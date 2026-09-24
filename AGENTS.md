@@ -26,6 +26,10 @@ is non-zero. Errors are written to be actionable (they name the track, parameter
 
 In order of preference:
 
+0. **A factory preset by name.** `wavelength presets <plugin> --search organ` lists what a
+   CLAP plugin ships (Altitude alone has 450: basses, leads, pads, plucks, drums, organs,
+   sequences); use it as `"preset": "OR Cathedral Organ"`. Prefixes in names tell the role
+   (`BA` bass, `LD` lead, `PD` pad, `PL` pluck, `DR` drum one-shot on C4, `OR` organ, `SQ` sequence).
 1. **A preset file as `state`.** Vital `.vital` files (JSON, `~/Music/Vital/**`) load
    directly. Bitwig `.clap-preset` files (inside any exported `.dawproject`, under
    `plugins/`) load for their own plugin. This gives designed, musical sounds.

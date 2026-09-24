@@ -13,7 +13,7 @@
 namespace wl {
 
 struct PluginSetup {
-    std::string spec, stateFile, stateFormat;
+    std::string spec, stateFile, stateFormat, preset;
     std::vector<ParamSetting> params;                         // set once
     std::vector<std::pair<std::string, Envelope>> automation; // name → curve
     bool verbose = false;
@@ -22,7 +22,7 @@ struct PluginSetup {
 
 struct OpenedPlugin {
     std::unique_ptr<Plugin> plugin;
-    std::string id, name, format, stateFormat;
+    std::string id, name, format, stateFormat, preset;
     std::vector<ParamValue> initial;
     std::vector<AutoParam> autos;
     std::vector<std::string> warnings;

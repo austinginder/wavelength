@@ -80,6 +80,7 @@ add_executable(wavelength
   src/engine.cpp
   src/loudness.cpp
   src/plugin.cpp
+  src/presets.cpp
   src/instance.cpp
   src/catalog.cpp
   src/clap_plugin.cpp

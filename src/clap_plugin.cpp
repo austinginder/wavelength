@@ -1,5 +1,7 @@
 #include "clap_plugin.hpp"
 
+#include "presets.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -35,6 +37,7 @@ std::unique_ptr<Plugin> ClapPlugin::create(const PluginInfo &info, std::string &
     p->inst_ = std::move(inst);
     p->id_ = info.id;
     p->name_ = info.name;
+    p->bundle_ = info.bundlePath;
     return p;
 }
 
@@ -46,6 +49,17 @@ bool ClapPlugin::loadState(const StateFile &sf, std::string &err) {
     }
     inst_->verbose = verbose;
     return inst_->loadState(sf.state, err);
+}
+
+bool ClapPlugin::loadPreset(const std::string &query, std::string &loadedName, std::string &err) {
+    std::vector<PresetInfo> presets;
+    if (!discoverPresets(bundle_, id_, presets, err)) return false;
+    PresetInfo p;
+    if (!findPreset(presets, query, p, err)) return false;
+    inst_->verbose = verbose;
+    if (!inst_->loadPreset(p.kind, p.location, p.loadKey, err)) { err = "preset '" + p.name + "': " + err; return false; }
+    loadedName = p.category.empty() ? p.name : p.category + "/" + p.name;
+    return true;
 }
 
 bool ClapPlugin::saveStateFile(const std::string &path, size_t &bytes, std::string &err) {

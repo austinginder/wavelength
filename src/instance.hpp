@@ -26,6 +26,9 @@ public:
     const std::string &id() const { return id_; }
 
     bool loadState(const std::vector<uint8_t> &data, std::string &err);
+    // CLAP preset-load: a preset found through preset discovery
+    bool loadPreset(uint32_t kind, const std::string &location, const std::string &loadKey, std::string &err);
+    std::string presetError;
     bool saveState(std::vector<uint8_t> &out, std::string &err);
 
     std::vector<ParamInfo> params() const;
@@ -72,6 +75,7 @@ private:
     const clap_plugin_audio_ports_t *audioPorts_ = nullptr;
     const clap_plugin_note_ports_t *notePorts_ = nullptr;
     const clap_plugin_render_t *render_ = nullptr;
+    const clap_plugin_preset_load_t *presetLoad_ = nullptr;
     bool active_ = false;
 
     void queryExtensions();

@@ -24,6 +24,8 @@ Working towards **v0.1.0**, the first release.
 - State formats `vstpreset` (VST3 preset files, as found inside Bitwig DAWprojects) and `nksf` (Native Instruments NKS presets, which carry the plugin's own state; this is how BBC Symphony Orchestra instruments load headlessly).
 - Per-track and per-effect `warmup` for plugins that stream samples after activation (orchestral libraries).
 - `state save` writes `.vstpreset` files for VST3 plugins.
+- CLAP preset discovery: `wavelength presets <plugin> [--search text]` lists a plugin's factory banks and preset files, and `"preset": "<name>"` on a track or effect (or `--preset` on `params`/`state save`) loads one by name through the plugin's preset-load extension. This opens the full factory libraries of plugins like Altitude (450 presets), Apricot, Regency, ExtraBold and Fluctus.
+- `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 
 ### Fixed
 - The CLI exits without running plugin static destructors, which crashed some plugins at shutdown after the work was already written.

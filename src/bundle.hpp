@@ -20,6 +20,7 @@ public:
     static std::shared_ptr<Bundle> open(const std::string &path, std::string &err);
 
     const clap_plugin_factory_t *factory() const { return factory_; }
+    const void *getFactory(const char *id) const { return entry_->get_factory(id); }
     const std::string &path() const { return path_; }
     std::vector<PluginInfo> plugins() const;
 

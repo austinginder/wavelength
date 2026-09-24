@@ -38,7 +38,8 @@ cmake --build build -j
 | Command | Does |
 |---|---|
 | `plugins [--rescan] [--json]` | Lists CLAP plugins in `~/Library/Audio/Plug-Ins/CLAP`, `/Library/Audio/Plug-Ins/CLAP` and `$WAVELENGTH_CLAP_PATH`. Results are cached per bundle. |
-| `params <plugin> [--state F] [--all] [--json]` | Parameters with ranges, current values and display text, optionally after loading a preset. |
+| `presets <plugin> [--search T] [--json]` | A CLAP plugin's factory presets and preset files, to use by name as `"preset"`. |
+| `params <plugin> [--preset N] [--state F] [--all] [--json]` | Parameters with ranges, current values and display text, optionally after loading a preset. |
 | `render <job.json> [--out DIR] [--json] [--verbose]` | Renders stems, mix and `report.json`. |
 | `state save <plugin> --out F.clap-preset [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes. The file uses Bitwig's `.clap-preset` layout, so it can be dropped into a `.dawproject`. |
 

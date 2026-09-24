@@ -8,7 +8,7 @@
 namespace wl {
 
 struct TrackResult {
-    std::string name, plugin, pluginName, file, stateFormat;
+    std::string name, plugin, pluginName, file, stateFormat, preset;
     size_t notes = 0, paramsApplied = 0, automated = 0;
     std::vector<std::string> fx;
     Levels levels{};

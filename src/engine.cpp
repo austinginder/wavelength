@@ -19,6 +19,10 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     out.plugin->verbose = setup.verbose;
     out.plugin->warmup = setup.warmup;
 
+    if (!setup.preset.empty()) {
+        if (!out.plugin->loadPreset(setup.preset, out.preset, err)) { err = context + ": " + err; return false; }
+        out.plugin->pump(100);
+    }
     if (!setup.stateFile.empty()) {
         StateFile sf;
         if (!readStateFile(setup.stateFile, setup.stateFormat, sf, err)) { err = context + ": " + err; return false; }

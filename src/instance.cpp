@@ -50,6 +50,11 @@ const clap_host_note_ports_t kNotePorts = {
     [](const clap_host_t *, uint32_t) {},
 };
 
+const clap_host_preset_load_t kPresetLoad = {
+    [](const clap_host_t *h, uint32_t, const char *, const char *, int32_t, const char *msg) { self(h)->presetError = msg ? msg : "preset load failed"; },
+    [](const clap_host_t *, uint32_t, const char *, const char *) {},
+};
+
 const clap_host_audio_ports_t kAudioPorts = {
     [](const clap_host_t *, uint32_t) { return false; },
     [](const clap_host_t *, uint32_t) {},
@@ -120,6 +125,8 @@ void Instance::queryExtensions() {
     audioPorts_ = static_cast<const clap_plugin_audio_ports_t *>(ext(CLAP_EXT_AUDIO_PORTS));
     notePorts_ = static_cast<const clap_plugin_note_ports_t *>(ext(CLAP_EXT_NOTE_PORTS));
     render_ = static_cast<const clap_plugin_render_t *>(ext(CLAP_EXT_RENDER));
+    presetLoad_ = static_cast<const clap_plugin_preset_load_t *>(ext(CLAP_EXT_PRESET_LOAD));
+    if (!presetLoad_) presetLoad_ = static_cast<const clap_plugin_preset_load_t *>(ext(CLAP_EXT_PRESET_LOAD_COMPAT));
 }
 
 const void *Instance::hostGetExtension(const clap_host_t *, const char *id) {
@@ -131,6 +138,7 @@ const void *Instance::hostGetExtension(const clap_host_t *, const char *id) {
     if (!std::strcmp(id, CLAP_EXT_TAIL)) return &kTail;
     if (!std::strcmp(id, CLAP_EXT_NOTE_PORTS)) return &kNotePorts;
     if (!std::strcmp(id, CLAP_EXT_AUDIO_PORTS)) return &kAudioPorts;
+    if (!std::strcmp(id, CLAP_EXT_PRESET_LOAD) || !std::strcmp(id, CLAP_EXT_PRESET_LOAD_COMPAT)) return &kPresetLoad;
     return nullptr;
 }
 void Instance::hostRequestRestart(const clap_host_t *h) { self(h)->restartRequested = true; }
@@ -168,6 +176,16 @@ bool Instance::saveState(std::vector<uint8_t> &out, std::string &err) {
     out.clear();
     clap_ostream_t s{&out, &streamWrite};
     if (!state_->save(plugin_, &s)) { err = "plugin failed to save its state"; return false; }
+    return true;
+}
+
+bool Instance::loadPreset(uint32_t kind, const std::string &location, const std::string &loadKey, std::string &err) {
+    if (!presetLoad_) { err = "plugin has no preset-load extension"; return false; }
+    presetError.clear();
+    const bool ok = presetLoad_->from_location(plugin_, kind, location.empty() ? nullptr : location.c_str(),
+                                               loadKey.empty() ? nullptr : loadKey.c_str());
+    pump(100);   // plugins may finish loading on the main thread
+    if (!ok || !presetError.empty()) { err = presetError.empty() ? "the plugin could not load the preset" : presetError; return false; }
     return true;
 }
 

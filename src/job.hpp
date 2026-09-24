@@ -24,7 +24,7 @@ struct ParamSetting {
 
 struct Track {
     std::string name, plugin;
-    std::string stateFile, stateFormat;
+    std::string stateFile, stateFormat, preset;
     std::vector<ParamSetting> params;
     std::vector<Note> notes;
     double gainDb = 0, pan = 0;

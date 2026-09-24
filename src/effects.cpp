@@ -436,6 +436,7 @@ struct PluginFx : Effect {
         if (j.contains("automate"))
             for (auto &[k, v] : j["automate"].items()) if (k != "mix") setup.automation.push_back({k, Envelope::parse(v, job.tempo, false)});
         setup.warmup = j.value("warmup", -1.0);
+        setup.preset = j.value("preset", "");
         mix = param(j, "mix", 1, job.tempo);
         (void)err;
     }

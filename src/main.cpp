@@ -8,6 +8,7 @@
 #include "catalog.hpp"
 #include "instance.hpp"
 #include "plugin.hpp"
+#include "presets.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
 #include "render.hpp"
@@ -40,7 +41,9 @@ const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https
 Usage:
   wavelength plugins [--rescan] [--json]
       List installed CLAP plugins (cached; --rescan reloads every bundle).
-  wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
+  wavelength presets <plugin> [--search TEXT] [--json]
+      List a CLAP plugin's presets (factory banks and preset files) to use as "preset".
+  wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
   wavelength render <job.json> [--out DIR] [--json] [--verbose]
@@ -127,6 +130,10 @@ std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec
     auto plugin = createPlugin(info, err);
     if (!plugin) return nullptr;
     plugin->verbose = a.has("--verbose");
+    if (a.has("--preset")) {
+        std::string loaded;
+        if (!plugin->loadPreset(a.get("--preset"), loaded, err)) return nullptr;
+    }
     if (a.has("--state")) {
         StateFile sf;
         if (!readStateFile(a.get("--state"), a.get("--format", "auto"), sf, err)) return nullptr;
@@ -134,6 +141,38 @@ std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec
     }
     plugin->pump(info.format == "vst3" ? 500 : 150);
     return plugin;
+}
+
+// ---- presets ---------------------------------------------------------------------------
+int cmdPresets(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength presets <plugin> [--search TEXT]");
+    PluginInfo info;
+    std::string err;
+    if (!resolvePlugin(a.positional[1], info, err)) return fail(a, err);
+    if (info.format != "clap") return fail(a, info.name + " is " + info.format + "; preset listing is available for CLAP plugins (use state files for VST3)");
+    std::vector<PresetInfo> presets;
+    if (!discoverPresets(info.bundlePath, info.id, presets, err)) return fail(a, err);
+    std::string q = a.get("--search");
+    std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+    auto matches = [&](const PresetInfo &p) {
+        if (q.empty()) return true;
+        std::string hay = p.category + " " + p.name + " " + p.description;
+        for (auto &f : p.features) hay += " " + f;
+        std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
+        return hay.find(q) != std::string::npos;
+    };
+    json list = json::array();
+    size_t shown = 0;
+    for (const auto &p : presets) {
+        if (!matches(p)) continue;
+        ++shown;
+        if (a.has("--json")) list.push_back({{"name", p.name}, {"category", p.category}, {"description", p.description},
+                                             {"creator", p.creator}, {"features", p.features}});
+        else std::fprintf(OUT, "%-24.24s %s\n", p.category.c_str(), p.name.c_str());
+    }
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2));
+    else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".\n", shown, presets.size(), info.name.c_str());
+    return 0;
 }
 
 // ---- params ----------------------------------------------------------------------------
@@ -181,7 +220,7 @@ int cmdRender(const Args &a) {
     json tracks = json::array();
     for (auto &t : r.tracks)
         tracks.push_back({{"name", t.name}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"file", t.file},
-                          {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automatedParams", t.automated},
+                          {"preset", t.preset}, {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automatedParams", t.automated},
                           {"stateFormat", t.stateFormat}, {"fx", t.fx}, {"lufs", r1(t.lufs)},
                           {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
     json buses = json::array();
@@ -268,6 +307,7 @@ int run(int argc, char **argv) {
     try {
         if (cmd == "plugins") return cmdPlugins(a);
         if (cmd == "params") return cmdParams(a);
+        if (cmd == "presets") return cmdPresets(a);
         if (cmd == "render") return cmdRender(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }

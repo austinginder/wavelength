@@ -51,7 +51,7 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     tr.notes = track.notes.size();
     if (isBuiltin(track.plugin)) {
         tr.plugin = tr.pluginName = track.plugin;
-        if (!track.stateFile.empty() || !track.params.empty() || !track.paramAutomation.empty())
+        if (!track.stateFile.empty() || !track.preset.empty() || !track.params.empty() || !track.paramAutomation.empty())
             tr.warnings.push_back("built-in instruments ignore state, params and parameter automation");
         return renderBuiltin(track.plugin, job, track, audio, tr.warnings, err);
     }
@@ -63,11 +63,13 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     setup.automation = track.paramAutomation;
     setup.verbose = verbose;
     setup.warmup = track.warmup;
+    setup.preset = track.preset;
     OpenedPlugin p;
     if (!openPlugin(setup, track.name, p, err)) return false;
     tr.plugin = p.id;
     tr.pluginName = p.name;
     tr.stateFormat = p.stateFormat;
+    tr.preset = p.preset;
     tr.paramsApplied = track.params.size();
     tr.automated = p.autos.size();
     const auto events = scheduleNotes(track.notes, job.sampleRate);
