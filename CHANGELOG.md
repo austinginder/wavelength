@@ -50,6 +50,7 @@ Working towards **v0.1.0**, the first release.
 - Preset listings drop copies of the same preset filed in several folders (All / By Category / By Creator).
 - `getState` on plugins and state formats that patch the plugin's current state (templates), used by `dx7`.
 - `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.
+- `wavelength analyze <file.wav | render-dir> [--start] [--end]`: pitch (YIN: note, cents, confidence), spectral centroid, rolloff and band balance (sub to air), stereo width and correlation, onsets, and envelope (attack, decay, sustain, active time). A render folder analyzes its mix, every stem and every marker section. Agents no longer need their own FFT scripts.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 - Orchestral writing: per-note articulations (`"art": "spiccato"` with a track `articulations` map of keyswitch keys) insert the keyswitch just before each change; track `range` warns about notes an instrument can't play; `velocityTo` turns note velocities into a controller curve (`{"param": "Dynamics"}` or `{"cc": 1}`) for libraries whose long notes ignore velocity.
 

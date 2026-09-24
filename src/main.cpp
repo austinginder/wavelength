@@ -7,6 +7,7 @@
 //   wavelength render <job.json> [--out DIR] [--json] [--verbose]
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
 //   wavelength version
+#include "analyze.hpp"
 #include "catalog.hpp"
 #include "instance.hpp"
 #include "plugin.hpp"
@@ -54,6 +55,10 @@ Usage:
   wavelength samples [--search TEXT] [--kit NAME] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples and drum kit folders);
       --kit shows the General MIDI key each of a kit's files is mapped to.
+  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--json]
+      Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
+      onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
+      every stem and every marker section.
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -255,6 +260,66 @@ int cmdSamples(const Args &a) {
     return 0;
 }
 
+// ---- analyze ---------------------------------------------------------------------------
+int cmdAnalyze(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength analyze <file.wav | render-dir> [--start S] [--end S]");
+    const std::string target = a.positional[1];
+    std::string err;
+    const double start = std::atof(a.get("--start", "0").c_str()), end = std::atof(a.get("--end", "0").c_str());
+    auto one = [&](const std::string &path, double s, double e, bool onsets, json &out) {
+        Audio audio;
+        int sr = 0;
+        if (!readWav(path, audio, sr, err)) return false;
+        out = analysisToJson(analyzeAudio(audio, sr, s, e), onsets);
+        out["file"] = path;
+        return true;
+    };
+    json result;
+    std::error_code ec;
+    if (fs::is_directory(target, ec)) {   // a render folder: mix, stems, sections
+        const fs::path dir(target);
+        std::ifstream rin(dir / "report.json");
+        const json report = rin ? json::parse(rin, nullptr, false) : json();
+        json mix;
+        if (!one((dir / "mix.wav").string(), start, end, true, mix)) return fail(a, err);
+        result = {{"ok", true}, {"mix", mix}, {"stems", json::array()}, {"sections", json::array()}};
+        if (report.is_object() && report.contains("tracks"))
+            for (auto &t : report["tracks"]) {
+                const std::string f = t.value("file", "");
+                if (f.empty() || !fs::exists(f, ec)) continue;
+                json s;
+                if (one(f, start, end, false, s)) { s["track"] = t.value("name", ""); result["stems"].push_back(s); }
+            }
+        if (report.is_object() && report.contains("sections"))
+            for (auto &sec : report["sections"]) {
+                json s;
+                if (one((dir / "mix.wav").string(), sec.value("start", 0.0), sec.value("end", 0.0), false, s)) {
+                    s["section"] = sec.value("name", "");
+                    result["sections"].push_back(s);
+                }
+            }
+    } else {
+        json one1;
+        if (!one(target, start, end, true, one1)) return fail(a, err);
+        result = one1;
+        result["ok"] = true;
+    }
+    if (a.has("--json")) { emit(result.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    auto line = [&](const std::string &label, const json &x) {
+        const auto &p = x["pitch"], &s = x["spectrum"], &e = x["envelope"];
+        std::fprintf(OUT, "%-22.22s %6.1f LUFS  pitch %-4s %+3d c (%.0f%%)  centroid %5d Hz  width %.2f  attack %4d ms  sustain %6.1f dB  onsets %zu\n",
+                     label.c_str(), x["lufs"].get<double>(), p["note"].get<std::string>().c_str(), p["cents"].get<int>(),
+                     p["confidence"].get<double>() * 100, s["centroidHz"].get<int>(), x["stereo"]["width"].get<double>(),
+                     e["attackMs"].get<int>(), e["sustainDb"].get<double>(), x["onsetCount"].get<size_t>());
+    };
+    if (result.contains("mix")) {
+        line("mix", result["mix"]);
+        for (auto &s : result["stems"]) line(s["track"].get<std::string>(), s);
+        for (auto &s : result["sections"]) line("section " + s["section"].get<std::string>(), s);
+    } else line(fs::path(target).filename().string(), result);
+    return 0;
+}
+
 // ---- params ----------------------------------------------------------------------------
 int cmdParams(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength params <plugin>");
@@ -408,6 +473,7 @@ int run(int argc, char **argv) {
         if (cmd == "params") return cmdParams(a);
         if (cmd == "presets") return cmdPresets(a);
         if (cmd == "samples") return cmdSamples(a);
+        if (cmd == "analyze") return cmdAnalyze(a);
         if (cmd == "render") return cmdRender(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }

@@ -113,6 +113,15 @@ in the job (details in `docs/effects.md`):
   arps −23 LUFS), then add `markers` and ride faders with `automation.gain` until the
   per-section loudness in the report follows the music (quiet sections really quiet).
 
+## Listening by numbers: `wavelength analyze`
+
+You can't hear the render, so measure it. `wavelength analyze out/<dir> --json` gives, for the
+mix, each stem and each section: pitch (note, cents, confidence), spectral centroid (brightness),
+band balance (sub, bass, low-mid, high-mid, presence, air), stereo width and correlation, onsets
+and the envelope (attack, decay, sustain). Use it to check a preset sounds in the octave you
+wrote, a bass isn't brighter than intended, a section's low end is balanced, a pad is wide, and a
+drum pattern has the hits you expect. `--start/--end` narrow it to a window.
+
 ## Reading the report
 
 `out/<dir>/report.json` (also printed with `--json`):

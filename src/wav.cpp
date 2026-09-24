@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <iterator>
 #include <fstream>
 #include <vector>
 
@@ -44,6 +46,45 @@ bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::stri
         }
     o.write(buf.data(), (std::streamsize)buf.size());
     if (!o) { err = "write failed for " + path + " (disk full?)"; return false; }
+    return true;
+}
+
+bool readWav(const std::string &path, Audio &out, int &sampleRate, std::string &err) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot read " + path; return false; }
+    const std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto u16 = [&](size_t i) { return (uint32_t)(d[i] | d[i + 1] << 8); };
+    auto u32 = [&](size_t i) { return (uint32_t)d[i] | (uint32_t)d[i + 1] << 8 | (uint32_t)d[i + 2] << 16 | (uint32_t)d[i + 3] << 24; };
+    if (d.size() < 12 || std::memcmp(d.data(), "RIFF", 4) || std::memcmp(d.data() + 8, "WAVE", 4)) { err = path + " is not a WAV file"; return false; }
+    uint32_t format = 0, channels = 0, bits = 0;
+    size_t data = 0, len = 0;
+    for (size_t p = 12; p + 8 <= d.size();) {
+        const uint32_t n = u32(p + 4);
+        if (!std::memcmp(&d[p], "fmt ", 4) && p + 24 <= d.size()) {
+            format = u16(p + 8); channels = u16(p + 10); sampleRate = (int)u32(p + 12); bits = u16(p + 22);
+            if (format == 0xFFFE && p + 34 <= d.size()) format = u16(p + 32);
+        } else if (!std::memcmp(&d[p], "data", 4)) { data = p + 8; len = std::min<size_t>(n, d.size() - p - 8); }
+        p += 8 + n + (n & 1);
+    }
+    const bool pcm = format == 1 && (bits == 8 || bits == 16 || bits == 24 || bits == 32), flt = format == 3 && (bits == 32 || bits == 64);
+    if (!data || !channels || !(pcm || flt)) { err = path + ": unsupported WAV encoding"; return false; }
+    const size_t bps = bits / 8, frames = len / (bps * channels);
+    out.resize(frames);
+    auto get = [&](size_t i) -> float {
+        const uint8_t *q = &d[i];
+        if (flt) { if (bits == 32) { float f; std::memcpy(&f, q, 4); return f; } double v; std::memcpy(&v, q, 8); return (float)v; }
+        switch (bits) {
+        case 8: return (q[0] - 128) / 128.f;
+        case 16: return (int16_t)(q[0] | q[1] << 8) / 32768.f;
+        case 24: return (float)((int32_t)((uint32_t)q[0] << 8 | (uint32_t)q[1] << 16 | (uint32_t)q[2] << 24) >> 8) / 8388608.f;
+        default: return (float)((int32_t)(q[0] | q[1] << 8 | q[2] << 16 | (uint32_t)q[3] << 24) / 2147483648.0);
+        }
+    };
+    for (size_t f = 0; f < frames; ++f) {
+        const size_t at = data + f * bps * channels;
+        out.left[f] = get(at);
+        out.right[f] = channels > 1 ? get(at + bps) : out.left[f];
+    }
     return true;
 }
 
