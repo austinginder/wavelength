@@ -389,6 +389,15 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     if (input && inBuses < 1) { err = name_ + " has no audio input, so it can't be used as an effect"; return false; }
     im.component->activateBus(kAudio, kOutput, 0, true);
     if (inBuses > 0) im.component->activateBus(kAudio, kInput, 0, true);
+    sidechainConnected = sidechain && inBuses > 1;
+    if (sidechainConnected) im.component->activateBus(kAudio, kInput, 1, true);   // the aux (sidechain) bus
+    if (verbose && sidechain)
+        for (int32 bi = 0; bi < inBuses; ++bi) {
+            Vst::BusInfo info{};
+            im.component->getBusInfo(kAudio, kInput, bi, info);
+            std::fprintf(stderr, "%s input bus %d: %s, %d channels, type %d, flags %u\n", name_.c_str(), bi,
+                         Steinberg::Vst::StringConvert::convert(info.name).c_str(), info.channelCount, info.busType, info.flags);
+        }
     if (im.component->getBusCount(kEvent, kInput) > 0) im.component->activateBus(kEvent, kInput, 0, true);
     if (im.component->setActive(true) != kResultOk) { err = name_ + " refused to activate"; return false; }
     pumpFor((warmup >= 0 ? warmup : job.warmup) * 1000.0);
@@ -517,8 +526,9 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 for (int32 c = 0; c < data.inputs[b].numChannels; ++c) {
                     float *dst = data.inputs[b].channelBuffers32[c];
                     std::fill(dst, dst + n, 0.f);
-                    if (b == 0 && input && pos >= 0 && pos < total) {
-                        const auto &src = (c % 2) ? input->right : input->left;
+                    const Audio *feed = b == 0 ? input : (b == 1 && sidechainConnected ? sidechain : nullptr);
+                    if (feed && pos >= 0 && pos < total) {
+                        const auto &src = (c % 2) ? feed->right : feed->left;
                         std::copy(src.begin() + pos, src.begin() + std::min<int64_t>(pos + n, total), dst);
                     }
                 }

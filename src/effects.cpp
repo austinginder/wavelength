@@ -226,6 +226,7 @@ struct Reverb : Effect {
 // ---------------------------------------------------------------------------- compressor
 struct Compressor : Effect {
     double threshold, ratio, attackMs, releaseMs, knee, makeup, mix;
+    std::string key;   // "sidechain": detect on another track's audio
     Compressor(const json &j, const Job &) {
         label = "compressor";
         threshold = j.value("threshold", -18.0);
@@ -235,7 +236,8 @@ struct Compressor : Effect {
         knee = std::max(0.0, j.value("knee", 6.0));
         makeup = j.value("makeup", 0.0);
         mix = std::clamp(j.value("mix", 1.0), 0.0, 1.0);
-        checkKeys(j, {"threshold", "ratio", "attack", "release", "knee", "makeup", "mix"}, *this);
+        key = j.value("sidechain", "");
+        checkKeys(j, {"threshold", "ratio", "attack", "release", "knee", "makeup", "mix", "sidechain"}, *this);
     }
     double curve(double x) const {   // static gain computer with soft knee, dB in → dB out
         const double over = x - threshold;
@@ -243,12 +245,17 @@ struct Compressor : Effect {
         if (knee > 0 && 2 * std::fabs(over) <= knee) return x + (1 / ratio - 1) * (over + knee / 2) * (over + knee / 2) / (2 * knee);
         return threshold + over / ratio;
     }
-    bool process(Audio &a, const FxContext &c, std::string &) override {
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate;
         const double att = std::exp(-1.0 / (attackMs * 0.001 * sr)), rel = std::exp(-1.0 / (releaseMs * 0.001 * sr));
+        const Audio *det = &a;
+        if (!key.empty()) {
+            det = c.sidechain ? c.sidechain(key) : nullptr;
+            if (!det) { err = "compressor: no sidechain audio from track '" + key + "'"; return false; }
+        }
         double g = 0, maxGr = 0;
         for (size_t i = 0; i < a.frames(); ++i) {
-            const double x = dsp::linToDb(std::max(std::fabs(a.left[i]), std::fabs(a.right[i])));
+            const double x = i < det->frames() ? dsp::linToDb(std::max(std::fabs(det->left[i]), std::fabs(det->right[i]))) : -240.0;
             const double gr = curve(x) - x;
             g = gr < g ? att * g + (1 - att) * gr : rel * g + (1 - rel) * gr;
             maxGr = std::min(maxGr, g);
@@ -460,6 +467,7 @@ struct Duck : Effect {
 struct PluginFx : Effect {
     PluginSetup setup;
     Envelope mix;
+    std::string key;   // "sidechain": a track's audio into the plugin's sidechain input
     PluginFx(const json &j, const Job &job, std::string &err) {
         setup.spec = j.value("plugin", "");
         label = setup.spec;
@@ -476,6 +484,7 @@ struct PluginFx : Effect {
         setup.warmup = j.value("warmup", -1.0);
         setup.preset = j.value("preset", "");
         mix = param(j, "mix", 1, job.tempo);
+        key = j.value("sidechain", "");
         (void)err;
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
@@ -485,7 +494,13 @@ struct PluginFx : Effect {
         label = p.name;
         Audio wet;
         wet.resize(a.frames());
+        if (!key.empty()) {
+            p.plugin->sidechain = c.sidechain ? c.sidechain(key) : nullptr;
+            if (!p.plugin->sidechain) { err = "effect " + p.name + ": no sidechain audio from track '" + key + "'"; return false; }
+        }
         if (!runPlugin(c.job, p, {}, &a, wet, err)) { err = "effect " + p.name + ": " + err; return false; }
+        if (!key.empty() && !p.plugin->sidechainConnected)
+            warnings.push_back(p.name + " has no sidechain input, so \"sidechain\": \"" + key + "\" is ignored");
         latencySamples = p.plugin->latencySamples;
         for (auto &w : p.warnings) warnings.push_back(w);
         {   // an effect whose output is just a scaled copy of its input did nothing audible but change the

@@ -98,7 +98,8 @@ in the job (details in `docs/effects.md`):
 - **Clean low end:** `eq` high-pass everything that isn't bass (pads ~140 Hz, leads ~150,
   arps ~250) and low-pass the sub.
 - **Pump:** `duck` bass, pads and arps from the kick (`"trigger": "Drums", "keys": [36]`).
-  Roughly: bass 10 dB, pads 6, arps 4–5, leads ~1.
+  Roughly: bass 10 dB, pads 6, arps 4–5, leads ~1. For pumping that follows the kick's actual
+  sound, use a `compressor` (or a plugin compressor) with `"sidechain": "Kick"`.
 - **Movement:** automate filters (`"automate": {"cutoff": ...}`) through builds and intros.
   LFOs work on any automatable value (`"lfo": {"cutoff": {"rate": "1/8", "depth": 1}}`), and
   `tremolo`, `gate` (trance gate / gated reverb), `rotary` (Leslie organ), `autowah`, `vibrato`,

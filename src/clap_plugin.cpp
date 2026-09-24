@@ -101,6 +101,7 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         inBufs[i] = {inPtrs[i].data(), nullptr, ch, 0, 0};
     }
     if (input && inPorts == 0) { inst.deactivate(); err = name_ + " has no audio input, so it can't be used as an effect"; return false; }
+    sidechainConnected = sidechain && inPorts > 1;
 
     const int64_t total = (int64_t)out.frames();
     std::atomic<bool> done{false};
@@ -214,6 +215,13 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
 
             for (auto &port : outStore) for (auto &c : port) std::fill(c.begin(), c.begin() + n, 0.f);
             for (auto &port : inStore) for (auto &c : port) std::fill(c.begin(), c.begin() + n, 0.f);
+            if (sidechain && pos >= 0 && pos < total && inStore.size() > 1) {   // sidechain: the second input port
+                auto &sp = inStore[1];
+                for (uint32_t i = 0; i < n && pos + i < total; ++i) {
+                    sp[0][i] = sidechain->left[pos + i];
+                    if (sp.size() > 1) sp[1][i] = sidechain->right[pos + i];
+                }
+            }
             if (input && pos >= 0 && !inStore.empty()) {
                 auto &ip = inStore[0];
                 for (uint32_t i = 0; i < n && pos + i < total; ++i) {

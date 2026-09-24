@@ -46,7 +46,7 @@ struct RenderResult {
 
 // Worker entry point: render track `index` of the job file (instrument + effects) into
 // <prefix>.pcm (float left, then right) and <prefix>.json (its TrackResult). Exit code 0 on success.
-int renderTrackWorker(const std::string &jobPath, size_t index, const std::string &prefix);
+int renderTrackWorker(const std::string &jobPath, size_t index, const std::string &prefix, const std::vector<std::string> &sidechains);
 
 // Renders every track (instrument → effects) to its own stem, applies faders and sends,
 // processes buses and the master chain, and writes mix.wav under outDir.

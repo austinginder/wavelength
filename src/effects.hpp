@@ -5,6 +5,7 @@
 #include "wav.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -15,6 +16,8 @@ namespace wl {
 struct FxContext {
     const Job &job;
     bool verbose;
+    // a track's audio (after its effects, before its fader) for effects keyed by it ("sidechain")
+    std::function<const Audio *(const std::string &track)> sidechain;
 };
 
 class Effect {

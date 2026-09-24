@@ -478,7 +478,9 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
-    if (cmd == "__track" && a.positional.size() > 3) return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3]);
+    if (cmd == "__track" && a.positional.size() > 3)
+        return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
+                                 std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));
     if (cmd == "__audition" && a.positional.size() > 3) return auditionWorker(a.positional[1], a.positional[2], a.positional[3]);
     if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
         std::vector<PluginInfo> plugins;

@@ -80,6 +80,10 @@ public:
     // Samples of processing delay the plugin reported for its last render (lookahead, linear
     // phase). Renders already remove it: output is shifted earlier so tracks stay aligned.
     uint32_t latencySamples = 0;
+    // Audio for the plugin's sidechain input (its second input port / aux bus), set before render.
+    // After render, `sidechainConnected` says whether the plugin had an input to take it.
+    const Audio *sidechain = nullptr;
+    bool sidechainConnected = false;
 
     virtual std::vector<ParamInfo> params() const = 0;
     bool findParam(const std::string &key, ParamInfo &out) const;   // "#id", name, "Module/Name"
