@@ -1,0 +1,251 @@
+// Wavelength, a headless music engine for AI agents.
+//
+//   wavelength plugins [--rescan] [--json]
+//   wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
+//   wavelength render <job.json> [--out DIR] [--json] [--verbose]
+//   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
+//   wavelength version
+#include "catalog.hpp"
+#include "instance.hpp"
+#include "job.hpp"
+#include "render.hpp"
+#include "state_file.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <cstdio>
+#include <unistd.h>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+
+using json = nlohmann::json;
+namespace fs = std::filesystem;
+using namespace wl;
+
+namespace {
+
+// Plugins print debug text to stdout. Wavelength's own output goes to a private copy of
+// the original stdout, and fd 1 is redirected to stderr before any plugin loads.
+FILE *OUT = stdout;
+void emit(const std::string &s) { std::fputs(s.c_str(), OUT); std::fputc('\n', OUT); std::fflush(OUT); }
+
+const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https://wavelength.run)
+
+Usage:
+  wavelength plugins [--rescan] [--json]
+      List installed CLAP plugins (cached; --rescan reloads every bundle).
+  wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
+      Show a plugin's parameters, optionally after loading a state/preset.
+      Hidden and read-only parameters are omitted unless --all is given.
+  wavelength render <job.json> [--out DIR] [--json] [--verbose]
+      Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out).
+  wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
+      Load an optional starting state, apply parameter values, save a preset.
+  wavelength version
+
+<plugin> is a CLAP id (nakst.Apricot), a plugin name (Apricot) or a path to a .clap bundle.
+State formats: auto (default), clap-preset, juce-string (.vital files), raw.
+Exit status is non-zero on any error; with --json, errors are {"ok":false,"error":...}.
+)";
+
+struct Args {
+    std::vector<std::string> positional;
+    std::map<std::string, std::string> opts;
+    std::vector<std::string> sets;
+    bool has(const std::string &k) const { return opts.count(k) > 0; }
+    std::string get(const std::string &k, const std::string &d = "") const { auto it = opts.find(k); return it == opts.end() ? d : it->second; }
+};
+
+Args parse(int argc, char **argv) {
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all"};
+    Args a;
+    for (int i = 1; i < argc; ++i) {
+        std::string s = argv[i];
+        if (s.rfind("--", 0) == 0) {
+            if (std::find(flags.begin(), flags.end(), s) != flags.end()) a.opts[s] = "1";
+            else if (i + 1 < argc) {
+                if (s == "--set") a.sets.push_back(argv[++i]);
+                else a.opts[s] = argv[++i];
+            } else a.opts[s] = "";
+        } else a.positional.push_back(s);
+    }
+    return a;
+}
+
+int fail(const Args &a, const std::string &msg) {
+    if (a.has("--json")) emit(json{{"ok", false}, {"error", msg}}.dump(2));
+    else std::fprintf(stderr, "error: %s\n", msg.c_str());
+    return 1;
+}
+
+json levelsJson(const Levels &l) {
+    auto r = [](double v) { return std::round(v * 10) / 10; };
+    return {{"peakDb", r(l.peakDb)}, {"rmsDb", r(l.rmsDb)}, {"activeRmsDb", r(l.activeRmsDb)}, {"silent", l.silent}};
+}
+
+// ---- plugins ---------------------------------------------------------------------------
+int cmdPlugins(const Args &a) {
+    std::vector<std::string> warnings;
+    auto all = scanPlugins(a.has("--rescan"), warnings);
+    all.push_back({"builtin:drums", "Drums (built-in)", "Wavelength", WAVELENGTH_VERSION,
+                   "GM kit: 36 kick, 38 snare, 37 rim, 42/46 hats, 49 crash, 51 ride, 41/45/48 toms", "", {"instrument", "drum"}});
+    all.push_back({"builtin:fx", "FX (built-in)", "Wavelength", WAVELENGTH_VERSION,
+                   "48 impact, 50 riser (note length), 52 reverse swell (ends with the note), 53 sub drop", "", {"instrument"}});
+    if (a.has("--json")) {
+        json list = json::array();
+        for (auto &p : all)
+            list.push_back({{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version},
+                            {"features", p.features}, {"bundle", p.bundlePath}});
+        emit(json{{"ok", true}, {"plugins", list}, {"warnings", warnings}}.dump(2));
+        return 0;
+    }
+    for (auto &p : all) {
+        bool instrument = std::find(p.features.begin(), p.features.end(), "instrument") != p.features.end();
+        std::fprintf(OUT, "%-36s %-22s %-18s %s\n", p.id.c_str(), p.name.c_str(), p.vendor.c_str(), instrument ? "instrument" : "effect");
+    }
+    for (auto &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+    std::fprintf(OUT, "\n%zu plugins in %zu search paths\n", all.size(), clapSearchPaths().size());
+    return 0;
+}
+
+// load a plugin (+ optional state) for inspection on the main thread
+std::unique_ptr<Instance> openForInspection(const Args &a, const std::string &spec, PluginInfo &info, std::string &err) {
+    if (!resolvePlugin(spec, info, err)) return nullptr;
+    auto bundle = Bundle::open(info.bundlePath, err);
+    if (!bundle) return nullptr;
+    auto inst = Instance::create(bundle, info.id, err);
+    if (!inst) return nullptr;
+    inst->verbose = a.has("--verbose");
+    if (a.has("--state")) {
+        StateFile sf;
+        if (!readStateFile(a.get("--state"), a.get("--format", "auto"), sf, err)) return nullptr;
+        if (!inst->loadState(sf.state, err)) return nullptr;
+    }
+    inst->pump(150);
+    return inst;
+}
+
+// ---- params ----------------------------------------------------------------------------
+int cmdParams(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength params <plugin>");
+    PluginInfo info;
+    std::string err;
+    auto inst = openForInspection(a, a.positional[1], info, err);
+    if (!inst) return fail(a, err);
+    auto params = inst->params();
+    json list = json::array();
+    size_t shown = 0;
+    for (auto &p : params) {
+        if (!a.has("--all") && (p.hidden || p.readonly)) continue;
+        ++shown;
+        if (a.has("--json"))
+            list.push_back({{"id", p.id}, {"name", p.name}, {"module", p.module}, {"min", p.min}, {"max", p.max},
+                            {"default", p.def}, {"value", p.value}, {"display", p.display}, {"stepped", p.stepped}});
+        else
+            std::fprintf(OUT, "#%-6u %-40s %10.4g  [%g .. %g]  %s\n", p.id,
+                        (p.module.empty() ? p.name : p.module + "/" + p.name).c_str(), p.value, p.min, p.max, p.display.c_str());
+    }
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"params", list}}.dump(2));
+    else std::fprintf(OUT, "\n%zu of %zu parameters (%s)\n", shown, params.size(), info.name.c_str());
+    return 0;
+}
+
+// ---- render ----------------------------------------------------------------------------
+int cmdRender(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json>");
+    const std::string path = a.positional[1];
+    std::ifstream in(path);
+    if (!in) return fail(a, "cannot read " + path);
+    json j;
+    try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    Job job;
+    std::string err;
+    std::string base = fs::absolute(path).parent_path().string();
+    if (!parseJob(j, base, job, err)) return fail(a, err);
+    RenderResult r;
+    std::string outDir = a.get("--out", "out");
+    if (!renderJob(job, outDir, a.has("--verbose"), r, err)) return fail(a, err);
+
+    auto r1 = [](double v) { return std::round(v * 10) / 10; };
+    json tracks = json::array();
+    for (auto &t : r.tracks)
+        tracks.push_back({{"name", t.name}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"file", t.file},
+                          {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automatedParams", t.automated},
+                          {"stateFormat", t.stateFormat}, {"fx", t.fx}, {"lufs", r1(t.lufs)},
+                          {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
+    json buses = json::array();
+    for (auto &b : r.buses) buses.push_back({{"name", b.name}, {"fx", b.fx}, {"lufs", r1(b.lufs)}, {"levels", levelsJson(b.levels)}});
+    json sections = json::array();
+    for (auto &sec : r.sections)
+        sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
+    json report = {{"ok", true}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
+                   {"renderSeconds", std::round(r.renderSeconds * 100) / 100},
+                   {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"levels", levelsJson(r.mix)},
+                            {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}}},
+                   {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings}};
+    std::ofstream(fs::path(outDir) / "report.json") << report.dump(2) << "\n";
+    if (a.has("--json")) { emit(report.dump(2)); return 0; }
+    for (auto &t : r.tracks) {
+        std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", t.name.c_str(), t.pluginName.c_str(), t.levels.peakDb,
+                    t.lufs, t.file.c_str());
+        for (auto &w : t.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
+    }
+    for (auto &b : r.buses) std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS\n", ("bus: " + b.name).c_str(), "", b.levels.peakDb, b.lufs);
+    std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", "MIX", "", r.mix.peakDb, r.mixLufs, r.mixFile.c_str());
+    for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
+    for (auto &w : r.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
+    std::fprintf(OUT, "%.2f s of audio rendered in %.2f s\n", r.seconds, r.renderSeconds);
+    return 0;
+}
+
+// ---- state save ------------------------------------------------------------------------
+int cmdState(const Args &a) {
+    if (a.positional.size() < 3 || a.positional[1] != "save") return fail(a, "usage: wavelength state save <plugin> --out FILE.clap-preset");
+    if (!a.has("--out")) return fail(a, "state save needs --out FILE.clap-preset");
+    PluginInfo info;
+    std::string err;
+    auto inst = openForInspection(a, a.positional[2], info, err);
+    if (!inst) return fail(a, err);
+    std::vector<ParamValue> values;
+    for (const auto &s : a.sets) {
+        auto eq = s.rfind('=');
+        if (eq == std::string::npos) return fail(a, "--set expects \"Name=value\", got '" + s + "'");
+        ParamInfo pi;
+        if (!inst->findParam(s.substr(0, eq), pi)) return fail(a, "no parameter '" + s.substr(0, eq) + "' on " + info.name);
+        values.push_back({pi.id, pi.cookie, std::clamp(std::stod(s.substr(eq + 1)), pi.min, pi.max)});
+    }
+    if (!inst->setParams(values, err)) return fail(a, err);
+    if (!values.empty() && !inst->commitParams(values, 48000, 512, 8, err)) return fail(a, err);
+    inst->pump(100);
+    std::vector<uint8_t> state;
+    if (!inst->saveState(state, err)) return fail(a, err);
+    if (!writeClapPreset(a.get("--out"), info.id, state, err)) return fail(a, err);
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"file", a.get("--out")}, {"bytes", state.size()}}.dump(2));
+    else std::fprintf(OUT, "saved %zu bytes of %s state to %s\n", state.size(), info.name.c_str(), a.get("--out").c_str());
+    return 0;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    int realStdout = dup(STDOUT_FILENO);
+    if (realStdout >= 0 && (OUT = fdopen(realStdout, "w"))) dup2(STDERR_FILENO, STDOUT_FILENO);
+    else OUT = stdout;
+    Args a = parse(argc, argv);
+    if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
+    const std::string cmd = a.positional[0];
+    try {
+        if (cmd == "plugins") return cmdPlugins(a);
+        if (cmd == "params") return cmdParams(a);
+        if (cmd == "render") return cmdRender(a);
+        if (cmd == "state") return cmdState(a);
+        if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
+    } catch (const std::exception &e) {
+        return fail(a, e.what());
+    }
+    return fail(a, "unknown command '" + cmd + "' (run `wavelength help`)");
+}

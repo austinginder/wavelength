@@ -1,0 +1,302 @@
+{
+  "tempo": 120,
+  "tail": 3,
+  "markers": [
+    {
+      "beat": 0,
+      "name": "A"
+    },
+    {
+      "beat": 8,
+      "name": "B"
+    }
+  ],
+  "buses": [
+    {
+      "name": "Hall",
+      "fx": [
+        {
+          "type": "reverb",
+          "decay": 3.2,
+          "size": 0.8,
+          "mix": 1
+        }
+      ]
+    },
+    {
+      "name": "Echo",
+      "fx": [
+        {
+          "type": "delay",
+          "time": 0.75,
+          "feedback": 0.4,
+          "mix": 1
+        }
+      ]
+    }
+  ],
+  "master": {
+    "fx": [
+      {
+        "type": "compressor",
+        "threshold": -16,
+        "ratio": 2.5,
+        "attack": 20,
+        "release": 250,
+        "makeup": 2
+      },
+      {
+        "type": "limiter",
+        "ceiling": -1
+      }
+    ]
+  },
+  "tracks": [
+    {
+      "name": "Kick",
+      "plugin": "builtin:drums",
+      "notes": [
+        {
+          "beat": 0,
+          "key": 36,
+          "vel": 0.95
+        },
+        {
+          "beat": 1,
+          "key": 38,
+          "vel": 0.9
+        },
+        {
+          "beat": 2,
+          "key": 36,
+          "vel": 0.95
+        },
+        {
+          "beat": 3,
+          "key": 38,
+          "vel": 0.9
+        },
+        {
+          "beat": 4,
+          "key": 36,
+          "vel": 0.95
+        },
+        {
+          "beat": 5,
+          "key": 38,
+          "vel": 0.9
+        },
+        {
+          "beat": 6,
+          "key": 36,
+          "vel": 0.95
+        },
+        {
+          "beat": 7,
+          "key": 38,
+          "vel": 0.9
+        },
+        {
+          "beat": 8,
+          "key": 49,
+          "vel": 1
+        },
+        {
+          "beat": 8,
+          "key": 36,
+          "vel": 1
+        }
+      ],
+      "sends": {
+        "Hall": -14
+      }
+    },
+    {
+      "name": "FX",
+      "plugin": "builtin:fx",
+      "notes": [
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": 50,
+          "vel": 0.9
+        },
+        {
+          "beat": 8,
+          "dur": 2,
+          "key": 48,
+          "vel": 1
+        }
+      ],
+      "sends": {
+        "Hall": -8
+      }
+    },
+    {
+      "name": "Pad",
+      "plugin": "nakst.Apricot",
+      "params": {
+        "Oscillator 1 Unison Voices": 0.5,
+        "Amp Attack Time": 0.5,
+        "Amp Release Time": 0.6
+      },
+      "fx": [
+        {
+          "type": "eq",
+          "bands": [
+            {
+              "type": "highpass",
+              "freq": 150
+            }
+          ]
+        },
+        {
+          "type": "filter",
+          "cutoff": 300,
+          "resonance": 1.2,
+          "automate": {
+            "cutoff": [
+              [
+                0,
+                300
+              ],
+              [
+                8,
+                6000
+              ]
+            ]
+          }
+        },
+        {
+          "type": "chorus",
+          "mix": 0.3
+        },
+        {
+          "type": "duck",
+          "trigger": "Kick",
+          "keys": [
+            36
+          ],
+          "depth": 9
+        }
+      ],
+      "automation": {
+        "gain": [
+          [
+            0,
+            -12
+          ],
+          [
+            4,
+            0
+          ]
+        ]
+      },
+      "sends": {
+        "Hall": -6
+      },
+      "notes": [
+        {
+          "beat": 0,
+          "dur": 4,
+          "key": "C4"
+        },
+        {
+          "beat": 0,
+          "dur": 4,
+          "key": "Eb4"
+        },
+        {
+          "beat": 0,
+          "dur": 4,
+          "key": "G4"
+        },
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": "Ab3"
+        },
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": "C4"
+        },
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": "Eb4"
+        },
+        {
+          "beat": 8,
+          "dur": 4,
+          "key": "G3"
+        },
+        {
+          "beat": 8,
+          "dur": 4,
+          "key": "B3"
+        },
+        {
+          "beat": 8,
+          "dur": 4,
+          "key": "D4"
+        }
+      ]
+    },
+    {
+      "name": "Lead",
+      "plugin": "audio.vital.synth",
+      "automation": {
+        "params": {
+          "Filter 1 Cutoff": [
+            [
+              0,
+              0.3
+            ],
+            [
+              8,
+              0.8
+            ]
+          ]
+        }
+      },
+      "fx": [
+        {
+          "type": "saturate",
+          "drive": 4,
+          "mix": 0.4
+        },
+        {
+          "type": "width",
+          "amount": 1.3
+        }
+      ],
+      "sends": {
+        "Echo": -10,
+        "Hall": -12
+      },
+      "notes": [
+        {
+          "beat": 0,
+          "dur": 1,
+          "key": "G4"
+        },
+        {
+          "beat": 1,
+          "dur": 1,
+          "key": "Eb4"
+        },
+        {
+          "beat": 2,
+          "dur": 2,
+          "key": "C5"
+        },
+        {
+          "beat": 8,
+          "dur": 3,
+          "key": "D5"
+        }
+      ]
+    }
+  ]
+}

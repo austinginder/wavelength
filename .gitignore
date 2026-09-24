@@ -1,0 +1,4 @@
+build/
+out/
+*.wav
+.DS_Store

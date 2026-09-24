@@ -1,0 +1,820 @@
+{
+  "sampleRate": 48000,
+  "tempo": 120,
+  "timeSignature": [
+    4,
+    4
+  ],
+  "tail": 3,
+  "normalize": -1,
+  "tracks": [
+    {
+      "name": "Pad",
+      "plugin": "nakst.Apricot",
+      "gain": -3,
+      "params": {
+        "Oscillator 1 Unison Voices": 0.5,
+        "Amp Attack Time": 0.6,
+        "Amp Release Time": 0.6,
+        "Filter Cutoff": 0.55,
+        "Reverb Mix": 0.35
+      },
+      "notes": [
+        {
+          "beat": 0,
+          "dur": 4,
+          "key": "C3",
+          "vel": 0.7
+        },
+        {
+          "beat": 0,
+          "dur": 4,
+          "key": "Eb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 0,
+          "dur": 4,
+          "key": "G3",
+          "vel": 0.7
+        },
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": "Ab2",
+          "vel": 0.7
+        },
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": "C3",
+          "vel": 0.7
+        },
+        {
+          "beat": 4,
+          "dur": 4,
+          "key": "Eb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 8,
+          "dur": 4,
+          "key": "Eb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 8,
+          "dur": 4,
+          "key": "G3",
+          "vel": 0.7
+        },
+        {
+          "beat": 8,
+          "dur": 4,
+          "key": "Bb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 12,
+          "dur": 4,
+          "key": "Bb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 12,
+          "dur": 4,
+          "key": "D3",
+          "vel": 0.7
+        },
+        {
+          "beat": 12,
+          "dur": 4,
+          "key": "F3",
+          "vel": 0.7
+        },
+        {
+          "beat": 16,
+          "dur": 4,
+          "key": "C3",
+          "vel": 0.7
+        },
+        {
+          "beat": 16,
+          "dur": 4,
+          "key": "Eb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 16,
+          "dur": 4,
+          "key": "G3",
+          "vel": 0.7
+        },
+        {
+          "beat": 20,
+          "dur": 4,
+          "key": "Ab2",
+          "vel": 0.7
+        },
+        {
+          "beat": 20,
+          "dur": 4,
+          "key": "C3",
+          "vel": 0.7
+        },
+        {
+          "beat": 20,
+          "dur": 4,
+          "key": "Eb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 24,
+          "dur": 4,
+          "key": "Eb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 24,
+          "dur": 4,
+          "key": "G3",
+          "vel": 0.7
+        },
+        {
+          "beat": 24,
+          "dur": 4,
+          "key": "Bb3",
+          "vel": 0.7
+        },
+        {
+          "beat": 28,
+          "dur": 4,
+          "key": "Bb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 28,
+          "dur": 4,
+          "key": "D3",
+          "vel": 0.7
+        },
+        {
+          "beat": 28,
+          "dur": 4,
+          "key": "F3",
+          "vel": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Bass",
+      "plugin": "nakst.ExtraBold",
+      "gain": -2,
+      "params": {
+        "Filter Cutoff": 0.45
+      },
+      "notes": [
+        {
+          "beat": 0.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 0.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 1.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 1.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 2.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 2.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 3.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 3.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 4.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 4.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 5.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 5.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 6.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 6.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 7.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 7.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 8.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 8.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 9.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 9.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 10.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 10.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 11.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 11.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 12.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 12.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 13.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 13.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 14.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 14.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 15.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 15.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 16.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 16.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 17.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 17.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 18.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 18.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 19.0,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.9
+        },
+        {
+          "beat": 19.5,
+          "dur": 0.4,
+          "key": "C2",
+          "vel": 0.7
+        },
+        {
+          "beat": 20.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 20.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 21.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 21.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 22.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 22.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 23.0,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.9
+        },
+        {
+          "beat": 23.5,
+          "dur": 0.4,
+          "key": "Ab1",
+          "vel": 0.7
+        },
+        {
+          "beat": 24.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 24.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 25.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 25.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 26.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 26.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 27.0,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.9
+        },
+        {
+          "beat": 27.5,
+          "dur": 0.4,
+          "key": "Eb2",
+          "vel": 0.7
+        },
+        {
+          "beat": 28.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 28.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 29.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 29.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 30.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 30.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        },
+        {
+          "beat": 31.0,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.9
+        },
+        {
+          "beat": 31.5,
+          "dur": 0.4,
+          "key": "Bb1",
+          "vel": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Keys",
+      "plugin": "org.surge-synth-team.OB-Xf",
+      "gain": -6,
+      "pan": -0.3,
+      "notes": [
+        {
+          "beat": 0,
+          "dur": 0.5,
+          "key": "C4",
+          "vel": 0.6
+        },
+        {
+          "beat": 1.5,
+          "dur": 0.5,
+          "key": "Eb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 3,
+          "dur": 0.5,
+          "key": "G4",
+          "vel": 0.6
+        },
+        {
+          "beat": 4,
+          "dur": 0.5,
+          "key": "C4",
+          "vel": 0.6
+        },
+        {
+          "beat": 5.5,
+          "dur": 0.5,
+          "key": "Eb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 7,
+          "dur": 0.5,
+          "key": "Ab4",
+          "vel": 0.6
+        },
+        {
+          "beat": 8,
+          "dur": 0.5,
+          "key": "Bb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 9.5,
+          "dur": 0.5,
+          "key": "Eb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 11,
+          "dur": 0.5,
+          "key": "G4",
+          "vel": 0.6
+        },
+        {
+          "beat": 12,
+          "dur": 0.5,
+          "key": "Bb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 13.5,
+          "dur": 0.5,
+          "key": "D4",
+          "vel": 0.6
+        },
+        {
+          "beat": 15,
+          "dur": 0.5,
+          "key": "F4",
+          "vel": 0.6
+        },
+        {
+          "beat": 16,
+          "dur": 0.5,
+          "key": "C4",
+          "vel": 0.6
+        },
+        {
+          "beat": 17.5,
+          "dur": 0.5,
+          "key": "Eb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 19,
+          "dur": 0.5,
+          "key": "G4",
+          "vel": 0.6
+        },
+        {
+          "beat": 20,
+          "dur": 0.5,
+          "key": "C4",
+          "vel": 0.6
+        },
+        {
+          "beat": 21.5,
+          "dur": 0.5,
+          "key": "Eb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 23,
+          "dur": 0.5,
+          "key": "Ab4",
+          "vel": 0.6
+        },
+        {
+          "beat": 24,
+          "dur": 0.5,
+          "key": "Bb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 25.5,
+          "dur": 0.5,
+          "key": "Eb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 27,
+          "dur": 0.5,
+          "key": "G4",
+          "vel": 0.6
+        },
+        {
+          "beat": 28,
+          "dur": 0.5,
+          "key": "Bb4",
+          "vel": 0.6
+        },
+        {
+          "beat": 29.5,
+          "dur": 0.5,
+          "key": "D4",
+          "vel": 0.6
+        },
+        {
+          "beat": 31,
+          "dur": 0.5,
+          "key": "F4",
+          "vel": 0.6
+        }
+      ]
+    },
+    {
+      "name": "Lead",
+      "plugin": "audio.vital.synth",
+      "gain": -4,
+      "pan": 0.2,
+      "notes": [
+        {
+          "beat": 16,
+          "dur": 0.9,
+          "key": "G4",
+          "vel": 0.8
+        },
+        {
+          "beat": 17,
+          "dur": 0.9,
+          "key": "Eb4",
+          "vel": 0.8
+        },
+        {
+          "beat": 18,
+          "dur": 0.9,
+          "key": "F4",
+          "vel": 0.8
+        },
+        {
+          "beat": 19,
+          "dur": 0.9,
+          "key": "G4",
+          "vel": 0.8
+        },
+        {
+          "beat": 20,
+          "dur": 0.9,
+          "key": "Ab4",
+          "vel": 0.8
+        },
+        {
+          "beat": 21,
+          "dur": 0.9,
+          "key": "G4",
+          "vel": 0.8
+        },
+        {
+          "beat": 22,
+          "dur": 0.9,
+          "key": "F4",
+          "vel": 0.8
+        },
+        {
+          "beat": 23,
+          "dur": 0.9,
+          "key": "Eb4",
+          "vel": 0.8
+        },
+        {
+          "beat": 24,
+          "dur": 0.9,
+          "key": "Bb4",
+          "vel": 0.8
+        },
+        {
+          "beat": 25,
+          "dur": 0.9,
+          "key": "G4",
+          "vel": 0.8
+        },
+        {
+          "beat": 26,
+          "dur": 0.9,
+          "key": "Ab4",
+          "vel": 0.8
+        },
+        {
+          "beat": 27,
+          "dur": 0.9,
+          "key": "Bb4",
+          "vel": 0.8
+        },
+        {
+          "beat": 28,
+          "dur": 0.9,
+          "key": "D5",
+          "vel": 0.8
+        },
+        {
+          "beat": 29,
+          "dur": 0.9,
+          "key": "C5",
+          "vel": 0.8
+        },
+        {
+          "beat": 30,
+          "dur": 0.9,
+          "key": "Bb4",
+          "vel": 0.8
+        },
+        {
+          "beat": 31,
+          "dur": 0.9,
+          "key": "F4",
+          "vel": 0.8
+        }
+      ]
+    }
+  ]
+}
