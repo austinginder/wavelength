@@ -46,9 +46,11 @@ const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https
 
 Usage:
   wavelength plugins [--rescan] [--json]
-      List installed CLAP plugins (cached; --rescan reloads every bundle).
-  wavelength presets <plugin> [--search TEXT] [--json]
-      List a CLAP plugin's presets (factory banks and preset files) to use as "preset".
+      List installed CLAP and VST3 plugins and the built-in instruments (cached; --rescan
+      reloads every bundle).
+  wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
+      List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
+      preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
   wavelength samples [--search TEXT] [--kit NAME] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples and drum kit folders);
       --kit shows the General MIDI key each of a kit's files is mapped to.
@@ -65,7 +67,8 @@ Usage:
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
 .clap/.vst3 bundle. Prefix with vst3: or clap: when a name exists in both formats.
 State formats: auto (default), clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree (.odin), h2p,
-dx7 (<cartridge>.syx#<voice>), juce-string (.vital), raw.
+dx7 (<cartridge>.syx#<voice>), synplant, cherry, ngrr, microtonic, soundbox, decentsampler,
+juce-string (.vital), raw.
 Exit status is non-zero on any error; with --json, errors are {"ok":false,"error":...}.
 )";
 
