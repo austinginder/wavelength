@@ -61,7 +61,34 @@ A job is one JSON object. Unknown fields are ignored.
 | `sends` | `{}` | Bus name → send level in dB (post-fader). |
 | `automation` | none | `{"gain": [[beat, dB], ...], "params": {"Name": [[beat, value], ...]}}`. |
 
-`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`).
+`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), or `builtin:sampler`.
+
+### builtin:sampler
+
+Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the open zip + XML
+format of Bitwig's Sampler: pianos, organs, guitars, basses, keys, orchestral), folders of
+drum WAVs, or a single WAV. List what is installed with `wavelength samples [--search text]`.
+Names are searched in `$WAVELENGTH_SAMPLES_PATH` (colon-separated folders) and the Bitwig
+Studio package folders; paths work too (relative to the job).
+
+```json
+{"name": "Keys", "plugin": "builtin:sampler", "sampler": {"multisample": "Grand Piano", "release": 0.4}, "notes": [...]}
+{"name": "Drums", "plugin": "builtin:sampler", "sampler": {"kit": "Legend 707", "map": {"36": "Kick Legend 707 02.wav"}}, "notes": [...]}
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `multisample` | | Name or path of a `.multisample` (or a folder with `multisample.xml`). Key and velocity zones, velocity crossfades, round robins, sustain loops and key tracking come from the file. Keys outside every zone stretch the nearest sample. |
+| `kit` | | A folder of one-shot WAVs mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
+| `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths). |
+| `sample` + `root` | 60 | One WAV played chromatically, `root` = the key it sounds at its own pitch. |
+| `attack`, `release` | 0.002 / 0.25 s (kits 0 / 0.05) | Amplitude envelope. |
+| `oneShot` | kits true | Play samples to their end, ignoring note length. |
+| `choke` | kits `[[42, 44, 46]]` | Key groups that cut each other (a closed hat stops the open hat). |
+| `select` | 0 | Value (0-127) matched against multisample `select` ranges (alternate articulations). |
+| `transpose` | 0 | Semitones. |
+| `velocity` | 1 | Velocity sensitivity 0-1 (1 = about 7 dB quieter at half velocity). |
+| `gain` | 0 | dB. |
 
 ## Buses, master, markers
 

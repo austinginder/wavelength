@@ -34,6 +34,7 @@ struct Track {
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)
     Envelope gainAutomation;                                     // fader dB over time (empty = none)
     std::vector<std::pair<std::string, Envelope>> paramAutomation;   // plugin parameter curves
+    nlohmann::json sampler;                                      // builtin:sampler settings
 };
 
 struct Bus {

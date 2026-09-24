@@ -83,6 +83,7 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
                 tr.stateFormat = s.is_object() ? s.value("format", "auto") : "auto";
                 if (fs::path(tr.stateFile).is_relative()) tr.stateFile = (fs::path(baseDir) / tr.stateFile).string();
             }
+            if (t.contains("sampler")) tr.sampler = t["sampler"];
             if (t.contains("params"))
                 for (auto &[k, v] : t["params"].items()) tr.params.push_back({k, v.get<double>()});
             if (t.contains("fx")) {

@@ -76,6 +76,7 @@ add_executable(wavelength
   src/main.cpp
   src/bundle.cpp
   src/builtins.cpp
+  src/sampler.cpp
   src/effects.cpp
   src/engine.cpp
   src/loudness.cpp
@@ -92,7 +93,8 @@ add_executable(wavelength
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
-target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting)
+find_package(ZLIB REQUIRED)
+target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")

@@ -84,6 +84,10 @@ in the job (details in `docs/effects.md`):
 
 - **Drums and FX:** `builtin:drums` (General MIDI kit) and `builtin:fx` (impact, riser,
   reverse swell, sub drop) are always available. Big moments need them.
+- **Real samples:** `builtin:sampler` plays Bitwig's sound content and any WAV folders:
+  `{"multisample": "Grand Piano"}`, organs, guitars, basses, and drum machine kits such as
+  `{"kit": "Legend 707"}` / `"Legend 808"` / `"Legend 909"`. Find them with
+  `wavelength samples --search <text>`; check a kit's key map with `--kit <name>`.
 - **Space:** create buses with a `reverb` (and a `delay`, e.g. `"time": 0.75` beats) at
   `"mix": 1`, and send tracks to them (`"sends": {"Hall": -8}`). Shared reverb glues parts.
 - **Clean low end:** `eq` high-pass everything that isn't bass (pads ~140 Hz, leads ~150,

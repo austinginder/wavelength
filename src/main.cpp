@@ -1,6 +1,8 @@
 // Wavelength, a headless music engine for AI agents.
 //
 //   wavelength plugins [--rescan] [--json]
+//   wavelength presets <plugin> [--search TEXT] [--json]
+//   wavelength samples [--search TEXT] [--kit NAME] [--json]
 //   wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
 //   wavelength render <job.json> [--out DIR] [--json] [--verbose]
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
@@ -9,6 +11,7 @@
 #include "instance.hpp"
 #include "plugin.hpp"
 #include "presets.hpp"
+#include "sampler.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
 #include "render.hpp"
@@ -43,6 +46,9 @@ Usage:
       List installed CLAP plugins (cached; --rescan reloads every bundle).
   wavelength presets <plugin> [--search TEXT] [--json]
       List a CLAP plugin's presets (factory banks and preset files) to use as "preset".
+  wavelength samples [--search TEXT] [--kit NAME] [--json]
+      List sample libraries for builtin:sampler (Bitwig multisamples and drum kit folders);
+      --kit shows the General MIDI key each of a kit's files is mapped to.
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -105,6 +111,7 @@ int cmdPlugins(const Args &a) {
         return p;
     };
     all.push_back(builtin("builtin:drums", "Drums (built-in)", "GM kit: 36 kick, 38 snare, 37 rim, 42/46 hats, 49 crash, 51 ride, 41/45/48 toms", {"instrument", "drum"}));
+    all.push_back(builtin("builtin:sampler", "Sampler (built-in)", "Bitwig .multisample instruments, WAV drum kits and single samples (see `wavelength samples`)", {"instrument", "sampler"}));
     all.push_back(builtin("builtin:fx", "FX (built-in)", "48 impact, 50 riser (note length), 52 reverse swell (ends with the note), 53 sub drop", {"instrument"}));
     if (a.has("--json")) {
         json list = json::array();
@@ -172,6 +179,46 @@ int cmdPresets(const Args &a) {
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2));
     else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".\n", shown, presets.size(), info.name.c_str());
+    return 0;
+}
+
+// ---- samples ---------------------------------------------------------------------------
+int cmdSamples(const Args &a) {
+    std::string err;
+    if (a.has("--kit")) {
+        std::vector<std::pair<int, std::string>> map;
+        std::vector<std::string> unmapped;
+        std::string dir;
+        if (!kitMap(a.get("--kit"), fs::current_path().string(), map, unmapped, dir, err)) return fail(a, err);
+        json list = json::array();
+        for (auto &[k, f] : map) {
+            const bool guessed = std::find(unmapped.begin(), unmapped.end(), f) != unmapped.end();
+            const std::string file = fs::path(f).filename().string();
+            if (a.has("--json")) list.push_back({{"key", k}, {"file", file}, {"recognised", !guessed}});
+            else std::fprintf(OUT, "%3d  %s%s\n", k, file.c_str(), guessed ? "   (unrecognised name: next free key)" : "");
+        }
+        if (a.has("--json")) emit(json{{"ok", true}, {"kit", dir}, {"map", list}}.dump(2));
+        else std::fprintf(OUT, "\n%s\nUse as \"sampler\": {\"kit\": \"%s\"}; override keys with \"map\": {\"36\": \"<file>\"}.\n",
+                          dir.c_str(), fs::path(dir).filename().string().c_str());
+        return 0;
+    }
+    std::string q = a.get("--search");
+    std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+    json list = json::array();
+    size_t shown = 0;
+    const auto &lib = sampleLibrary();
+    for (const auto &e : lib) {
+        std::string hay = e.kind + " " + e.category + " " + e.name;
+        std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
+        if (!q.empty() && hay.find(q) == std::string::npos) continue;
+        ++shown;
+        if (a.has("--json")) list.push_back({{"kind", e.kind}, {"name", e.name}, {"category", e.category}, {"count", e.count}, {"path", e.path}});
+        else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
+                          e.kind == "kit" ? "wavs" : "zones");
+    }
+    if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2));
+    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"} or {\"kit\": \"<name>\"}.\n",
+                      shown, lib.size());
     return 0;
 }
 
@@ -308,6 +355,7 @@ int run(int argc, char **argv) {
         if (cmd == "plugins") return cmdPlugins(a);
         if (cmd == "params") return cmdParams(a);
         if (cmd == "presets") return cmdPresets(a);
+        if (cmd == "samples") return cmdSamples(a);
         if (cmd == "render") return cmdRender(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }

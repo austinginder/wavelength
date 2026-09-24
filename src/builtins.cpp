@@ -1,6 +1,7 @@
 #include "builtins.hpp"
 
 #include "dsp.hpp"
+#include "sampler.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -143,7 +144,8 @@ bool isBuiltin(const std::string &plugin) { return plugin.rfind("builtin:", 0) =
 bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track, Audio &out,
                    std::vector<std::string> &warnings, std::string &err) {
     const std::string kind = plugin.substr(8);
-    if (kind != "drums" && kind != "fx") { err = "unknown built-in instrument '" + plugin + "' (use builtin:drums or builtin:fx)"; return false; }
+    if (kind == "sampler") return renderSampler(job, track, out, warnings, err);
+    if (kind != "drums" && kind != "fx") { err = "unknown built-in instrument '" + plugin + "' (use builtin:drums, builtin:fx or builtin:sampler)"; return false; }
     const double sr = job.sampleRate;
     dsp::Noise nz(12345), nzl(777), nzr(4242);
     std::map<int, int> unmapped;

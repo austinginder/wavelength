@@ -1,0 +1,546 @@
+{
+ "sampleRate": 48000,
+ "tempo": 122,
+ "tail": 3,
+ "buses": [
+  {
+   "name": "Room",
+   "fx": [
+    {
+     "type": "reverb",
+     "decay": 1.6,
+     "size": 0.6,
+     "mix": 1
+    }
+   ]
+  }
+ ],
+ "master": {
+  "fx": [
+   {
+    "type": "limiter",
+    "ceiling": -1.5
+   }
+  ]
+ },
+ "tracks": [
+  {
+   "name": "707",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "kit": "Legend 707"
+   },
+   "gain": -10,
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 1,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 2,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 3,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 1,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 3,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 0.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 1.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 2.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 3.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 0.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 1.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 2.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 3.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 4,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 5,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 6,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 7,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 5,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 7,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 4.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 5.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 6.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 7.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 4.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 5.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 6.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 7.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 8,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 9,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 10,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 11,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 9,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 11,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 8.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 9.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 10.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 11.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 8.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 9.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 10.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 11.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 12,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 13,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 14,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 15,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 1
+    },
+    {
+     "beat": 13,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 15,
+     "dur": 0.25,
+     "key": 39,
+     "vel": 0.85
+    },
+    {
+     "beat": 12.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 13.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 14.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 15.0,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.55
+    },
+    {
+     "beat": 12.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 13.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 14.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    },
+    {
+     "beat": 15.5,
+     "dur": 0.25,
+     "key": 46,
+     "vel": 0.5
+    }
+   ]
+  },
+  {
+   "name": "Piano",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "multisample": "Grand Piano",
+    "release": 0.4
+   },
+   "gain": 6,
+   "sends": {
+    "Room": -10
+   },
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 3.8,
+     "key": 45,
+     "vel": 0.75
+    },
+    {
+     "beat": 0,
+     "dur": 3.8,
+     "key": 52,
+     "vel": 0.75
+    },
+    {
+     "beat": 0,
+     "dur": 3.8,
+     "key": 57,
+     "vel": 0.75
+    },
+    {
+     "beat": 0,
+     "dur": 3.8,
+     "key": 60,
+     "vel": 0.75
+    },
+    {
+     "beat": 0,
+     "dur": 3.8,
+     "key": 64,
+     "vel": 0.75
+    },
+    {
+     "beat": 4,
+     "dur": 3.8,
+     "key": 41,
+     "vel": 0.75
+    },
+    {
+     "beat": 4,
+     "dur": 3.8,
+     "key": 48,
+     "vel": 0.75
+    },
+    {
+     "beat": 4,
+     "dur": 3.8,
+     "key": 53,
+     "vel": 0.75
+    },
+    {
+     "beat": 4,
+     "dur": 3.8,
+     "key": 57,
+     "vel": 0.75
+    },
+    {
+     "beat": 4,
+     "dur": 3.8,
+     "key": 60,
+     "vel": 0.75
+    },
+    {
+     "beat": 8,
+     "dur": 3.8,
+     "key": 43,
+     "vel": 0.75
+    },
+    {
+     "beat": 8,
+     "dur": 3.8,
+     "key": 50,
+     "vel": 0.75
+    },
+    {
+     "beat": 8,
+     "dur": 3.8,
+     "key": 55,
+     "vel": 0.75
+    },
+    {
+     "beat": 8,
+     "dur": 3.8,
+     "key": 59,
+     "vel": 0.75
+    },
+    {
+     "beat": 8,
+     "dur": 3.8,
+     "key": 62,
+     "vel": 0.75
+    },
+    {
+     "beat": 12,
+     "dur": 3.8,
+     "key": 40,
+     "vel": 0.75
+    },
+    {
+     "beat": 12,
+     "dur": 3.8,
+     "key": 47,
+     "vel": 0.75
+    },
+    {
+     "beat": 12,
+     "dur": 3.8,
+     "key": 52,
+     "vel": 0.75
+    },
+    {
+     "beat": 12,
+     "dur": 3.8,
+     "key": 56,
+     "vel": 0.75
+    },
+    {
+     "beat": 12,
+     "dur": 3.8,
+     "key": 59,
+     "vel": 0.75
+    }
+   ]
+  },
+  {
+   "name": "Organ",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "multisample": "Farfisa SO Flute",
+    "attack": 0.02
+   },
+   "gain": -8,
+   "sends": {
+    "Room": -12
+   },
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 4,
+     "key": 76,
+     "vel": 0.8
+    },
+    {
+     "beat": 4,
+     "dur": 4,
+     "key": 72,
+     "vel": 0.8
+    },
+    {
+     "beat": 8,
+     "dur": 4,
+     "key": 74,
+     "vel": 0.8
+    },
+    {
+     "beat": 12,
+     "dur": 4,
+     "key": 71,
+     "vel": 0.8
+    }
+   ]
+  }
+ ]
+}
