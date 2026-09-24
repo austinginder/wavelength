@@ -440,14 +440,17 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     std::atomic<bool> done{false};
     std::string audioErr;
     int failures = 0;
+    // delay compensation: render `lat` more samples and write every output sample `lat` earlier
+    const int64_t lat = std::min<int64_t>(im.processor->getLatencySamples(), (int64_t)(10 * sr));
+    latencySamples = (uint32_t)lat;
     std::thread worker([&] {
         im.processor->setProcessing(true);
-        const int64_t warm = (int64_t)(0.1 * sr);
+        const int64_t warm = (int64_t)(0.1 * sr), end = total + lat;
         size_t next = 0;
         std::vector<float> lastAuto(autos.size(), NAN);
         bool firstBlock = true;
-        for (int64_t pos = -warm; pos < total;) {
-            const int32 n = (int32)std::min<int64_t>(block, pos < 0 ? -pos : total - pos);
+        for (int64_t pos = -warm; pos < end;) {
+            const int32 n = (int32)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
             data.numSamples = n;
             eventList.clear();
             outEvents.clear();
@@ -513,10 +516,11 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             for (int32 b = 0; b < data.numInputs; ++b)
                 for (int32 c = 0; c < data.inputs[b].numChannels; ++c) {
                     float *dst = data.inputs[b].channelBuffers32[c];
-                    if (b == 0 && input && pos >= 0) {
+                    std::fill(dst, dst + n, 0.f);
+                    if (b == 0 && input && pos >= 0 && pos < total) {
                         const auto &src = (c % 2) ? input->right : input->left;
-                        std::copy(src.begin() + pos, src.begin() + pos + n, dst);
-                    } else std::fill(dst, dst + n, 0.f);
+                        std::copy(src.begin() + pos, src.begin() + std::min<int64_t>(pos + n, total), dst);
+                    }
                 }
             for (int32 b = 0; b < data.numOutputs; ++b)
                 for (int32 c = 0; c < data.outputs[b].numChannels; ++c) std::fill(data.outputs[b].channelBuffers32[c], data.outputs[b].channelBuffers32[c] + n, 0.f);
@@ -526,8 +530,12 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 const auto &bus = data.outputs[0];
                 if (bus.numChannels > 0) {
                     const float *l = bus.channelBuffers32[0], *r = bus.numChannels > 1 ? bus.channelBuffers32[1] : l;
-                    std::copy(l, l + n, out.left.begin() + pos);
-                    std::copy(r, r + n, out.right.begin() + pos);
+                    for (int32 i = 0; i < n; ++i) {
+                        const int64_t at = pos + i - lat;
+                        if (at < 0 || at >= total) continue;
+                        out.left[(size_t)at] = l[i];
+                        out.right[(size_t)at] = r[i];
+                    }
                 }
             }
             pos += n;

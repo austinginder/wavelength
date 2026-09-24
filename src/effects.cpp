@@ -486,6 +486,7 @@ struct PluginFx : Effect {
         Audio wet;
         wet.resize(a.frames());
         if (!runPlugin(c.job, p, {}, &a, wet, err)) { err = "effect " + p.name + ": " + err; return false; }
+        latencySamples = p.plugin->latencySamples;
         for (auto &w : p.warnings) warnings.push_back(w);
         {   // an effect whose output is just a scaled copy of its input did nothing audible but change the
             // level: typically an unlicensed or demo-mode plugin, or a preset the plugin ignored

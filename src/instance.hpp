@@ -48,6 +48,7 @@ public:
     uint32_t inputChannels(uint32_t port) const;
     bool usesMidiDialect() const;
     bool acceptsMidi() const;
+    uint32_t latency() const;       // samples, valid while activated
     bool textToValue(uint32_t id, const std::string &text, double &value) const;       // note port 0 lists the MIDI dialect (CC / pitch bend as MIDI events)
 
     // Activate, process `blocks` silent blocks on an audio thread with these parameter
@@ -75,6 +76,7 @@ private:
     const clap_plugin_params_t *params_ = nullptr;
     const clap_plugin_state_t *state_ = nullptr;
     const clap_plugin_audio_ports_t *audioPorts_ = nullptr;
+    const clap_plugin_latency_t *latency_ = nullptr;
     const clap_plugin_note_ports_t *notePorts_ = nullptr;
     const clap_plugin_render_t *render_ = nullptr;
     const clap_plugin_preset_load_t *presetLoad_ = nullptr;

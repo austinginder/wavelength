@@ -319,6 +319,7 @@ int cmdRender(const Args &a) {
                           {"preset", t.preset}, {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automatedParams", t.automated},
                           {"stateFormat", t.stateFormat}, {"fx", t.fx}, {"lufs", r1(t.lufs)},
                           {"renderSeconds", std::round(t.seconds * 100) / 100},
+                          {"latencyCompensatedMs", std::round(t.latencySamples * 1000.0 / r.sampleRate * 100) / 100},
                           {"sectionLufs", [&] { json o = json::array(); for (double v : t.sectionLufs) o.push_back(r1(v)); return o; }()},   // same order as "sections"
                           {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
     json buses = json::array();

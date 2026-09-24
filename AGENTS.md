@@ -120,6 +120,8 @@ in the job (details in `docs/effects.md`):
 - `tracks[].sectionLufs`, each track's loudness per marker section after its fader and rides:
   find which part dominates a section without writing measuring scripts.
 - `tracks[].renderSeconds`, where the render time goes (plugin load and warmup included).
+- `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
+  removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.
 - `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
 - `tracks[].lufs`, integrated loudness of the stem (after its `fx`, before its fader).
   Use it for gain staging: `gain` = target − lufs. `mix.lufs` is the whole song

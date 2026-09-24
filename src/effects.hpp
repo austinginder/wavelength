@@ -4,6 +4,7 @@
 #include "job.hpp"
 #include "wav.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -21,6 +22,7 @@ public:
     virtual ~Effect() = default;
     virtual bool process(Audio &io, const FxContext &ctx, std::string &err) = 0;
     std::string label;                  // "reverb", "compressor", "Vital", …
+    uint32_t latencySamples = 0;        // plugin effects: reported processing delay (already compensated)
     std::vector<std::string> warnings;
 };
 

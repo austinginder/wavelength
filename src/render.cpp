@@ -77,6 +77,7 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     auto events = scheduleNotes(track.notes, job.sampleRate);
     scheduleControllers(track, job.sampleRate, (double)audio.frames() / job.sampleRate, events);
     if (!runPlugin(job, p, events, nullptr, audio, err)) { err = track.name + ": " + err; return false; }
+    tr.latencySamples += p.plugin->latencySamples;
     for (auto &w : p.warnings) tr.warnings.push_back(w);
     return true;
 }
@@ -140,6 +141,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         if (verbose) std::fprintf(stderr, "rendering %s (%s)...\n", track.name.c_str(), track.plugin.c_str());
         if (!renderInstrument(job, track, audio, tr, verbose, err)) return false;
         if (!runChain(trackChains[i], audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err)) return false;
+        for (auto &fx : trackChains[i]) tr.latencySamples += fx->latencySamples;
 
         char prefix[8];
         std::snprintf(prefix, sizeof prefix, "%02zu-", i + 1);

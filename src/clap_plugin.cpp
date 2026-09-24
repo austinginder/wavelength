@@ -79,6 +79,9 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     if (!inst.activate(sr, block, err)) return false;
     inst.pump((warmup >= 0 ? warmup : job.warmup) * 1000.0);
     const bool midi = inst.usesMidiDialect(), midiCtl = inst.acceptsMidi();
+    // delay compensation: render `lat` more samples and write every output sample `lat` earlier
+    const int64_t lat = std::min<int64_t>(inst.latency(), (int64_t)(10 * sr));
+    latencySamples = (uint32_t)lat;
     bool warnedCc = false;
 
     const uint32_t outPorts = std::max<uint32_t>(1, inst.outputPortCount()), inPorts = inst.inputPortCount();
@@ -117,8 +120,9 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         std::vector<double> lastAuto(autos.size(), NAN);
         clap_event_transport_t transport{};
         bool first = true;
-        for (int64_t pos = -warm; pos < total && audioErr.empty();) {
-            const uint32_t n = (uint32_t)std::min<int64_t>(block, pos < 0 ? -pos : total - pos);
+        const int64_t end = total + lat;
+        for (int64_t pos = -warm; pos < end && audioErr.empty();) {
+            const uint32_t n = (uint32_t)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
             notes.clear(); midis.clear(); params.clear(); exprs.clear();
             params.reserve(initial.size() * 2 + autos.size());
             Events in;
@@ -212,7 +216,7 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             for (auto &port : inStore) for (auto &c : port) std::fill(c.begin(), c.begin() + n, 0.f);
             if (input && pos >= 0 && !inStore.empty()) {
                 auto &ip = inStore[0];
-                for (uint32_t i = 0; i < n; ++i) {
+                for (uint32_t i = 0; i < n && pos + i < total; ++i) {
                     ip[0][i] = input->left[pos + i];
                     if (ip.size() > 1) ip[1][i] = input->right[pos + i];
                 }
@@ -233,8 +237,10 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             if (pos >= 0) {
                 const auto &mainOut = outStore[0];
                 for (uint32_t i = 0; i < n; ++i) {
-                    out.left[pos + i] = mainOut[0][i];
-                    out.right[pos + i] = mainOut.size() > 1 ? mainOut[1][i] : mainOut[0][i];
+                    const int64_t at = pos + i - lat;
+                    if (at < 0 || at >= total) continue;
+                    out.left[at] = mainOut[0][i];
+                    out.right[at] = mainOut.size() > 1 ? mainOut[1][i] : mainOut[0][i];
                 }
             }
             steady += n;

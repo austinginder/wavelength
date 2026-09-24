@@ -59,6 +59,7 @@ Working towards **v0.1.0**, the first release.
 - Kit auto-mapping groups takes of one sound and maps toms by number, so some keys of auto-mapped kits play different files than before (explicit `map` entries are unaffected).
 
 ### Fixed
+- Plugin delay compensation: instruments and effects that report latency (lookahead limiters, linear-phase EQs, LA-2A, ...) are rendered that many samples longer and shifted back into place, so their tracks no longer land late against the mix. The report gives `tracks[].latencyCompensatedMs`.
 - A failed render no longer leaves the previous render's `mix.wav`, `report.json` and stems behind; it writes `{"ok": false}` to `report.json`.
 - `params` set on top of a `state` stick on plugins that apply state late (Surge XT); `params` inspection processes a few blocks first so such plugins show real values.
 - Clamp warnings no longer fire for in-range values (float precision) and show the range.

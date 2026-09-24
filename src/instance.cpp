@@ -123,6 +123,7 @@ void Instance::queryExtensions() {
     params_ = static_cast<const clap_plugin_params_t *>(ext(CLAP_EXT_PARAMS));
     state_ = static_cast<const clap_plugin_state_t *>(ext(CLAP_EXT_STATE));
     audioPorts_ = static_cast<const clap_plugin_audio_ports_t *>(ext(CLAP_EXT_AUDIO_PORTS));
+    latency_ = static_cast<const clap_plugin_latency_t *>(ext(CLAP_EXT_LATENCY));
     notePorts_ = static_cast<const clap_plugin_note_ports_t *>(ext(CLAP_EXT_NOTE_PORTS));
     render_ = static_cast<const clap_plugin_render_t *>(ext(CLAP_EXT_RENDER));
     presetLoad_ = static_cast<const clap_plugin_preset_load_t *>(ext(CLAP_EXT_PRESET_LOAD));
@@ -340,6 +341,7 @@ uint32_t Instance::inputChannels(uint32_t port) const {
 bool Instance::textToValue(uint32_t id, const std::string &text, double &value) const {
     return params_ && params_->text_to_value && params_->text_to_value(plugin_, id, text.c_str(), &value);
 }
+uint32_t Instance::latency() const { return latency_ ? latency_->get(plugin_) : 0; }
 bool Instance::acceptsMidi() const {
     if (!notePorts_ || notePorts_->count(plugin_, true) == 0) return false;
     clap_note_port_info_t info{};

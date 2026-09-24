@@ -77,6 +77,9 @@ public:
     }
     // Factory programs a plugin lists itself (VST3 program lists); empty when it has none.
     virtual std::vector<std::string> programs() { return {}; }
+    // Samples of processing delay the plugin reported for its last render (lookahead, linear
+    // phase). Renders already remove it: output is shifted earlier so tracks stay aligned.
+    uint32_t latencySamples = 0;
 
     virtual std::vector<ParamInfo> params() const = 0;
     bool findParam(const std::string &key, ParamInfo &out) const;   // "#id", name, "Module/Name"
