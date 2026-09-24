@@ -1,8 +1,8 @@
 #pragma once
-// Running CLAP plugins over a whole timeline: instruments (notes in, audio out) and
+// Running plugins (CLAP or VST3) over a whole timeline: instruments (notes in, audio out) and
 // effects (audio in, audio out), with parameter automation.
 #include "automation.hpp"
-#include "instance.hpp"
+#include "plugin.hpp"
 #include "job.hpp"
 #include "wav.hpp"
 
@@ -12,30 +12,17 @@
 
 namespace wl {
 
-struct TimedEvent {
-    int64_t frame;
-    bool on;
-    int key, channel;
-    double velocity;
-};
-
-struct AutoParam {
-    clap_id id;
-    void *cookie;
-    std::string name;
-    Envelope env;   // plain values over seconds
-};
-
 struct PluginSetup {
     std::string spec, stateFile, stateFormat;
     std::vector<ParamSetting> params;                         // set once
     std::vector<std::pair<std::string, Envelope>> automation; // name → curve
     bool verbose = false;
+    double warmup = -1;
 };
 
 struct OpenedPlugin {
-    std::unique_ptr<Instance> inst;
-    std::string id, name, stateFormat;
+    std::unique_ptr<Plugin> plugin;
+    std::string id, name, format, stateFormat;
     std::vector<ParamValue> initial;
     std::vector<AutoParam> autos;
     std::vector<std::string> warnings;

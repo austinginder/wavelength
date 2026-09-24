@@ -38,6 +38,22 @@ In order of preference:
 
 Default patches are usually plain and quiet; don't judge an instrument by its init patch.
 
+## VST3 and sample libraries
+
+VST3 plugins work everywhere CLAP plugins do. `wavelength plugins` lists both (`format`
+column); name clashes resolve to CLAP unless you write `vst3:Name`. Sample-based
+instruments need a `warmup` of several seconds on their track so samples finish loading.
+
+Many libraries select their instrument through state, not parameters. Look for NKS presets
+(`.nksf`, e.g. `~/Spitfire/<library>/NKS/`): each one is a complete instrument and loads as
+`state`. **BBC Symphony Orchestra** (Discover): one track per instrument, `warmup` 5+,
+notes must be inside the instrument's playable range (out-of-range notes are silent),
+and articulations are selected with keyswitch notes starting at MIDI 0 (0 = the first
+articulation, usually Long; 1 = Short; strings: 2 = Pizzicato, 3 = Tremolo), played just
+before the notes they apply to. Performance controls are parameters: `Expression`,
+`Dynamics`, `Vibrato`, `Release`, `Tightness`, `Reverb` and the `Mic: ...` mixes, all
+automatable.
+
 ## Writing jobs
 
 See `docs/job-format.md` for every field. The essentials:
@@ -89,8 +105,8 @@ changes don't alter stems.
 
 ## Known limits (v0.1)
 
-- CLAP only (no VST3/AU yet). Built-in effects cover the essentials; CLAP effects work in
-  any `fx` chain when installed.
+- CLAP and VST3 (no Audio Units yet). Built-in effects cover the essentials; installed CLAP
+  and VST3 effects work in any `fx` chain.
 - All tracks render in one process. Some plugin families (the nakst synths) share
   Objective-C class names and print a warning when several load together; if a render
   crashes, split tracks into separate jobs.

@@ -7,6 +7,8 @@
 //   wavelength version
 #include "catalog.hpp"
 #include "instance.hpp"
+#include "plugin.hpp"
+#include "vst3_plugin.hpp"
 #include "job.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
@@ -43,12 +45,14 @@ Usage:
       Hidden and read-only parameters are omitted unless --all is given.
   wavelength render <job.json> [--out DIR] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out).
-  wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
-      Load an optional starting state, apply parameter values, save a preset.
+  wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
+      Load an optional starting state, apply parameter values, save a preset
+      (.clap-preset for CLAP plugins, .vstpreset for VST3).
   wavelength version
 
-<plugin> is a CLAP id (nakst.Apricot), a plugin name (Apricot) or a path to a .clap bundle.
-State formats: auto (default), clap-preset, juce-string (.vital files), raw.
+<plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
+.clap/.vst3 bundle. Prefix with vst3: or clap: when a name exists in both formats.
+State formats: auto (default), clap-preset, vstpreset, nksf, juce-string (.vital), raw.
 Exit status is non-zero on any error; with --json, errors are {"ok":false,"error":...}.
 )";
 
@@ -91,42 +95,45 @@ json levelsJson(const Levels &l) {
 int cmdPlugins(const Args &a) {
     std::vector<std::string> warnings;
     auto all = scanPlugins(a.has("--rescan"), warnings);
-    all.push_back({"builtin:drums", "Drums (built-in)", "Wavelength", WAVELENGTH_VERSION,
-                   "GM kit: 36 kick, 38 snare, 37 rim, 42/46 hats, 49 crash, 51 ride, 41/45/48 toms", "", {"instrument", "drum"}});
-    all.push_back({"builtin:fx", "FX (built-in)", "Wavelength", WAVELENGTH_VERSION,
-                   "48 impact, 50 riser (note length), 52 reverse swell (ends with the note), 53 sub drop", "", {"instrument"}});
+    auto builtin = [](const char *id, const char *name, const char *desc, std::vector<std::string> features) {
+        PluginInfo p;
+        p.id = id; p.name = name; p.vendor = "Wavelength"; p.version = WAVELENGTH_VERSION; p.description = desc;
+        p.format = "builtin"; p.features = std::move(features);
+        return p;
+    };
+    all.push_back(builtin("builtin:drums", "Drums (built-in)", "GM kit: 36 kick, 38 snare, 37 rim, 42/46 hats, 49 crash, 51 ride, 41/45/48 toms", {"instrument", "drum"}));
+    all.push_back(builtin("builtin:fx", "FX (built-in)", "48 impact, 50 riser (note length), 52 reverse swell (ends with the note), 53 sub drop", {"instrument"}));
     if (a.has("--json")) {
         json list = json::array();
         for (auto &p : all)
-            list.push_back({{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version},
+            list.push_back({{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version}, {"format", p.format},
                             {"features", p.features}, {"bundle", p.bundlePath}});
         emit(json{{"ok", true}, {"plugins", list}, {"warnings", warnings}}.dump(2));
         return 0;
     }
     for (auto &p : all) {
         bool instrument = std::find(p.features.begin(), p.features.end(), "instrument") != p.features.end();
-        std::fprintf(OUT, "%-36s %-22s %-18s %s\n", p.id.c_str(), p.name.c_str(), p.vendor.c_str(), instrument ? "instrument" : "effect");
+        std::fprintf(OUT, "%-7s %-32.32s %-30.30s %-22.22s %s\n", p.format.c_str(), p.name.c_str(), p.id.c_str(), p.vendor.c_str(),
+                     instrument ? "instrument" : "effect");
     }
     for (auto &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
-    std::fprintf(OUT, "\n%zu plugins in %zu search paths\n", all.size(), clapSearchPaths().size());
+    std::fprintf(OUT, "\n%zu plugins (CLAP, VST3 and built-in). Use \"vst3:Name\" or \"clap:Name\" when a name exists in both formats.\n", all.size());
     return 0;
 }
 
 // load a plugin (+ optional state) for inspection on the main thread
-std::unique_ptr<Instance> openForInspection(const Args &a, const std::string &spec, PluginInfo &info, std::string &err) {
+std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec, PluginInfo &info, std::string &err) {
     if (!resolvePlugin(spec, info, err)) return nullptr;
-    auto bundle = Bundle::open(info.bundlePath, err);
-    if (!bundle) return nullptr;
-    auto inst = Instance::create(bundle, info.id, err);
-    if (!inst) return nullptr;
-    inst->verbose = a.has("--verbose");
+    auto plugin = createPlugin(info, err);
+    if (!plugin) return nullptr;
+    plugin->verbose = a.has("--verbose");
     if (a.has("--state")) {
         StateFile sf;
         if (!readStateFile(a.get("--state"), a.get("--format", "auto"), sf, err)) return nullptr;
-        if (!inst->loadState(sf.state, err)) return nullptr;
+        if (!plugin->loadState(sf, err)) return nullptr;
     }
-    inst->pump(150);
-    return inst;
+    plugin->pump(info.format == "vst3" ? 500 : 150);
+    return plugin;
 }
 
 // ---- params ----------------------------------------------------------------------------
@@ -149,7 +156,7 @@ int cmdParams(const Args &a) {
             std::fprintf(OUT, "#%-6u %-40s %10.4g  [%g .. %g]  %s\n", p.id,
                         (p.module.empty() ? p.name : p.module + "/" + p.name).c_str(), p.value, p.min, p.max, p.display.c_str());
     }
-    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"params", list}}.dump(2));
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"params", list}}.dump(2));
     else std::fprintf(OUT, "\n%zu of %zu parameters (%s)\n", shown, params.size(), info.name.c_str());
     return 0;
 }
@@ -204,8 +211,8 @@ int cmdRender(const Args &a) {
 
 // ---- state save ------------------------------------------------------------------------
 int cmdState(const Args &a) {
-    if (a.positional.size() < 3 || a.positional[1] != "save") return fail(a, "usage: wavelength state save <plugin> --out FILE.clap-preset");
-    if (!a.has("--out")) return fail(a, "state save needs --out FILE.clap-preset");
+    if (a.positional.size() < 3 || a.positional[1] != "save") return fail(a, "usage: wavelength state save <plugin> --out FILE");
+    if (!a.has("--out")) return fail(a, "state save needs --out FILE (.clap-preset for CLAP, .vstpreset for VST3)");
     PluginInfo info;
     std::string err;
     auto inst = openForInspection(a, a.positional[2], info, err);
@@ -216,28 +223,48 @@ int cmdState(const Args &a) {
         if (eq == std::string::npos) return fail(a, "--set expects \"Name=value\", got '" + s + "'");
         ParamInfo pi;
         if (!inst->findParam(s.substr(0, eq), pi)) return fail(a, "no parameter '" + s.substr(0, eq) + "' on " + info.name);
-        values.push_back({pi.id, pi.cookie, std::clamp(std::stod(s.substr(eq + 1)), pi.min, pi.max)});
+        values.push_back({pi.id, pi.cookie, std::clamp(std::stod(s.substr(eq + 1)), std::min(pi.min, pi.max), std::max(pi.min, pi.max))});
     }
     if (!inst->setParams(values, err)) return fail(a, err);
-    if (!values.empty() && !inst->commitParams(values, 48000, 512, 8, err)) return fail(a, err);
+    if (!values.empty() && !inst->commitParams(values, 48000, 512, err)) return fail(a, err);
     inst->pump(100);
-    std::vector<uint8_t> state;
-    if (!inst->saveState(state, err)) return fail(a, err);
-    if (!writeClapPreset(a.get("--out"), info.id, state, err)) return fail(a, err);
-    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"file", a.get("--out")}, {"bytes", state.size()}}.dump(2));
-    else std::fprintf(OUT, "saved %zu bytes of %s state to %s\n", state.size(), info.name.c_str(), a.get("--out").c_str());
+    size_t bytes = 0;
+    if (!inst->saveStateFile(a.get("--out"), bytes, err)) return fail(a, err);
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"file", a.get("--out")}, {"bytes", bytes}}.dump(2));
+    else std::fprintf(OUT, "saved %zu bytes of %s state to %s\n", bytes, info.name.c_str(), a.get("--out").c_str());
     return 0;
 }
 
 } // namespace
 
+int run(int argc, char **argv);
+
+// Plugins (JUCE ones especially) often crash in their static destructors when a host process
+// exits. Everything useful is written by then, so leave without running them.
 int main(int argc, char **argv) {
+    const int code = run(argc, argv);
+    std::fflush(OUT);
+    std::fflush(stderr);
+    _exit(code);
+}
+
+int run(int argc, char **argv) {
     int realStdout = dup(STDOUT_FILENO);
     if (realStdout >= 0 && (OUT = fdopen(realStdout, "w"))) dup2(STDERR_FILENO, STDOUT_FILENO);
     else OUT = stdout;
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
+    if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
+        std::vector<PluginInfo> plugins;
+        std::string err;
+        json out = {{"ok", scanVst3Bundle(a.positional[1], plugins, err)}, {"plugins", json::array()}};
+        for (const auto &p : plugins) out["plugins"].push_back(pluginToJson(p));
+        if (!err.empty()) out["error"] = err;
+        emit(out.dump());
+        std::fflush(OUT);
+        _exit(0);   // skip plugin static destructors, which some plugins crash in
+    }
     try {
         if (cmd == "plugins") return cmdPlugins(a);
         if (cmd == "params") return cmdParams(a);

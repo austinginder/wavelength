@@ -19,3 +19,11 @@ Working towards **v0.1.0**, the first release.
 - Agent ergonomics: `--json` on every command with actionable errors; plugin stdout is diverted to stderr so reports stay parseable.
 - Docs: `AGENTS.md` (operating guide and mixing playbook), `docs/job-format.md`, `docs/effects.md`.
 - `scripts/check.sh` regression check; examples `hello.json` and `effects-tour.json`.
+- VST3 hosting (Steinberg VST3 SDK 3.8, MIT): instruments and effects render through the same jobs, effects chains, automation and reports as CLAP plugins. Plugins resolve by name, id or bundle path; `vst3:` / `clap:` prefixes pick a format when a plugin ships as both.
+- VST3 scanning runs each unknown bundle in a child process with a timeout, so a plugin that crashes or hangs while loading can't take the scan down; results (including failures such as Intel-only bundles) are cached.
+- State formats `vstpreset` (VST3 preset files, as found inside Bitwig DAWprojects) and `nksf` (Native Instruments NKS presets, which carry the plugin's own state; this is how BBC Symphony Orchestra instruments load headlessly).
+- Per-track and per-effect `warmup` for plugins that stream samples after activation (orchestral libraries).
+- `state save` writes `.vstpreset` files for VST3 plugins.
+
+### Fixed
+- The CLI exits without running plugin static destructors, which crashed some plugins at shutdown after the work was already written.

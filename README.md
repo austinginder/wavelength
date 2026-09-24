@@ -1,7 +1,7 @@
 # Wavelength
 
 A headless music engine for AI agents. Wavelength plays notes through real, installed
-CLAP synthesizers (Vital, Surge's OB-Xf, the nakst synths, …) offline, with no DAW and
+CLAP and VST3 instruments (Vital, Surge's OB-Xf, the nakst synths, BBC Symphony Orchestra, …) offline, with no DAW and
 no screen, mixes them with built-in effects, buses and automation, and returns WAV
 stems, a mixdown and a machine-readable report with loudness per track and section.
 
@@ -15,7 +15,7 @@ https://wavelength.run
 ## Build
 
 Requires CMake 3.20+ and a C++17 compiler (Xcode command line tools on macOS). The CLAP
-headers and nlohmann/json are fetched at configure time.
+headers, the VST3 SDK (hosting sources only) and nlohmann/json are fetched at configure time.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -59,5 +59,5 @@ master). `src/state_file.*` reads and writes plugin state containers.
 1. Per-track process isolation (crash containment, plugin families that clash in one process).
 2. `render project.dawproject`: render DAWproject files directly, including their plugin states.
 3. A local service (Go) with a web UI and live playback through the speakers.
-4. VST3 and Audio Unit hosting.
+4. Audio Unit hosting.
 5. True-peak (oversampled) limiting and metering.

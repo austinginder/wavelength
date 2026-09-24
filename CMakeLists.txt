@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(wavelength VERSION 0.1.0 LANGUAGES CXX)
+project(wavelength VERSION 0.1.0 LANGUAGES C CXX)
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +20,57 @@ FetchContent_Declare(clap
 FetchContent_Declare(json
   URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-FetchContent_MakeAvailable(clap json)
+# VST3 SDK (MIT since 3.8): only the hosting sources are compiled, so SOURCE_SUBDIR points
+# at a folder without a CMakeLists.txt to keep the SDK's own targets out of the build
+FetchContent_Declare(vst3sdk
+  GIT_REPOSITORY https://github.com/steinbergmedia/vst3sdk.git
+  GIT_TAG v3.8.1_build_84
+  GIT_SHALLOW TRUE
+  GIT_SUBMODULES base pluginterfaces public.sdk
+  SOURCE_SUBDIR wavelength-no-build)
+FetchContent_MakeAvailable(clap json vst3sdk)
+
+set(SDK ${vst3sdk_SOURCE_DIR})
+add_library(vst3hosting STATIC
+  ${SDK}/base/source/baseiids.cpp
+  ${SDK}/base/source/fbuffer.cpp
+  ${SDK}/base/source/fdebug.cpp
+  ${SDK}/base/source/fobject.cpp
+  ${SDK}/base/source/fstreamer.cpp
+  ${SDK}/base/source/fstring.cpp
+  ${SDK}/base/source/timer.cpp
+  ${SDK}/base/source/updatehandler.cpp
+  ${SDK}/base/thread/source/fcondition.cpp
+  ${SDK}/base/thread/source/flock.cpp
+  ${SDK}/pluginterfaces/base/conststringtable.cpp
+  ${SDK}/pluginterfaces/base/coreiids.cpp
+  ${SDK}/pluginterfaces/base/funknown.cpp
+  ${SDK}/pluginterfaces/base/ustring.cpp
+  ${SDK}/public.sdk/source/common/commoniids.cpp
+  ${SDK}/public.sdk/source/common/commonstringconvert.cpp
+  ${SDK}/public.sdk/source/common/memorystream.cpp
+  ${SDK}/public.sdk/source/vst/vstinitiids.cpp
+  ${SDK}/public.sdk/source/vst/vstpresetfile.cpp
+  ${SDK}/public.sdk/source/vst/hosting/connectionproxy.cpp
+  ${SDK}/public.sdk/source/vst/hosting/eventlist.cpp
+  ${SDK}/public.sdk/source/vst/hosting/hostclasses.cpp
+  ${SDK}/public.sdk/source/vst/hosting/module.cpp
+  ${SDK}/public.sdk/source/vst/hosting/parameterchanges.cpp
+  ${SDK}/public.sdk/source/vst/hosting/pluginterfacesupport.cpp
+  ${SDK}/public.sdk/source/vst/hosting/plugprovider.cpp
+  ${SDK}/public.sdk/source/vst/hosting/processdata.cpp
+  ${SDK}/public.sdk/source/vst/utility/stringconvert.cpp)
+if(APPLE)
+  target_sources(vst3hosting PRIVATE ${SDK}/public.sdk/source/vst/hosting/module_mac.mm ${SDK}/public.sdk/source/common/threadchecker_mac.mm)
+  set_source_files_properties(${SDK}/public.sdk/source/vst/hosting/module_mac.mm ${SDK}/public.sdk/source/common/threadchecker_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+  target_link_libraries(vst3hosting PUBLIC "-framework CoreFoundation" "-framework Foundation")
+elseif(UNIX)
+  target_sources(vst3hosting PRIVATE ${SDK}/public.sdk/source/vst/hosting/module_linux.cpp ${SDK}/public.sdk/source/common/threadchecker_linux.cpp)
+  target_link_libraries(vst3hosting PUBLIC dl pthread)
+endif()
+target_include_directories(vst3hosting SYSTEM PUBLIC ${SDK})
+target_compile_definitions(vst3hosting PUBLIC RELEASE=1)
+target_compile_options(vst3hosting PRIVATE -w)
 
 add_executable(wavelength
   src/main.cpp
@@ -26,16 +79,19 @@ add_executable(wavelength
   src/effects.cpp
   src/engine.cpp
   src/loudness.cpp
+  src/plugin.cpp
   src/instance.cpp
   src/catalog.cpp
+  src/clap_plugin.cpp
   src/job.cpp
   src/render.cpp
   src/state_file.cpp
+  src/vst3_plugin.cpp
   src/wav.cpp)
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
-target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json)
+target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")

@@ -28,6 +28,7 @@ struct Track {
     std::vector<ParamSetting> params;
     std::vector<Note> notes;
     double gainDb = 0, pan = 0;
+    double warmup = -1;                                          // seconds; < 0 = job warmup
     bool mute = false;
     nlohmann::json fx = nlohmann::json::array();               // effect chain, in order
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)

@@ -48,12 +48,13 @@ A job is one JSON object. Unknown fields are ignored.
 | Field | Default | Meaning |
 |---|---|---|
 | `name` | `trackN` | Used for the stem file name and in the report. |
-| `plugin` | required | CLAP id (`nakst.Apricot`), plugin name (`Apricot`), path to a `.clap` bundle, or `path.clap#id`. |
-| `state` | none | A preset file path, or `{"file": "...", "format": "auto"}`. Formats: `clap-preset` (Bitwig / DAWproject container), `juce-string` (text presets such as Vital `.vital`), `raw`, `auto` (detects the first two). |
+| `plugin` | required | A plugin id (`nakst.Apricot`, a VST3 class id), a name (`Apricot`, `BBC Symphony Orchestra`), a path to a `.clap`/`.vst3` bundle, or `path#id`. Prefix `vst3:` or `clap:` when a name exists in both formats (e.g. `vst3:Vital`). |
+| `state` | none | A preset file path, or `{"file": "...", "format": "auto"}`. Formats: `clap-preset` (CLAP, Bitwig / DAWproject container), `vstpreset` (VST3 preset), `nksf` (NKS preset: the plugin's own state), `juce-string` (text presets such as Vital `.vital`), `raw`; `auto` detects them. |
 | `params` | `{}` | `name → plain value`, applied after the state. Keys: exact name, `Module/Name`, or `#id`. Out-of-range values are clamped (with a warning). |
 | `gain` | 0 | dB applied when summing into the mix. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |
 | `mute` | false | Render the stem but leave it out of the mix. |
+| `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |
 | `notes` | `[]` | See below. |
 | `fx` | `[]` | Effect chain (built-in or CLAP plugins), see `effects.md`. |
 | `sends` | `{}` | Bus name → send level in dB (post-fader). |

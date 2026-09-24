@@ -62,6 +62,7 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     setup.params = track.params;
     setup.automation = track.paramAutomation;
     setup.verbose = verbose;
+    setup.warmup = track.warmup;
     OpenedPlugin p;
     if (!openPlugin(setup, track.name, p, err)) return false;
     tr.plugin = p.id;

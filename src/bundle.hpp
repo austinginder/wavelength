@@ -9,6 +9,7 @@ namespace wl {
 
 struct PluginInfo {
     std::string id, name, vendor, version, description, bundlePath;
+    std::string format = "clap";   // "clap" or "vst3"
     std::vector<std::string> features;
 };
 

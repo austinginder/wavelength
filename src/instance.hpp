@@ -6,6 +6,7 @@
 // While audio renders, the main thread keeps pumping the run loop and on_main_thread()
 // requests, because many plugins (JUCE ones especially) do real work there.
 #include "bundle.hpp"
+#include "plugin.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -15,21 +16,6 @@
 #include <vector>
 
 namespace wl {
-
-struct ParamInfo {
-    clap_id id;
-    void *cookie;          // must be passed back in every event for this parameter
-    std::string name, module;
-    double min, max, def, value;
-    bool stepped, readonly, hidden;
-    std::string display;   // plugin's own text for the current value
-};
-
-struct ParamValue {
-    clap_id id;
-    void *cookie;
-    double value;
-};
 
 class Instance {
 public:
