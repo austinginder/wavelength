@@ -38,6 +38,11 @@ Working towards **v0.1.0**, the first release.
 - `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 
+### Changed
+- Automation points at the same beat keep the order they are written in (`[16, 0], [16, 1]` jumps from 0 to 1); they used to be sorted by value.
+- The limiter detects true (inter-sample) peaks by default; mixes limited at the same ceiling come out a few tenths of a dB quieter.
+- Kit auto-mapping groups takes of one sound and maps toms by number, so some keys of auto-mapped kits play different files than before (explicit `map` entries are unaffected).
+
 ### Fixed
 - A failed render no longer leaves the previous render's `mix.wav`, `report.json` and stems behind; it writes `{"ok": false}` to `report.json`.
 - `params` set on top of a `state` stick on plugins that apply state late (Surge XT); `params` inspection processes a few blocks first so such plugins show real values.
