@@ -78,7 +78,8 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     const double sr = job.sampleRate;
     if (!inst.activate(sr, block, err)) return false;
     inst.pump((warmup >= 0 ? warmup : job.warmup) * 1000.0);
-    const bool midi = inst.usesMidiDialect();
+    const bool midi = inst.usesMidiDialect(), midiCtl = inst.acceptsMidi();
+    bool warnedCc = false;
 
     const uint32_t outPorts = std::max<uint32_t>(1, inst.outputPortCount()), inPorts = inst.inputPortCount();
     std::vector<std::vector<std::vector<float>>> outStore(outPorts), inStore(inPorts);
@@ -111,17 +112,23 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         std::vector<clap_event_note_t> notes;
         std::vector<clap_event_midi_t> midis;
         std::vector<clap_event_param_value_t> params;
+        std::vector<clap_event_note_expression_t> exprs;
+        bool resent = false;
         std::vector<double> lastAuto(autos.size(), NAN);
         clap_event_transport_t transport{};
         bool first = true;
         for (int64_t pos = -warm; pos < total && audioErr.empty();) {
             const uint32_t n = (uint32_t)std::min<int64_t>(block, pos < 0 ? -pos : total - pos);
-            notes.clear(); midis.clear(); params.clear();
-            params.reserve(initial.size() + autos.size());
+            notes.clear(); midis.clear(); params.clear(); exprs.clear();
+            params.reserve(initial.size() * 2 + autos.size());
             Events in;
             if (first) {   // parameter values again through process(): some plugins only commit them here
                 for (const auto &v : initial) params.push_back(paramEvent(v.id, v.cookie, v.value, 0));
                 first = false;
+            }
+            if (pos >= 0 && !resent) {   // again when audio starts: some plugins apply a loaded state late
+                for (const auto &v : initial) params.push_back(paramEvent(v.id, v.cookie, v.value, 0));
+                resent = true;
             }
             if (pos >= 0) {
                 const double t = pos / sr;
@@ -134,10 +141,39 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             if (pos >= 0) {
                 const size_t firstEv = next;
                 while (next < events.size() && events[next].frame < pos + n) ++next;
-                notes.reserve(next - firstEv); midis.reserve(next - firstEv);
+                notes.reserve(next - firstEv); midis.reserve(next - firstEv); exprs.reserve(next - firstEv);
                 for (size_t i = firstEv; i < next; ++i) {
                     const auto &e = events[i];
                     const uint32_t at = (uint32_t)std::max<int64_t>(0, e.frame - pos);
+                    if (e.kind != TimedEvent::Note) {
+                        if (midiCtl) {
+                            clap_event_midi_t m{};
+                            m.header = {sizeof(m), at, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, 0};
+                            if (e.kind == TimedEvent::CC) {
+                                m.data[0] = (uint8_t)(0xB0 | (e.channel & 15)); m.data[1] = (uint8_t)e.number;
+                                m.data[2] = (uint8_t)std::lround(e.value * 127);
+                            } else if (e.kind == TimedEvent::Pressure) {
+                                m.data[0] = (uint8_t)(0xD0 | (e.channel & 15)); m.data[1] = (uint8_t)std::lround(e.value * 127);
+                            } else {
+                                const int v = std::clamp((int)std::lround((e.value + 1) * 8192), 0, 16383);
+                                m.data[0] = (uint8_t)(0xE0 | (e.channel & 15)); m.data[1] = (uint8_t)(v & 127); m.data[2] = (uint8_t)(v >> 7);
+                            }
+                            midis.push_back(m);
+                            in.ptrs.push_back(&midis.back().header);
+                        } else if (e.kind != TimedEvent::CC) {   // CLAP-only plugins: note expressions on every note
+                            clap_event_note_expression_t x{};
+                            x.header = {sizeof(x), at, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_EXPRESSION, 0};
+                            x.expression_id = e.kind == TimedEvent::PitchBend ? CLAP_NOTE_EXPRESSION_TUNING : CLAP_NOTE_EXPRESSION_PRESSURE;
+                            x.note_id = -1; x.port_index = 0; x.channel = -1; x.key = -1;
+                            x.value = e.kind == TimedEvent::PitchBend ? e.value * e.range : e.value;
+                            exprs.push_back(x);
+                            in.ptrs.push_back(&exprs.back().header);
+                        } else if (!warnedCc) {
+                            warnedCc = true;
+                            warnings.push_back(name_ + " takes no MIDI, so MIDI CC automation is ignored (automate its parameters instead)");
+                        }
+                        continue;
+                    }
                     if (midi) {
                         clap_event_midi_t m{};
                         m.header = {sizeof(m), at, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, 0};

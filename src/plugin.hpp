@@ -35,6 +35,10 @@ struct TimedEvent {
     bool on;
     int key, channel;
     double velocity;
+    enum Kind { Note, CC, PitchBend, Pressure } kind = Note;
+    int number = 0;       // CC number
+    double value = 0;     // CC / pressure 0..1, pitch bend -1..1
+    double range = 2;     // pitch bend range in semitones (for note-expression tuning)
 };
 
 struct AutoParam {
@@ -63,6 +67,8 @@ public:
     virtual bool loadPreset(const std::string &query, std::string &loadedName, std::string &err) {
         (void)query; (void)loadedName; err = std::string(format()) + " presets by name are not supported yet; use a state file"; return false;
     }
+    // Factory programs a plugin lists itself (VST3 program lists); empty when it has none.
+    virtual std::vector<std::string> programs() { return {}; }
 
     virtual std::vector<ParamInfo> params() const = 0;
     bool findParam(const std::string &key, ParamInfo &out) const;   // "#id", name, "Module/Name"

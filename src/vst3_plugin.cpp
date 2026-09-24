@@ -13,6 +13,8 @@
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
+#include "pluginterfaces/vst/ivstunits.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 
 #include <algorithm>
@@ -21,6 +23,7 @@
 #include <cmath>
 #include <fstream>
 #include <map>
+#include <set>
 #include <thread>
 
 #ifdef __APPLE__
@@ -242,6 +245,76 @@ bool Vst3Plugin::setParams(const std::vector<ParamValue> &values, std::string &e
     return true;
 }
 
+// ---- factory programs (VST3 program lists, selected through the program-change parameter) ----
+namespace {
+struct ProgramList { ParamID param = 0; int32 count = 0; Vst::ProgramListID list = -1; };
+ProgramList findProgramList(IEditController *ctl) {
+    ProgramList out;
+    if (!ctl) return out;
+    FUnknownPtr<Vst::IUnitInfo> units(ctl);
+    for (int32 i = 0, n = ctl->getParameterCount(); i < n; ++i) {
+        Vst::ParameterInfo pi{};
+        if (ctl->getParameterInfo(i, pi) != kResultOk || !(pi.flags & Vst::ParameterInfo::kIsProgramChange)) continue;
+        out.param = pi.id;
+        out.count = pi.stepCount + 1;
+        if (units) {   // the program list of the parameter's unit names the programs
+            for (int32 u = 0, un = units->getUnitCount(); u < un; ++u) {
+                Vst::UnitInfo ui{};
+                if (units->getUnitInfo(u, ui) == kResultOk && ui.id == pi.unitId) out.list = ui.programListId;
+            }
+            if (out.list == Vst::kNoProgramListId && units->getProgramListCount() > 0) {
+                Vst::ProgramListInfo li{};
+                if (units->getProgramListInfo(0, li) == kResultOk) out.list = li.id;
+            }
+        }
+        if (pi.unitId == Vst::kRootUnitId) break;   // prefer the root unit's program change
+    }
+    return out;
+}
+} // namespace
+
+std::vector<std::string> Vst3Plugin::programs() {
+    std::vector<std::string> names;
+    auto &im = *impl_;
+    const ProgramList pl = findProgramList(im.controller);
+    if (!pl.param || pl.count < 1) return names;
+    FUnknownPtr<Vst::IUnitInfo> units(im.controller);
+    for (int32 i = 0; i < pl.count; ++i) {
+        Vst::String128 name{};
+        std::string s;
+        if (units && pl.list != Vst::kNoProgramListId && units->getProgramName(pl.list, i, name) == kResultOk)
+            s = Steinberg::Vst::StringConvert::convert(name);
+        names.push_back(s.empty() ? "Program " + std::to_string(i + 1) : s);
+    }
+    return names;
+}
+
+bool Vst3Plugin::loadPreset(const std::string &query, std::string &loadedName, std::string &err) {
+    auto &im = *impl_;
+    const ProgramList pl = findProgramList(im.controller);
+    const auto names = programs();
+    if (!pl.param || names.empty()) { err = name_ + " lists no factory programs; load a state file instead"; return false; }
+    auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), ::tolower); return s; };
+    int found = -1;
+    std::vector<int> partial;
+    for (size_t i = 0; i < names.size() && found < 0; ++i) if (names[i] == query) found = (int)i;
+    for (size_t i = 0; i < names.size() && found < 0; ++i) if (lower(names[i]) == lower(query)) found = (int)i;
+    if (found < 0) for (size_t i = 0; i < names.size(); ++i) if (lower(names[i]).find(lower(query)) != std::string::npos) partial.push_back((int)i);
+    if (found < 0 && partial.size() == 1) found = partial[0];
+    if (found < 0) {
+        err = partial.empty() ? "no program named '" + query + "' on " + name_ : "'" + query + "' matches " + std::to_string(partial.size()) + " programs";
+        for (size_t i = 0; i < partial.size() && i < 6; ++i) err += (i ? ", " : ": ") + names[(size_t)partial[i]];
+        err += " (run `wavelength presets \"" + name_ + "\"`)";
+        return false;
+    }
+    const Vst::ParamValue norm = pl.count > 1 ? (double)found / (pl.count - 1) : 0;
+    im.controller->setParamNormalized(pl.param, norm);
+    // plugins switch programs inside process(): commit it now so the state and parameters follow
+    if (!commitParams({{pl.param, nullptr, im.controller->normalizedParamToPlain(pl.param, norm)}}, 48000, 512, err)) return false;
+    loadedName = names[(size_t)found];
+    return true;
+}
+
 bool Vst3Plugin::commitParams(const std::vector<ParamValue> &values, double sampleRate, uint32_t block, std::string &err) {
     if (values.empty()) return true;
     Job job;
@@ -298,6 +371,25 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         for (int64_t b = 0; b < blocks; ++b) autoNorm[a][(size_t)b] = (float)im.toNorm(autos[a].id, autos[a].env.at(b * (double)block / sr));
     }
 
+    // MIDI CC / pitch bend / pressure reach a VST3 plugin as the parameters it maps them to
+    std::map<std::pair<int, int>, ParamID> ctlMap;   // (channel, controller) -> parameter
+    std::set<int> unmapped;
+    {
+        FUnknownPtr<Vst::IMidiMapping> mm(im.controller);
+        for (const auto &e : events) {
+            if (e.kind == TimedEvent::Note) continue;
+            const int ctl = e.kind == TimedEvent::CC ? e.number : e.kind == TimedEvent::PitchBend ? Vst::kPitchBend : Vst::kAfterTouch;
+            const auto key = std::make_pair(e.channel, ctl);
+            if (ctlMap.count(key) || unmapped.count(ctl)) continue;
+            ParamID id = 0;
+            if (mm && mm->getMidiControllerAssignment(0, (int16)e.channel, (Vst::CtrlNumber)ctl, id) == kResultTrue) ctlMap[key] = id;
+            else unmapped.insert(ctl);
+        }
+        for (int ctl : unmapped)
+            warnings.push_back(name_ + " does not map " + (ctl == Vst::kPitchBend ? std::string("pitch bend") : ctl == Vst::kAfterTouch ? std::string("channel pressure") : "MIDI CC " + std::to_string(ctl)) +
+                               " to a parameter; that automation is ignored");
+    }
+
     std::atomic<bool> done{false};
     std::string audioErr;
     int failures = 0;
@@ -314,17 +406,28 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             outEvents.clear();
             changes.clearQueue();
             outChanges.clearQueue();
-            auto addParam = [&](ParamID id, Vst::ParamValue v) {
+            auto addParam = [&](ParamID id, Vst::ParamValue v, int32 offset = 0) {
                 int32 qi = 0, pi = 0;
-                if (auto *q = changes.addParameterData(id, qi)) q->addPoint(0, v, pi);
+                if (auto *q = changes.addParameterData(id, qi)) q->addPoint(offset, v, pi);
             };
             if (firstBlock) { for (auto &[id, v] : first) addParam(id, v); firstBlock = false; }
+            // again when audio starts: some plugins (Surge XT) apply a loaded state in their first
+            // blocks and would otherwise overwrite these values
+            if (pos >= 0 && pos < block) for (const auto &v : initial) addParam(v.id, im.toNorm(v.id, v.value));
             if (pos >= 0) {
                 const size_t b = (size_t)(pos / block);
                 for (size_t a = 0; a < autos.size(); ++a)
                     if (b < autoNorm[a].size() && autoNorm[a][b] != lastAuto[a]) { addParam(autos[a].id, autoNorm[a][b]); lastAuto[a] = autoNorm[a][b]; }
                 while (next < events.size() && events[next].frame < pos + n) {
                     const auto &e = events[next++];
+                    if (e.kind != TimedEvent::Note) {
+                        const int ctl = e.kind == TimedEvent::CC ? e.number : e.kind == TimedEvent::PitchBend ? Vst::kPitchBend : Vst::kAfterTouch;
+                        auto it = ctlMap.find({e.channel, ctl});
+                        if (it != ctlMap.end())
+                            addParam(it->second, e.kind == TimedEvent::PitchBend ? (e.value + 1) * 0.5 : e.value,
+                                     (int32)std::max<int64_t>(0, e.frame - pos));
+                        continue;
+                    }
                     Event ev{};
                     ev.busIndex = 0;
                     ev.sampleOffset = (int32)std::max<int64_t>(0, e.frame - pos);

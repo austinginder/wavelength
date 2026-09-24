@@ -15,6 +15,7 @@ struct Note {
     double start, length;   // seconds
     int key, channel;
     double velocity;        // 0..1
+    std::vector<std::pair<double, double>> bend;   // (seconds after the note start, semitones); empty = none
 };
 
 struct ParamSetting {
@@ -33,14 +34,23 @@ struct Track {
     nlohmann::json fx = nlohmann::json::array();               // effect chain, in order
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)
     Envelope gainAutomation;                                     // fader dB over time (empty = none)
+    Envelope panAutomation;                                      // pan -1..1 over time (empty = static pan)
+    std::vector<std::pair<int, Envelope>> ccAutomation;          // MIDI CC number → value 0..127 over time
+    Envelope bendAutomation;                                     // pitch bend in semitones over time
+    Envelope pressureAutomation;                                 // channel pressure 0..127 over time
+    double bendRange = 2;                                        // the plugin's pitch-bend range, semitones
     std::vector<std::pair<std::string, Envelope>> paramAutomation;   // plugin parameter curves
     nlohmann::json sampler;                                      // builtin:sampler settings
+    std::string output;                                          // bus to feed instead of the master ("" = master)
+    std::vector<std::pair<std::string, Envelope>> sendAutomation;   // bus name → send dB over time
 };
 
 struct Bus {
     std::string name;
     double gainDb = 0;
     nlohmann::json fx = nlohmann::json::array();
+    std::string output;             // another bus to feed ("" = master)
+    Envelope gainAutomation;        // dB added to the bus gain over time
 };
 
 struct Marker {
@@ -62,6 +72,8 @@ struct Job {
     std::vector<Bus> buses;
     nlohmann::json masterFx = nlohmann::json::array();
     double masterGainDb = 0;
+    Envelope masterGainAutomation;  // dB added to the master gain over time (fades)
+    int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<Marker> markers;  // sections for per-section loudness in the report
     std::string baseDir;        // relative paths resolve from here
 };

@@ -26,7 +26,21 @@ Working towards **v0.1.0**, the first release.
 - `state save` writes `.vstpreset` files for VST3 plugins.
 - CLAP preset discovery: `wavelength presets <plugin> [--search text]` lists a plugin's factory banks and preset files, and `"preset": "<name>"` on a track or effect (or `--preset` on `params`/`state save`) loads one by name through the plugin's preset-load extension. This opens the full factory libraries of plugins like Altitude (450 presets), Apricot, Regency, ExtraBold and Fluctus.
 - `builtin:sampler`: plays Bitwig `.multisample` instruments (key/velocity zones, velocity crossfades, round robins, select ranges, sustain loops with crossfade, key tracking, reverse), WAV drum kit folders auto-mapped to General MIDI from file names (with overrides and hat choke), and single WAVs. `wavelength samples [--search] [--kit]` lists libraries from `$WAVELENGTH_SAMPLES_PATH` and Bitwig Studio's installed packages (Legend 707/808/909, Grand Piano, Rare Organs, electric guitar, basses, ...).
+- Automation: `"step"` points and a `curve` setting; LFOs (tempo-synced note values or Hz, six shapes, depth curves) on any built-in effect setting, plugin parameter, fader, pan or send; track `pan` automation; automated sends; bus and master gain automation (fades).
+- Routing: `"output"` on tracks and buses for group buses and bus chains, processed in dependency order.
+- Feel: job/track `groove` (swing, lay-back, humanize with a seed), `roll` (strummed chords), track `transpose`, tempo ramps (`"ramp": true` tempo points).
+- MIDI controllers: `automation.cc`, `automation.pitchbend` (semitones via `bendRange`) and `automation.pressure`; CLAP plugins get MIDI or note expressions, VST3 plugins the parameters they map through IMidiMapping.
+- New built-in effects: `tremolo` (and autopan), `pan`, `gate` (step pattern or note-keyed), `rotary` (Leslie with rotor inertia), `autowah`, `bitcrush`, `vibrato`, `tapestop`. `duck` depth is automatable.
+- Limiter true-peak detection (4x oversampled, on by default); the report gives `mix.truePeakDb`, per-track `renderSeconds` and per-track `sectionLufs`.
+- Sampler: `mono` + `glide` (legato slides), per-note `bend`, kit map entries with `gain`/`pan`/`tune`, `retrigger`, `variants` (takes as round robins), `bpm` (tempo-synced loops), `slices`, `start`, `reverse`; toms map by number, loops no longer land on drum keys, `samples` lists loop folders, ambiguous kit names are an error that lists the choices.
+- State: `fxp` format (VST2 `.fxp`/`.fxb` chunks: Surge XT and OB-Xf factory patches load directly); VST3 factory program lists in `presets` and `"preset"` (Dexed); a warning when a state or preset changes no parameters, and when an effect plugin only changes the level.
+- Stems: `"stems": "float" | "24" | "16" | "none"` (and `render --stems`); a free-space check before rendering.
+- `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 
 ### Fixed
+- A failed render no longer leaves the previous render's `mix.wav`, `report.json` and stems behind; it writes `{"ok": false}` to `report.json`.
+- `params` set on top of a `state` stick on plugins that apply state late (Surge XT); `params` inspection processes a few blocks first so such plugins show real values.
+- Clamp warnings no longer fire for in-range values (float precision) and show the range.
+- Limiter warning reads as a positive gain-reduction figure with the time it happened.
 - The CLI exits without running plugin static destructors, which crashed some plugins at shutdown after the work was already written.

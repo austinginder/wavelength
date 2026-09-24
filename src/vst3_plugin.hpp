@@ -24,6 +24,8 @@ public:
     const char *format() const override { return "vst3"; }
 
     bool loadState(const StateFile &sf, std::string &err) override;
+    bool loadPreset(const std::string &query, std::string &loadedName, std::string &err) override;
+    std::vector<std::string> programs() override;
     bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) override;
     std::vector<ParamInfo> params() const override;
     bool setParams(const std::vector<ParamValue> &values, std::string &err) override;

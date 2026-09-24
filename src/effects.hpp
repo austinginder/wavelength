@@ -28,4 +28,7 @@ public:
 std::unique_ptr<Effect> makeEffect(const nlohmann::json &j, const Job &job, const std::string &context, std::string &err);
 std::vector<std::string> builtinEffectTypes();
 
+// Highest reconstructed (inter-sample, 4x oversampled) peak in dBTP.
+double truePeakDb(const Audio &a);
+
 } // namespace wl

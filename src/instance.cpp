@@ -337,6 +337,11 @@ uint32_t Instance::inputChannels(uint32_t port) const {
     clap_audio_port_info_t info{};
     return audioPorts_->get(plugin_, port, true, &info) ? info.channel_count : 0;
 }
+bool Instance::acceptsMidi() const {
+    if (!notePorts_ || notePorts_->count(plugin_, true) == 0) return false;
+    clap_note_port_info_t info{};
+    return notePorts_->get(plugin_, 0, true, &info) && (info.supported_dialects & CLAP_NOTE_DIALECT_MIDI);
+}
 bool Instance::usesMidiDialect() const {
     if (!notePorts_ || notePorts_->count(plugin_, true) == 0) return false;
     clap_note_port_info_t info{};

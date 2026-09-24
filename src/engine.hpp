@@ -33,6 +33,9 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
 
 // Note events for a track, sorted, note-offs first on ties.
 std::vector<TimedEvent> scheduleNotes(const std::vector<Note> &notes, int sampleRate);
+// Adds the track's MIDI CC / pitch bend / pressure automation as events (sampled every 64
+// frames, only when the quantized value changes) and re-sorts.
+void scheduleControllers(const Track &track, int sampleRate, double seconds, std::vector<TimedEvent> &events);
 
 // Activate, render out.frames() frames (with a discarded pre-roll), deactivate.
 // `input` (optional) feeds the plugin's first audio input port.

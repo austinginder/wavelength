@@ -21,9 +21,11 @@ They are deterministic: the same job renders the same audio every time.
 }
 ```
 
-Signal flow per track: **instrument → `fx` → stem file → fader (`gain` + `automation.gain`, `pan`) → mix**,
-and post-fader **sends** (dB) into buses. Buses run their own `fx` (use `"mix": 1` for reverbs and
-delays there) and return to the mix. Then `master.gain`, `master.fx`, and optional `normalize`.
+Signal flow per track: **instrument → `fx` → stem file → fader (`gain` + `automation.gain`, `pan`) → mix**
+(or the bus named in the track's `output`), and post-fader **sends** (dB) into buses. Buses run their own
+`fx` (use `"mix": 1` for reverbs and delays there) and return to the mix or to their `output` bus, after
+every bus that feeds them. Then `master.gain` (+ `master.automation.gain`), `master.fx`, and optional
+`normalize`.
 
 `markers` split the report into sections with their own loudness (LUFS).
 
@@ -37,8 +39,21 @@ Any effect can be skipped with `"bypass": true`.
   effect: `{"type": "filter", "cutoff": 800, "automate": {"cutoff": [[0, 300], [16, 8000]]}}`.
 
 Curves are `[[beat, value], ...]`; values are held before the first point and after the last,
-and interpolated linearly between points (exponentially for `cutoff`). Use two points close
-together (e.g. `[55.5, 0], [56, -3]`) for a quick ramp at a section boundary.
+and interpolated linearly between points (exponentially for `cutoff`). A third element
+`"step"` (`[56, -3, "step"]`) holds the previous value until that beat and then jumps. The object
+form `{"points": [...], "curve": "linear" | "exp" | "step", "lfo": {...}}` sets the curve for all
+points, and `{"value": 0.5, "lfo": {...}}` is a steady value with an LFO on it.
+
+**LFOs** add a wave on top of any automatable value: on a built-in effect with
+`"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5, "shape": "sine"}}` (next to `automate`), or inside
+any curve's object form (plugin parameters, fader, pan, sends). `rate` is Hz or a tempo-synced
+note value (`"1/4"`, `"1/8T"` triplet, `"1/16D"` dotted, `"2/1"` two bars); `shape` sine, triangle,
+square, saw (falling), ramp (rising), random (sample and hold); `phase` 0-1; `depth` in the value's
+units (octaves for cutoff), or a curve `[[beat, depth], ...]` to fade the LFO in and out.
+
+Also automatable: bus and master `automation.gain` (whole-mix fades, bus throws), send levels
+(`"sends": {"Echo": [[0, -40], [31.5, -40, "step"], [31.5, -6], [32, -40, "step"]]}`), track `pan`,
+and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 
 ## Built-in effects
 
@@ -50,19 +65,28 @@ together (e.g. `[55.5, 0], [56, -3]`) for a quick ramp at a section boundary.
 | `delay` | `time` 0.75 beats (or `ms`), `feedback` 0.35, `pingpong` true, `highpass` 250, `lowpass` 5000 (in the feedback loop), `mix` 0.25 *(automatable)* |
 | `reverb` | `decay` 2.5 s (RT60), `size` 0.7 (0–1), `predelay` 15 ms, `damping` 0.5 (0–1), `width` 1, `highpass` 150 Hz, `mix` 0.3 *(automatable)*, an 8-line feedback delay network |
 | `compressor` | `threshold` −18 dB, `ratio` 3, `attack` 10 ms, `release` 150 ms, `knee` 6 dB, `makeup` 0 dB, `mix` 1, stereo-linked |
-| `limiter` | `ceiling` −1 dB, `release` 80 ms, `lookahead` 5 ms, brickwall on sample peaks; true peaks can be ~0.5 dB higher, so use −1.5 for delivery |
+| `limiter` | `ceiling` −1 dB, `release` 80 ms, `lookahead` 5 ms, `truePeak` true (4x oversampled detection, so the ceiling holds for inter-sample peaks too; the report gives the mix's `truePeakDb`) |
 | `saturate` | `drive` 6 dB *(automatable)*, `mix` 1 *(automatable)*, tanh |
 | `chorus` | `rate` 0.3 Hz, `depth` 4 ms, `delay` 14 ms, `mix` 0.35 *(automatable)* |
 | `width` | `amount` 1 (0 = mono, >1 wider) *(automatable)* |
-| `duck` | `trigger` (track name), `keys` (optional list, e.g. `[36]` = kicks only), `depth` 8 dB, `attack` 8 ms, `hold` 20 ms, `release` 180 ms, sidechain-style pumping keyed from another track's notes |
+| `duck` | `trigger` (track name), `keys` (optional list, e.g. `[36]` = kicks only), `depth` 8 dB *(automatable)*, `attack` 8 ms, `hold` 20 ms, `release` 180 ms, sidechain-style pumping keyed from another track's notes |
+| `tremolo` | `rate` "1/8" (Hz or note value), `shape` sine, `phase`, `depth` 0.5 (0-1) *(automatable)*, `spread` 0 (right channel phase offset; 0.5 = autopan) |
+| `pan` | `position` 0 (-1..1) *(automatable, LFO-able)*: balance a stereo signal |
+| `gate` | `pattern` step string (`"x-x-xx--"`, digits 0-9 for levels) with `step` "1/16" (trance gate), or `trigger` (track name) + `keys` + `hold` 120 ms (opens on each note: gated reverb); `attack` 1 ms, `release` 15 ms, `depth` 80 dB, `mix` 1 *(automatable)* |
+| `rotary` | Leslie speaker: `speed` 0 (chorale) to 1 (tremolo) *(automatable; the rotors speed up and slow down with inertia)*, `crossover` 800 Hz, `hornSlow`/`hornFast` 0.8/6.7 Hz, `drumSlow`/`drumFast` 0.7/5.8 Hz, `mix` 1 *(automatable)* |
+| `autowah` | envelope follower sweeping a resonant filter: `min` 350 Hz, `max` 2800 Hz, `resonance` 3, `sensitivity` 0 dB, `attack` 6 ms, `release` 120 ms, `mode` bandpass/lowpass, `mix` 1 *(automatable)* |
+| `bitcrush` | `bits` 8 *(automatable)*, `downsample` 1 (sample-and-hold factor) *(automatable)*, `mix` 1 *(automatable)* |
+| `vibrato` | pitch wobble (tape wow, flutter, vibrato): `rate` 5.5 Hz (or note value), `depth` 20 cents (max 100) *(automatable)* |
+| `tapestop` | `speed` 1 (1 = normal, 0 = stopped, up to 4) *(automatable)*: varispeed of the incoming audio, pitch and time together; whenever speed is back at 1 the output is in sync again |
 
 `mix` is a dry/wet crossfade: 0 = dry only, 1 = wet only.
 
-## CLAP effect plugins
+## Plugin effects (CLAP and VST3)
 
-`{"plugin": "<clap id or name>", "state": "...", "params": {...}, "automate": {"Param": [[b, v], ...]}, "mix": 1}`
-runs an installed CLAP audio effect over the track, bus or master, with the same state, parameter
-and automation support as instruments.
+`{"plugin": "<id or name>", "state": "...", "preset": "...", "params": {...}, "automate": {"Param": [[b, v], ...]}, "mix": 1}`
+runs an installed CLAP or VST3 audio effect over the track, bus or master, with the same state, preset,
+parameter and automation support as instruments (`mix` is automatable too). An effect whose output is
+only a level-scaled copy of its input gets a warning (unlicensed or demo mode, bypass, an ignored preset).
 
 ## Built-in instruments
 

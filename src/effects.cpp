@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <map>
@@ -25,7 +26,7 @@ inline float blend(float dry, double wet, double mix) { return (float)(dry * (1.
 
 void checkKeys(const json &j, std::initializer_list<const char *> allowed, Effect &fx) {
     for (auto &[k, _] : j.items()) {
-        if (k == "type" || k == "automate" || k == "bypass") continue;
+        if (k == "type" || k == "automate" || k == "lfo" || k == "bypass") continue;
         bool ok = false;
         for (auto *a : allowed) ok |= k == a;
         if (!ok) fx.warnings.push_back(fx.label + ": unknown setting '" + k + "' ignored");
@@ -260,24 +261,56 @@ struct Compressor : Effect {
     }
 };
 
+// inter-sample peak between x[i] and x[i+1] (4x oversampling with a windowed-sinc kernel):
+// what a DAC or a lossy encoder will actually reconstruct
+inline double interPeak(const std::vector<float> &x, size_t i) {
+    static double k[3][8];
+    static bool init = false;
+    if (!init) {
+        for (int p = 0; p < 3; ++p) {
+            const double frac = (p + 1) / 4.0;
+            for (int t = 0; t < 8; ++t) {
+                const double d = (t - 3) - frac, sinc = std::fabs(d) < 1e-9 ? 1 : std::sin(M_PI * d) / (M_PI * d);
+                const double w = 0.5 + 0.5 * std::cos(M_PI * d / 4.5);   // Hann window
+                k[p][t] = sinc * w;
+            }
+        }
+        init = true;
+    }
+    const long n = (long)x.size();
+    double pk = 0;
+    for (int p = 0; p < 3; ++p) {
+        double v = 0;
+        for (int t = 0; t < 8; ++t) {
+            const long j = (long)i + t - 3;
+            if (j >= 0 && j < n) v += x[(size_t)j] * k[p][t];
+        }
+        pk = std::max(pk, std::fabs(v));
+    }
+    return pk;
+}
+
 // ------------------------------------------------------------------------------- limiter
 // Look-ahead brickwall: the gain starts falling before a peak arrives, so the output
 // never exceeds the ceiling and never clicks.
 struct Limiter : Effect {
     double ceiling, releaseMs, lookMs;
+    bool truePeak;
     Limiter(const json &j, const Job &) {
         label = "limiter";
         ceiling = j.value("ceiling", -1.0);
         releaseMs = std::max(1.0, j.value("release", 80.0));
         lookMs = std::clamp(j.value("lookahead", 5.0), 0.5, 50.0);
-        checkKeys(j, {"ceiling", "release", "lookahead"}, *this);
+        truePeak = j.value("truePeak", true);
+        checkKeys(j, {"ceiling", "release", "lookahead", "truePeak"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate, ceil = dbToLin(ceiling);
         const size_t n = a.frames(), L = std::max<size_t>(1, (size_t)(lookMs * 0.001 * sr));
         std::vector<float> req(n), mn(n);
         for (size_t i = 0; i < n; ++i) {
-            const double pk = std::max(std::fabs(a.left[i]), std::fabs(a.right[i]));
+            double pk = std::max(std::fabs(a.left[i]), std::fabs(a.right[i]));
+            if (truePeak && pk > ceil * 0.5) pk = std::max({pk, interPeak(a.left, i), interPeak(a.right, i)});
             req[i] = (float)(pk > ceil ? ceil / pk : 1.0);
         }
         std::deque<size_t> dq;   // forward-looking window minimum over [i, i+L]
@@ -288,17 +321,21 @@ struct Limiter : Effect {
             mn[ii] = req[dq.front()];
         }
         const double rel = 1.0 - std::exp(-1.0 / (releaseMs * 0.001 * sr));
-        double sum = 0, g = 1, minG = 1;
+        double sum = 0, g = 1, minG = 1, worstAt = 0;
         for (size_t i = 0; i < n; ++i) {
             sum += mn[i];
             if (i >= L) sum -= mn[i - L];
             const double avg = sum / (double)std::min(i + 1, L);      // smooth attack ramp
             g = avg < g ? avg : g + (avg - g) * rel;                 // release
-            minG = std::min(minG, g);
+            if (g < minG) { minG = g; worstAt = (double)i; }
             a.left[i] = (float)std::clamp(a.left[i] * g, -ceil, ceil);
             a.right[i] = (float)std::clamp(a.right[i] * g, -ceil, ceil);
         }
-        if (dsp::linToDb(minG) < -8) warnings.push_back("limiter reduced peaks by " + std::to_string((int)dsp::linToDb(minG)) + " dB: the input is very hot");
+        if (dsp::linToDb(minG) < -8) {
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "limiter: up to %.1f dB of gain reduction (at %.2f s); the input is very hot", -dsp::linToDb(minG), worstAt / sr);
+            warnings.push_back(buf);
+        }
         return true;
     }
 };
@@ -374,13 +411,14 @@ struct Width : Effect {
 struct Duck : Effect {
     std::string trigger;
     std::vector<int> keys;
-    double depthDb, attackMs, holdMs, releaseMs;
-    Duck(const json &j, const Job &, std::string &err) {
+    double attackMs, holdMs, releaseMs;
+    Envelope depthDb;
+    Duck(const json &j, const Job &job, std::string &err) {
         label = "duck";
         trigger = j.value("trigger", "");
         if (trigger.empty()) err = "duck needs \"trigger\": the name of the track whose notes cause ducking";
         for (auto &k : j.value("keys", json::array())) keys.push_back(parseKey(k));
-        depthDb = -std::fabs(j.value("depth", 8.0));
+        depthDb = param(j, "depth", 8.0, job.tempo);   // dB of ducking, automatable (e.g. to 0 as the kick fades out)
         attackMs = std::max(0.5, j.value("attack", 8.0));
         holdMs = std::max(0.0, j.value("hold", 20.0));
         releaseMs = std::max(5.0, j.value("release", 180.0));
@@ -411,7 +449,7 @@ struct Duck : Effect {
                 else v = 0;
                 amount = std::max(amount, v);
             }
-            const float g = (float)dbToLin(depthDb * amount);
+            const float g = (float)dbToLin(-std::fabs(depthDb.at(t)) * amount);
             a.left[i] *= g; a.right[i] *= g;
         }
         return true;
@@ -449,6 +487,21 @@ struct PluginFx : Effect {
         wet.resize(a.frames());
         if (!runPlugin(c.job, p, {}, &a, wet, err)) { err = "effect " + p.name + ": " + err; return false; }
         for (auto &w : p.warnings) warnings.push_back(w);
+        {   // an effect whose output is just a scaled copy of its input did nothing audible but change the
+            // level: typically an unlicensed or demo-mode plugin, or a preset the plugin ignored
+            double xy = 0, xx = 0, yy = 0;
+            for (size_t i = 0; i < a.frames(); ++i)
+                for (int ch = 0; ch < 2; ++ch) {
+                    const double x = ch ? a.right[i] : a.left[i], y = ch ? wet.right[i] : wet.left[i];
+                    xy += x * y; xx += x * x; yy += y * y;
+                }
+            if (xx > 1e-6 && yy > 1e-9) {
+                const double k = xy / xx, residual = std::max(0.0, yy - k * xy);
+                if (residual < yy * 1e-4)
+                    warnings.push_back(p.name + " only changed the level (" + std::to_string((int)std::lround(dsp::linToDb(std::fabs(k)))) +
+                                       " dB) and otherwise passed the audio through unchanged: licence or demo mode, bypass, or a preset it ignored?");
+            } else if (xx > 1e-6 && yy <= 1e-9) warnings.push_back(p.name + " output silence");
+        }
         const double sr = c.job.sampleRate;
         for (size_t i = 0; i < a.frames(); ++i) {
             const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
@@ -459,10 +512,314 @@ struct PluginFx : Effect {
     }
 };
 
+
+// ------------------------------------------------------------------------------ modulation
+// Tempo-synced or free LFO settings shared by tremolo, vibrato and rotary: "rate" (Hz or "1/8"),
+// "shape", "phase".
+Lfo lfoFrom(const json &j, const Job &job, const char *defRate) {
+    json spec = {{"rate", j.contains("rate") ? j["rate"] : json(defRate)}, {"shape", j.value("shape", "sine")},
+                 {"phase", j.value("phase", 0.0)}, {"depth", 1.0}};
+    if (spec["rate"].is_string() && spec["rate"].get<std::string>().find('/') == std::string::npos)
+        spec["rate"] = std::stod(spec["rate"].get<std::string>());
+    return Lfo::parse(spec, job.tempo);
+}
+
+// tremolo / autopan: amplitude LFO; "spread" offsets the right channel's phase (0.5 = autopan)
+struct Tremolo : Effect {
+    Lfo lfo;
+    Envelope depth;
+    double spread;
+    Tremolo(const json &j, const Job &job) {
+        label = "tremolo";
+        lfo = lfoFrom(j, job, "1/8");
+        depth = param(j, "depth", 0.5, job.tempo);
+        spread = j.value("spread", 0.0);
+        checkKeys(j, {"rate", "shape", "phase", "depth", "spread"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        Lfo right = lfo;
+        right.phase += spread;
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double t = i / sr, d = std::clamp(depth.at(t), 0.0, 1.0);
+            a.left[i] *= (float)(1 - d * (0.5 - 0.5 * lfo.wave(t)));
+            a.right[i] *= (float)(1 - d * (0.5 - 0.5 * right.wave(t)));
+        }
+        return true;
+    }
+};
+
+// pan: balance a stereo signal (automatable, LFO-able "position" -1..1)
+struct Pan : Effect {
+    Envelope position;
+    Pan(const json &j, const Job &job) { label = "pan"; position = param(j, "position", 0, job.tempo); checkKeys(j, {"position"}, *this); }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        double pl = 1, pr = 1;
+        for (size_t i = 0; i < a.frames(); ++i) {
+            if (i % 32 == 0) {
+                const double ang = (std::clamp(position.at(i / sr), -1.0, 1.0) + 1.0) * dsp::kPi / 4.0;
+                pl = std::cos(ang) * M_SQRT2; pr = std::sin(ang) * M_SQRT2;
+            }
+            a.left[i] *= (float)std::min(1.0, pl); a.right[i] *= (float)std::min(1.0, pr);
+        }
+        return true;
+    }
+};
+
+// gate: a rhythmic step pattern ("x-x-xx--", digits 0-9 for levels) or note-keyed from a track
+// ("trigger", like duck: opens on each note for "hold" ms), e.g. an 80s gated reverb
+struct Gate : Effect {
+    std::string pattern, trigger;
+    std::vector<int> keys;
+    double stepBeats, attackMs, holdMs, releaseMs, floorDb;
+    Envelope mix;
+    Gate(const json &j, const Job &job, std::string &err) {
+        label = "gate";
+        pattern = j.value("pattern", "");
+        trigger = j.value("trigger", "");
+        if (pattern.empty() == trigger.empty()) err = "gate needs either \"pattern\" (e.g. \"x-x-xx--\") or \"trigger\" (a track name)";
+        const auto &st = j.contains("step") ? j["step"] : json("1/16");
+        stepBeats = st.is_number() ? st.get<double>() : Lfo::noteBeats(st.get<std::string>());
+        for (auto &k : j.value("keys", json::array())) keys.push_back(parseKey(k));
+        attackMs = std::max(0.1, j.value("attack", 1.0));
+        holdMs = std::max(0.0, j.value("hold", 120.0));
+        releaseMs = std::max(0.5, j.value("release", 15.0));
+        floorDb = -std::fabs(j.value("depth", 80.0));
+        mix = param(j, "mix", 1, job.tempo);
+        checkKeys(j, {"pattern", "trigger", "keys", "step", "attack", "hold", "release", "depth", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
+        const double sr = c.job.sampleRate, floor = dbToLin(floorDb);
+        std::vector<double> times;
+        if (!trigger.empty()) {
+            const Track *src = nullptr;
+            for (const auto &t : c.job.tracks) if (t.name == trigger) src = &t;
+            if (!src) { err = "gate: no track named '" + trigger + "'"; return false; }
+            for (const auto &n : src->notes)
+                if (keys.empty() || std::find(keys.begin(), keys.end(), n.key) != keys.end()) times.push_back(n.start);
+            std::sort(times.begin(), times.end());
+        }
+        const double att = 1.0 - std::exp(-1.0 / (attackMs * 0.001 * sr)), rel = 1.0 - std::exp(-1.0 / (releaseMs * 0.001 * sr));
+        double g = floor;
+        size_t k = 0;
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double t = i / sr;
+            double target;
+            if (!pattern.empty()) {
+                const double beat = c.job.tempo.secToBeat(t);
+                const long step = (long)std::floor(beat / stepBeats);
+                const char ch = pattern[(size_t)(((step % (long)pattern.size()) + (long)pattern.size()) % (long)pattern.size())];
+                target = ch == 'x' || ch == 'X' ? 1.0 : (ch >= '0' && ch <= '9') ? (ch - '0') / 9.0 : 0.0;
+                target = floor + (1 - floor) * target;
+            } else {
+                while (k < times.size() && times[k] <= t) ++k;
+                target = k > 0 && t - times[k - 1] < holdMs * 0.001 ? 1.0 : floor;
+            }
+            g += (target - g) * (target > g ? att : rel);
+            const double m = mix.constant() ? mix.at(0) : mix.at(t);
+            a.left[i] = blend(a.left[i], a.left[i] * g, m);
+            a.right[i] = blend(a.right[i], a.right[i] * g, m);
+        }
+        return true;
+    }
+};
+
+// rotary speaker (Leslie): horn above ~800 Hz, drum below, each spinning with its own inertia;
+// "speed" 0 = chorale (slow), 1 = tremolo (fast), automatable
+struct Rotary : Effect {
+    Envelope speed, mix;
+    double hornSlow, hornFast, drumSlow, drumFast, crossover;
+    Rotary(const json &j, const Job &job) {
+        label = "rotary";
+        speed = param(j, "speed", 0, job.tempo);
+        mix = param(j, "mix", 1, job.tempo);
+        hornSlow = j.value("hornSlow", 0.8); hornFast = j.value("hornFast", 6.7);
+        drumSlow = j.value("drumSlow", 0.7); drumFast = j.value("drumFast", 5.8);
+        crossover = j.value("crossover", 800.0);
+        checkKeys(j, {"speed", "mix", "hornSlow", "hornFast", "drumSlow", "drumFast", "crossover"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        Biquad lp, hp;
+        lp.set(Biquad::LowPass, crossover, 0.7071, 0, sr);
+        hp.set(Biquad::HighPass, crossover, 0.7071, 0, sr);
+        dsp::DelayLine hornL, hornR, drum;
+        const size_t cap = (size_t)(0.004 * sr) + 8;
+        hornL.resize(cap); hornR.resize(cap); drum.resize(cap);
+        double hornHz = hornSlow, drumHz = drumSlow, hph = 0, dph = 0;
+        const double hornAcc = 1.0 - std::exp(-1.0 / (0.7 * sr)), drumAcc = 1.0 - std::exp(-1.0 / (3.5 * sr));   // inertia
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double t = i / sr, sp = std::clamp(speed.at(t), 0.0, 1.0);
+            hornHz += (hornSlow + (hornFast - hornSlow) * sp - hornHz) * hornAcc;
+            drumHz += (drumSlow + (drumFast - drumSlow) * sp - drumHz) * drumAcc;
+            hph += 2 * dsp::kPi * hornHz / sr;
+            dph += 2 * dsp::kPi * drumHz / sr;
+            const double in = (a.left[i] + a.right[i]) * 0.5;
+            const double lo = lp.process(in), hi = hp.process(in);
+            hornL.push(hi); hornR.push(hi); drum.push(lo);
+            // horn: doppler (moving delay), amplitude and stereo position follow the rotation
+            const double hs = std::sin(hph), hc = std::cos(hph);
+            const double hl = hornL.tap(2 + 0.0012 * sr * (1 + hs)) * (0.75 + 0.25 * hc);
+            const double hr = hornR.tap(2 + 0.0012 * sr * (1 - hs)) * (0.75 - 0.25 * hc);
+            const double ds = std::sin(dph);
+            const double d = drum.tap(2 + 0.0004 * sr * (1 + ds)) * (0.85 + 0.15 * ds);
+            const double m = mix.constant() ? mix.at(0) : mix.at(t);
+            a.left[i] = blend(a.left[i], d + hl * 1.1, m);
+            a.right[i] = blend(a.right[i], d + hr * 1.1, m);
+        }
+        return true;
+    }
+};
+
+// auto-wah: an envelope follower sweeps a resonant band-pass (or low-pass) between min and max
+struct AutoWah : Effect {
+    double minHz, maxHz, q, sensDb, attackMs, releaseMs;
+    Biquad::Type type;
+    Envelope mix;
+    AutoWah(const json &j, const Job &job, std::string &err) {
+        label = "autowah";
+        minHz = j.value("min", 350.0); maxHz = j.value("max", 2800.0);
+        q = j.value("resonance", 3.0);
+        sensDb = j.value("sensitivity", 0.0);
+        attackMs = std::max(0.5, j.value("attack", 6.0));
+        releaseMs = std::max(1.0, j.value("release", 120.0));
+        const std::string mode = j.value("mode", "bandpass");
+        if (mode == "bandpass") type = Biquad::BandPass;
+        else if (mode == "lowpass") type = Biquad::LowPass;
+        else err = "autowah mode must be bandpass or lowpass";
+        mix = param(j, "mix", 1, job.tempo);
+        checkKeys(j, {"min", "max", "resonance", "sensitivity", "attack", "release", "mode", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        const double att = 1.0 - std::exp(-1.0 / (attackMs * 0.001 * sr)), rel = 1.0 - std::exp(-1.0 / (releaseMs * 0.001 * sr));
+        Biquad fl, fr;
+        double env = 0;
+        const double gainComp = type == Biquad::BandPass ? std::sqrt(q) : 1.0;
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double x = std::max(std::fabs(a.left[i]), std::fabs(a.right[i]));
+            env += (x - env) * (x > env ? att : rel);
+            if (i % 16 == 0) {
+                // -36 dB .. 0 dB of envelope (plus sensitivity) maps onto min .. max
+                const double pos = std::clamp((dsp::linToDb(env) + sensDb + 36.0) / 36.0, 0.0, 1.0);
+                fl.set(type, minHz * std::pow(maxHz / minHz, pos), q, 0, sr);
+                fr.b0 = fl.b0; fr.b1 = fl.b1; fr.b2 = fl.b2; fr.a1 = fl.a1; fr.a2 = fl.a2;
+            }
+            const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+            a.left[i] = blend(a.left[i], fl.process(a.left[i]) * gainComp, m);
+            a.right[i] = blend(a.right[i], fr.process(a.right[i]) * gainComp, m);
+        }
+        return true;
+    }
+};
+
+// bitcrush: fewer bits and sample-and-hold downsampling
+struct Bitcrush : Effect {
+    Envelope bits, downsample, mix;
+    Bitcrush(const json &j, const Job &job) {
+        label = "bitcrush";
+        bits = param(j, "bits", 8, job.tempo);
+        downsample = param(j, "downsample", 1, job.tempo);
+        mix = param(j, "mix", 1, job.tempo);
+        checkKeys(j, {"bits", "downsample", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        double holdL = 0, holdR = 0, count = 1e9;
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double t = i / sr, ds = std::max(1.0, downsample.at(t));
+            const double steps = std::pow(2.0, std::clamp(bits.at(t), 1.0, 24.0) - 1);
+            if (++count >= ds) { count -= ds; holdL = std::round(a.left[i] * steps) / steps; holdR = std::round(a.right[i] * steps) / steps; }
+            const double m = mix.constant() ? mix.at(0) : mix.at(t);
+            a.left[i] = blend(a.left[i], holdL, m);
+            a.right[i] = blend(a.right[i], holdR, m);
+        }
+        return true;
+    }
+};
+
+// vibrato: pitch-only wobble (tape wow, flutter, singer's vibrato), depth in cents
+struct Vibrato : Effect {
+    Lfo lfo;
+    Envelope depth;
+    Vibrato(const json &j, const Job &job) {
+        label = "vibrato";
+        lfo = lfoFrom(j, job, "5.5");
+        depth = param(j, "depth", 20, job.tempo);
+        checkKeys(j, {"rate", "shape", "phase", "depth"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        // a delay swinging by A samples at f Hz shifts pitch by up to 2*pi*f*A/sr: solve A for the cents wanted
+        const double f = lfo.hz > 0 ? lfo.hz : c.job.tempo.bpmAtBeat(0) / 60.0 / lfo.beats;
+        const double maxCents = 100;
+        const double maxA = (std::pow(2.0, maxCents / 1200) - 1) * sr / (2 * dsp::kPi * std::max(0.05, f));
+        dsp::DelayLine L, R;
+        L.resize((size_t)(2 * maxA) + 16); R.resize((size_t)(2 * maxA) + 16);
+        // the wave is integrated so its derivative (the pitch) follows the LFO shape
+        double integ = 0;
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double t = i / sr;
+            L.push(a.left[i]); R.push(a.right[i]);
+            const double cents = std::clamp(depth.at(t), 0.0, maxCents);
+            const double A = (std::pow(2.0, cents / 1200) - 1) * sr / (2 * dsp::kPi * std::max(0.05, f));
+            integ = std::sin(2 * dsp::kPi * (lfo.hz > 0 ? t * lfo.hz : c.job.tempo.secToBeat(t) / lfo.beats) + lfo.phase * 2 * dsp::kPi);
+            const double d = 2 + maxA + A * integ;
+            a.left[i] = (float)L.tap(d);
+            a.right[i] = (float)R.tap(d);
+        }
+        return true;
+    }
+};
+
+// tape stop / varispeed: plays the incoming audio at "speed" (1 = normal, 0 = stopped), pitch
+// and time together. Whenever speed is back at 1 the output is in sync with the input again.
+struct TapeStop : Effect {
+    Envelope speed;
+    TapeStop(const json &j, const Job &job) { label = "tapestop"; speed = param(j, "speed", 1, job.tempo); checkKeys(j, {"speed"}, *this); }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        const std::vector<float> inL = a.left, inR = a.right;
+        const size_t n = a.frames();
+        double pos = 0;
+        bool synced = true;
+        for (size_t i = 0; i < n; ++i) {
+            const double sp = std::clamp(speed.at(i / sr), 0.0, 4.0);
+            if (sp >= 0.9999 && std::fabs(sp - 1) < 1e-4) {
+                if (!synced) {   // back in sync: 5 ms fade in from silence avoids a click
+                    synced = true;
+                }
+                pos = (double)i;
+                continue;
+            }
+            synced = false;
+            pos += sp;
+            const size_t i0 = (size_t)pos;
+            const double f = pos - i0;
+            float l = 0, r = 0;
+            if (i0 + 1 < n) { l = (float)(inL[i0] * (1 - f) + inL[i0 + 1] * f); r = (float)(inR[i0] * (1 - f) + inR[i0 + 1] * f); }
+            a.left[i] = l; a.right[i] = r;
+        }
+        return true;
+    }
+};
+
 } // namespace
 
+double truePeakDb(const Audio &a) {
+    double pk = 0;
+    for (size_t i = 0; i < a.frames(); ++i) {
+        pk = std::max({pk, (double)std::fabs(a.left[i]), (double)std::fabs(a.right[i])});
+        if (std::max(std::fabs(a.left[i]), std::fabs(a.right[i])) > pk * 0.5)
+            pk = std::max({pk, interPeak(a.left, i), interPeak(a.right, i)});
+    }
+    return dsp::linToDb(pk);
+}
+
 std::vector<std::string> builtinEffectTypes() {
-    return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "chorus", "width", "duck"};
+    return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "chorus", "width", "duck",
+            "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -483,6 +840,14 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "chorus") fx = std::make_unique<Chorus>(j, job);
             else if (t == "width") fx = std::make_unique<Width>(j, job);
             else if (t == "duck") fx = std::make_unique<Duck>(j, job, err);
+            else if (t == "tremolo") fx = std::make_unique<Tremolo>(j, job);
+            else if (t == "pan") fx = std::make_unique<Pan>(j, job);
+            else if (t == "gate") fx = std::make_unique<Gate>(j, job, err);
+            else if (t == "rotary") fx = std::make_unique<Rotary>(j, job);
+            else if (t == "autowah") fx = std::make_unique<AutoWah>(j, job, err);
+            else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
+            else if (t == "vibrato") fx = std::make_unique<Vibrato>(j, job);
+            else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
             else {
                 std::string list;
                 for (auto &n : builtinEffectTypes()) list += (list.empty() ? "" : ", ") + n;

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 
 namespace fs = std::filesystem;
 
@@ -72,7 +73,8 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     tr.preset = p.preset;
     tr.paramsApplied = track.params.size();
     tr.automated = p.autos.size();
-    const auto events = scheduleNotes(track.notes, job.sampleRate);
+    auto events = scheduleNotes(track.notes, job.sampleRate);
+    scheduleControllers(track, job.sampleRate, (double)audio.frames() / job.sampleRate, events);
     if (!runPlugin(job, p, events, nullptr, audio, err)) { err = track.name + ": " + err; return false; }
     for (auto &w : p.warnings) tr.warnings.push_back(w);
     return true;
@@ -102,6 +104,23 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     std::error_code ec;
     fs::create_directories(fs::path(outDir) / "stems", ec);
     if (ec) { err = "cannot create " + outDir + ": " + ec.message(); return false; }
+    // never leave a previous render's files next to this one's: a failed render must not look finished
+    fs::remove(fs::path(outDir) / "report.json", ec);
+    fs::remove(fs::path(outDir) / "mix.wav", ec);
+    for (auto &e : fs::directory_iterator(fs::path(outDir) / "stems", ec))
+        if (e.path().extension() == ".wav") fs::remove(e.path(), ec);
+    {
+        const double perFile = (double)frames * 2 * 4 + 64;
+        const double need = perFile + (job.stemBits ? job.tracks.size() * (double)frames * 2 * (job.stemBits / 8) : 0);
+        const auto space = fs::space(outDir, ec);
+        if (!ec && (double)space.available < need * 1.05) {
+            char buf[200];
+            std::snprintf(buf, sizeof buf, "not enough disk space in %s: this render writes %.0f MB, %.0f MB free (set \"stems\": \"none\" or \"16\" to write less)",
+                          outDir.c_str(), need / 1e6, space.available / 1e6);
+            err = buf;
+            return false;
+        }
+    }
 
     const FxContext ctx{job, verbose};
     Audio mix;
@@ -116,57 +135,104 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         tr.name = track.name;
         Audio audio;
         audio.resize(frames);
+        const auto tt = std::chrono::steady_clock::now();
         if (verbose) std::fprintf(stderr, "rendering %s (%s)...\n", track.name.c_str(), track.plugin.c_str());
         if (!renderInstrument(job, track, audio, tr, verbose, err)) return false;
         if (!runChain(trackChains[i], audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err)) return false;
 
         char prefix[8];
         std::snprintf(prefix, sizeof prefix, "%02zu-", i + 1);
-        tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
-        if (!writeWav(tr.file, audio, job.sampleRate, err)) return false;
+        if (job.stemBits) {
+            tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
+            if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits)) return false;
+        }
         tr.levels = measure(audio);
         tr.lufs = integratedLufs(audio, job.sampleRate);
         if (tr.levels.silent && !track.notes.empty())
             tr.warnings.push_back("rendered silence: check the notes, the state/preset, and that the plugin is an instrument");
 
         if (!track.mute) {
-            const double angle = (track.pan + 1.0) * dsp::kPi / 4.0;
-            const double pl = std::cos(angle) * M_SQRT2, pr = std::sin(angle) * M_SQRT2;
+            double angle = (track.pan + 1.0) * dsp::kPi / 4.0;
+            double pl = std::cos(angle) * M_SQRT2, pr = std::sin(angle) * M_SQRT2;
+            const bool panAuto = !track.panAutomation.empty();
             const bool automated = !track.gainAutomation.empty();
-            std::vector<std::pair<Audio *, double>> sends;
+            struct Send { Audio *bus; double amt; const Envelope *env; };
+            std::vector<Send> sends;
             for (const auto &[busName, db] : track.sends)
                 for (size_t b = 0; b < job.buses.size(); ++b)
-                    if (job.buses[b].name == busName) sends.push_back({&buses[b], dsp::dbToLin(db)});
+                    if (job.buses[b].name == busName) {
+                        const Envelope *env = nullptr;
+                        for (auto &[n, e] : track.sendAutomation) if (n == busName) env = &e;
+                        sends.push_back({&buses[b], dsp::dbToLin(db), env});
+                    }
+            Audio *dest = &mix;   // "output": a group bus instead of the master
+            for (size_t b = 0; b < job.buses.size(); ++b) if (job.buses[b].name == track.output) dest = &buses[b];
             double g = dsp::dbToLin(track.gainDb);
+            Audio post;   // what this track adds to its output, for per-section loudness
+            if (!job.markers.empty()) post.resize(frames);
             for (size_t f = 0; f < frames; ++f) {
                 if (automated && f % 32 == 0) g = dsp::dbToLin(track.gainDb + track.gainAutomation.at(f / sr));
+                if (f % 32 == 0) for (auto &s : sends) if (s.env) s.amt = dsp::dbToLin(s.env->at(f / sr));
+                if (panAuto && f % 32 == 0) {
+                    angle = (std::clamp(track.panAutomation.at(f / sr), -1.0, 1.0) + 1.0) * dsp::kPi / 4.0;
+                    pl = std::cos(angle) * M_SQRT2; pr = std::sin(angle) * M_SQRT2;
+                }
                 const float l = (float)(audio.left[f] * g * pl), r = (float)(audio.right[f] * g * pr);
-                mix.left[f] += l; mix.right[f] += r;
-                for (auto &[bus, amt] : sends) { bus->left[f] += (float)(l * amt); bus->right[f] += (float)(r * amt); }
+                dest->left[f] += l; dest->right[f] += r;
+                if (!post.left.empty()) { post.left[f] = l; post.right[f] = r; }
+                for (auto &s : sends) { s.bus->left[f] += (float)(l * s.amt); s.bus->right[f] += (float)(r * s.amt); }
+            }
+            for (size_t m = 0; m < job.markers.size(); ++m) {
+                const double a0 = job.markers[m].sec, b0 = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
+                tr.sectionLufs.push_back(integratedLufs(post, job.sampleRate, (size_t)(a0 * sr), (size_t)(b0 * sr)));
             }
         }
+        tr.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - tt).count();
         result.tracks.push_back(std::move(tr));
     }
 
-    // 2. buses (typically 100%-wet reverbs and delays) return into the mix
-    for (size_t b = 0; b < job.buses.size(); ++b) {
-        BusResult br;
+    // 2. buses (reverbs, delays, groups) run after every bus that feeds them, then return into
+    //    their output bus or the mix
+    std::vector<size_t> order;
+    {
+        std::vector<int> state(job.buses.size(), 0);
+        std::function<void(size_t)> visit = [&](size_t b) {
+            if (state[b]) return;
+            state[b] = 1;
+            for (size_t s = 0; s < job.buses.size(); ++s) if (job.buses[s].output == job.buses[b].name) visit(s);
+            order.push_back(b);
+        };
+        for (size_t b = 0; b < job.buses.size(); ++b) visit(b);
+    }
+    std::vector<BusResult> busResults(job.buses.size());
+    for (size_t b : order) {
+        BusResult &br = busResults[b];
         br.name = job.buses[b].name;
         std::vector<std::string> warnings;
         if (!runChain(busChains[b], buses[b], ctx, br.fx, warnings, "bus '" + br.name + "'", err)) return false;
         for (auto &w : warnings) result.warnings.push_back("bus '" + br.name + "': " + w);
-        const float g = (float)dsp::dbToLin(job.buses[b].gainDb);
-        for (size_t f = 0; f < frames; ++f) { buses[b].left[f] *= g; buses[b].right[f] *= g; mix.left[f] += buses[b].left[f]; mix.right[f] += buses[b].right[f]; }
+        Audio *dest = &mix;
+        for (size_t o = 0; o < job.buses.size(); ++o) if (job.buses[o].name == job.buses[b].output) dest = &buses[o];
+        const auto &env = job.buses[b].gainAutomation;
+        float g = (float)dsp::dbToLin(job.buses[b].gainDb);
+        for (size_t f = 0; f < frames; ++f) {
+            if (!env.empty() && f % 32 == 0) g = (float)dsp::dbToLin(job.buses[b].gainDb + env.at(f / sr));
+            buses[b].left[f] *= g; buses[b].right[f] *= g;
+            dest->left[f] += buses[b].left[f]; dest->right[f] += buses[b].right[f];
+        }
         br.levels = measure(buses[b]);
         br.lufs = integratedLufs(buses[b], job.sampleRate);
-        result.buses.push_back(std::move(br));
     }
+    for (auto &br : busResults) result.buses.push_back(std::move(br));
     buses.clear();
 
     // 3. master chain, then optional peak normalisation
-    if (job.masterGainDb != 0) {
-        const float g = (float)dsp::dbToLin(job.masterGainDb);
-        for (size_t f = 0; f < frames; ++f) { mix.left[f] *= g; mix.right[f] *= g; }
+    if (job.masterGainDb != 0 || !job.masterGainAutomation.empty()) {
+        float g = (float)dsp::dbToLin(job.masterGainDb);
+        for (size_t f = 0; f < frames; ++f) {
+            if (!job.masterGainAutomation.empty() && f % 32 == 0) g = (float)dsp::dbToLin(job.masterGainDb + job.masterGainAutomation.at(f / sr));
+            mix.left[f] *= g; mix.right[f] *= g;
+        }
     }
     {
         std::vector<std::string> warnings;
@@ -183,6 +249,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     result.mixFile = (fs::path(outDir) / "mix.wav").string();
     if (!writeWav(result.mixFile, mix, job.sampleRate, err)) return false;
     result.mix = measure(mix);
+    result.truePeakDb = truePeakDb(mix);
     result.mixLufs = integratedLufs(mix, job.sampleRate);
     for (size_t m = 0; m < job.markers.size(); ++m) {
         const double a = job.markers[m].sec, b = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;

@@ -36,12 +36,14 @@ A job is one JSON object. Unknown fields are ignored.
 |---|---|---|
 | `sampleRate` | 48000 | Output sample rate (Hz). |
 | `blockSize` | 512 | Frames per `process()` call. |
-| `tempo` | 120 | A BPM number, or a tempo map: `[{"beat": 0, "bpm": 76}, {"beat": 8, "bpm": 138}]` (steps, no ramps). Also sent to plugins as transport, so tempo-synced LFOs and delays follow it. |
+| `tempo` | 120 | A BPM number, or a tempo map: `[{"beat": 0, "bpm": 76}, {"beat": 8, "bpm": 138}]`. Points step by default; `"ramp": true` on a point reaches its bpm by a smooth ramp from the previous point (accelerando / ritardando). Also sent to plugins as transport, so tempo-synced LFOs and delays follow it. |
 | `timeSignature` | `[4, 4]` | Sent to plugins as transport. |
 | `tail` | 3 | Seconds rendered after the last note-off, for releases and reverb. |
 | `warmup` | 0.4 | Wall-clock seconds each plugin gets after activation to finish loading samples or restoring state. |
 | `length` | 0 | Fixed render length in seconds (0 = last note + `tail`). |
 | `normalize` | none | If set, scale the mix so its peak is this many dBFS (e.g. `-1`). Stems are never normalized. |
+| `stems` | `"float"` | Stem files: `"float"` (32-bit, keeps overs), `"24"`, `"16"`, or `"none"` (the report still has every track's loudness). `render --stems` overrides it. A render checks free disk space first. |
+| `groove` | none | Swing and humanize for every track (a track's own `groove` overrides keys): `{"swing": 0.58, "grid": 0.25, "lay": 0.02, "humanize": {"time": 0.01, "vel": 0.06, "seed": 7}}`. `swing` 0.5 = straight, 0.667 = triplet feel, applied to notes on the off-steps of `grid` (beats; 0.25 = 16ths); `lay` shifts every note (beats, + = behind the beat); `humanize` adds random timing (beats) and velocity (fraction) deviations, deterministic per `seed`. |
 
 ## Tracks
 
@@ -49,17 +51,21 @@ A job is one JSON object. Unknown fields are ignored.
 |---|---|---|
 | `name` | `trackN` | Used for the stem file name and in the report. |
 | `plugin` | required | A plugin id (`nakst.Apricot`, a VST3 class id), a name (`Apricot`, `BBC Symphony Orchestra`), a path to a `.clap`/`.vst3` bundle, or `path#id`. Prefix `vst3:` or `clap:` when a name exists in both formats (e.g. `vst3:Vital`). |
-| `preset` | none | A preset from the plugin's own library, by name (`"OR Cathedral Organ"`), `"Category/Name"`, or a unique part of the name. List them with `wavelength presets <plugin>`. CLAP plugins with preset discovery. Applied before `state` and `params`. |
-| `state` | none | A preset file path, or `{"file": "...", "format": "auto"}`. Formats: `clap-preset` (CLAP, Bitwig / DAWproject container), `vstpreset` (VST3 preset), `nksf` (NKS preset: the plugin's own state), `juce-string` (text presets such as Vital `.vital`), `raw`; `auto` detects them. |
+| `preset` | none | A preset from the plugin's own library, by name (`"OR Cathedral Organ"`), `"Category/Name"`, or a unique part of the name. List them with `wavelength presets <plugin>`: CLAP preset discovery, or a VST3 plugin's factory program list (Dexed cartridges, ...). Applied before `state` and `params`. |
+| `state` | none | A preset file path, or `{"file": "...", "format": "auto"}`. Formats: `clap-preset` (CLAP, Bitwig / DAWproject container), `vstpreset` (VST3 preset), `nksf` (NKS preset: the plugin's own state), `fxp` (VST2 `.fxp`/`.fxb` program chunks such as Surge XT and OB-Xf factory patches), `juce-string` (text presets such as Vital `.vital`), `raw`; `auto` detects them. A state or preset that changes none of the plugin's parameters gets a warning (it was ignored, or already loaded). |
 | `params` | `{}` | `name → plain value`, applied after the state. Keys: exact name, `Module/Name`, or `#id`. Out-of-range values are clamped (with a warning). |
 | `gain` | 0 | dB applied when summing into the mix. |
+| `transpose` | 0 | Semitones added to every note (presets that sound an octave off, key changes). |
+| `output` | master | A bus name: the track feeds that bus instead of the master (group buses / sub-mixes). |
+| `roll` | 0 | Beats between notes that start together, lowest first (strummed or rolled chords); negative rolls from the top. |
+| `bendRange` | 2 | The plugin's pitch-bend range in semitones, so `automation.pitchbend` can be written in semitones. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |
 | `mute` | false | Render the stem but leave it out of the mix. |
 | `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |
 | `notes` | `[]` | See below. |
 | `fx` | `[]` | Effect chain (built-in or CLAP plugins), see `effects.md`. |
-| `sends` | `{}` | Bus name → send level in dB (post-fader). |
-| `automation` | none | `{"gain": [[beat, dB], ...], "params": {"Name": [[beat, value], ...]}}`. |
+| `sends` | `{}` | Bus name → send level in dB (post-fader), or an automation curve of dB (`[[beat, dB], ...]`) for throws. |
+| `automation` | none | `gain` (dB), `pan` (-1..1), `params` (`{"Name": curve}`, plain values), `cc` (`{"1": curve, "64": curve}`, MIDI CC values 0-127), `pitchbend` (semitones, see `bendRange`), `pressure` (0-127). CC, pitch bend and pressure reach CLAP plugins as MIDI (or note expressions) and VST3 plugins through the parameters they map those controllers to (a warning names any they don't map). Curves are described in `effects.md` (points, steps, LFOs). |
 
 `plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), or `builtin:sampler`.
 
@@ -80,11 +86,18 @@ Studio package folders; paths work too (relative to the job).
 |---|---|---|
 | `multisample` | | Name or path of a `.multisample` (or a folder with `multisample.xml`). Key and velocity zones, velocity crossfades, round robins, sustain loops and key tracking come from the file. Keys outside every zone stretch the nearest sample. |
 | `kit` | | A folder of one-shot WAVs mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
-| `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths). |
+| `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths), or `{"file": ..., "gain": dB, "pan": -1..1, "tune": semitones}`, or just the settings for the kit's own sample on that key. |
 | `sample` + `root` | 60 | One WAV played chromatically, `root` = the key it sounds at its own pitch. |
 | `attack`, `release` | 0.002 / 0.25 s (kits 0 / 0.05) | Amplitude envelope. |
 | `oneShot` | kits true | Play samples to their end, ignoring note length. |
-| `choke` | kits `[[42, 44, 46]]` | Key groups that cut each other (a closed hat stops the open hat). |
+| `choke` | kits `[[42, 44, 46]]` | Key groups that cut each other (a closed hat stops the open hat). A one-key group chokes itself. |
+| `retrigger` | `"overlap"` | `"cut"`: a new note on a key stops the previous one on that key. |
+| `variants` | `"keys"` | Kits: takes of one sound (`Snare 01`, `Snare 02`) go to the drum's alternate General MIDI keys, then free keys from 60; `"roundrobin"` stacks them on one key and cycles through them. |
+| `mono`, `glide` | false, 0 s | One voice at a time; overlapping notes play legato and glide (seconds) from the previous pitch: 808 slides, portamento leads. |
+| `bpm` | none | The sample's own tempo: resampled (pitch and speed) to the song tempo at each note. |
+| `slices` | none | With `sample`: cut the file into this many equal slices on keys `root`, `root+1`, ... (chop a break). |
+| `start` | 0 | Seconds to skip into every sample. |
+| `reverse` | false | Play samples backwards (reverse cymbals and swells). |
 | `select` | 0 | Value (0-127) matched against multisample `select` ranges (alternate articulations). |
 | `transpose` | 0 | Semitones. |
 | `velocity` | 1 | Velocity sensitivity 0-1 (1 = about 7 dB quieter at half velocity). |
@@ -94,8 +107,8 @@ Studio package folders; paths work too (relative to the job).
 
 | Field | Meaning |
 |---|---|
-| `buses` | `[{"name": "Hall", "gain": 0, "fx": [...]}]`, tracks reach them through `sends`. |
-| `master` | `{"gain": 0, "fx": [...]}`, applied to the full mix before `normalize`. |
+| `buses` | `[{"name": "Hall", "gain": 0, "fx": [...], "output": "Glue", "automation": {"gain": curve}}]`. Tracks reach them through `sends` or `output`; a bus returns to the master or to another bus (`output`), and runs after every bus that feeds it. |
+| `master` | `{"gain": 0, "fx": [...], "automation": {"gain": curve}}`, applied to the full mix before `normalize`. Gain automation fades the whole mix. |
 | `markers` | `[{"beat": 0, "name": "Intro"}, ...]`, the report gives loudness per section. |
 
 ## Notes
@@ -107,6 +120,7 @@ Studio package folders; paths work too (relative to the job).
 | `key` | MIDI note number, or a name with C4 = 60: `"C4"`, `"F#3"`, `"Bb5"`. |
 | `vel` | 0..1; values above 1 are read as MIDI velocity 0..127. Default 0.8. |
 | `channel` | MIDI channel 0..15 (default 0). |
+| `bend` | Pitch over the note, `[[beats after the note start, semitones], ...]` (sampler tracks: scoops, bends, slides). |
 
 Notes are delivered as CLAP note events, or as MIDI if the plugin only accepts MIDI.
 

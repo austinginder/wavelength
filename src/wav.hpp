@@ -16,7 +16,8 @@ struct Levels {
     bool silent;
 };
 
-bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err);  // 32-bit float
+// bits: 32 = IEEE float (keeps overs above 0 dBFS), 24 or 16 = PCM (dithered 16, clipped at full scale)
+bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits = 32);
 Levels measure(const Audio &a);
 
 } // namespace wl

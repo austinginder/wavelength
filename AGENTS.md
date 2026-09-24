@@ -95,6 +95,16 @@ in the job (details in `docs/effects.md`):
 - **Pump:** `duck` bass, pads and arps from the kick (`"trigger": "Drums", "keys": [36]`).
   Roughly: bass 10 dB, pads 6, arps 4–5, leads ~1.
 - **Movement:** automate filters (`"automate": {"cutoff": ...}`) through builds and intros.
+  LFOs work on any automatable value (`"lfo": {"cutoff": {"rate": "1/8", "depth": 1}}`), and
+  `tremolo`, `gate` (trance gate / gated reverb), `rotary` (Leslie organ), `autowah`, `vibrato`,
+  `bitcrush` and `tapestop` are built in. Use `"step"` points for hard switches, not two
+  close points (a stray ramp can quietly lower a whole section).
+- **Groups:** `"output": "Drums"` sends tracks to a group bus (shared glue, one filter sweep
+  for the whole band); buses can feed other buses; `master.automation.gain` fades the song.
+- **Feel and expression:** `groove` (swing, lay-back, humanize) instead of hand-shifted notes;
+  `roll` for strummed chords; `automation.pitchbend` / `cc` for plugins, per-note `bend` and
+  `mono` + `glide` for samples (808 slides, guitar bends); `transpose` for presets that sound
+  an octave off; a tempo point with `"ramp": true` for ritardando.
 - **Master:** a gentle glue `compressor` (ratio ~1.6–2) then a `limiter` at −1.5 dB.
 - **Balance, then dynamics:** first set each track's `gain` from its stem loudness
   (`gain = target − tracks[].lufs`; e.g. leads −18, brass −17, drums −15, pads −23,
@@ -105,6 +115,10 @@ in the job (details in `docs/effects.md`):
 
 `out/<dir>/report.json` (also printed with `--json`):
 
+- `tracks[].sectionLufs`, each track's loudness per marker section after its fader and rides:
+  find which part dominates a section without writing measuring scripts.
+- `tracks[].renderSeconds`, where the render time goes (plugin load and warmup included).
+- `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
 - `tracks[].lufs`, integrated loudness of the stem (after its `fx`, before its fader).
   Use it for gain staging: `gain` = target − lufs. `mix.lufs` is the whole song
   (−14 LUFS is a common streaming level); `sections[].lufs` is per marker section.
@@ -116,7 +130,9 @@ in the job (details in `docs/effects.md`):
 - `mix.levels` and `warnings`, prefer a master `limiter` over `"normalize"`.
 
 Stems are written **after** the track's `fx` and **before** its fader, so fader and send
-changes don't alter stems.
+changes don't alter stems. They are 32-bit float by default and big (about 8 MB per track-minute
+at 48 kHz); use `"stems": "none"` (or `--stems none`) once you only need the report and the mix.
+A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous render's.
 
 ## Known limits (v0.1)
 
@@ -126,3 +142,8 @@ changes don't alter stems.
   Objective-C class names and print a warning when several load together; if a render
   crashes, split tracks into separate jobs.
 - A plugin whose sound depends on its own GUI or licence dialog may render its demo/default.
+  An effect that only changes the level gets a warning; a state or preset that changes no
+  parameter gets a warning too.
+- Preset files in a plugin's private format (Serum 2 `.SerumPreset`, Odin2 `.odin`, u-he
+  `.h2p`, Guitar Rig racks) need converting to the plugin's state.
+  `.fxp`/`.fxb` (Surge XT, OB-Xf) load directly, and VST3 factory program lists load by name.

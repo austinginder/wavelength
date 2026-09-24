@@ -52,7 +52,7 @@ Usage:
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
-  wavelength render <job.json> [--out DIR] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out).
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
@@ -74,7 +74,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -147,6 +147,13 @@ std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec
         if (!plugin->loadState(sf, err)) return nullptr;
     }
     plugin->pump(info.format == "vst3" ? 500 : 150);
+    if (info.format == "vst3") {   // some plugins (Surge XT) only publish real values after processing a few blocks
+        auto ps = plugin->params();
+        if (!ps.empty()) {
+            std::string e2;
+            plugin->commitParams({{ps.front().id, ps.front().cookie, ps.front().value}}, 48000, 512, e2);
+        }
+    }
     return plugin;
 }
 
@@ -156,9 +163,14 @@ int cmdPresets(const Args &a) {
     PluginInfo info;
     std::string err;
     if (!resolvePlugin(a.positional[1], info, err)) return fail(a, err);
-    if (info.format != "clap") return fail(a, info.name + " is " + info.format + "; preset listing is available for CLAP plugins (use state files for VST3)");
     std::vector<PresetInfo> presets;
-    if (!discoverPresets(info.bundlePath, info.id, presets, err)) return fail(a, err);
+    if (info.format == "vst3") {   // factory programs from the plugin's program list
+        auto plugin = createPlugin(info, err);
+        if (!plugin) return fail(a, err);
+        const auto names = plugin->programs();
+        if (names.empty()) return fail(a, info.name + " lists no factory programs (VST3 program list); load its presets as state files");
+        for (auto &n : names) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
+    } else if (!discoverPresets(info.bundlePath, info.id, presets, err)) return fail(a, err);
     std::string q = a.get("--search");
     std::transform(q.begin(), q.end(), q.begin(), ::tolower);
     auto matches = [&](const PresetInfo &p) {
@@ -189,13 +201,15 @@ int cmdSamples(const Args &a) {
         std::vector<std::pair<int, std::string>> map;
         std::vector<std::string> unmapped;
         std::string dir;
-        if (!kitMap(a.get("--kit"), fs::current_path().string(), map, unmapped, dir, err)) return fail(a, err);
+        std::vector<std::string> extras;
+        if (!kitMap(a.get("--kit"), fs::current_path().string(), map, unmapped, dir, err, a.has("--roundrobin"), &extras)) return fail(a, err);
         json list = json::array();
         for (auto &[k, f] : map) {
-            const bool guessed = std::find(unmapped.begin(), unmapped.end(), f) != unmapped.end();
+            const bool extra = std::find(extras.begin(), extras.end(), f) != extras.end();
+            const bool guessed = !extra && std::find(unmapped.begin(), unmapped.end(), f) != unmapped.end();
             const std::string file = fs::path(f).filename().string();
-            if (a.has("--json")) list.push_back({{"key", k}, {"file", file}, {"recognised", !guessed}});
-            else std::fprintf(OUT, "%3d  %s%s\n", k, file.c_str(), guessed ? "   (unrecognised name: next free key)" : "");
+            if (a.has("--json")) list.push_back({{"key", k}, {"file", file}, {"recognised", !guessed}, {"extraTake", extra}});
+            else std::fprintf(OUT, "%3d  %s%s\n", k, file.c_str(), extra ? "   (another take: --roundrobin stacks takes on one key)" : guessed ? "   (unrecognised name: next free key)" : "");
         }
         if (a.has("--json")) emit(json{{"ok", true}, {"kit", dir}, {"map", list}}.dump(2));
         else std::fprintf(OUT, "\n%s\nUse as \"sampler\": {\"kit\": \"%s\"}; override keys with \"map\": {\"36\": \"<file>\"}.\n",
@@ -231,9 +245,12 @@ int cmdParams(const Args &a) {
     if (!inst) return fail(a, err);
     auto params = inst->params();
     json list = json::array();
-    size_t shown = 0;
+    size_t shown = 0, midiHidden = 0;
     for (auto &p : params) {
-        if (!a.has("--all") && (p.hidden || p.readonly)) continue;
+        // JUCE plugins expose ~2000 "MIDI CC 0|1" placeholder parameters: use "cc"/"pitchbend" automation instead
+        const bool midiPlaceholder = p.name.rfind("MIDI CC ", 0) == 0 || p.name == "MIDI";
+        if (midiPlaceholder) ++midiHidden;
+        if (!a.has("--all") && (p.hidden || p.readonly || midiPlaceholder)) continue;
         ++shown;
         if (a.has("--json"))
             list.push_back({{"id", p.id}, {"name", p.name}, {"module", p.module}, {"min", p.min}, {"max", p.max},
@@ -243,7 +260,8 @@ int cmdParams(const Args &a) {
                         (p.module.empty() ? p.name : p.module + "/" + p.name).c_str(), p.value, p.min, p.max, p.display.c_str());
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"params", list}}.dump(2));
-    else std::fprintf(OUT, "\n%zu of %zu parameters (%s)\n", shown, params.size(), info.name.c_str());
+    else std::fprintf(OUT, "\n%zu of %zu parameters (%s)%s\n", shown, params.size(), info.name.c_str(),
+                      midiHidden && !a.has("--all") ? (", " + std::to_string(midiHidden) + " MIDI controller placeholders hidden: use \"cc\" / \"pitchbend\" automation").c_str() : "");
     return 0;
 }
 
@@ -259,9 +277,21 @@ int cmdRender(const Args &a) {
     std::string err;
     std::string base = fs::absolute(path).parent_path().string();
     if (!parseJob(j, base, job, err)) return fail(a, err);
+    if (a.has("--stems")) {
+        const std::string s = a.get("--stems");
+        job.stemBits = s == "none" ? 0 : s == "16" ? 16 : s == "24" ? 24 : s == "float" || s == "32" ? 32 : -1;
+        if (job.stemBits < 0) return fail(a, "--stems must be float, 24, 16 or none");
+    }
     RenderResult r;
     std::string outDir = a.get("--out", "out");
-    if (!renderJob(job, outDir, a.has("--verbose"), r, err)) return fail(a, err);
+    bool ok = false;
+    try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
+    catch (const std::exception &e) { err = std::string("render failed: ") + e.what(); }
+    if (!ok) {   // a failed render leaves a failed report, never the previous render's
+        std::error_code ec;
+        if (fs::is_directory(outDir, ec)) std::ofstream(fs::path(outDir) / "report.json") << json{{"ok", false}, {"error", err}}.dump(2) << "\n";
+        return fail(a, err);
+    }
 
     auto r1 = [](double v) { return std::round(v * 10) / 10; };
     json tracks = json::array();
@@ -269,6 +299,8 @@ int cmdRender(const Args &a) {
         tracks.push_back({{"name", t.name}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"file", t.file},
                           {"preset", t.preset}, {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automatedParams", t.automated},
                           {"stateFormat", t.stateFormat}, {"fx", t.fx}, {"lufs", r1(t.lufs)},
+                          {"renderSeconds", std::round(t.seconds * 100) / 100},
+                          {"sectionLufs", [&] { json o = json::array(); for (double v : t.sectionLufs) o.push_back(r1(v)); return o; }()},   // same order as "sections"
                           {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
     json buses = json::array();
     for (auto &b : r.buses) buses.push_back({{"name", b.name}, {"fx", b.fx}, {"lufs", r1(b.lufs)}, {"levels", levelsJson(b.levels)}});
@@ -277,7 +309,7 @@ int cmdRender(const Args &a) {
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
     json report = {{"ok", true}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100},
-                   {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"levels", levelsJson(r.mix)},
+                   {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings}};
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2) << "\n";

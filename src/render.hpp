@@ -12,7 +12,8 @@ struct TrackResult {
     size_t notes = 0, paramsApplied = 0, automated = 0;
     std::vector<std::string> fx;
     Levels levels{};
-    double lufs = -120;
+    double lufs = -120, seconds = 0;   // seconds: wall time to render this track
+    std::vector<double> sectionLufs;  // post-fader loudness in each marker section
     std::vector<std::string> warnings;
 };
 
@@ -36,7 +37,7 @@ struct RenderResult {
     std::vector<std::string> masterFx;
     std::string mixFile;
     Levels mix{};
-    double mixLufs = -120, normalizeGainDb = 0;
+    double mixLufs = -120, normalizeGainDb = 0, truePeakDb = -120;
     std::vector<SectionResult> sections;
     std::vector<std::string> warnings;
 };

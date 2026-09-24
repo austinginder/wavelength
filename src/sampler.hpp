@@ -31,8 +31,11 @@ struct SampleLibraryEntry {
 const std::vector<SampleLibraryEntry> &sampleLibrary();
 std::vector<std::string> sampleRoots();
 
-// The General MIDI map a kit folder gets: key -> file path, plus files left unmapped.
+// The General MIDI map a kit folder gets: key -> file path. Files that are takes of the same sound
+// ("Snare 01", "Snare 02") share its key as round robins when `roundRobin`, else they (and
+// unrecognised files) take free keys from 60 and are listed in `unmapped` / `extraTakes`.
 bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vector<std::pair<int, std::string>> &map,
-            std::vector<std::string> &unmapped, std::string &resolved, std::string &err);
+            std::vector<std::string> &unmapped, std::string &resolved, std::string &err, bool roundRobin = false,
+            std::vector<std::string> *extraTakes = nullptr);
 
 } // namespace wl

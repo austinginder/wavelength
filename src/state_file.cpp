@@ -34,6 +34,55 @@ bool nksPluginChunk(const std::vector<uint8_t> &d, std::vector<uint8_t> &out) {
     }
     return false;
 }
+bool isFxp(const std::vector<uint8_t> &d) { return d.size() >= 28 && std::equal(d.begin(), d.begin() + 4, "CcnK"); }
+uint32_t be32(const std::vector<uint8_t> &d, size_t i) { return uint32_t(d[i]) << 24 | uint32_t(d[i + 1]) << 16 | uint32_t(d[i + 2]) << 8 | d[i + 3]; }
+// VST2 .fxp program / .fxb bank: the opaque chunk inside ("FPCh" program, "FBCh" bank)
+bool fxpChunk(const std::vector<uint8_t> &d, std::vector<uint8_t> &out, std::string &err) {
+    const std::string magic(d.begin() + 8, d.begin() + 12);
+    size_t at;
+    if (magic == "FPCh") at = 56;          // header + 28-byte program name, then u32 chunk size
+    else if (magic == "FBCh") at = 156;    // header + 128 reserved bytes, then u32 chunk size
+    else {
+        err = magic == "FxCk" || magic == "FxBk"
+            ? "is a VST2 parameter-list preset (" + magic + "), not a state chunk; set its values with \"params\" instead"
+            : "has an unknown fxp type '" + magic + "'";
+        return false;
+    }
+    if (d.size() < at + 4) { err = "is a truncated .fxp/.fxb file"; return false; }
+    const uint32_t n = be32(d, at);
+    if (at + 4 + n > d.size()) { err = "is a truncated .fxp/.fxb file"; return false; }
+    out.assign(d.begin() + at + 4, d.begin() + at + 4 + n);
+    return true;
+}
+// OB-Xf / OB-Xd program chunks keep the patch on the root element (<OB-Xf a=".." .../>); their
+// plugin state wants a single-program document (<OB-Xf single-program-format="1"><program .../>)
+void adaptObxProgram(std::vector<uint8_t> &chunk) {
+    if (chunk.size() < 8 || !std::equal(chunk.begin(), chunk.begin() + 4, "VC2!")) return;
+    std::string xml(chunk.begin() + 8, chunk.end());
+    while (!xml.empty() && xml.back() == 0) xml.pop_back();
+    for (const std::string tag : {"OB-Xf", "OB-Xd"}) {
+        const size_t open = xml.find("<" + tag + " ");
+        if (open == std::string::npos || xml.find("<program") != std::string::npos) continue;
+        const size_t close = xml.find("/>", open);
+        if (close == std::string::npos) return;
+        size_t nameEnd = open + 1 + tag.size();
+        std::string attrs = xml.substr(nameEnd, close - nameEnd), version;
+        const std::string key = tag == "OB-Xf" ? "ob-xf_version=\"" : "ob-xd_version=\"";
+        const size_t v = attrs.find(key);
+        if (v != std::string::npos) {
+            const size_t e = attrs.find('"', v + key.size());
+            version = " " + attrs.substr(v, e + 1 - v);
+            attrs.erase(v, e + 1 - v);
+        }
+        xml = xml.substr(0, open) + "<" + tag + version + " single-program-format=\"1\"><program" + attrs + "/></" + tag + ">";
+        std::vector<uint8_t> body(xml.begin(), xml.end());
+        body.push_back(0);
+        const uint32_t n = (uint32_t)body.size();
+        chunk.assign({'V', 'C', '2', '!', uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), uint8_t(n >> 24)});
+        chunk.insert(chunk.end(), body.begin(), body.end());
+        return;
+    }
+}
 } // namespace
 
 bool readStateFile(const std::string &path, const std::string &format, StateFile &out, std::string &err) {
@@ -44,7 +93,7 @@ bool readStateFile(const std::string &path, const std::string &format, StateFile
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : endsWith(path, ".vital") ? "juce-string" : "raw";
+            : isFxp(data) ? "fxp" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
     if (fmt == "clap-preset") {
@@ -61,10 +110,14 @@ bool readStateFile(const std::string &path, const std::string &format, StateFile
         out.state = std::move(data);
     } else if (fmt == "nksf") {
         if (!isNksf(data) || !nksPluginChunk(data, out.state)) { err = path + " is not an NKS preset with a plugin chunk"; return false; }
+    } else if (fmt == "fxp") {
+        if (!isFxp(data)) { err = path + " is not a .fxp/.fxb file"; return false; }
+        if (!fxpChunk(data, out.state, err)) { err = path + " " + err; return false; }
+        adaptObxProgram(out.state);
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, juce-string or raw)";
         return false;
     }
     return true;

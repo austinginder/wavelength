@@ -1,10 +1,11 @@
 #pragma once
-// Beats <-> seconds through a stepped tempo map.
+// Beats <-> seconds through a tempo map. A point with `ramp` reaches its bpm by a linear
+// ramp (in beats) from the previous point (accelerando / ritardando); otherwise tempo steps.
 #include <vector>
 
 namespace wl {
 
-struct TempoPoint { double beat, bpm; };
+struct TempoPoint { double beat, bpm; bool ramp = false; };
 
 class TempoMap {
 public:
@@ -15,6 +16,7 @@ public:
 private:
     std::vector<TempoPoint> pts_;
     std::vector<double> secAt_;   // seconds at each point
+    double segSec(size_t i, double beats) const;
 };
 
 } // namespace wl

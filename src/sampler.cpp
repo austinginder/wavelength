@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -216,6 +217,8 @@ struct Zone {
     enum Loop { Off, Always, Sustain } loop = Off;
     double loopStart = 0, loopStop = 0, loopFade = 0;
     bool reverse = false, roundRobin = false;
+    double pan = 0;                          // kit map entries only
+    double startSec = 0;                     // extra start offset (sampler "start"), seconds
 };
 
 bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::string &err) {
@@ -267,20 +270,30 @@ bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::str
 // ---- library index ------------------------------------------------------------------------
 std::string home() { const char *h = getenv("HOME"); return h ? h : ""; }
 
-int gmKeyFor(const std::string &file, std::set<int> &taken) {
+int gmKeyFor(const std::string &file, std::set<int> &taken, int *primary = nullptr) {
     const std::string n = lower(fs::path(file).stem().string());
     std::vector<std::string> tok;
     std::string cur;
     for (char c : n) { if (isalnum((unsigned char)c)) cur += c; else { if (!cur.empty()) tok.push_back(cur); cur.clear(); } }
     if (!cur.empty()) tok.push_back(cur);
+    // loops and phrases are not drum hits: "133bpm", "loop", "beat", "fill"
+    for (auto &t : tok) {
+        const size_t d = t.find_first_not_of("0123456789");
+        if (d != std::string::npos && d > 1 && t.substr(d) == "bpm") return -1;
+        if (t == "bpm" || t == "loop" || t == "loops" || t == "fill" || t == "groove") return -1;
+    }
     auto has = [&](std::initializer_list<const char *> words) {
         for (const char *w : words) {
-            if (strlen(w) <= 3) { for (auto &t : tok) if (t == w) return true; }
-            else if (n.find(w) != std::string::npos) return true;
+            for (size_t i = 0; i < tok.size(); ++i) {
+                const bool match = strlen(w) <= 3 ? tok[i] == w : tok[i].find(w) != std::string::npos;
+                if (match && !(i > 0 && (tok[i - 1] == "no" || tok[i - 1] == "without"))) return true;   // "No Snare"
+            }
+            if (strlen(w) > 3 && strchr(w, ' ') && n.find(w) != std::string::npos) return true;
         }
         return false;
     };
     auto pick = [&](std::initializer_list<int> keys) {
+        if (primary) *primary = *keys.begin();   // the role's main key, for round-robin variants
         for (int k : keys) if (!taken.count(k)) { taken.insert(k); return k; }
         return -1;
     };
@@ -300,6 +313,15 @@ int gmKeyFor(const std::string &file, std::set<int> &taken) {
     if (has({"tom"})) {
         if (has({"floor", "low", "lo", "lt"})) return pick({45, 41, 43});
         if (has({"high", "hi", "ht"})) return pick({50, 48});
+        for (size_t i = 0; i + 1 < tok.size(); ++i)   // "Tom 1" is the smallest drum, "Tom 3" the floor tom
+            if (tok[i].find("tom") != std::string::npos && tok[i + 1].size() == 1 && isdigit((unsigned char)tok[i + 1][0])) {
+                switch (tok[i + 1][0]) {
+                case '1': return pick({50, 48});
+                case '2': return pick({47, 48});
+                case '3': return pick({45, 43});
+                default: return pick({43, 41});
+                }
+            }
         return pick({47, 48, 45, 50});
     }
     if (has({"cowbell", "cow"})) return pick({56});
@@ -316,6 +338,14 @@ int gmKeyFor(const std::string &file, std::set<int> &taken) {
     if (has({"whistle"})) return pick({71, 72});
     if (has({"triangle"})) return pick({81, 80});
     return -1;
+}
+
+bool looksLikeLoop(const std::string &file) {
+    const std::string n = lower(fs::path(file).stem().string());
+    if (n.find("loop") != std::string::npos) return true;
+    for (size_t p = n.find("bpm"); p != std::string::npos; p = n.find("bpm", p + 1))
+        if (p > 0 && isdigit((unsigned char)n[p - 1])) return true;
+    return false;
 }
 
 bool isWav(const fs::path &p) { return lower(p.extension().string()) == ".wav"; }
@@ -354,7 +384,14 @@ std::string resolveIn(const std::string &name, const std::string &baseDir) {
 bool findEntry(const std::string &kind, const std::string &query, std::string &path, std::string &err) {
     const auto &lib = sampleLibrary();
     const std::string q = lower(query);
-    for (auto &e : lib) if (e.kind == kind && lower(e.name) == q) { path = e.path; return true; }
+    std::vector<const SampleLibraryEntry *> exact;
+    for (auto &e : lib) if (e.kind == kind && lower(e.name) == q) exact.push_back(&e);
+    if (exact.size() == 1) { path = exact[0]->path; return true; }
+    if (exact.size() > 1) {
+        err = "'" + query + "' names " + std::to_string(exact.size()) + " " + kind + "s; add the folder above it:";
+        for (auto *e : exact) err += " \"" + fs::path(e->path).parent_path().filename().string() + "/" + e->name + "\"";
+        return false;
+    }
     for (auto &e : lib) {
         const std::string lp = lower(e.path);
         if (e.kind == kind && lp.size() >= q.size() && lp.compare(lp.size() - q.size(), q.size(), q) == 0) { path = e.path; return true; }
@@ -379,8 +416,10 @@ struct Voice {
     std::shared_ptr<SampleData> data;
     size_t startFrame;
     double noteLen;     // seconds until note-off (inf for one-shots)
-    double cutAt;       // seconds until a choke cuts the voice (inf = never)
-    double amp, ratio;
+    double cutAt;       // seconds until a choke or the next mono note cuts the voice (inf = never)
+    double amp;
+    std::function<double(double)> key;   // sounding key (fractional, incl. glide and bend) at t seconds
+    double semisOffset = 0;              // zone tune + transpose
 };
 
 inline float cubic(const std::vector<float> &x, double pos) {
@@ -401,9 +440,12 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
     const bool canLoop = z.loop != Zone::Off && loopLen > 16 && z.loopStop <= stop && !z.reverse;
     const double fadeLen = canLoop ? std::min(z.loopFade * loopLen, z.loopStart) : 0;
     const bool stereo = !s.r.empty();
-    double pos = z.start;
+    double pos = z.start + z.startSec * s.rate;
     const double chokeFade = 0.004;
+    const double rateRatio = s.rate / sr;
+    double ratio = 1;
     for (size_t i = 0;; ++i) {
+        if (i % 16 == 0) ratio = std::pow(2.0, (z.keyTrack * (v.key(i / sr) - z.root) + v.semisOffset) / 12) * rateRatio;
         const size_t idx = v.startFrame + i;
         if (idx >= out.frames()) break;
         const double t = i / sr;
@@ -432,9 +474,10 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
             r = r * (1 - w) + (stereo ? cubic(s.r, alt) : cubic(s.l, alt)) * w;
         }
         const double g = v.amp * env;
-        out.left[idx] += (float)(l * g);
-        out.right[idx] += (float)(r * g);
-        pos += v.ratio;
+        const double pl = z.pan > 0 ? 1 - z.pan : 1, pr = z.pan < 0 ? 1 + z.pan : 1;
+        out.left[idx] += (float)(l * g * pl);
+        out.right[idx] += (float)(r * g * pr);
+        pos += ratio;
     }
 }
 
@@ -495,11 +538,14 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
             }
             for (auto &[dir, wavs] : dirWavs) {
                 std::sort(wavs.begin(), wavs.end());
-                if (!looksLikeKit(wavs)) continue;
+                size_t loops = 0;
+                for (auto &w : wavs) loops += looksLikeLoop(w);
+                const bool kit = looksLikeKit(wavs), loopDir = wavs.size() >= 2 && loops * 2 >= wavs.size();
+                if (!kit && !loopDir) continue;
                 const fs::path d(dir);
                 const std::string name = d.filename().string();
                 if (!seen.insert("k:" + d.parent_path().filename().string() + "/" + name).second) continue;
-                lib.push_back({"kit", name, dir, d.parent_path().filename().string(), wavs.size()});
+                lib.push_back({kit ? "kit" : "loops", name, dir, d.parent_path().filename().string(), wavs.size()});
             }
         }
         std::sort(lib.begin(), lib.end(), [](auto &a, auto &b) { return a.kind != b.kind ? a.kind < b.kind : lower(a.name) < lower(b.name); });
@@ -507,17 +553,46 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
     return lib;
 }
 
+// "Snare 01.wav" and "Snare 02.wav" are takes of one sound: the name without its trailing number
+std::string takeGroup(const std::string &file) {
+    std::string n = fs::path(file).stem().string();
+    while (!n.empty() && (isdigit((unsigned char)n.back()) || n.back() == ' ' || n.back() == '_' || n.back() == '-')) n.pop_back();
+    return lower(n);
+}
+
 bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vector<std::pair<int, std::string>> &map,
-            std::vector<std::string> &unmapped, std::string &resolved, std::string &err) {
+            std::vector<std::string> &unmapped, std::string &resolved, std::string &err, bool roundRobin,
+            std::vector<std::string> *extraTakes) {
     resolved = resolveIn(nameOrPath, baseDir);
     if (resolved.empty() || !fs::is_directory(resolved)) {
-        if (!findEntry("kit", nameOrPath, resolved, err)) return false;
+        std::string err2;
+        if (!findEntry("kit", nameOrPath, resolved, err) && !findEntry("loops", nameOrPath, resolved, err2)) return false;
+        err.clear();
     }
     std::set<int> taken;
+    std::vector<std::pair<std::string, std::vector<std::string>>> groups;   // in file order
     for (auto &w : wavsIn(resolved)) {
-        const int k = gmKeyFor(w, taken);
-        if (k >= 0) map.push_back({k, w}); else unmapped.push_back(w);
+        const std::string g = takeGroup(w);
+        auto it = std::find_if(groups.begin(), groups.end(), [&](auto &x) { return x.first == g; });
+        if (it == groups.end()) groups.push_back({g, {w}}); else it->second.push_back(w);
     }
+    std::vector<std::string> extras;
+    for (auto &[g, files] : groups) {
+        int primary = -1;
+        const int k = gmKeyFor(files.front(), taken, &primary);
+        if (k < 0) {   // a known drum whose keys are all used is another take, not an unknown sound
+            (primary >= 0 ? extras : unmapped).insert((primary >= 0 ? extras : unmapped).end(), files.begin(), files.end());
+            continue;
+        }
+        map.push_back({k, files.front()});
+        for (size_t i = 1; i < files.size(); ++i) {
+            if (roundRobin) { map.push_back({k, files[i]}); continue; }   // takes cycle on the same key
+            const int alt = gmKeyFor(files[i], taken);                     // else the drum's alternate key (35, 40, 57, ...)
+            if (alt >= 0) map.push_back({alt, files[i]}); else extras.push_back(files[i]);
+        }
+    }
+    unmapped.insert(unmapped.end(), extras.begin(), extras.end());
+    if (extraTakes) *extraTakes = extras;
     // anything unrecognised goes on the free keys from 60 up
     int next = 60;
     for (auto &w : unmapped) {
@@ -534,7 +609,8 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     const json &cfg = track.sampler;
     if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
-                                                "select", "transpose", "velocity", "choke", "gain"};
+                                                "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
+                                                "retrigger", "bpm", "reverse", "start", "slices", "variants"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
@@ -565,20 +641,32 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         std::string dir;
         if (cfg.contains("kit") && cfg["kit"].is_string()) {
             std::vector<std::string> unmapped;
-            if (!kitMap(cfg["kit"].get<std::string>(), job.baseDir, map, unmapped, dir, err)) return false;
+            if (!kitMap(cfg["kit"].get<std::string>(), job.baseDir, map, unmapped, dir, err, cfg.value("variants", std::string("keys")) == "roundrobin"))
+                return false;
         }
         json explicitMap = cfg.contains("kit") && cfg["kit"].is_object() ? cfg["kit"] : cfg.value("map", json::object());
+        struct KeyOpts { double gain = 0, pan = 0, tune = 0; };
+        std::map<int, KeyOpts> opts;
         for (auto &[k, v] : explicitMap.items()) {
             const int key = std::atoi(k.c_str());
-            std::string file = v.get<std::string>();
+            if (v.is_object() && !v.contains("file")) {   // settings only, for the kit's own sample on this key
+                opts[key] = {v.value("gain", 0.0), v.value("pan", 0.0), v.value("tune", 0.0)};
+                continue;
+            }
+            std::string file = v.is_object() ? v.at("file").get<std::string>() : v.get<std::string>();
+            if (v.is_object()) opts[key] = {v.value("gain", 0.0), v.value("pan", 0.0), v.value("tune", 0.0)};
             std::string path = !dir.empty() && fs::exists(fs::path(dir) / file) ? (fs::path(dir) / file).string() : resolveIn(file, job.baseDir);
             if (path.empty()) { err = "sampler: cannot find kit sample '" + file + "'"; return false; }
             map.erase(std::remove_if(map.begin(), map.end(), [&](auto &m) { return m.first == key; }), map.end());
             map.push_back({key, path});
         }
+        std::map<int, int> perKey;
+        for (auto &[key, file] : map) ++perKey[key];
         for (auto &[key, file] : map) {
             Zone z;
             z.file = file; z.keyLow = z.keyHigh = z.root = key; z.keyTrack = 0;
+            z.roundRobin = perKey[key] > 1;
+            if (opts.count(key)) { z.gainDb = opts[key].gain; z.pan = std::clamp(opts[key].pan, -1.0, 1.0); z.tune = opts[key].tune; }
             zones.push_back(z);
         }
         source = dir;
@@ -588,7 +676,22 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         z.file = resolveIn(f, job.baseDir);
         if (z.file.empty()) { err = "sampler: cannot find sample '" + f + "'"; return false; }
         z.root = cfg.value("root", 60);
-        zones.push_back(z);
+        const int slices = cfg.value("slices", 0);
+        if (slices > 1) {   // slice mode: key root + i plays the i-th equal slice, unpitched
+            std::vector<uint8_t> bytes;
+            SampleData d;
+            std::string e2;
+            if (!readFile(z.file, bytes) || !decodeWav(bytes, d, e2)) { err = "sampler: cannot read " + z.file + " " + e2; return false; }
+            const double len = (double)d.frames() / slices;
+            for (int i = 0; i < slices && z.root + i <= 127; ++i) {
+                Zone sl = z;
+                sl.keyLow = sl.keyHigh = z.root + i;
+                sl.root = z.root + i;
+                sl.keyTrack = 0;
+                sl.start = i * len; sl.stop = (i + 1) * len;
+                zones.push_back(sl);
+            }
+        } else zones.push_back(z);
     } else {
         err = "track '" + track.name + "': the sampler needs \"multisample\", \"kit\"/\"map\" or \"sample\"";
         return false;
@@ -623,10 +726,44 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         return true;
     };
 
+    const bool mono = cfg.value("mono", false);
+    const double glide = std::max(0.0, cfg.value("glide", 0.0));
+    const bool retriggerCut = cfg.value("retrigger", std::string("overlap")) == "cut";
+    const double loopBpm = cfg.value("bpm", 0.0);   // the sample's own tempo: resampled to the song tempo
+    const bool reverseAll = cfg.value("reverse", false);
+    const double startSec = std::max(0.0, cfg.value("start", 0.0));   // skip into every sample (seconds)
+    if (reverseAll || startSec > 0)
+        for (auto &z : zones) { if (reverseAll) z.reverse = !z.reverse; z.startSec = startSec; }
+
+    // notes in time order; in mono mode overlapping notes form one legato voice that glides
+    std::vector<size_t> idx(track.notes.size());
+    for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+    std::stable_sort(idx.begin(), idx.end(), [&](size_t a, size_t b) { return track.notes[a].start < track.notes[b].start; });
+    struct Phrase { std::vector<const Note *> notes; double end; };
+    std::vector<Phrase> phrases;
+    for (size_t i : idx) {
+        const Note &n = track.notes[i];
+        if (mono && !phrases.empty() && n.start < phrases.back().end - 1e-6) {
+            phrases.back().notes.push_back(&n);
+            phrases.back().end = n.start + n.length;   // the newest note owns the voice
+        } else phrases.push_back({{&n}, n.start + n.length});
+    }
+    auto bendAt = [](const Note &n, double t) {   // t seconds after the note start
+        if (n.bend.empty()) return 0.0;
+        if (t <= n.bend.front().first) return n.bend.front().second;
+        for (size_t i = 1; i < n.bend.size(); ++i)
+            if (t < n.bend[i].first) {
+                const auto &a = n.bend[i - 1], &b = n.bend[i];
+                return a.second + (b.second - a.second) * (t - a.first) / std::max(1e-9, b.first - a.first);
+            }
+        return n.bend.back().second;
+    };
+
     std::map<int, size_t> rr;   // round-robin position per key
-    size_t silent = 0;
-    for (size_t ni = 0; ni < track.notes.size(); ++ni) {
-        const Note &n = track.notes[ni];
+    std::map<int, int> missed;  // key -> notes with no zone
+    for (size_t pi = 0; pi < phrases.size(); ++pi) {
+        const auto &ph = phrases[pi];
+        const Note &n = *ph.notes.front();
         const int vel127 = std::clamp((int)std::lround(n.velocity * 127), 1, 127);
         auto velOk = [&](const Zone &z) { return vel127 >= z.velLow && vel127 <= z.velHigh; };
         auto selOk = [&](const Zone &z) { return select >= z.selLow && select <= z.selHigh; };
@@ -640,20 +777,35 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                 for (auto &z : zones) if ((pass || velOk(z)) && selOk(z) && std::abs(z.root - n.key) == best) hit.push_back(&z);
             }
         }
-        if (hit.empty()) { ++silent; continue; }
+        if (hit.empty()) { missed[n.key] += (int)ph.notes.size(); continue; }
         std::vector<const Zone *> play1, robin;
         for (auto *z : hit) (z->roundRobin ? robin : play1).push_back(z);
         if (!robin.empty()) play1.push_back(robin[rr[n.key]++ % robin.size()]);
 
         double cutAt = INFINITY;
-        if (oneShot)
-            for (auto &grp : chokes)
-                if (grp.count(n.key))
-                    for (size_t nj = 0; nj < track.notes.size(); ++nj) {
-                        const Note &m = track.notes[nj];
-                        if (nj != ni && grp.count(m.key) && m.key != n.key && m.start > n.start + 1e-6 && m.start - n.start < cutAt)
-                            cutAt = m.start - n.start;
-                    }
+        auto cutBy = [&](const Note &m) { if (m.start > n.start + 1e-6 && m.start - n.start < cutAt) cutAt = m.start - n.start; };
+        if (mono && pi + 1 < phrases.size()) cutBy(*phrases[pi + 1].notes.front());
+        for (const auto &m : track.notes) {
+            if (retriggerCut && m.key == n.key) cutBy(m);
+            if (oneShot)
+                for (auto &grp : chokes)
+                    if (grp.count(n.key) && grp.count(m.key) && (m.key != n.key || grp.size() == 1)) cutBy(m);
+        }
+        // sounding key over time: glides between the phrase's notes, plus each note's bend
+        std::vector<std::pair<double, int>> steps;   // (seconds after phrase start, key)
+        for (auto *m : ph.notes) steps.push_back({m->start - n.start, m->key});
+        const std::vector<const Note *> notes = ph.notes;
+        const double phraseStart = n.start;
+        auto keyAt = [steps, notes, glide, phraseStart, bendAt](double t) {
+            size_t i = 0;
+            while (i + 1 < steps.size() && steps[i + 1].first <= t) ++i;
+            double k = steps[i].second;
+            if (i > 0 && glide > 0 && t - steps[i].first < glide)
+                k = steps[i - 1].second + (steps[i].second - steps[i - 1].second) * (t - steps[i].first) / glide;
+            return k + bendAt(*notes[i], t - (notes[i]->start - phraseStart));
+        };
+        double tempoSemis = 0;
+        if (loopBpm > 0) tempoSemis = 12 * std::log2(job.tempo.bpmAtBeat(job.tempo.secToBeat(n.start)) / loopBpm);
         const double velDb = velSens * 24 * std::log10(std::max(n.velocity, 0.01));
         for (auto *z : play1) {
             Voice v;
@@ -663,14 +815,19 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             if (z->velLowFade > 0 && vel127 < z->velLow + z->velLowFade) w *= (vel127 - z->velLow + 1.0) / (z->velLowFade + 1.0);
             if (z->velHighFade > 0 && vel127 > z->velHigh - z->velHighFade) w *= (z->velHigh - vel127 + 1.0) / (z->velHighFade + 1.0);
             v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velDb) / 20);
-            v.ratio = std::pow(2.0, (z->keyTrack * (n.key - z->root) + z->tune + transpose) / 12) * v.data->rate / sr;
+            v.key = keyAt;
+            v.semisOffset = z->tune + transpose + tempoSemis;
             v.startFrame = (size_t)std::llround(n.start * sr);
-            v.noteLen = oneShot ? INFINITY : n.length;
+            v.noteLen = oneShot ? INFINITY : ph.end - n.start;
             v.cutAt = cutAt;
             play(v, out, sr, attack, release);
         }
     }
-    if (silent) warnings.push_back(std::to_string(silent) + " note(s) matched no sample zone");
+    size_t silent = 0;
+    std::string keys;
+    for (auto &[k, c] : missed) { silent += c; keys += (keys.empty() ? "" : ", ") + std::to_string(k); }
+    if (silent) warnings.push_back(std::to_string(silent) + " note(s) matched no sample zone (keys " + keys + ")" +
+                                   (isKit ? "; run `wavelength samples --kit <name>` for the key map" : ""));
     return true;
 }
 
