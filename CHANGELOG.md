@@ -35,6 +35,8 @@ Working towards **v0.1.0**, the first release.
 - Sampler: `mono` + `glide` (legato slides), per-note `bend`, kit map entries with `gain`/`pan`/`tune`, `retrigger`, `variants` (takes as round robins), `bpm` (tempo-synced loops), `slices`, `start`, `reverse`; toms map by number, loops no longer land on drum keys, `samples` lists loop folders, ambiguous kit names are an error that lists the choices.
 - State: `fxp` format (VST2 `.fxp`/`.fxb` chunks: Surge XT and OB-Xf factory patches load directly); VST3 factory program lists in `presets` and `"preset"` (Dexed); a warning when a state or preset changes no parameters, and when an effect plugin only changes the level.
 - Stems: `"stems": "float" | "24" | "16" | "none"` (and `render --stems`); a free-space check before rendering.
+- Preset formats: Serum 2 `.SerumPreset` (zstd + CBOR, split into processor and controller state), JUCE ValueTree binaries such as Odin2 `.odin`, and u-he `.h2p` (Zebra2, Zebralette, TripleCheese) load as `state` and are auto-detected.
+- Presets by name from preset folders: `wavelength presets` and `"preset"` also search the plugin's preset folders (`/Library/Audio/Presets/<Vendor>/<Plugin>`, Serum 2, Odin2, u-he, Surge XT, OB-Xf), about 5,800 presets across these plugins; placeholder VST3 program lists ("Prog 1") are hidden.
 - `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 

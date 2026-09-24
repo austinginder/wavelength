@@ -11,6 +11,7 @@
 #include "instance.hpp"
 #include "plugin.hpp"
 #include "presets.hpp"
+#include "preset_files.hpp"
 #include "sampler.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
@@ -167,10 +168,14 @@ int cmdPresets(const Args &a) {
     if (info.format == "vst3") {   // factory programs from the plugin's program list
         auto plugin = createPlugin(info, err);
         if (!plugin) return fail(a, err);
-        const auto names = plugin->programs();
-        if (names.empty()) return fail(a, info.name + " lists no factory programs (VST3 program list); load its presets as state files");
-        for (auto &n : names) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
-    } else if (!discoverPresets(info.bundlePath, info.id, presets, err)) return fail(a, err);
+        for (auto &n : plugin->programs()) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
+    } else {
+        std::string discoverErr;
+        discoverPresets(info.bundlePath, info.id, presets, discoverErr);
+    }
+    // plus preset files in the plugin's preset folders (Serum 2, Odin2, u-he, Surge XT, OB-Xf, .vstpreset)
+    for (auto &p : filePresets(info)) presets.push_back(p);
+    if (presets.empty()) return fail(a, info.name + " has no presets Wavelength can find (no preset discovery, program list or preset folder); load a state file");
     std::string q = a.get("--search");
     std::transform(q.begin(), q.end(), q.begin(), ::tolower);
     auto matches = [&](const PresetInfo &p) {

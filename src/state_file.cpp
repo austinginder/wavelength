@@ -1,5 +1,7 @@
 #include "state_file.hpp"
 
+#include "preset_formats.hpp"
+
 #include <algorithm>
 #include <fstream>
 #include <iterator>
@@ -93,7 +95,8 @@ bool readStateFile(const std::string &path, const std::string &format, StateFile
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : endsWith(path, ".vital") ? "juce-string" : "raw";
+            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum"
+            : endsWith(path, ".odin") ? "juce-valuetree" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
     if (fmt == "clap-preset") {
@@ -114,10 +117,18 @@ bool readStateFile(const std::string &path, const std::string &format, StateFile
         if (!isFxp(data)) { err = path + " is not a .fxp/.fxb file"; return false; }
         if (!fxpChunk(data, out.state, err)) { err = path + " " + err; return false; }
         adaptObxProgram(out.state);
+    } else if (fmt == "serum") {
+        if (!serumPresetToStates(data, out.state, out.controllerState, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "juce-valuetree") {
+        if (!valueTreeToJuceXml(data, out.state, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "h2p") {
+        std::string name = path.substr(path.find_last_of("/\\") + 1);
+        if (endsWith(name, ".h2p")) name.resize(name.size() - 4);
+        out.state = h2pToState(data, name);
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, juce-string or raw)";
         return false;
     }
     return true;

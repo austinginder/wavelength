@@ -28,7 +28,18 @@ FetchContent_Declare(vst3sdk
   GIT_SHALLOW TRUE
   GIT_SUBMODULES base pluginterfaces public.sdk
   SOURCE_SUBDIR wavelength-no-build)
-FetchContent_MakeAvailable(clap json vst3sdk)
+# zstd (BSD): Serum 2 presets and states are zstd-compressed CBOR
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
+set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(zstd
+  URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SOURCE_SUBDIR build/cmake)
+FetchContent_MakeAvailable(clap json vst3sdk zstd)
 
 set(SDK ${vst3sdk_SOURCE_DIR})
 add_library(vst3hosting STATIC
@@ -82,6 +93,8 @@ add_executable(wavelength
   src/loudness.cpp
   src/plugin.cpp
   src/presets.cpp
+  src/preset_formats.cpp
+  src/preset_files.cpp
   src/instance.cpp
   src/catalog.cpp
   src/clap_plugin.cpp
@@ -94,7 +107,8 @@ add_executable(wavelength
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
 find_package(ZLIB REQUIRED)
-target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB)
+target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB libzstd_static)
+target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")

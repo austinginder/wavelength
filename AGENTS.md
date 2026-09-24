@@ -144,6 +144,8 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
 - A plugin whose sound depends on its own GUI or licence dialog may render its demo/default.
   An effect that only changes the level gets a warning; a state or preset that changes no
   parameter gets a warning too.
-- Preset files in a plugin's private format (Serum 2 `.SerumPreset`, Odin2 `.odin`, u-he
-  `.h2p`, Guitar Rig racks) need converting to the plugin's state.
-  `.fxp`/`.fxb` (Surge XT, OB-Xf) load directly, and VST3 factory program lists load by name.
+- Presets by name come from CLAP preset discovery, VST3 program lists, and preset files in the
+  plugin's preset folders: Serum 2 `.SerumPreset`, Odin2 `.odin`, u-he `.h2p` (Zebra2,
+  Zebralette, TripleCheese), Surge XT and OB-Xf `.fxp`, and any `.vstpreset` under
+  `/Library/Audio/Presets/<Vendor>/<Plugin>`. `wavelength presets <plugin>` lists them all.
+  Other private formats (Guitar Rig racks, TAL programs) still need converting.

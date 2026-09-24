@@ -21,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <set>
@@ -183,6 +184,11 @@ bool Vst3Plugin::loadState(const StateFile &sf, std::string &err) {
         int64 pos = 0;
         stream.seek(0, IBStream::kIBSeekSet, &pos);
         im.controller->setComponentState(&stream);
+        if (!sf.controllerState.empty()) {   // the controller's own half (Serum 2 presets carry both)
+            std::vector<uint8_t> ctl = sf.controllerState;
+            MemoryStream cs(ctl.data(), (TSize)ctl.size());
+            im.controller->setState(&cs);
+        }
     }
     return true;
 }
@@ -286,6 +292,14 @@ std::vector<std::string> Vst3Plugin::programs() {
             s = Steinberg::Vst::StringConvert::convert(name);
         names.push_back(s.empty() ? "Program " + std::to_string(i + 1) : s);
     }
+    // a list of placeholders ("Prog 1", "Program 0", "Default") is not a preset library
+    auto generic = [](std::string n) {
+        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+        for (const char *w : {"program", "prog", "preset", "patch", "default", "init"})
+            if (n.rfind(w, 0) == 0) { n.erase(0, strlen(w)); break; }
+        return n.find_first_not_of(" 0123456789") == std::string::npos;
+    };
+    if (std::all_of(names.begin(), names.end(), generic)) names.clear();
     return names;
 }
 

@@ -1,6 +1,7 @@
 #include "engine.hpp"
 
 #include "catalog.hpp"
+#include "preset_files.hpp"
 #include "state_file.hpp"
 
 #include <algorithm>
@@ -35,7 +36,21 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     };
     if (!setup.preset.empty()) {
         const auto before = snapshot();
-        if (!out.plugin->loadPreset(setup.preset, out.preset, err)) { err = context + ": " + err; return false; }
+        std::string pluginErr;
+        if (!out.plugin->loadPreset(setup.preset, out.preset, pluginErr)) {
+            // not in the plugin's own library: look for a preset file in its preset folders
+            const auto files = filePresets(info);
+            PresetInfo hit;
+            std::string fileErr;
+            if (files.empty() || !findPreset(files, setup.preset, hit, fileErr)) {
+                err = context + ": " + (files.empty() ? pluginErr : fileErr);
+                return false;
+            }
+            StateFile sf;
+            if (!readStateFile(hit.location, "auto", sf, err) || !out.plugin->loadState(sf, err)) { err = context + ": " + err; return false; }
+            out.preset = hit.name;
+            out.stateFormat = sf.format;
+        }
         out.plugin->pump(100);
         checkChanged(before, "preset '" + out.preset + "'");
     }

@@ -9,8 +9,13 @@
 //               the VST3 host whole
 //  nksf         a Native Instruments NKS preset (RIFF "NIKS"); the PCHK chunk holds the
 //               plugin's own state (after a 4-byte chunk version)
+//  fxp          VST2 .fxp/.fxb program or bank chunk (Surge XT, OB-Xf patches)
+//  serum        Serum 2 .SerumPreset, split into its processor and controller states
+//  juce-valuetree  a JUCE ValueTree in binary form (Odin2 .odin), re-written as the JUCE binary
+//               XML state the plugin loads
+//  h2p          a u-he text preset (Zebra2, Zebralette, TripleCheese, ...)
 //  raw          the plugin's state bytes as-is
-//  auto         detected from the header, else juce-string for .vital, else raw
+//  auto         detected from the header or extension, else juce-string for .vital, else raw
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -19,6 +24,7 @@ namespace wl {
 
 struct StateFile {
     std::vector<uint8_t> state;   // what the plugin's state.load() receives
+    std::vector<uint8_t> controllerState;   // VST3 edit-controller state, when the file carries one
     std::string pluginId;         // from a clap-preset header or a vstpreset class id, if present
     std::string format;           // the format that was used
 };

@@ -1,0 +1,26 @@
+#pragma once
+// Converters from plugins' own preset files to the state their plugins load.
+//
+//  Serum 2 .SerumPreset  "XferJson\0" + u64 LE header length + JSON header + u32 LE CBOR size
+//                        + u32 version (2) + zstd(CBOR). A preset is the processor state and the
+//                        controller state merged into one map; they are split apart again here.
+//  JUCE ValueTree        ValueTree::writeToStream binary (Odin2 .odin): the plugin's state is
+//                        the same tree as JUCE binary XML ("VC2!" + u32 LE length + XML + NUL).
+//  u-he .h2p             text preset (Zebra2, Zebralette, TripleCheese, ...): the state is
+//                        u32 LE length + "#pgm=<name>.h2p\n" + the preset text.
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace wl {
+
+bool isXferJson(const std::vector<uint8_t> &d);
+bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> &processor,
+                         std::vector<uint8_t> &controller, std::string &err);
+
+bool valueTreeToJuceXml(const std::vector<uint8_t> &file, std::vector<uint8_t> &state, std::string &err);
+
+bool looksLikeH2p(const std::vector<uint8_t> &d);
+std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
+
+} // namespace wl
