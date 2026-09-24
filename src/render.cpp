@@ -1,6 +1,7 @@
 #include "render.hpp"
 
 #include "builtins.hpp"
+#include "clips.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
 #include "engine.hpp"
@@ -127,6 +128,7 @@ int renderTrackWorker(const std::string &jobPath, size_t index, const std::strin
     if (index >= job.tracks.size()) return fail("no track " + std::to_string(index));
     double end = 0;
     for (const auto &t : job.tracks) for (const auto &n : t.notes) end = std::max(end, n.start + n.length);
+    for (const auto &t : job.tracks) if (!t.clips.empty()) end = std::max(end, clipsEndSeconds(job, t));
     const double seconds = job.length > 0 ? job.length : end + job.tail;
     const size_t frames = (size_t)std::ceil(seconds * job.sampleRate);
     Chain chain;
@@ -151,6 +153,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     const auto t0 = std::chrono::steady_clock::now();
     double end = 0;
     for (const auto &t : job.tracks) for (const auto &n : t.notes) end = std::max(end, n.start + n.length);
+    for (const auto &t : job.tracks) if (!t.clips.empty()) end = std::max(end, clipsEndSeconds(job, t));
     const double seconds = job.length > 0 ? job.length : end + job.tail;
     const size_t frames = (size_t)std::ceil(seconds * job.sampleRate);
     const double sr = job.sampleRate;

@@ -483,6 +483,8 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
 
 } // namespace
 
+std::string resolveSampleFile(const std::string &name, const std::string &baseDir) { return resolveIn(name, baseDir); }
+
 std::vector<std::string> sampleRoots() {
     std::vector<std::string> roots;
     if (const char *env = getenv("WAVELENGTH_SAMPLES_PATH")) {

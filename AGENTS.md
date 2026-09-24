@@ -86,6 +86,9 @@ in the job (details in `docs/effects.md`):
 
 - **Drums and FX:** `builtin:drums` (General MIDI kit) and `builtin:fx` (impact, riser,
   reverse swell, sub drop) are always available. Big moments need them.
+- **Audio on the timeline:** `builtin:audio` places WAV clips in beats: breaks fitted to the song
+  tempo with their pitch kept (`"bpm": 133`), vocal chops transposed with `pitch`, and reverse
+  swells that end exactly on a downbeat (`"endAt": 64, "reverse": true`).
 - **Real samples:** `builtin:sampler` plays Bitwig's sound content and any WAV folders:
   `{"multisample": "Grand Piano"}`, organs, guitars, basses, and drum machine kits such as
   `{"kit": "Legend 707"}` / `"Legend 808"` / `"Legend 909"`. Find them with

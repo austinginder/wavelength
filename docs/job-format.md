@@ -71,7 +71,30 @@ A job is one JSON object. Unknown fields are ignored.
 | `velocityTo` | none | Drive a controller from note velocities, one point per onset, ramping between them: `{"param": "Dynamics", "min": 0.1, "max": 1}` or `{"cc": 1, "min": 10, "max": 127}`. For libraries whose long notes take loudness from a controller instead of velocity. Explicit automation of the same target wins. |
 | `automation` | none | `gain` (dB), `pan` (-1..1), `params` (`{"Name": curve}`, plain values), `cc` (`{"1": curve, "64": curve}`, MIDI CC values 0-127), `pitchbend` (semitones, see `bendRange`), `pressure` (0-127). CC, pitch bend and pressure reach CLAP plugins as MIDI (or note expressions) and VST3 plugins through the parameters they map those controllers to (a warning names any they don't map). Curves are described in `effects.md` (points, steps, LFOs). |
 
-`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), or `builtin:sampler`.
+`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`, or `builtin:audio`.
+
+### builtin:audio
+
+Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
+
+```json
+{"name": "Break", "plugin": "builtin:audio", "clips": [
+  {"file": "breaks/amen-136.wav", "beat": 0, "bpm": 136, "beats": 16},
+  {"file": "fx/crash.wav", "endAt": 64, "reverse": true, "fadeIn": 200},
+  {"file": "vox/hook.wav", "beat": 32, "pitch": -2, "start": 1.5, "length": 2}]}
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `file` | required | A WAV: absolute, relative to the job, or relative to a sample root (Bitwig content, `$WAVELENGTH_SAMPLES_PATH`). |
+| `beat` / `endAt` | one of them | Where the clip starts, or the beat where it ends (reverse swells, pickups). |
+| `bpm` | none | The file's own tempo: the clip is sped up or slowed to the song's tempo at its anchor. |
+| `speed` | 1 | An explicit speed factor instead of `bpm`. |
+| `stretch` | true | Keep the pitch while changing speed (Signalsmith Stretch); `false` = tape-style, pitch follows speed. |
+| `pitch` | 0 | Semitones, without changing length. |
+| `start`, `length` | 0, whole file | Trim, in seconds of the file; or `beats` (with `bpm`) instead of `length`. |
+| `reverse` | false | Play the trimmed audio backwards. |
+| `gain`, `fadeIn`, `fadeOut` | 0 dB, 2 ms, 5 ms | Level and edge fades (ms). |
 
 ### builtin:sampler
 

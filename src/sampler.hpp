@@ -29,6 +29,8 @@ struct SampleLibraryEntry {
 
 // Every multisample and kit folder under the sample roots (cached per process).
 const std::vector<SampleLibraryEntry> &sampleLibrary();
+// A sample file by path (absolute, relative to baseDir, or relative to a sample root); "" if missing.
+std::string resolveSampleFile(const std::string &name, const std::string &baseDir);
 std::vector<std::string> sampleRoots();
 
 // The General MIDI map a kit folder gets: key -> file path. Files that are takes of the same sound

@@ -183,6 +183,10 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
                 if (fs::path(tr.stateFile).is_relative()) tr.stateFile = (fs::path(baseDir) / tr.stateFile).string();
             }
             if (t.contains("sampler")) tr.sampler = t["sampler"];
+            if (t.contains("clips")) {
+                if (!t["clips"].is_array()) throw std::runtime_error("track '" + tr.name + "': \"clips\" must be an array");
+                tr.clips = t["clips"];
+            }
             if (t.contains("params"))
                 for (auto &[k, v] : t["params"].items()) tr.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
             if (t.contains("fx")) {

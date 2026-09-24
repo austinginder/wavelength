@@ -1,0 +1,250 @@
+{
+ "sampleRate": 48000,
+ "tempo": 174,
+ "tail": 2,
+ "master": {
+  "fx": [
+   {
+    "type": "limiter",
+    "ceiling": -1.5
+   }
+  ]
+ },
+ "tracks": [
+  {
+   "name": "Kick",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "kit": "Legend 909"
+   },
+   "gain": -8,
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 1,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 2,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 3,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 4,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 5,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 6,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 7,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 8,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 9,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 10,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 11,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 12,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 13,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 14,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 15,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 16,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 17,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 18,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 19,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 20,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 21,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 22,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 23,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 24,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 25,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 26,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 27,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 28,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 29,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 30,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 31,
+     "dur": 0.25,
+     "key": 36,
+     "vel": 0.9
+    }
+   ]
+  },
+  {
+   "name": "Break",
+   "plugin": "builtin:audio",
+   "gain": -6,
+   "clips": [
+    {
+     "file": "Beatport Sounds/Beatport Sounds Loops (teaser)/Dirty Breaks/BP 133bpm Pig Farmer-Full.wav",
+     "beat": 0,
+     "bpm": 133,
+     "beats": 16
+    },
+    {
+     "file": "Beatport Sounds/Beatport Sounds Loops (teaser)/Dirty Breaks/BP 133bpm Pig Farmer-Full.wav",
+     "beat": 16,
+     "bpm": 133,
+     "beats": 16,
+     "pitch": -3
+    }
+   ]
+  },
+  {
+   "name": "Swell",
+   "plugin": "builtin:audio",
+   "gain": -10,
+   "clips": [
+    {
+     "file": "Bitwig/Classic Drum Machines/Legend 707/Cymbal Crash Legend 707.wav",
+     "endAt": 16,
+     "reverse": true,
+     "fadeIn": 200
+    }
+   ]
+  }
+ ]
+}

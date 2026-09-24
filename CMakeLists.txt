@@ -39,7 +39,17 @@ FetchContent_Declare(zstd
   URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   SOURCE_SUBDIR build/cmake)
-FetchContent_MakeAvailable(clap json vst3sdk zstd)
+# Signalsmith Stretch + Linear (MIT, header-only): pitch-preserving time stretch for audio clips
+FetchContent_Declare(signalsmith_stretch
+  GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+  GIT_TAG 57b93f4e9206a089a45387eaa39bdc9f310d3308
+  SOURCE_SUBDIR wavelength-no-build)
+FetchContent_Declare(signalsmith_linear
+  GIT_REPOSITORY https://github.com/Signalsmith-Audio/linear.git
+  GIT_TAG 0.3.1
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR wavelength-no-build)
+FetchContent_MakeAvailable(clap json vst3sdk zstd signalsmith_stretch signalsmith_linear)
 
 set(SDK ${vst3sdk_SOURCE_DIR})
 add_library(vst3hosting STATIC
@@ -98,6 +108,7 @@ add_executable(wavelength
   src/microtonic.cpp
   src/analyze.cpp
   src/audition.cpp
+  src/clips.cpp
   src/instance.cpp
   src/catalog.cpp
   src/clap_plugin.cpp
@@ -111,7 +122,8 @@ set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
 find_package(ZLIB REQUIRED)
 target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB libzstd_static)
-target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib)
+target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include
+                           ${signalsmith_linear_SOURCE_DIR}/include)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")
