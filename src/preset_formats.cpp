@@ -325,6 +325,105 @@ bool dexedWithVoice(const std::vector<uint8_t> &dexedState, const std::vector<ui
     return true;
 }
 
+// ---- JUCE ValueTree binary, kept byte-exact (values are copied as raw var bytes) -------------
+namespace {
+struct VTree {
+    std::string type;
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> props;
+    std::vector<VTree> kids;
+    VTree *child(const std::string &t) { for (auto &k : kids) if (k.type == t) return &k; return nullptr; }
+    void setProp(const std::string &k, const std::vector<uint8_t> &v) {
+        for (auto &p : props) if (p.first == k) { p.second = v; return; }
+        props.push_back({k, v});
+    }
+    void setProps(const VTree &src) { for (auto &p : src.props) setProp(p.first, p.second); }
+    const std::vector<uint8_t> *prop(const std::string &k) const { for (auto &p : props) if (p.first == k) return &p.second; return nullptr; }
+};
+
+bool readVTree(Reader &r, VTree &t, int depth) {
+    t.type = r.cstr();
+    if (!r.ok || t.type.empty() || depth > 64) return false;
+    const int64_t np = r.cint();
+    if (np < 0 || np > 1000000) return false;
+    for (int64_t i = 0; i < np; ++i) {
+        std::string k = r.cstr();
+        const int64_t n = r.cint();
+        if (!r.ok || n < 0 || r.i + (size_t)n > r.b.size()) return false;
+        t.props.push_back({k, std::vector<uint8_t>(r.b.begin() + (long)r.i, r.b.begin() + (long)(r.i + (size_t)n))});
+        r.i += (size_t)n;
+    }
+    const int64_t nk = r.cint();
+    if (!r.ok || nk < 0 || nk > 1000000) return false;
+    t.kids.resize((size_t)nk);
+    for (auto &k : t.kids) if (!readVTree(r, k, depth + 1)) return false;
+    return true;
+}
+void writeCInt(std::vector<uint8_t> &o, int64_t v) {
+    if (v == 0) { o.push_back(0); return; }
+    const bool neg = v < 0;
+    uint64_t u = neg ? (uint64_t)-v : (uint64_t)v;
+    std::vector<uint8_t> b;
+    while (u) { b.push_back((uint8_t)u); u >>= 8; }
+    o.push_back((uint8_t)(b.size() | (neg ? 0x80 : 0)));
+    o.insert(o.end(), b.begin(), b.end());
+}
+void writeVTree(std::vector<uint8_t> &o, const VTree &t) {
+    o.insert(o.end(), t.type.begin(), t.type.end()); o.push_back(0);
+    writeCInt(o, (int64_t)t.props.size());
+    for (auto &[k, v] : t.props) { o.insert(o.end(), k.begin(), k.end()); o.push_back(0); writeCInt(o, (int64_t)v.size()); o.insert(o.end(), v.begin(), v.end()); }
+    writeCInt(o, (int64_t)t.kids.size());
+    for (auto &k : t.kids) writeVTree(o, k);
+}
+void putBe32At(std::vector<uint8_t> &o, size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) o[at + (size_t)i] = (uint8_t)(v >> (8 * (3 - i))); }
+} // namespace
+
+bool isCherryPreset(const std::vector<uint8_t> &d) { return d.size() > 6 && std::memcmp(d.data(), "main\0", 5) == 0; }
+
+bool cherryWithPreset(const std::vector<uint8_t> &st, const std::vector<uint8_t> &presetBytes, std::vector<uint8_t> &out, std::string &err) {
+    VTree pre;
+    Reader pr{presetBytes};
+    if (!readVTree(pr, pre, 0) || pre.type != "main") { err = "not a Cherry Audio preset (JUCE ValueTree \"main\")"; return false; }
+    const auto *name = pre.prop("presetName");
+    if (st.size() > 0xb0 && std::memcmp(st.data(), "VstW", 4) == 0 && std::memcmp(st.data() + 16, "CcnK", 4) == 0) {
+        // Voltage Modular: VstW header + FXB header, the JUCE chunk from 0xb0
+        std::vector<uint8_t> chunk(st.begin() + 0xb0, st.end());
+        Reader r{chunk};
+        VTree vs;
+        if (!readVTree(r, vs, 0) || !vs.child("presetInfo")) { err = "unexpected Voltage Modular state"; return false; }
+        std::vector<uint8_t> tail(chunk.begin() + (long)r.i, chunk.end());
+        VTree *pi = vs.child("presetInfo");
+        pi->setProps(pre);
+        if (name) pi->setProp("displayName", *name);
+        pi->kids = pre.kids;
+        std::vector<uint8_t> nc;
+        writeVTree(nc, vs);
+        nc.insert(nc.end(), tail.begin(), tail.end());
+        out.assign(st.begin(), st.begin() + 0xb0);
+        putBe32At(out, 20, (uint32_t)(out.size() - 24 + nc.size()));
+        putBe32At(out, 0xac, (uint32_t)nc.size());
+        out.insert(out.end(), nc.begin(), nc.end());
+        return true;
+    }
+    // DCO-106 / MG-1 Plus / SEM: "savedState" (children curpreset, pt) + JUCE private-data tail
+    Reader r{st};
+    VTree ss;
+    if (!readVTree(r, ss, 0) || !ss.child("pt")) { err = "a Cherry Audio preset loads into its Cherry Audio plugin only"; return false; }
+    std::vector<uint8_t> tail(st.begin() + (long)r.i, st.end());
+    VTree *pt = ss.child("pt");
+    pt->setProps(pre);
+    for (auto &c : pre.kids) {
+        VTree *old = pt->child(c.type);
+        if (c.type == "pd" && old) old->setProps(c);   // parameters a preset leaves out keep their init values
+        else if (old) *old = c;                       // mpe, mappings
+        else pt->kids.push_back(c);
+    }
+    if (VTree *cp = ss.child("curpreset"); cp && name) { cp->setProp("displayName", *name); cp->setProp("name", *name); }
+    out.clear();
+    writeVTree(out, ss);
+    out.insert(out.end(), tail.begin(), tail.end());
+    return true;
+}
+
 bool isSynplantPatch(const std::vector<uint8_t> &d) {
     return d.size() > 16 && std::memcmp(d.data(), "SynplantPatch: {", 16) == 0;
 }

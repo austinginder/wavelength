@@ -32,6 +32,13 @@ bool isSynplantPatch(const std::vector<uint8_t> &d);
 bool synplantWithPatch(const std::vector<uint8_t> &synplantState, const std::vector<uint8_t> &patch, const std::string &name,
                        std::vector<uint8_t> &out, std::string &err);
 
+// Cherry Audio presets (.dco106preset, .mg1preset, .sempreset, .voltagepreset): a JUCE ValueTree
+// "main" holding the patch, merged into the plugin's own state ("savedState" > "pt", or for
+// Voltage Modular "VoltageState" > "presetInfo" inside a VST2-style FXB wrapper).
+bool isCherryPreset(const std::vector<uint8_t> &d);
+bool cherryWithPreset(const std::vector<uint8_t> &pluginState, const std::vector<uint8_t> &preset,
+                      std::vector<uint8_t> &out, std::string &err);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
 

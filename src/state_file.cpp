@@ -101,7 +101,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant"
+            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry"
             : endsWith(path, ".odin") ? "juce-valuetree" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
@@ -146,10 +146,16 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         out.transform = [patch, name](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return synplantWithPatch(current, patch, name, state, e);
         };
+    } else if (fmt == "cherry") {
+        if (!isCherryPreset(data)) { err = path + " is not a Cherry Audio preset"; return false; }
+        const auto preset = data;
+        out.transform = [preset](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return cherryWithPreset(current, preset, state, e);
+        };
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, juce-string or raw)";
         return false;
     }
     return true;

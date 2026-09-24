@@ -21,7 +21,8 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
     return o;
 }
 
-const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant"};
+const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
+                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -42,6 +43,10 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".serumpreset") return p.find("serum") != std::string::npos;
     if (ext == ".odin") return p.find("odin") != std::string::npos;
     if (ext == ".synplant") return p.find("synplant") != std::string::npos;
+    if (ext == ".dco106preset") return p == "dco106";
+    if (ext == ".mg1preset") return p.find("mg1") != std::string::npos;
+    if (ext == ".sempreset") return p == "synthesizerexpandermodule";
+    if (ext == ".voltagepreset") return p == "voltagemodular";
     if (ext != ".h2p" && ext != ".vstpreset") return true;
     std::ifstream in(file, std::ios::binary);
     std::string head(4096, '\0');
@@ -60,7 +65,7 @@ struct NksEntry { std::string path, name, category, vendor, bank, magic, uid; };
 
 std::string cachePath() {
     const char *h = getenv("HOME");
-    return std::string(h ? h : "") + "/Library/Caches/wavelength/nks.json";
+    return std::string(h ? h : "") + "/Library/Caches/wavelength/nks-v2.json";
 }
 
 bool readNks(const std::string &path, NksEntry &e) {
@@ -73,7 +78,16 @@ bool readNks(const std::string &path, NksEntry &e) {
     for (size_t i = 12; i + 8 <= d.size();) {
         const std::string id(d.begin() + (long)i, d.begin() + (long)i + 4);
         const uint32_t n = d[i + 4] | d[i + 5] << 8 | d[i + 6] << 16 | (uint32_t)d[i + 7] << 24;
-        if (id == "PCHK" || i + 8 + n > d.size()) break;   // metadata chunks come first
+        if (id == "PCHK") {
+            // SynthMaster: the payload's kind says which plugin's bank it names, whatever PLID says
+            // (the Player's NKS folder carries SynthMaster One presets too)
+            if (i + 8 + 28 <= d.size() && std::memcmp(&d[i + 16], "133k", 4) == 0) {
+                if (std::memcmp(&d[i + 20], "p1ms", 4) == 0) e.magic = "536D3169";        // 'Sm1i'
+                else if (std::memcmp(&d[i + 20], "lpms", 4) == 0) e.magic = "536D7069";   // 'Smpi'
+            }
+            break;
+        }
+        if (i + 8 + n > d.size()) break;   // metadata chunks come first
         if ((id == "NISI" || id == "PLID") && n > 4) {
             const std::vector<uint8_t> body(d.begin() + (long)i + 12, d.begin() + (long)(i + 8 + n));
             const json m = json::from_msgpack(body, true, false);
@@ -195,6 +209,9 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         for (auto d : {"/Library/Application Support/Surge XT/patches_factory", "/Library/Application Support/Surge XT/patches_3rdparty"})
             dirs.push_back(d);
     if (p == "surgext") dirs.push_back(fs::path(home) / "Documents/Surge XT/Patches");
+    // Cherry Audio keeps presets in Application Support
+    dirs.push_back(fs::path(home) / "Library/Application Support/CherryAudio" / plugin.name);
+    if (p == "voltagemodular") dirs.push_back(fs::path(home) / "Library/Application Support/Voltage");
     if (p == "obxf") {
         dirs.push_back("/Library/Application Support/Surge Synth Team/OB-Xf/Patches");
         dirs.push_back(fs::path(home) / "Documents/Surge Synth Team/OB-Xf/Patches");

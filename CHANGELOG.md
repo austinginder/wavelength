@@ -40,6 +40,8 @@ Working towards **v0.1.0**, the first release.
 - NKS preset index: `.nksf` files in the usual NKS folders are indexed (cached in `~/Library/Caches/wavelength/nks.json`, rebuilt with `presets --rescan` or when a name isn't found) and matched to their plugin, so `"preset"` reaches DUNE 3's 1,071 presets and BBC Symphony Orchestra's instruments by name; NKS chunks of wrapped VST2 plugins get the length prefix their VST3 state needs.
 - DX7 cartridges: every voice of Dexed's `.syx` cartridges is a preset by name (1,056 voices installed), or `"state": "<cart>.syx#<voice>"`; the voice is written into Dexed's own state (edit buffer and cartridge).
 - Synplant: `.synplant` patches (355 unique, 12 categories) load by name into program slot 0 of Synplant's own state, with their tuning, release and volume.
+- Cherry Audio: DCO-106, Surrealistic MG-1 Plus, Synthesizer Expander Module and Voltage Modular presets (737) load by name, merged into each plugin's own state (JUCE ValueTree, byte-exact); Voltage Modular gets a 5 s default warmup (it loads patches asynchronously), BBC Symphony Orchestra 6 s.
+- SynthMaster One and Player: their NKS presets (about 3,400) load by name; each file is assigned by its payload (the Player's folder holds One presets too).
 - Preset listings drop copies of the same preset filed in several folders (All / By Category / By Creator).
 - `getState` on plugins and state formats that patch the plugin's current state (templates), used by `dx7`.
 - `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.
