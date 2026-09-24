@@ -52,7 +52,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `name` | `trackN` | Used for the stem file name and in the report. |
 | `plugin` | required | A plugin id (`nakst.Apricot`, a VST3 class id), a name (`Apricot`, `BBC Symphony Orchestra`), a path to a `.clap`/`.vst3` bundle, or `path#id`. Prefix `vst3:` or `clap:` when a name exists in both formats (e.g. `vst3:Vital`). |
 | `preset` | none | A preset from the plugin's own library, by name (`"OR Cathedral Organ"`), `"Category/Name"`, or a unique part of the name. List them with `wavelength presets <plugin>`: CLAP preset discovery, a VST3 plugin's factory program list (Dexed cartridges), preset files in the plugin's preset folders (Serum 2, Odin2, u-he, Surge XT, OB-Xf, `.vstpreset`), Dexed's DX7 cartridge voices, or NKS presets (DUNE 3, BBC Symphony Orchestra, ...). Applied before `state` and `params`. |
-| `state` | none | A preset file path, or `{"file": "...", "format": "auto"}`. Formats: `clap-preset` (CLAP, Bitwig / DAWproject container), `vstpreset` (VST3 preset), `nksf` (NKS preset: the plugin's own state), `fxp` (VST2 `.fxp`/`.fxb` program chunks such as Surge XT and OB-Xf factory patches), `serum` (Serum 2 `.SerumPreset`), `juce-valuetree` (Odin2 `.odin`), `h2p` (u-he presets), `dx7` (a DX7 cartridge voice for Dexed: `"<cart>.syx#<voice 0-31>"`), `synplant` (Synplant `.synplant` patches), `cherry` (Cherry Audio presets), `ngrr` (Guitar Rig racks), `microtonic` (`.mtpreset` kits; `.mtdrum` drums as `"<file>.mtdrum#<channel>"`), `juce-string` (text presets such as Vital `.vital`), `raw`; `auto` detects them. A state or preset that changes none of the plugin's parameters gets a warning (it was ignored, or already loaded). |
+| `state` | none | A preset file path, or `{"file": "...", "format": "auto"}`. Formats: `clap-preset` (CLAP, Bitwig / DAWproject container), `vstpreset` (VST3 preset), `nksf` (NKS preset: the plugin's own state), `fxp` (VST2 `.fxp`/`.fxb` program chunks such as Surge XT and OB-Xf factory patches), `serum` (Serum 2 `.SerumPreset`), `juce-valuetree` (Odin2 `.odin`), `h2p` (u-he presets), `dx7` (a DX7 cartridge voice for Dexed: `"<cart>.syx#<voice 0-31>"`), `synplant` (Synplant `.synplant` patches), `cherry` (Cherry Audio presets), `ngrr` (Guitar Rig racks), `microtonic` (`.mtpreset` kits; `.mtdrum` drums as `"<file>.mtdrum#<channel>"`), `soundbox` (`.sbset`), `decentsampler` (`.dspreset`), `juce-string` (text presets such as Vital `.vital`), `raw`; `auto` detects them. A state or preset that changes none of the plugin's parameters gets a warning (it was ignored, or already loaded). |
 | `params` | `{}` | `name → plain value` or the plugin's own display text (`"Cutoff": "800 Hz"`, `"StepRate": "1/16"`, parsed by the plugin), applied after the state. Keys: exact name, `Module/Name`, or `#id`. Out-of-range values are clamped (with a warning). |
 | `gain` | 0 | dB applied when summing into the mix. |
 | `transpose` | 0 | Semitones added to every note (presets that sound an octave off, key changes). |
@@ -65,6 +65,9 @@ A job is one JSON object. Unknown fields are ignored.
 | `notes` | `[]` | See below. |
 | `fx` | `[]` | Effect chain (built-in or CLAP plugins), see `effects.md`. |
 | `sends` | `{}` | Bus name → send level in dB (post-fader), or an automation curve of dB (`[[beat, dB], ...]`) for throws. |
+| `articulations` | none | Articulation name → keyswitch key (`{"long": 0, "spiccato": 1, "tremolo": 3}`). Notes pick one with `"art"`; the keyswitch note is sent 30 ms before the first note of every change. |
+| `range` | none | `[lowest, highest]` playable keys (`["G3", "C#7"]`): notes outside it get a warning in the report (sample libraries are silent there). |
+| `velocityTo` | none | Drive a controller from note velocities, one point per onset, ramping between them: `{"param": "Dynamics", "min": 0.1, "max": 1}` or `{"cc": 1, "min": 10, "max": 127}`. For libraries whose long notes take loudness from a controller instead of velocity. Explicit automation of the same target wins. |
 | `automation` | none | `gain` (dB), `pan` (-1..1), `params` (`{"Name": curve}`, plain values), `cc` (`{"1": curve, "64": curve}`, MIDI CC values 0-127), `pitchbend` (semitones, see `bendRange`), `pressure` (0-127). CC, pitch bend and pressure reach CLAP plugins as MIDI (or note expressions) and VST3 plugins through the parameters they map those controllers to (a warning names any they don't map). Curves are described in `effects.md` (points, steps, LFOs). |
 
 `plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), or `builtin:sampler`.
@@ -120,6 +123,7 @@ Studio package folders; paths work too (relative to the job).
 | `key` | MIDI note number, or a name with C4 = 60: `"C4"`, `"F#3"`, `"Bb5"`. |
 | `vel` | 0..1; values above 1 are read as MIDI velocity 0..127. Default 0.8. |
 | `channel` | MIDI channel 0..15 (default 0). |
+| `art` | Articulation: a name from the track's `articulations`, or a keyswitch key number/name. |
 | `bend` | Pitch over the note, `[[beats after the note start, semitones], ...]` (sampler tracks: scoops, bends, slides). |
 
 Notes are delivered as CLAP note events, or as MIDI if the plugin only accepts MIDI.

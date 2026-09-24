@@ -50,6 +50,7 @@ bool runChain(Chain &chain, Audio &a, const FxContext &ctx, std::vector<std::str
 // Instrument stage: a CLAP plugin or a built-in synth.
 bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackResult &tr, bool verbose, std::string &err) {
     tr.notes = track.notes.size();
+    for (auto &w : track.warnings) tr.warnings.push_back(w);
     if (isBuiltin(track.plugin)) {
         tr.plugin = tr.pluginName = track.plugin;
         if (!track.stateFile.empty() || !track.preset.empty() || !track.params.empty() || !track.paramAutomation.empty())

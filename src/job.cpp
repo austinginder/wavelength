@@ -71,6 +71,84 @@ int parseKey(const json &k) {
     return 12 * (octave + 1) + semis;
 }
 
+namespace {
+
+std::string keyName(int k) {
+    static const char *names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    return std::string(names[((k % 12) + 12) % 12]) + std::to_string(k / 12 - 1);
+}
+
+// After a track's notes are parsed: range warnings, keyswitch notes for articulation
+// changes, and velocity-driven controller curves ("velocityTo").
+void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std::vector<int> &noteArt) {
+    const size_t played = tr.notes.size();
+    if (t.contains("range")) {
+        const auto &r = t["range"];
+        if (!r.is_array() || r.size() != 2) throw std::runtime_error("track '" + tr.name + "': \"range\" must be [lowest, highest]");
+        const int lo = parseKey(r[0]), hi = parseKey(r[1]);
+        size_t outside = 0;
+        double first = -1;
+        for (const auto &n : tr.notes)
+            if (n.key < lo || n.key > hi) { if (!outside++) first = n.start; }
+        if (outside)
+            tr.warnings.push_back(std::to_string(outside) + " of " + std::to_string(played) + " notes outside the playable range " + keyName(lo) +
+                                  "-" + keyName(hi) + " (first at beat " + std::to_string((int)std::floor(tempo.secToBeat(first))) +
+                                  "); the instrument will likely be silent for them");
+    }
+    if (t.contains("velocityTo")) {   // {"param": "Dynamics"} or {"cc": 1}, with "min"/"max" output values
+        const json &v = t["velocityTo"];
+        const bool cc = v.contains("cc");
+        if (!cc && !v.contains("param")) throw std::runtime_error("track '" + tr.name + "': \"velocityTo\" needs \"param\" or \"cc\"");
+        const double lo = v.value("min", cc ? 10.0 : 0.05), hi = v.value("max", cc ? 127.0 : 1.0);
+        std::vector<std::pair<double, double>> onsets;   // (beat, velocity), one per start
+        for (size_t i = 0; i < played; ++i) {
+            const double b = std::round(tempo.secToBeat(tr.notes[i].start) * 1000) / 1000;
+            if (!onsets.empty() && onsets.back().first == b) onsets.back().second = std::max(onsets.back().second, tr.notes[i].velocity);
+            else onsets.push_back({b, tr.notes[i].velocity});
+        }
+        std::sort(onsets.begin(), onsets.end());
+        json pts = json::array();
+        for (auto &[b, vel] : onsets) pts.push_back({b, lo + (hi - lo) * vel});
+        if (pts.empty()) pts.push_back({0.0, hi});
+        Envelope env = Envelope::parse(pts, tempo, false);
+        if (cc) {
+            const int num = v["cc"].get<int>();
+            bool taken = false;
+            for (auto &[n, e] : tr.ccAutomation) taken |= n == num;
+            if (taken) tr.warnings.push_back("velocityTo: CC " + std::to_string(num) + " already has automation; using that instead");
+            else tr.ccAutomation.push_back({num, env});
+        } else {
+            const std::string name = v["param"].get<std::string>();
+            bool taken = false;
+            for (auto &[n, e] : tr.paramAutomation) taken |= n == name;
+            if (taken) tr.warnings.push_back("velocityTo: '" + name + "' already has automation; using that instead");
+            else tr.paramAutomation.push_back({name, env});
+        }
+    }
+    // keyswitches: a short note just before the first note of each articulation change
+    std::vector<size_t> order(played);
+    for (size_t i = 0; i < played; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return tr.notes[a].start < tr.notes[b].start; });
+    int current = -1;
+    double lastSwitch = -1;
+    for (size_t i : order) {
+        const int art = noteArt[i];
+        if (art < 0 || art == current) continue;
+        if (art > 127) throw std::runtime_error("track '" + tr.name + "': keyswitch key " + std::to_string(art) + " is out of range 0-127");
+        Note ks{};
+        ks.start = std::max({0.0, tr.notes[i].start - 0.03, lastSwitch + 0.005});
+        ks.length = 0.02;
+        ks.key = art;
+        ks.channel = tr.notes[i].channel;
+        ks.velocity = 0.5;
+        tr.notes.push_back(ks);
+        lastSwitch = ks.start;
+        current = art;
+    }
+}
+
+} // namespace
+
 bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &err) {
     try {
         out.baseDir = baseDir;
@@ -146,6 +224,11 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
             const double roll = t.value("roll", 0.0);
             const int transpose = t.value("transpose", 0);   // semitones added to every note (octave-off presets, key changes)   // beats between notes that start together (strum)
             std::map<long, int> rolled;                  // start tick -> notes already rolled there
+            // articulations: name -> keyswitch key, sent just before the notes that change it
+            std::map<std::string, int> arts;
+            const json artMap = t.value("articulations", json::object());
+            for (auto &[name, key] : artMap.items()) arts[name] = parseKey(key);
+            std::vector<int> noteArt;                    // keyswitch per note (-1 = none)
             std::vector<json> ordered;
             for (auto &n : t.value("notes", json::array())) ordered.push_back(n);
             if (roll != 0)   // strum from the lowest note up (or down for negative roll)
@@ -187,8 +270,18 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
                 note.velocity = std::clamp(v > 1.0 ? v / 127.0 : v, 0.0, 1.0);
                 note.channel = n.value("channel", 0);
                 if (note.key < 0 || note.key > 127) throw std::runtime_error("note key out of range 0-127 in track '" + tr.name + "'");
+                int art = -1;
+                if (n.contains("art") && !n["art"].is_null()) {
+                    const auto &a = n["art"];
+                    if (a.is_string() && arts.count(a.get<std::string>())) art = arts[a.get<std::string>()];
+                    else if (a.is_string() && artMap.empty()) art = parseKey(a);
+                    else if (a.is_number()) art = a.get<int>();
+                    else throw std::runtime_error("track '" + tr.name + "': unknown articulation '" + a.dump() + "' (declare it in \"articulations\")");
+                }
+                noteArt.push_back(art);
                 tr.notes.push_back(note);
             }
+            finishTrackNotes(t, out.tempo, tr, noteArt);
             out.tracks.push_back(std::move(tr));
         }
         for (auto &b : j.value("buses", json::array())) {

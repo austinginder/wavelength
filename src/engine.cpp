@@ -63,6 +63,8 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
         for (unsigned char c : info.name) if (std::isalnum(c)) n += (char)std::tolower(c);
         if (n == "voltagemodular") out.plugin->warmup = 5;
         else if (n == "bbcsymphonyorchestra") out.plugin->warmup = 6;
+        else if (n == "analoglabv") out.plugin->warmup = 15;   // sampled engines stream after activation
+        else if (n == "decentsampler") out.plugin->warmup = 3;
     }
 
     // a preset or state the plugin silently ignores leaves every parameter where it was
@@ -72,6 +74,9 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
         return v;
     };
     auto checkChanged = [&](const std::vector<double> &before, const std::string &what) {
+        // plugins whose state selects a program without moving any parameter (AAS Player, DecentSampler,
+        // SynthMaster) would always trip this check
+        if (out.stateFormat == "aas" || out.stateFormat == "decentsampler" || info.name.rfind("SynthMaster", 0) == 0) return;
         const auto after = snapshot();
         if (before.empty() || before.size() != after.size()) return;
         for (size_t i = 0; i < before.size(); ++i) if (std::fabs(before[i] - after[i]) > 1e-7) return;

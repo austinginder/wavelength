@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 
@@ -99,6 +100,26 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         const size_t hash = pathIn.rfind(ext);
         if (hash != std::string::npos) { path = pathIn.substr(0, hash + strlen(ext) - 1); voice = std::atoi(pathIn.c_str() + hash + strlen(ext)); }
     }
+    // entries inside a bank file: "aas:<bank>#<n>" (AAS Player), "melda:<bank>#<n>" (MeldaProduction)
+    if (path.rfind("aas:", 0) == 0 || path.rfind("melda:", 0) == 0) {
+        const bool aas = path[0] == 'a';
+        const std::string rest = path.substr(aas ? 4 : 6);
+        const size_t hash = rest.rfind('#');
+        const std::string bank = rest.substr(0, hash);
+        const int n = std::atoi(rest.c_str() + hash + 1);
+        out.format = aas ? "aas" : "melda";
+        if (aas) {
+            std::string id, name;
+            std::vector<AasProgram> progs;
+            if (!aasBank(bank, id, name, progs) || n < 1 || n > (int)progs.size()) { err = "no program " + std::to_string(n) + " in " + bank; return false; }
+            out.state = aasProgramState(n, progs[(size_t)n - 1].name, id, name);
+        } else {
+            std::vector<MeldaPreset> presets;
+            if (!meldaPresets(bank, presets, err) || n < 0 || n >= (int)presets.size()) { err = "no preset " + std::to_string(n) + " in " + bank; return false; }
+            out.state = presets[(size_t)n].state;
+        }
+        return true;
+    }
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot read state file " + path; return false; }
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -107,6 +128,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
             : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
+            : endsWith(path, ".sbset") ? "soundbox" : endsWith(path, ".dspreset") ? "decentsampler"
             : endsWith(path, ".odin") ? "juce-valuetree" : endsWith(path, ".ngrr") ? "ngrr" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
@@ -179,10 +201,16 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
             state.clear();
             return microtonicDrumParams(plugin, text, channel, values, e) && plugin.setParams(values, e);
         };
+    } else if (fmt == "soundbox") {
+        if (!soundboxState(data, out.state, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "decentsampler") {
+        std::error_code ec;
+        const std::string abs = std::filesystem::absolute(path, ec).string();
+        if (!decentSamplerState(data, abs, out.state, err)) { err = path + ": " + err; return false; }
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, microtonic, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;

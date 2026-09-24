@@ -52,11 +52,13 @@ Many libraries select their instrument through state, not parameters. Look for N
 (`.nksf`, e.g. `~/Spitfire/<library>/NKS/`): each one is a complete instrument and loads as
 `state`. **BBC Symphony Orchestra** (Discover): one track per instrument, `warmup` 5+,
 notes must be inside the instrument's playable range (out-of-range notes are silent),
-and articulations are selected with keyswitch notes starting at MIDI 0 (0 = the first
-articulation, usually Long; 1 = Short; strings: 2 = Pizzicato, 3 = Tremolo), played just
-before the notes they apply to. Performance controls are parameters: `Expression`,
-`Dynamics`, `Vibrato`, `Release`, `Tightness`, `Reverb` and the `Mic: ...` mixes, all
-automatable.
+and articulations are keyswitches from MIDI 0 (0 = the first articulation, usually Long;
+1 = Short; strings: 2 = Pizzicato, 3 = Tremolo). Let Wavelength send them: give the track
+`"articulations": {"long": 0, "spiccato": 1, "pizzicato": 2, "tremolo": 3}` and each note an
+`"art"`, add `"range": ["G3", "C#7"]` to be warned about unplayable notes, and
+`"velocityTo": {"param": "Dynamics"}` so long notes follow your velocities (they ignore
+velocity otherwise). Performance controls are parameters: `Expression`, `Dynamics`,
+`Vibrato`, `Release`, `Tightness`, `Reverb` and the `Mic: ...` mixes, all automatable.
 
 Plugins with no program parameter and no preset files (factory presets compiled into the
 binary) can still be driven by state. JUCE plugins' state is `VC2!` + u32 little-endian
@@ -152,5 +154,9 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
   and Microtonic kits and drums (`"AC BD Back#3"` puts a drum on channel 3). `wavelength presets
   <plugin>` lists them all. Parameters also take the plugin's display text: `"Cutoff": "800 Hz"`.
   Presets compiled into plugin binaries (TAL-NoiseMaker, Relica 2) appear after running
-  `scripts/extract-embedded-presets.py` once.
+  `scripts/extract-embedded-presets.py` once. Analog Lab V, AAS Player (guitars, electric
+  pianos, mallets), MPowerSynth, Soundbox and DecentSampler also load by name.
+- Not loadable headlessly: Kontakt (never pass it an unknown state file: it can hang the render),
+  Komplete Kontrol, ZENOLOGY (needs a Roland Cloud login), Spitfire LABS (encrypted patches; the
+  default patch plays), UVI Workstation.
   Other private formats (Guitar Rig racks, TAL programs) still need converting.

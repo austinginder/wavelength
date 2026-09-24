@@ -24,7 +24,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 }
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
-                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate"};
+                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -51,6 +51,8 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".voltagepreset") return p == "voltagemodular";
     if (ext == ".ngrr") return p.find("guitarrig") != std::string::npos;
     if (ext == ".mtpreset" || ext == ".mtdrum") return p.find("microtonic") != std::string::npos;
+    if (ext == ".sbset") return p == "soundbox";
+    if (ext == ".dspreset") return p == "decentsampler";
     if (ext != ".h2p" && ext != ".vstpreset") return true;
     std::ifstream in(file, std::ios::binary);
     std::string head(4096, '\0');
@@ -218,6 +220,11 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     // Cherry Audio keeps presets in Application Support
     dirs.push_back(fs::path(home) / "Library/Application Support/CherryAudio" / plugin.name);
     if (p == "voltagemodular") dirs.push_back(fs::path(home) / "Library/Application Support/Voltage");
+    if (p == "soundbox") dirs.push_back(fs::path(home) / "Library/Application Support/Audiomodern/Soundbox/Presets/Imported");
+    if (p == "decentsampler") {
+        dirs.push_back(fs::path(home) / "Documents/Decent Sampler");
+        dirs.push_back(fs::path(home) / "Library/Application Support/DecentSampler");
+    }
     if (p.find("microtonic") != std::string::npos) {   // kits and drums; "By Category" gives drum categories
         dirs.push_back("/Library/Audio/Presets/Sonic Charge/Microtonic Presets");
         dirs.push_back("/Library/Audio/Presets/Sonic Charge/Microtonic Drum Patches");
@@ -271,6 +278,54 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             out.push_back(pi);
         }
     }
+    // AAS Player: programs of its banks
+    if (p == "aasplayer") {
+        std::error_code ec;
+        for (auto &e : fs::directory_iterator("/Library/Application Support/Applied Acoustics Systems/AAS Player/Banks", ec)) {
+            if (e.path().extension() != ".aasbank") continue;
+            std::string id, bank;
+            std::vector<AasProgram> progs;
+            if (!aasBank(e.path().string(), id, bank, progs)) continue;
+            for (size_t i = 0; i < progs.size(); ++i) {
+                PresetInfo pi;
+                pi.name = progs[i].name;
+                pi.category = progs[i].category;
+                pi.location = pi.loadKey = "aas:" + e.path().string() + "#" + std::to_string(i + 1);
+                out.push_back(pi);
+            }
+        }
+    }
+    // MeldaProduction synths keep every preset in one bank file
+    if (p == "mpowersynth") {
+        const std::string bank = "/Library/Application Support/MeldaProduction/MSynthesizer.presets";
+        std::vector<MeldaPreset> presets;
+        std::string e;
+        if (meldaPresets(bank, presets, e))
+            for (size_t i = 0; i < presets.size(); ++i) {
+                PresetInfo pi;
+                pi.name = presets[i].name;
+                pi.category = presets[i].category;
+                pi.location = pi.loadKey = "melda:" + bank + "#" + std::to_string(i);
+                out.push_back(pi);
+            }
+    }
+    // Analog Lab V: its own presets are its state (instrument presets of other Arturia engines are not)
+    if (p == "analoglabv") {
+        std::error_code ec;
+        for (auto &e : fs::directory_iterator("/Library/Arturia/Presets/Analog Lab V/Factory/Factory", ec)) {
+            if (!e.is_regular_file(ec)) continue;
+            std::ifstream in(e.path(), std::ios::binary);
+            std::string head(4096, '\0');
+            in.read(&head[0], (std::streamsize)head.size());
+            head.resize((size_t)in.gcount());
+            if (head.rfind("22 serialization::archive ", 0) != 0 || head.find(" 15 InstrumentPart1 ") == std::string::npos) continue;
+            PresetInfo pi;
+            pi.name = e.path().filename().string();
+            pi.category = "Analog Lab";
+            pi.location = pi.loadKey = e.path().string();
+            out.push_back(pi);
+        }
+    }
     // Dexed: every voice of every DX7 cartridge (.syx, 32 voices) is a preset: "<file>.syx#<n>"
     if (p == "dexed") {
         std::error_code ec;
@@ -306,8 +361,8 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         std::vector<PresetInfo> unique;
         for (auto &x : out) {
             std::error_code ec;
-            const auto size = x.location.find(".syx#") != std::string::npos ? (uintmax_t)0 : fs::file_size(x.location, ec);
-            if (x.location.find(".syx#") != std::string::npos || keep.insert({x.name, size}).second) unique.push_back(x);
+            if (!fs::is_regular_file(x.location, ec)) { unique.push_back(x); continue; }   // bank entries, cartridge voices
+            if (keep.insert({x.name, fs::file_size(x.location, ec)}).second) unique.push_back(x);
         }
         out.swap(unique);
     }

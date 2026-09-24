@@ -44,6 +44,7 @@ struct Track {
     nlohmann::json sampler;                                      // builtin:sampler settings
     std::string output;                                          // bus to feed instead of the master ("" = master)
     std::vector<std::pair<std::string, Envelope>> sendAutomation;   // bus name → send dB over time
+    std::vector<std::string> warnings;                           // found while parsing (range, articulations)
 };
 
 struct Bus {

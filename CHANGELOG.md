@@ -46,10 +46,12 @@ Working towards **v0.1.0**, the first release.
 - Parameter values as display text: `"params": {"Cutoff": "800 Hz", "Rate": "1/16"}` is parsed by the plugin itself (VST3 getParamValueByString, CLAP text_to_value), in jobs and effect chains.
 - Microtonic: 115 kits (`.mtpreset`) and 430 drums (`.mtdrum`) load by name; a kit waits for notes 36-43 (its pattern player and mutes off; set `"PlayStop": "PlayNow"` to let its patterns play), a drum goes onto a channel with `"preset": "AC BD Back#3"`. Values are read by Microtonic's own text parser, so they match the presets exactly.
 - `scripts/extract-embedded-presets.py`: extracts factory presets compiled into JUCE plugin binaries (no files on disk) into `~/Library/Application Support/Wavelength/Presets/<Plugin>/`, which `presets` and `"preset"` search: TAL-NoiseMaker (256), Relica 2 (35), Thump One (164), Wavetable (99), Flux Mini 2 (22). Listings show a preset once when a file and a program share its name.
+- Analog Lab V (254 Analog Lab presets, 15 s default warmup), AAS Player (673 programs: Strum guitars, Lounge Lizard, Chromaphone, Ultra Analog, String Studio), MPowerSynth (1,578 presets from its bank), Soundbox (45) and DecentSampler (`.dspreset` files, samples resolved next to the preset; 3 s warmup) load by name or as `state`.
 - Preset listings drop copies of the same preset filed in several folders (All / By Category / By Creator).
 - `getState` on plugins and state formats that patch the plugin's current state (templates), used by `dx7`.
 - `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
+- Orchestral writing: per-note articulations (`"art": "spiccato"` with a track `articulations` map of keyswitch keys) insert the keyswitch just before each change; track `range` warns about notes an instrument can't play; `velocityTo` turns note velocities into a controller curve (`{"param": "Dynamics"}` or `{"cc": 1}`) for libraries whose long notes ignore velocity.
 
 ### Changed
 - Automation points at the same beat keep the order they are written in (`[16, 0], [16, 1]` jumps from 0 to 1); they used to be sorted by value.

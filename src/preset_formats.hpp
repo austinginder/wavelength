@@ -46,6 +46,21 @@ std::vector<std::string> guitarRigPaid(const std::string &rackXml);   // paid co
 bool guitarRigRackState(const std::vector<uint8_t> &rack, std::vector<uint8_t> &state,
                         std::vector<std::string> &paidComponents, std::string &err);
 
+// AAS Player: programs of an .aasbank, and the state that selects one (1-based index + name).
+struct AasProgram { std::string name, category; };
+bool aasBank(const std::string &bankPath, std::string &bankId, std::string &bankName, std::vector<AasProgram> &programs);
+std::vector<uint8_t> aasProgramState(int index1, const std::string &name, const std::string &bankId, const std::string &bankName);
+
+// MeldaProduction preset banks (MBXX tree, e.g. MSynthesizer.presets for MPowerSynth): each preset's
+// XML, which is the plugin's state.
+struct MeldaPreset { std::string name, category; std::vector<uint8_t> state; };
+bool meldaPresets(const std::string &bankPath, std::vector<MeldaPreset> &out, std::string &err);
+
+// Audiomodern Soundbox .sbset and DecentSampler .dspreset: XML wrapped as JUCE XML state.
+bool soundboxState(const std::vector<uint8_t> &sbset, std::vector<uint8_t> &state, std::string &err);
+bool decentSamplerState(const std::vector<uint8_t> &dspreset, const std::string &presetPath, std::vector<uint8_t> &state,
+                        std::string &err);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
 

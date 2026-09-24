@@ -6,6 +6,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <map>
 #include <set>
 
 using json = nlohmann::json;
@@ -482,6 +484,132 @@ bool guitarRigRackState(const std::vector<uint8_t> &rack, std::vector<uint8_t> &
     put32(state, 0x145);
     for (auto &c : {chunk("dnss", snd), chunk("ofni", std::vector<uint8_t>(info.begin(), info.end())), chunk("tsrp", inst), chunk("DNSS", snd)})
         state.insert(state.end(), c.begin(), c.end());
+    return true;
+}
+
+namespace {
+std::vector<uint8_t> juceXmlBlob(const std::string &xml) {
+    std::vector<uint8_t> out = {'V', 'C', '2', '!'};
+    put32(out, (uint32_t)xml.size() + 1);
+    out.insert(out.end(), xml.begin(), xml.end());
+    out.push_back(0);
+    return out;
+}
+std::string luaQuote(const std::string &s) {
+    std::string o;
+    for (char c : s) { if (c == '\\' || c == '"') o += '\\'; o += c; }
+    return o;
+}
+} // namespace
+
+bool aasBank(const std::string &bankPath, std::string &bankId, std::string &bankName, std::vector<AasProgram> &programs) {
+    std::ifstream in(bankPath);
+    if (!in) return false;
+    std::string line;
+    AasProgram cur;
+    auto field = [](const std::string &l, const char *key, std::string &v) {   // `    key = "value",`
+        const std::string k = std::string("    ") + key + " = \"";
+        if (l.rfind(k, 0) != 0 || l.size() < k.size() + 2 || l.compare(l.size() - 2, 2, "\",") != 0) return false;
+        v = l.substr(k.size(), l.size() - k.size() - 2);
+        return true;
+    };
+    while (std::getline(in, line)) {
+        std::string v;
+        if (bankId.empty() && line.rfind("  id = \"", 0) == 0) bankId = line.substr(8, line.find('"', 8) - 8);
+        if (bankName.empty() && line.rfind("  name = \"", 0) == 0) bankName = line.substr(10, line.find('"', 10) - 10);
+        if (field(line, "name", v)) cur.name = v;
+        else if (field(line, "folder", v) || (cur.category.empty() && field(line, "category", v))) cur.category = v;
+        else if (line == "  }," || line == "  {") {
+            if (!cur.name.empty()) programs.push_back(cur);
+            cur = AasProgram{};
+        }
+    }
+    if (!cur.name.empty()) programs.push_back(cur);
+    return !bankId.empty() && !programs.empty();
+}
+
+std::vector<uint8_t> aasProgramState(int index1, const std::string &name, const std::string &bankId, const std::string &bankName) {
+    const std::string s = "{\n\tcurrentProgram = " + std::to_string(index1) + ",\n\tactiveBankId = \"" + bankId +
+                          "\",\n\tcurrentProgramBankName = \"" + luaQuote(bankName) + "\",\n\tactiveBank = 1,\n\tpolyphony = 12,\n"
+                          "\tcurrentProgramBankId = \"" + bankId + "\",\n\tversion = 1,\n\tcurrentProgramName = \"" + luaQuote(name) +
+                          "\",\n\tcurrentProgramBank = 1,\n\tparameters = {\n\t\t0.99999994039536,\n\t},\n\tactiveBankName = \"" +
+                          luaQuote(bankName) + "\",\n}";
+    return std::vector<uint8_t>(s.begin(), s.end());
+}
+
+bool meldaPresets(const std::string &bankPath, std::vector<MeldaPreset> &out, std::string &err) {
+    std::ifstream in(bankPath, std::ios::binary);
+    const std::vector<uint8_t> b((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (b.size() < 4) { err = "cannot read " + bankPath; return false; }
+    struct Frame { std::string tag; std::map<std::string, std::string> attrs; std::vector<uint8_t> value; };
+    std::vector<Frame> stack(1);
+    auto cstr = [&](size_t &i) { std::string s; while (i < b.size() && b[i]) s += (char)b[i++]; ++i; return s; };
+    for (size_t i = 0; i < b.size();) {
+        const uint8_t c = b[i++];
+        if (c == 0) continue;
+        if (c == '~') break;
+        if (c == 'M') { i += 2; continue; }
+        if (c == 'X') { Frame f; f.tag = cstr(i); stack.push_back(std::move(f)); }
+        else if (c == 'A') {
+            const std::string n = cstr(i);
+            if (i >= b.size()) break;
+            const char t = (char)b[i++];
+            if (t == 's') stack.back().attrs[n] = cstr(i);
+            else {
+                const size_t w = t == '1' ? 1 : (t == '4' || t == 'f') ? 4 : 8;
+                if (t == '1') stack.back().attrs[n] = std::to_string(b[i]);
+                i += w;
+            }
+        } else if (c == 'V') {
+            if (i + 5 > b.size()) break;
+            const uint32_t n = le32(&b[i + 1]);
+            if (i + 5 + n > b.size()) break;
+            stack.back().value.assign(b.begin() + (long)i + 5, b.begin() + (long)(i + 5 + n));
+            i += 5 + n;
+        } else if (c == '/') {
+            if (stack.size() < 2) break;
+            Frame f = std::move(stack.back());
+            stack.pop_back();
+            if (f.tag != "preset") continue;
+            MeldaPreset p;
+            p.name = f.attrs["name"];
+            for (auto &s : stack) if (s.tag == "Directory") p.category += (p.category.empty() ? "" : "/") + s.attrs["Name"];
+            if (f.attrs["compressed"] == "1") {
+                uLongf len = (uLongf)f.value.size() * 20 + 65536;
+                std::vector<uint8_t> x;
+                int rc;
+                do { x.resize(len); rc = uncompress(x.data(), &len, f.value.data(), f.value.size()); if (rc == Z_BUF_ERROR) len *= 2; } while (rc == Z_BUF_ERROR);
+                if (rc != Z_OK) continue;
+                x.resize(len);
+                p.state = std::move(x);
+            } else p.state = f.value;
+            out.push_back(std::move(p));
+        } else { err = "unexpected MBXX data in " + bankPath; return !out.empty(); }
+    }
+    return !out.empty();
+}
+
+bool soundboxState(const std::vector<uint8_t> &sbset, std::vector<uint8_t> &state, std::string &err) {
+    std::string x(sbset.begin(), sbset.end());
+    const size_t a = x.find("<Audiomodern.Soundbox_Preset");
+    if (a == std::string::npos) { err = "not a Soundbox preset (.sbset)"; return false; }
+    x = x.substr(a);
+    x.replace(0, 29, "<Audiomodern.Soundbox_State preset=\"\" ");
+    for (size_t p; (p = x.find("</Audiomodern.Soundbox_Preset>")) != std::string::npos;) x.replace(p, 30, "</Audiomodern.Soundbox_State>");
+    state = juceXmlBlob("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + x);
+    return true;
+}
+
+bool decentSamplerState(const std::vector<uint8_t> &dspreset, const std::string &presetPath, std::vector<uint8_t> &state,
+                        std::string &err) {
+    std::string x(dspreset.begin(), dspreset.end());
+    const size_t root = x.find("<DecentSampler");
+    if (root == std::string::npos) { err = "not a DecentSampler preset (.dspreset)"; return false; }
+    // samples are relative to the preset's folder: tell the plugin where that is
+    const std::string dir = presetPath.substr(0, presetPath.find_last_of('/') + 1);
+    std::string attr = " _samplePath=\"" + dir + "\"";
+    x.insert(root + 14, attr);
+    state = juceXmlBlob(x.rfind("<?xml", 0) == 0 ? x : "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + x);
     return true;
 }
 
