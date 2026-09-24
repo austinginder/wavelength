@@ -21,7 +21,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
     return o;
 }
 
-const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf"};
+const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -41,6 +41,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     const std::string p = squash(plugin.name);
     if (ext == ".serumpreset") return p.find("serum") != std::string::npos;
     if (ext == ".odin") return p.find("odin") != std::string::npos;
+    if (ext == ".synplant") return p.find("synplant") != std::string::npos;
     if (ext != ".h2p" && ext != ".vstpreset") return true;
     std::ifstream in(file, std::ios::binary);
     std::string head(4096, '\0');
@@ -244,6 +245,22 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 out.push_back(pi);
             }
         }
+    }
+    // libraries often file one preset under several folders (All / By Category / By Creator): keep one
+    // copy of each name + size, preferring a "Category" folder (its name is the category)
+    std::stable_sort(out.begin(), out.end(), [](const PresetInfo &a, const PresetInfo &b) {
+        const bool ca = a.location.find("Categor") != std::string::npos, cb = b.location.find("Categor") != std::string::npos;
+        return ca > cb;
+    });
+    {
+        std::set<std::pair<std::string, uintmax_t>> keep;
+        std::vector<PresetInfo> unique;
+        for (auto &x : out) {
+            std::error_code ec;
+            const auto size = x.location.find(".syx#") != std::string::npos ? (uintmax_t)0 : fs::file_size(x.location, ec);
+            if (x.location.find(".syx#") != std::string::npos || keep.insert({x.name, size}).second) unique.push_back(x);
+        }
+        out.swap(unique);
     }
     std::sort(out.begin(), out.end(), [](const PresetInfo &a, const PresetInfo &b) {
         return a.category != b.category ? a.category < b.category : a.name < b.name;

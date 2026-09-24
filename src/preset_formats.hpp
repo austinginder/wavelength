@@ -26,6 +26,12 @@ bool isDx7Cartridge(const std::vector<uint8_t> &d);
 bool dexedWithVoice(const std::vector<uint8_t> &dexedState, const std::vector<uint8_t> &cart, int voice,
                     std::vector<uint8_t> &out, std::string &err);
 
+// Synplant .synplant text patch -> program slot 0 of Synplant's own state (which holds 16 patches,
+// zlib-compressed inside an FXB chunk); `name` becomes the patch's display name.
+bool isSynplantPatch(const std::vector<uint8_t> &d);
+bool synplantWithPatch(const std::vector<uint8_t> &synplantState, const std::vector<uint8_t> &patch, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
 

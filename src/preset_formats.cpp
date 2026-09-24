@@ -1,6 +1,7 @@
 #include "preset_formats.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlib.h>
 #include <zstd.h>
 
 #include <cstdio>
@@ -321,6 +322,71 @@ bool dexedWithVoice(const std::vector<uint8_t> &dexedState, const std::vector<ui
     put32(out, (uint32_t)xml.size() + 1);
     out.insert(out.end(), xml.begin(), xml.end());
     out.push_back(0);
+    return true;
+}
+
+bool isSynplantPatch(const std::vector<uint8_t> &d) {
+    return d.size() > 16 && std::memcmp(d.data(), "SynplantPatch: {", 16) == 0;
+}
+
+namespace {
+uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+void putBe32(std::vector<uint8_t> &o, uint32_t v) { for (int i = 3; i >= 0; --i) o.push_back((uint8_t)(v >> (8 * i))); }
+} // namespace
+
+bool synplantWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &patch, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err) {
+    // state: 59 a2 cd 18, u8 0, u8 current program, u32 LE FXB length, FXB (big-endian "CcnK" ...
+    // "FBCh" ... chunk at +160): ";yMqmrAMPSuN" 02 00 02 00, u32 LE body length, zlib(body)
+    // body: u32 LE count, count x (u32 LE length + patch text), trailer (hash + MIDI config)
+    static const uint8_t magic[4] = {0x59, 0xa2, 0xcd, 0x18};
+    if (st.size() < 10 + 160 + 20 || std::memcmp(st.data(), magic, 4) || std::memcmp(st.data() + 10, "CcnK", 4) ||
+        std::memcmp(st.data() + 18, "FBCh", 4)) { err = "a .synplant patch loads into Synplant only"; return false; }
+    const uint8_t *fxb = st.data() + 10;
+    const uint32_t csize = be32(fxb + 156);
+    if (10 + 160 + (size_t)csize > st.size() || std::memcmp(fxb + 160, ";yMqmrAMPSuN", 12)) { err = "unexpected Synplant state layout"; return false; }
+    const uint8_t *chunk = fxb + 160;
+    uLongf blen = le32(chunk + 16);
+    std::vector<uint8_t> body(blen);
+    if (uncompress(body.data(), &blen, chunk + 20, csize - 20) != Z_OK) { err = "Synplant state does not decompress"; return false; }
+    const uint32_t count = le32(body.data());
+    size_t p = 4;
+    std::vector<std::vector<uint8_t>> patches;
+    for (uint32_t i = 0; i < count && p + 4 <= body.size(); ++i) {
+        const uint32_t n = le32(&body[p]);
+        patches.emplace_back(body.begin() + (long)p + 4, body.begin() + (long)(p + 4 + n));
+        p += 4 + n;
+    }
+    if (patches.empty()) { err = "Synplant state has no programs"; return false; }
+    const std::vector<uint8_t> trailer(body.begin() + (long)p, body.end());
+    // the patch, named: replace its name line, or add one before pitchAdjust (keys are sorted)
+    std::string text(patch.begin(), patch.end()), esc;
+    for (char c : name) { if (c == '\\' || c == '"') esc += '\\'; esc += c; }
+    const size_t nm = text.find("\n\tname: \"");
+    if (nm != std::string::npos) text.replace(nm + 1, text.find('\n', nm + 1) - nm - 1, "\tname: \"" + esc + "\"");
+    else if (const size_t pa = text.find("\n\tpitchAdjust: "); pa != std::string::npos) text.insert(pa + 1, "\tname: \"" + esc + "\"\n");
+    if (text.empty() || text.back() != '\n') text += '\n';
+    patches[0].assign(text.begin(), text.end());
+    std::vector<uint8_t> nb;
+    put32(nb, (uint32_t)patches.size());
+    for (auto &t : patches) { put32(nb, (uint32_t)t.size()); nb.insert(nb.end(), t.begin(), t.end()); }
+    nb.insert(nb.end(), trailer.begin(), trailer.end());
+    uLongf zlen = compressBound(nb.size());
+    std::vector<uint8_t> z(zlen);
+    if (compress2(z.data(), &zlen, nb.data(), nb.size(), 6) != Z_OK) { err = "zlib failed"; return false; }
+    z.resize(zlen);
+    std::vector<uint8_t> newChunk(chunk, chunk + 16);
+    put32(newChunk, (uint32_t)nb.size());
+    newChunk.insert(newChunk.end(), z.begin(), z.end());
+    std::vector<uint8_t> rest(fxb + 8, fxb + 156);   // from "FBCh" to the chunk size
+    putBe32(rest, (uint32_t)newChunk.size());
+    rest.insert(rest.end(), newChunk.begin(), newChunk.end());
+    std::vector<uint8_t> newFxb = {'C', 'c', 'n', 'K'};
+    putBe32(newFxb, (uint32_t)rest.size());
+    newFxb.insert(newFxb.end(), rest.begin(), rest.end());
+    out = {magic[0], magic[1], magic[2], magic[3], 0, 0};   // current program 0
+    put32(out, (uint32_t)newFxb.size());
+    out.insert(out.end(), newFxb.begin(), newFxb.end());
     return true;
 }
 

@@ -101,7 +101,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7"
+            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant"
             : endsWith(path, ".odin") ? "juce-valuetree" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
@@ -138,10 +138,18 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         out.transform = [cart, v](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return dexedWithVoice(current, cart, v, state, e);
         };
+    } else if (fmt == "synplant") {
+        if (!isSynplantPatch(data)) { err = path + " is not a Synplant patch"; return false; }
+        std::string name = path.substr(path.find_last_of("/\\") + 1);
+        if (endsWith(name, ".synplant")) name.resize(name.size() - 9);
+        const auto patch = data;
+        out.transform = [patch, name](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return synplantWithPatch(current, patch, name, state, e);
+        };
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, juce-string or raw)";
         return false;
     }
     return true;
