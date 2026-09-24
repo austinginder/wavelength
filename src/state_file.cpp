@@ -102,7 +102,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
             : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry"
-            : endsWith(path, ".odin") ? "juce-valuetree" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
+            : endsWith(path, ".odin") ? "juce-valuetree" : endsWith(path, ".ngrr") ? "ngrr" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
     if (fmt == "clap-preset") {
@@ -152,10 +152,19 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         out.transform = [preset](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return cherryWithPreset(current, preset, state, e);
         };
+    } else if (fmt == "ngrr") {
+        std::vector<std::string> paid;
+        if (!guitarRigRackState(data, out.state, paid, err)) { err = path + ": " + err; return false; }
+        if (!paid.empty()) {
+            std::string list;
+            for (auto &p : paid) list += (list.empty() ? "" : ", ") + p;
+            out.warnings.push_back("rack uses components outside Guitar Rig's free edition (" + list +
+                                   "); a free licence removes them on load and the rack may pass audio through with only gain");
+        }
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, juce-string or raw)";
         return false;
     }
     return true;

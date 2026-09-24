@@ -317,6 +317,7 @@ std::vector<std::string> Vst3Plugin::programs() {
         return n.find_first_not_of(" 0123456789") == std::string::npos;
     };
     if (std::all_of(names.begin(), names.end(), generic)) names.clear();
+    if (names.size() > 1 && std::all_of(names.begin(), names.end(), [&](const std::string &n) { return n == names[0]; })) names.clear();
     return names;
 }
 

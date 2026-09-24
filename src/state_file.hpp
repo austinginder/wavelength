@@ -26,6 +26,7 @@ namespace wl {
 struct StateFile {
     std::vector<uint8_t> state;   // what the plugin's state.load() receives
     std::vector<uint8_t> controllerState;   // VST3 edit-controller state, when the file carries one
+    std::vector<std::string> warnings;      // e.g. components a licence will remove
     // Formats that patch the plugin's own state (a DX7 voice into Dexed's): called with the
     // plugin's current state, returns the state to load. Empty = load `state` as is.
     std::function<bool(const std::vector<uint8_t> &current, std::vector<uint8_t> &out, std::string &err)> transform;

@@ -1,5 +1,7 @@
 #include "preset_files.hpp"
 
+#include "preset_formats.hpp"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -22,7 +24,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 }
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
-                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset"};
+                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -47,6 +49,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".mg1preset") return p.find("mg1") != std::string::npos;
     if (ext == ".sempreset") return p == "synthesizerexpandermodule";
     if (ext == ".voltagepreset") return p == "voltagemodular";
+    if (ext == ".ngrr") return p.find("guitarrig") != std::string::npos;
     if (ext != ".h2p" && ext != ".vstpreset") return true;
     std::ifstream in(file, std::ios::binary);
     std::string head(4096, '\0');
@@ -212,6 +215,10 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     // Cherry Audio keeps presets in Application Support
     dirs.push_back(fs::path(home) / "Library/Application Support/CherryAudio" / plugin.name);
     if (p == "voltagemodular") dirs.push_back(fs::path(home) / "Library/Application Support/Voltage");
+    if (p.find("guitarrig") != std::string::npos) {
+        dirs.push_back("/Library/Application Support/Native Instruments/" + plugin.name + "/Rack Presets");
+        dirs.push_back(fs::path(home) / "Documents/Native Instruments/User Content" / plugin.name / "Rack Presets");
+    }
     if (p == "obxf") {
         dirs.push_back("/Library/Application Support/Surge Synth Team/OB-Xf/Patches");
         dirs.push_back(fs::path(home) / "Documents/Surge Synth Team/OB-Xf/Patches");
@@ -233,6 +240,24 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             PresetInfo pi;
             pi.name = it->path().stem().string();
             pi.category = it->path().parent_path().filename().string();
+            if (ext == ".ngrr") {   // Guitar Rig: category from the rack's own tags, licence status in the description
+                std::ifstream in(it->path(), std::ios::binary);
+                const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                const size_t us = raw.find("<user-set>RP://");
+                if (us != std::string::npos) {
+                    std::string tag = raw.substr(us + 15, raw.find("</user-set>", us) - us - 15);
+                    std::replace(tag.begin(), tag.end(), '\t', '/');
+                    for (size_t amp; (amp = tag.find("&amp;")) != std::string::npos;) tag.replace(amp, 5, "&");
+                    if (tag.rfind("FX Types/", 0) == 0) tag.erase(0, 9);
+                    pi.category = tag;
+                }
+                const size_t gi = raw.find("<gr-instrument-chunk");
+                const auto paid = gi == std::string::npos ? std::vector<std::string>() : guitarRigPaid(raw.substr(gi));
+                std::string d = paid.empty() ? "free edition" : "needs Guitar Rig Pro:";
+                for (auto &x : paid) d += " " + x + ",";
+                if (!paid.empty()) d.pop_back();
+                pi.description = d;
+            }
             pi.location = file;
             pi.loadKey = file;
             pi.kind = 0;   // CLAP_PRESET_DISCOVERY_LOCATION_FILE

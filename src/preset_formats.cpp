@@ -424,6 +424,67 @@ bool cherryWithPreset(const std::vector<uint8_t> &st, const std::vector<uint8_t>
     return true;
 }
 
+std::vector<std::string> guitarRigPaid(const std::string &xml) {
+    // components of Guitar Rig's free edition (amps: Jump; cabs: Matched Cabinet (Pro); the basic
+    // effects and modifiers); anything else is removed when the free licence loads the rack
+    static const std::set<int> freeIds = {100, 2000, 4000, 6000, 7000, 8000, 9000, 12000, 14000, 15000, 18000, 19000, 24000, 25000,
+                                          26000, 28000, 33000, 50000, 51000, 52000, 55000, 57000, 58000, 59000, 61000, 63000, 64000,
+                                          66000, 67000, 68000, 69000, 70000, 82000, 83000, 88000, 89000, 90000, 98000, 99000, 101000,
+                                          141000, 153000, 156000};
+    std::set<std::string> names;
+    for (size_t p = 0; (p = xml.find("<component id=\"", p)) != std::string::npos; ++p) {
+        const int id = std::atoi(xml.c_str() + p + 15);
+        const size_t nm = xml.find("name=\"", p), ne = nm == std::string::npos ? nm : xml.find('"', nm + 6);
+        const std::string name = nm == std::string::npos ? "" : xml.substr(nm + 6, ne - nm - 6);
+        if (!freeIds.count(id) && name != "Master FX") names.insert(name);   // Master FX becomes Global FX on load
+    }
+    return std::vector<std::string>(names.begin(), names.end());
+}
+
+bool guitarRigRackState(const std::vector<uint8_t> &rack, std::vector<uint8_t> &state,
+                        std::vector<std::string> &paid, std::string &err) {
+    // " LMX" + u32 1 + u32 length + XML; the rack is the block holding <gr-instrument-chunk
+    std::vector<uint8_t> inst;
+    for (size_t i = 0; i + 12 <= rack.size(); ++i) {
+        if (std::memcmp(&rack[i], " LMX\x01\0\0\0", 8) != 0) continue;
+        const uint32_t n = le32(&rack[i + 8]);
+        if (i + 12 + n > rack.size()) break;
+        const std::string head(rack.begin() + (long)i + 12, rack.begin() + (long)(i + 12 + std::min<uint32_t>(n, 300)));
+        if (head.find("<gr-instrument-chunk") != std::string::npos) { inst.assign(rack.begin() + (long)i, rack.begin() + (long)(i + 12 + n)); break; }
+    }
+    if (inst.empty()) { err = "not a Guitar Rig rack preset (no <gr-instrument-chunk>)"; return false; }
+    paid = guitarRigPaid(std::string(inst.begin() + 12, inst.end()));
+    auto chunk = [&](const char *tag, const std::vector<uint8_t> &raw) {
+        uLongf zlen = compressBound(raw.size());
+        std::vector<uint8_t> z(zlen);
+        compress2(z.data(), &zlen, raw.data(), raw.size(), 9);
+        std::vector<uint8_t> c = {'a', 't', 'a', 'd'};
+        put32(c, 2);
+        c.insert(c.end(), tag, tag + 4);
+        c.insert(c.end(), {'b', 'i', 'l', 'z'});
+        put32(c, (uint32_t)zlen);
+        put32(c, (uint32_t)raw.size());
+        c.insert(c.end(), z.begin(), z.begin() + (long)zlen);
+        return c;
+    };
+    std::vector<uint8_t> snd;
+    put32(snd, 2);
+    for (char c : std::string("-IN-R$iN")) snd.push_back((uint8_t)c);
+    put32(snd, 0);
+    const std::string info = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n<soundinfo version=\"400\">\n\n"
+                             "  <properties/>\n\n  <components>\n    <component>Guitar Rig 4</component>\n  </components>\n\n"
+                             "  <attributes>\n    <attribute>\n      <value>Effect</value>\n    </attribute>\n  </attributes>\n\n</soundinfo>\n";
+    state = {'-', 'i', 'n', '-'};
+    put32(state, 2);
+    const std::string doc = "#NI#CS#Document##NI#SoundShell#Sound#";
+    state.insert(state.end(), doc.begin(), doc.end());
+    state.insert(state.end(), 11, 0);
+    put32(state, 0x145);
+    for (auto &c : {chunk("dnss", snd), chunk("ofni", std::vector<uint8_t>(info.begin(), info.end())), chunk("tsrp", inst), chunk("DNSS", snd)})
+        state.insert(state.end(), c.begin(), c.end());
+    return true;
+}
+
 bool isSynplantPatch(const std::vector<uint8_t> &d) {
     return d.size() > 16 && std::memcmp(d.data(), "SynplantPatch: {", 16) == 0;
 }

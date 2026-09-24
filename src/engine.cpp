@@ -21,7 +21,7 @@ bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err) {
 }
 
 bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,
-                      std::string &stateFormat, std::string &err) {
+                      std::string &stateFormat, std::string &err, std::vector<std::string> *warnings) {
     std::string pluginErr;
     if (plugin.loadPreset(query, loadedName, pluginErr)) return true;
     // not in the plugin's own library: a preset file in its preset folders, a cartridge voice, NKS
@@ -35,6 +35,7 @@ bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string 
     if (files.empty() || !findPreset(files, query, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
     StateFile sf;
     if (!readStateFile(hit.location, "auto", sf, err) || !loadStateInto(plugin, sf, err)) return false;
+    if (warnings) for (auto &w : sf.warnings) warnings->push_back("preset '" + hit.name + "': " + w);
     loadedName = hit.name;
     stateFormat = sf.format;
     return true;
@@ -72,7 +73,7 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     };
     if (!setup.preset.empty()) {
         const auto before = snapshot();
-        if (!loadPresetByName(*out.plugin, info, setup.preset, out.preset, out.stateFormat, err)) { err = context + ": " + err; return false; }
+        if (!loadPresetByName(*out.plugin, info, setup.preset, out.preset, out.stateFormat, err, &out.warnings)) { err = context + ": " + err; return false; }
         out.plugin->pump(100);
         checkChanged(before, "preset '" + out.preset + "'");
     }
@@ -82,6 +83,7 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
         out.stateFormat = sf.format;
         const auto before = snapshot();
         if (!loadStateInto(*out.plugin, sf, err)) { err = context + ": " + err; return false; }
+        for (auto &w : sf.warnings) out.warnings.push_back(w);
         out.plugin->pump(50);
         checkChanged(before, "state " + sf.format + " file");
     }

@@ -196,7 +196,7 @@ int cmdPresets(const Args &a) {
         ++shown;
         if (a.has("--json")) list.push_back({{"name", p.name}, {"category", p.category}, {"description", p.description},
                                              {"creator", p.creator}, {"features", p.features}});
-        else std::fprintf(OUT, "%-24.24s %s\n", p.category.c_str(), p.name.c_str());
+        else std::fprintf(OUT, "%-24.24s %s%s%s\n", p.category.c_str(), p.name.c_str(), p.description.empty() ? "" : "   (", p.description.empty() ? "" : (p.description.substr(0, 90) + ")").c_str());
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2));
     else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".\n", shown, presets.size(), info.name.c_str());

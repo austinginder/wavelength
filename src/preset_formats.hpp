@@ -39,6 +39,13 @@ bool isCherryPreset(const std::vector<uint8_t> &d);
 bool cherryWithPreset(const std::vector<uint8_t> &pluginState, const std::vector<uint8_t> &preset,
                       std::vector<uint8_t> &out, std::string &err);
 
+// Guitar Rig 6 rack (.ngrr): its rack XML block, wrapped in the NI SoundShell container the plugin's
+// state uses (no template needed). `paidComponents` lists components outside the free edition,
+// which a free licence removes on load.
+std::vector<std::string> guitarRigPaid(const std::string &rackXml);   // paid components a rack uses
+bool guitarRigRackState(const std::vector<uint8_t> &rack, std::vector<uint8_t> &state,
+                        std::vector<std::string> &paidComponents, std::string &err);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
 

@@ -36,7 +36,7 @@ bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err);
 // A preset by name: the plugin's own library (CLAP preset discovery, VST3 program list), then
 // preset files for it (preset folders, DX7 cartridges, NKS).
 bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,
-                      std::string &stateFormat, std::string &err);
+                      std::string &stateFormat, std::string &err, std::vector<std::string> *warnings = nullptr);
 
 // Resolve, create, load state, resolve and apply parameters. `context` prefixes errors.
 bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlugin &out, std::string &err);
