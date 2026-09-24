@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -178,7 +179,13 @@ int cmdPresets(const Args &a) {
     // plus preset files in the plugin's preset folders (Serum 2, Odin2, u-he, Surge XT, OB-Xf, .vstpreset),
     // Dexed cartridges and NKS presets
     if (a.has("--rescan")) nksPresets(info, true);
-    for (auto &p : filePresets(info)) presets.push_back(p);
+    std::set<std::string> listed;   // a preset file with a program's name is the same sound: list it once
+    for (auto &p : presets) { std::string n = p.name; std::transform(n.begin(), n.end(), n.begin(), ::tolower); listed.insert(n); }
+    for (auto &p : filePresets(info)) {
+        std::string n = p.name;
+        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+        if (listed.insert(n).second) presets.push_back(p);
+    }
     if (presets.empty()) return fail(a, info.name + " has no presets Wavelength can find (no preset discovery, program list or preset folder); load a state file");
     std::string q = a.get("--search");
     std::transform(q.begin(), q.end(), q.begin(), ::tolower);

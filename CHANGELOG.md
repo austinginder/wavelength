@@ -45,6 +45,7 @@ Working towards **v0.1.0**, the first release.
 - Guitar Rig 6: its 1,272 rack presets (`.ngrr`) load by name in an effect chain, built without a template; the listing gives each rack's category and whether the free edition can play it (52 can), and a rack using paid components gets a warning naming them.
 - Parameter values as display text: `"params": {"Cutoff": "800 Hz", "Rate": "1/16"}` is parsed by the plugin itself (VST3 getParamValueByString, CLAP text_to_value), in jobs and effect chains.
 - Microtonic: 115 kits (`.mtpreset`) and 430 drums (`.mtdrum`) load by name; a kit waits for notes 36-43 (its pattern player and mutes off; set `"PlayStop": "PlayNow"` to let its patterns play), a drum goes onto a channel with `"preset": "AC BD Back#3"`. Values are read by Microtonic's own text parser, so they match the presets exactly.
+- `scripts/extract-embedded-presets.py`: extracts factory presets compiled into JUCE plugin binaries (no files on disk) into `~/Library/Application Support/Wavelength/Presets/<Plugin>/`, which `presets` and `"preset"` search: TAL-NoiseMaker (256), Relica 2 (35), Thump One (164), Wavetable (99), Flux Mini 2 (22). Listings show a preset once when a file and a program share its name.
 - Preset listings drop copies of the same preset filed in several folders (All / By Category / By Creator).
 - `getState` on plugins and state formats that patch the plugin's current state (templates), used by `dx7`.
 - `wavelength params` hides JUCE's MIDI CC placeholder parameters (thousands per plugin) unless `--all`.

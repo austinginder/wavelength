@@ -24,7 +24,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 }
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
-                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum"};
+                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -213,6 +213,8 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         for (auto d : {"/Library/Application Support/Surge XT/patches_factory", "/Library/Application Support/Surge XT/patches_3rdparty"})
             dirs.push_back(d);
     if (p == "surgext") dirs.push_back(fs::path(home) / "Documents/Surge XT/Patches");
+    // presets Wavelength extracted itself (scripts/extract-embedded-presets.py)
+    dirs.push_back(fs::path(home) / "Library/Application Support/Wavelength/Presets" / plugin.name);
     // Cherry Audio keeps presets in Application Support
     dirs.push_back(fs::path(home) / "Library/Application Support/CherryAudio" / plugin.name);
     if (p == "voltagemodular") dirs.push_back(fs::path(home) / "Library/Application Support/Voltage");

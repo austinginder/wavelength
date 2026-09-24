@@ -151,4 +151,6 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
   presets (DUNE 3, BBC Symphony Orchestra, SynthMaster), Synplant, Cherry Audio, Guitar Rig racks
   and Microtonic kits and drums (`"AC BD Back#3"` puts a drum on channel 3). `wavelength presets
   <plugin>` lists them all. Parameters also take the plugin's display text: `"Cutoff": "800 Hz"`.
+  Presets compiled into plugin binaries (TAL-NoiseMaker, Relica 2) appear after running
+  `scripts/extract-embedded-presets.py` once.
   Other private formats (Guitar Rig racks, TAL programs) still need converting.
