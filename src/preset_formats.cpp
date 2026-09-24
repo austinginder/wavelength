@@ -229,6 +229,101 @@ bool valueTreeToJuceXml(const std::vector<uint8_t> &file, std::vector<uint8_t> &
     return true;
 }
 
+bool isDx7Cartridge(const std::vector<uint8_t> &d) {
+    return d.size() == 4104 && d[0] == 0xF0 && d[1] == 0x43 && d[3] == 0x09 && d[4] == 0x20 && d[5] == 0x00;
+}
+
+namespace {
+// JUCE MemoryBlock::toBase64Encoding: "<size>." + 6-bit little-endian groups in its own alphabet
+const char *kJuceB64 = ".ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+";
+std::string juceB64(const std::vector<uint8_t> &d) {
+    std::string s = std::to_string(d.size()) + ".";
+    const size_t bits = d.size() * 8;
+    for (size_t b = 0; b < bits; b += 6) {
+        int v = 0;
+        for (int k = 0; k < 6 && b + k < bits; ++k) if (d[(b + k) / 8] >> ((b + k) % 8) & 1) v |= 1 << k;
+        s += kJuceB64[v];
+    }
+    return s;
+}
+std::vector<uint8_t> juceUnB64(const std::string &s) {
+    const size_t dot = s.find('.');
+    const size_t size = dot == std::string::npos ? 0 : (size_t)std::atol(s.substr(0, dot).c_str());
+    std::vector<uint8_t> d(size, 0);
+    size_t b = 0;
+    for (size_t i = dot + 1; i < s.size(); ++i) {
+        const char *p = std::strchr(kJuceB64, s[i]);
+        const int v = p ? (int)(p - kJuceB64) : 0;
+        for (int k = 0; k < 6; ++k, ++b) if (b / 8 < size && (v >> k & 1)) d[b / 8] |= (uint8_t)(1 << (b % 8));
+    }
+    return d;
+}
+// DX7 packed voice (128 bytes, bulk dump) -> VCED single-voice layout (155 bytes)
+std::vector<uint8_t> unpackDx7Voice(const uint8_t *p) {
+    std::vector<uint8_t> o;
+    for (int op = 0; op < 6; ++op) {
+        const uint8_t *q = p + op * 17;
+        o.insert(o.end(), q, q + 11);                                  // EG rates/levels, break point, depths
+        o.push_back(q[11] & 3); o.push_back((q[11] >> 2) & 3);         // curves
+        o.push_back(q[12] & 7);                                        // rate scaling
+        o.push_back(q[13] & 3); o.push_back((q[13] >> 2) & 7);         // amp mod / key velocity sensitivity
+        o.push_back(q[14]);                                            // output level
+        o.push_back(q[15] & 1); o.push_back((q[15] >> 1) & 31);        // osc mode, coarse
+        o.push_back(q[16]);                                            // fine
+        o.push_back((q[12] >> 3) & 15);                                // detune
+    }
+    o.insert(o.end(), p + 102, p + 110);                               // pitch EG
+    o.push_back(p[110] & 31); o.push_back(p[111] & 7); o.push_back((p[111] >> 3) & 1);   // algorithm, feedback, key sync
+    o.insert(o.end(), p + 112, p + 116);                               // LFO speed, delay, PMD, AMD
+    o.push_back(p[116] & 1); o.push_back((p[116] >> 1) & 7); o.push_back((p[116] >> 4) & 7);   // LFO sync, wave, PMS
+    o.push_back(p[117]);                                               // transpose
+    o.insert(o.end(), p + 118, p + 128);                               // name
+    return o;
+}
+bool setAttr(std::string &xml, const std::string &name, const std::string &value) {
+    const std::string key = " " + name + "=\"";
+    const size_t a = xml.find(key);
+    if (a == std::string::npos) return false;
+    const size_t v = a + key.size(), e = xml.find('"', v);
+    xml.replace(v, e - v, value);
+    return true;
+}
+} // namespace
+
+bool dexedWithVoice(const std::vector<uint8_t> &dexedState, const std::vector<uint8_t> &cart, int voice,
+                    std::vector<uint8_t> &out, std::string &err) {
+    if (dexedState.size() < 9 || std::memcmp(dexedState.data(), "VC2!", 4) || voice < 0 || voice > 31) {
+        err = "a DX7 cartridge loads into Dexed only (its state is JUCE XML); voices are numbered 0-31";
+        return false;
+    }
+    std::string xml(dexedState.begin() + 8, dexedState.end());
+    while (!xml.empty() && xml.back() == 0) xml.pop_back();
+    if (xml.find("<dexedState") == std::string::npos) { err = "a DX7 cartridge loads into Dexed only"; return false; }
+    // the edit buffer: 155-byte voice, then the operator on/off byte (all six on) and Dexed's own tail
+    std::vector<uint8_t> program(161, 0);
+    const size_t p = xml.find(" base64:program=\"");
+    if (p != std::string::npos) {
+        const size_t v = p + 17, e = xml.find('"', v);
+        const auto old = juceUnB64(xml.substr(v, e - v));
+        for (size_t i = 155; i < 161 && i < old.size(); ++i) program[i] = old[i];
+    }
+    const auto unpacked = unpackDx7Voice(cart.data() + 6 + voice * 128);
+    std::copy(unpacked.begin(), unpacked.end(), program.begin());
+    program[155] = 0x3F;
+    // NamedValueSet::copyToXmlAttributes stores binary values as attributes named "base64:<name>"
+    if (!setAttr(xml, "base64:sysex", juceB64(cart)) || !setAttr(xml, "base64:program", juceB64(program))) {
+        err = "Dexed state has no cartridge / program blob";
+        return false;
+    }
+    setAttr(xml, "currentProgram", std::to_string(voice));
+    setAttr(xml, "opSwitch", "111111");
+    out = {'V', 'C', '2', '!'};
+    put32(out, (uint32_t)xml.size() + 1);
+    out.insert(out.end(), xml.begin(), xml.end());
+    out.push_back(0);
+    return true;
+}
+
 bool looksLikeH2p(const std::vector<uint8_t> &d) {
     auto starts = [&](const char *s) { return d.size() >= std::strlen(s) && std::memcmp(d.data(), s, std::strlen(s)) == 0; };
     return starts("/*@Meta") || starts("#AM=");

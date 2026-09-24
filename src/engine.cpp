@@ -10,6 +10,35 @@
 
 namespace wl {
 
+bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err) {
+    if (sf.transform) {
+        std::vector<uint8_t> current;
+        if (!plugin.getState(current, err) || !sf.transform(current, sf.state, err)) return false;
+        sf.transform = nullptr;
+    }
+    return plugin.loadState(sf, err);
+}
+
+bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,
+                      std::string &stateFormat, std::string &err) {
+    std::string pluginErr;
+    if (plugin.loadPreset(query, loadedName, pluginErr)) return true;
+    // not in the plugin's own library: a preset file in its preset folders, a cartridge voice, NKS
+    auto files = filePresets(info);
+    PresetInfo hit;
+    std::string fileErr;
+    if (!findPreset(files, query, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
+        nksPresets(info, true);
+        files = filePresets(info);
+    }
+    if (files.empty() || !findPreset(files, query, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
+    StateFile sf;
+    if (!readStateFile(hit.location, "auto", sf, err) || !loadStateInto(plugin, sf, err)) return false;
+    loadedName = hit.name;
+    stateFormat = sf.format;
+    return true;
+}
+
 bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlugin &out, std::string &err) {
     PluginInfo info;
     if (!resolvePlugin(setup.spec, info, err)) { err = context + ": " + err; return false; }
@@ -36,21 +65,7 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     };
     if (!setup.preset.empty()) {
         const auto before = snapshot();
-        std::string pluginErr;
-        if (!out.plugin->loadPreset(setup.preset, out.preset, pluginErr)) {
-            // not in the plugin's own library: look for a preset file in its preset folders
-            const auto files = filePresets(info);
-            PresetInfo hit;
-            std::string fileErr;
-            if (files.empty() || !findPreset(files, setup.preset, hit, fileErr)) {
-                err = context + ": " + (files.empty() ? pluginErr : fileErr);
-                return false;
-            }
-            StateFile sf;
-            if (!readStateFile(hit.location, "auto", sf, err) || !out.plugin->loadState(sf, err)) { err = context + ": " + err; return false; }
-            out.preset = hit.name;
-            out.stateFormat = sf.format;
-        }
+        if (!loadPresetByName(*out.plugin, info, setup.preset, out.preset, out.stateFormat, err)) { err = context + ": " + err; return false; }
         out.plugin->pump(100);
         checkChanged(before, "preset '" + out.preset + "'");
     }
@@ -59,7 +74,7 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
         if (!readStateFile(setup.stateFile, setup.stateFormat, sf, err)) { err = context + ": " + err; return false; }
         out.stateFormat = sf.format;
         const auto before = snapshot();
-        if (!out.plugin->loadState(sf, err)) { err = context + ": " + err; return false; }
+        if (!loadStateInto(*out.plugin, sf, err)) { err = context + ": " + err; return false; }
         out.plugin->pump(50);
         checkChanged(before, "state " + sf.format + " file");
     }

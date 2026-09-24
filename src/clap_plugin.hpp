@@ -18,6 +18,7 @@ public:
 
     bool loadState(const StateFile &sf, std::string &err) override;
     bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) override;
+    bool getState(std::vector<uint8_t> &out, std::string &err) override { return inst_->saveState(out, err); }
     bool loadPreset(const std::string &query, std::string &loadedName, std::string &err) override;
     std::vector<ParamInfo> params() const override { return inst_->params(); }
     bool setParams(const std::vector<ParamValue> &values, std::string &err) override { return inst_->setParams(values, err); }

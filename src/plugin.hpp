@@ -63,6 +63,9 @@ public:
     virtual bool loadState(const StateFile &sf, std::string &err) = 0;
     // Save the current state as this format's preset file (.clap-preset / .vstpreset).
     virtual bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) = 0;
+    // The plugin's current state bytes (VST3: the component state), e.g. as a template for
+    // preset formats that only replace part of it.
+    virtual bool getState(std::vector<uint8_t> &out, std::string &err) = 0;
     // Load a preset by name through the plugin's own preset library (CLAP preset discovery).
     virtual bool loadPreset(const std::string &query, std::string &loadedName, std::string &err) {
         (void)query; (void)loadedName; err = std::string(format()) + " presets by name are not supported yet; use a state file"; return false;

@@ -147,5 +147,6 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
 - Presets by name come from CLAP preset discovery, VST3 program lists, and preset files in the
   plugin's preset folders: Serum 2 `.SerumPreset`, Odin2 `.odin`, u-he `.h2p` (Zebra2,
   Zebralette, TripleCheese), Surge XT and OB-Xf `.fxp`, and any `.vstpreset` under
-  `/Library/Audio/Presets/<Vendor>/<Plugin>`. `wavelength presets <plugin>` lists them all.
+  `/Library/Audio/Presets/<Vendor>/<Plugin>`, every DX7 cartridge voice for Dexed, and NKS
+  presets (DUNE 3, BBC Symphony Orchestra). `wavelength presets <plugin>` lists them all.
   Other private formats (Guitar Rig racks, TAL programs) still need converting.

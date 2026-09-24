@@ -17,6 +17,7 @@
 //  raw          the plugin's state bytes as-is
 //  auto         detected from the header or extension, else juce-string for .vital, else raw
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,9 @@ namespace wl {
 struct StateFile {
     std::vector<uint8_t> state;   // what the plugin's state.load() receives
     std::vector<uint8_t> controllerState;   // VST3 edit-controller state, when the file carries one
+    // Formats that patch the plugin's own state (a DX7 voice into Dexed's): called with the
+    // plugin's current state, returns the state to load. Empty = load `state` as is.
+    std::function<bool(const std::vector<uint8_t> &current, std::vector<uint8_t> &out, std::string &err)> transform;
     std::string pluginId;         // from a clap-preset header or a vstpreset class id, if present
     std::string format;           // the format that was used
 };

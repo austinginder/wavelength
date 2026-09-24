@@ -178,11 +178,21 @@ bool Vst3Plugin::loadState(const StateFile &sf, std::string &err) {
         return true;
     }
     // nksf / juce-string / raw: the component's own state bytes
-    MemoryStream stream(data.data(), (TSize)data.size());
-    if (im.component->setState(&stream) != kResultOk) { err = name_ + " rejected the state (" + std::to_string(data.size()) + " bytes)"; return false; }
+    auto tryLoad = [&](std::vector<uint8_t> &bytes) {
+        MemoryStream stream(bytes.data(), (TSize)bytes.size());
+        return im.component->setState(&stream) == kResultOk;
+    };
+    bool ok = tryLoad(data);
+    if (!ok && sf.format == "nksf") {   // NKS chunks of wrapped VST2 plugins (DUNE 3) lack the u32 length prefix
+        std::vector<uint8_t> pre(4);
+        for (int i = 0; i < 4; ++i) pre[(size_t)i] = (uint8_t)(sf.state.size() >> (8 * i));
+        pre.insert(pre.end(), sf.state.begin(), sf.state.end());
+        data = pre;
+        ok = tryLoad(data);
+    }
+    if (!ok) { err = name_ + " rejected the state (" + std::to_string(sf.state.size()) + " bytes)"; return false; }
     if (im.controller) {
-        int64 pos = 0;
-        stream.seek(0, IBStream::kIBSeekSet, &pos);
+        MemoryStream stream(data.data(), (TSize)data.size());
         im.controller->setComponentState(&stream);
         if (!sf.controllerState.empty()) {   // the controller's own half (Serum 2 presets carry both)
             std::vector<uint8_t> ctl = sf.controllerState;
@@ -205,6 +215,13 @@ bool Vst3Plugin::saveStateFile(const std::string &path, size_t &bytes, std::stri
     out.write(stream.getData(), (std::streamsize)stream.getSize());
     bytes = (size_t)stream.getSize();
     return (bool)out;
+}
+
+bool Vst3Plugin::getState(std::vector<uint8_t> &out, std::string &err) {
+    MemoryStream stream;
+    if (impl_->component->getState(&stream) != kResultOk) { err = name_ + " failed to save its state"; return false; }
+    out.assign(stream.getData(), stream.getData() + stream.getSize());
+    return true;
 }
 
 // ---- parameters --------------------------------------------------------------------------

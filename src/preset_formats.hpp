@@ -20,6 +20,12 @@ bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> 
 
 bool valueTreeToJuceXml(const std::vector<uint8_t> &file, std::vector<uint8_t> &state, std::string &err);
 
+// DX7 32-voice bulk dump (.syx, 4104 bytes) + voice index -> patch Dexed's own state: the
+// cartridge goes into its sysex blob and the voice (unpacked to 155 bytes) into its edit buffer.
+bool isDx7Cartridge(const std::vector<uint8_t> &d);
+bool dexedWithVoice(const std::vector<uint8_t> &dexedState, const std::vector<uint8_t> &cart, int voice,
+                    std::vector<uint8_t> &out, std::string &err);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
 

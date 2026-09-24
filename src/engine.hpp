@@ -3,6 +3,7 @@
 // effects (audio in, audio out), with parameter automation.
 #include "automation.hpp"
 #include "plugin.hpp"
+#include "state_file.hpp"
 #include "job.hpp"
 #include "wav.hpp"
 
@@ -27,6 +28,15 @@ struct OpenedPlugin {
     std::vector<AutoParam> autos;
     std::vector<std::string> warnings;
 };
+
+// Load a state file into a plugin, running the file's transform on the plugin's current state
+// first when the format needs it (e.g. a DX7 voice patched into Dexed's state).
+bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err);
+
+// A preset by name: the plugin's own library (CLAP preset discovery, VST3 program list), then
+// preset files for it (preset folders, DX7 cartridges, NKS).
+bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,
+                      std::string &stateFormat, std::string &err);
 
 // Resolve, create, load state, resolve and apply parameters. `context` prefixes errors.
 bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlugin &out, std::string &err);

@@ -10,6 +10,7 @@
 #include "catalog.hpp"
 #include "instance.hpp"
 #include "plugin.hpp"
+#include "engine.hpp"
 #include "presets.hpp"
 #include "preset_files.hpp"
 #include "sampler.hpp"
@@ -62,7 +63,8 @@ Usage:
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
 .clap/.vst3 bundle. Prefix with vst3: or clap: when a name exists in both formats.
-State formats: auto (default), clap-preset, vstpreset, nksf, juce-string (.vital), raw.
+State formats: auto (default), clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree (.odin), h2p,
+dx7 (<cartridge>.syx#<voice>), juce-string (.vital), raw.
 Exit status is non-zero on any error; with --json, errors are {"ok":false,"error":...}.
 )";
 
@@ -139,13 +141,13 @@ std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec
     if (!plugin) return nullptr;
     plugin->verbose = a.has("--verbose");
     if (a.has("--preset")) {
-        std::string loaded;
-        if (!plugin->loadPreset(a.get("--preset"), loaded, err)) return nullptr;
+        std::string loaded, fmt;
+        if (!loadPresetByName(*plugin, info, a.get("--preset"), loaded, fmt, err)) return nullptr;
     }
     if (a.has("--state")) {
         StateFile sf;
         if (!readStateFile(a.get("--state"), a.get("--format", "auto"), sf, err)) return nullptr;
-        if (!plugin->loadState(sf, err)) return nullptr;
+        if (!loadStateInto(*plugin, sf, err)) return nullptr;
     }
     plugin->pump(info.format == "vst3" ? 500 : 150);
     if (info.format == "vst3") {   // some plugins (Surge XT) only publish real values after processing a few blocks
@@ -173,7 +175,9 @@ int cmdPresets(const Args &a) {
         std::string discoverErr;
         discoverPresets(info.bundlePath, info.id, presets, discoverErr);
     }
-    // plus preset files in the plugin's preset folders (Serum 2, Odin2, u-he, Surge XT, OB-Xf, .vstpreset)
+    // plus preset files in the plugin's preset folders (Serum 2, Odin2, u-he, Surge XT, OB-Xf, .vstpreset),
+    // Dexed cartridges and NKS presets
+    if (a.has("--rescan")) nksPresets(info, true);
     for (auto &p : filePresets(info)) presets.push_back(p);
     if (presets.empty()) return fail(a, info.name + " has no presets Wavelength can find (no preset discovery, program list or preset folder); load a state file");
     std::string q = a.get("--search");

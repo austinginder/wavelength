@@ -3,6 +3,7 @@
 #include "preset_formats.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 
@@ -87,7 +88,12 @@ void adaptObxProgram(std::vector<uint8_t> &chunk) {
 }
 } // namespace
 
-bool readStateFile(const std::string &path, const std::string &format, StateFile &out, std::string &err) {
+bool readStateFile(const std::string &pathIn, const std::string &format, StateFile &out, std::string &err) {
+    // "<cartridge>.syx#<voice>" picks one voice of a DX7 cartridge
+    std::string path = pathIn;
+    int voice = -1;
+    const size_t hash = pathIn.rfind(".syx#");
+    if (hash != std::string::npos) { path = pathIn.substr(0, hash + 4); voice = std::atoi(pathIn.c_str() + hash + 5); }
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot read state file " + path; return false; }
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -95,7 +101,7 @@ bool readStateFile(const std::string &path, const std::string &format, StateFile
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum"
+            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7"
             : endsWith(path, ".odin") ? "juce-valuetree" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
@@ -125,10 +131,17 @@ bool readStateFile(const std::string &path, const std::string &format, StateFile
         std::string name = path.substr(path.find_last_of("/\\") + 1);
         if (endsWith(name, ".h2p")) name.resize(name.size() - 4);
         out.state = h2pToState(data, name);
+    } else if (fmt == "dx7") {
+        if (!isDx7Cartridge(data)) { err = path + " is not a DX7 32-voice cartridge (4104-byte sysex)"; return false; }
+        const auto cart = data;
+        const int v = voice < 0 ? 0 : voice;
+        out.transform = [cart, v](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return dexedWithVoice(current, cart, v, state, e);
+        };
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, juce-string or raw)";
         return false;
     }
     return true;
