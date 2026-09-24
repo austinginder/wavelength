@@ -63,8 +63,8 @@ velocity otherwise). Performance controls are parameters: `Expression`, `Dynamic
 Plugins with no program parameter and no preset files (factory presets compiled into the
 binary) can still be driven by state. JUCE plugins' state is `VC2!` + u32 little-endian
 length + an XML document + NUL; write that XML yourself with plain parameter values and load
-it as `{"file": ..., "format": "raw"}`. Relica 2's factory
-presets, for example, can be read out of its binary and overridden per part.
+it as `{"file": ..., "format": "raw"}`. `scripts/extract-embedded-presets.py` reads such factory
+presets out of the binary (Relica 2, TAL-NoiseMaker); override values per part with `params`.
 Run `wavelength state save <plugin> --out x.vstpreset` first to see the plugin's real layout.
 
 ## Writing jobs
@@ -170,4 +170,3 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
 - Not loadable headlessly: Kontakt (never pass it an unknown state file: it can hang the render),
   Komplete Kontrol, ZENOLOGY (needs a Roland Cloud login), Spitfire LABS (encrypted patches; the
   default patch plays), UVI Workstation.
-  Other private formats (Guitar Rig racks, TAL programs) still need converting.
