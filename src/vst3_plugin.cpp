@@ -217,6 +217,21 @@ bool Vst3Plugin::saveStateFile(const std::string &path, size_t &bytes, std::stri
     return (bool)out;
 }
 
+bool Vst3Plugin::valueFromText(ParamId id, const std::string &text, double &plain) {
+    auto &ctl = impl_->controller;
+    if (!ctl) return false;
+    Vst::String128 s{};
+    Steinberg::Vst::StringConvert::convert(text, s);
+    Vst::ParamValue norm = 0;
+    if (ctl->getParamValueByString(id, s, norm) != kResultOk) return false;
+    plain = ctl->normalizedParamToPlain(id, norm);
+    return true;
+}
+
+void Vst3Plugin::setControllerValue(ParamId id, double plain) {
+    if (impl_->controller) impl_->controller->setParamNormalized(id, impl_->toNorm(id, plain));
+}
+
 bool Vst3Plugin::getState(std::vector<uint8_t> &out, std::string &err) {
     MemoryStream stream;
     if (impl_->component->getState(&stream) != kResultOk) { err = name_ + " failed to save its state"; return false; }

@@ -1,9 +1,12 @@
 #include "state_file.hpp"
 
+#include "microtonic.hpp"
+#include "plugin.hpp"
 #include "preset_formats.hpp"
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 
@@ -89,11 +92,13 @@ void adaptObxProgram(std::vector<uint8_t> &chunk) {
 } // namespace
 
 bool readStateFile(const std::string &pathIn, const std::string &format, StateFile &out, std::string &err) {
-    // "<cartridge>.syx#<voice>" picks one voice of a DX7 cartridge
+    // "<cartridge>.syx#<voice>" picks one voice of a DX7 cartridge, "<drum>.mtdrum#<channel>" a channel
     std::string path = pathIn;
     int voice = -1;
-    const size_t hash = pathIn.rfind(".syx#");
-    if (hash != std::string::npos) { path = pathIn.substr(0, hash + 4); voice = std::atoi(pathIn.c_str() + hash + 5); }
+    for (const char *ext : {".syx#", ".mtdrum#"}) {
+        const size_t hash = pathIn.rfind(ext);
+        if (hash != std::string::npos) { path = pathIn.substr(0, hash + strlen(ext) - 1); voice = std::atoi(pathIn.c_str() + hash + strlen(ext)); }
+    }
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot read state file " + path; return false; }
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -101,7 +106,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry"
+            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
             : endsWith(path, ".odin") ? "juce-valuetree" : endsWith(path, ".ngrr") ? "ngrr" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
     out.format = fmt;
@@ -135,7 +140,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         if (!isDx7Cartridge(data)) { err = path + " is not a DX7 32-voice cartridge (4104-byte sysex)"; return false; }
         const auto cart = data;
         const int v = voice < 0 ? 0 : voice;
-        out.transform = [cart, v](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+        out.transform = [cart, v](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return dexedWithVoice(current, cart, v, state, e);
         };
     } else if (fmt == "synplant") {
@@ -143,13 +148,13 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         std::string name = path.substr(path.find_last_of("/\\") + 1);
         if (endsWith(name, ".synplant")) name.resize(name.size() - 9);
         const auto patch = data;
-        out.transform = [patch, name](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+        out.transform = [patch, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return synplantWithPatch(current, patch, name, state, e);
         };
     } else if (fmt == "cherry") {
         if (!isCherryPreset(data)) { err = path + " is not a Cherry Audio preset"; return false; }
         const auto preset = data;
-        out.transform = [preset](const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+        out.transform = [preset](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return cherryWithPreset(current, preset, state, e);
         };
     } else if (fmt == "ngrr") {
@@ -161,10 +166,23 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
             out.warnings.push_back("rack uses components outside Guitar Rig's free edition (" + list +
                                    "); a free licence removes them on load and the rack may pass audio through with only gain");
         }
+    } else if (fmt == "microtonic") {
+        if (!isMicrotonicText(data)) { err = path + " is not a Microtonic kit or drum"; return false; }
+        std::string name = path.substr(path.find_last_of("/\\") + 1);
+        name = name.substr(0, name.find_last_of('.'));
+        const auto text = data;
+        const bool kit = std::string(data.begin(), data.begin() + 18).find("reset") != std::string::npos;   // MicrotonicPresetV3
+        const int channel = voice < 0 ? 1 : voice;
+        out.transform = [text, name, kit, channel](Plugin &plugin, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            if (kit) return microtonicKitState(plugin, current, text, name, state, e);
+            std::vector<ParamValue> values;   // one drum: the channel's parameters, the rest of the kit stays
+            state.clear();
+            return microtonicDrumParams(plugin, text, channel, values, e) && plugin.setParams(values, e);
+        };
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, microtonic, juce-string or raw)";
         return false;
     }
     return true;

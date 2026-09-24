@@ -21,6 +21,7 @@ struct Note {
 struct ParamSetting {
     std::string key;        // "#id", "Name" or "Module/Name"
     double value;           // plain value in the parameter's own range
+    std::string text;       // or the plugin's display text ("800 Hz"), parsed by the plugin
 };
 
 struct Track {

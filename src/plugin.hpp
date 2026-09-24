@@ -63,6 +63,11 @@ public:
     virtual bool loadState(const StateFile &sf, std::string &err) = 0;
     // Save the current state as this format's preset file (.clap-preset / .vstpreset).
     virtual bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) = 0;
+    // A parameter's plain value from display text ("84.3 Hz", "1/16", "-6 dB"), parsed by the plugin.
+    virtual bool valueFromText(ParamId id, const std::string &text, double &plain) { (void)id; (void)text; (void)plain; return false; }
+    // Set a value on the edit controller only, so text of other parameters is read in its context
+    // (a drum's mode decides whether "17 Hz" is a rate or a time).
+    virtual void setControllerValue(ParamId id, double plain) { (void)id; (void)plain; }
     // The plugin's current state bytes (VST3: the component state), e.g. as a template for
     // preset formats that only replace part of it.
     virtual bool getState(std::vector<uint8_t> &out, std::string &err) = 0;

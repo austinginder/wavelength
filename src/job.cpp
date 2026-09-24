@@ -105,7 +105,7 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
             }
             if (t.contains("sampler")) tr.sampler = t["sampler"];
             if (t.contains("params"))
-                for (auto &[k, v] : t["params"].items()) tr.params.push_back({k, v.get<double>()});
+                for (auto &[k, v] : t["params"].items()) tr.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
             if (t.contains("fx")) {
                 if (!t["fx"].is_array()) throw std::runtime_error("track '" + tr.name + "': \"fx\" must be an array of effects");
                 tr.fx = t["fx"];

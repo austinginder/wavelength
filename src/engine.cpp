@@ -14,8 +14,9 @@ namespace wl {
 bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err) {
     if (sf.transform) {
         std::vector<uint8_t> current;
-        if (!plugin.getState(current, err) || !sf.transform(current, sf.state, err)) return false;
+        if (!plugin.getState(current, err) || !sf.transform(plugin, current, sf.state, err)) return false;
         sf.transform = nullptr;
+        if (sf.state.empty()) return true;   // the transform set parameters only (a Microtonic drum)
     }
     return plugin.loadState(sf, err);
 }
@@ -27,12 +28,18 @@ bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string 
     // not in the plugin's own library: a preset file in its preset folders, a cartridge voice, NKS
     auto files = filePresets(info);
     PresetInfo hit;
-    std::string fileErr;
-    if (!findPreset(files, query, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
+    std::string fileErr, q = query, suffix;
+    const size_t hash = query.rfind('#');   // "AC BD Back#3": a Microtonic drum on channel 3
+    if (hash != std::string::npos && hash + 1 < query.size() && std::isdigit((unsigned char)query[hash + 1])) {
+        q = query.substr(0, hash);
+        suffix = query.substr(hash);
+    }
+    if (!findPreset(files, q, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
         nksPresets(info, true);
         files = filePresets(info);
     }
-    if (files.empty() || !findPreset(files, query, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
+    if (files.empty() || !findPreset(files, q, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
+    if (!suffix.empty()) hit.location += suffix;
     StateFile sf;
     if (!readStateFile(hit.location, "auto", sf, err) || !loadStateInto(plugin, sf, err)) return false;
     if (warnings) for (auto &w : sf.warnings) warnings->push_back("preset '" + hit.name + "': " + w);
@@ -92,9 +99,14 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
         err = context + ": no parameter '" + key + "' on " + info.name + " (run `wavelength params \"" + info.name + "\"`)";
         return false;
     };
-    for (const auto &p : setup.params) {
+    for (auto p : setup.params) {
         ParamInfo pi;
         if (!lookup(p.key, pi)) return false;
+        if (!p.text.empty() && !out.plugin->valueFromText(pi.id, p.text, p.value)) {
+            err = context + ": " + info.name + " could not read '" + p.text + "' as a value of '" + pi.name + "' (now showing '" +
+                  pi.display + "'); use a number in [" + std::to_string(pi.min) + " .. " + std::to_string(pi.max) + "] or its own text format";
+            return false;
+        }
         const double lo = std::min(pi.min, pi.max), hi = std::max(pi.min, pi.max);
         const double v = std::clamp(p.value, lo, hi);
         if (std::fabs(v - p.value) > 1e-6 * std::max(1.0, hi - lo)) {

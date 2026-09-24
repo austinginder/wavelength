@@ -148,5 +148,7 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
   plugin's preset folders: Serum 2 `.SerumPreset`, Odin2 `.odin`, u-he `.h2p` (Zebra2,
   Zebralette, TripleCheese), Surge XT and OB-Xf `.fxp`, and any `.vstpreset` under
   `/Library/Audio/Presets/<Vendor>/<Plugin>`, every DX7 cartridge voice for Dexed, and NKS
-  presets (DUNE 3, BBC Symphony Orchestra). `wavelength presets <plugin>` lists them all.
+  presets (DUNE 3, BBC Symphony Orchestra, SynthMaster), Synplant, Cherry Audio, Guitar Rig racks
+  and Microtonic kits and drums (`"AC BD Back#3"` puts a drum on channel 3). `wavelength presets
+  <plugin>` lists them all. Parameters also take the plugin's display text: `"Cutoff": "800 Hz"`.
   Other private formats (Guitar Rig racks, TAL programs) still need converting.

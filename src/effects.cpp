@@ -470,7 +470,7 @@ struct PluginFx : Effect {
             if (fs::path(setup.stateFile).is_relative()) setup.stateFile = (fs::path(job.baseDir) / setup.stateFile).string();
         }
         const json params = j.value("params", json::object());
-        for (auto &[k, v] : params.items()) setup.params.push_back({k, v.get<double>()});
+        for (auto &[k, v] : params.items()) setup.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
         if (j.contains("automate"))
             for (auto &[k, v] : j["automate"].items()) if (k != "mix") setup.automation.push_back({k, Envelope::parse(v, job.tempo, false)});
         setup.warmup = j.value("warmup", -1.0);

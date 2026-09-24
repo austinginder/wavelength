@@ -24,7 +24,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 }
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
-                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr"};
+                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -50,6 +50,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".sempreset") return p == "synthesizerexpandermodule";
     if (ext == ".voltagepreset") return p == "voltagemodular";
     if (ext == ".ngrr") return p.find("guitarrig") != std::string::npos;
+    if (ext == ".mtpreset" || ext == ".mtdrum") return p.find("microtonic") != std::string::npos;
     if (ext != ".h2p" && ext != ".vstpreset") return true;
     std::ifstream in(file, std::ios::binary);
     std::string head(4096, '\0');
@@ -215,6 +216,10 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     // Cherry Audio keeps presets in Application Support
     dirs.push_back(fs::path(home) / "Library/Application Support/CherryAudio" / plugin.name);
     if (p == "voltagemodular") dirs.push_back(fs::path(home) / "Library/Application Support/Voltage");
+    if (p.find("microtonic") != std::string::npos) {   // kits and drums; "By Category" gives drum categories
+        dirs.push_back("/Library/Audio/Presets/Sonic Charge/Microtonic Presets");
+        dirs.push_back("/Library/Audio/Presets/Sonic Charge/Microtonic Drum Patches");
+    }
     if (p.find("guitarrig") != std::string::npos) {
         dirs.push_back("/Library/Application Support/Native Instruments/" + plugin.name + "/Rack Presets");
         dirs.push_back(fs::path(home) / "Documents/Native Instruments/User Content" / plugin.name / "Rack Presets");

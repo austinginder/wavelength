@@ -47,7 +47,8 @@ public:
     uint32_t inputPortCount() const;
     uint32_t inputChannels(uint32_t port) const;
     bool usesMidiDialect() const;
-    bool acceptsMidi() const;       // note port 0 lists the MIDI dialect (CC / pitch bend as MIDI events)
+    bool acceptsMidi() const;
+    bool textToValue(uint32_t id, const std::string &text, double &value) const;       // note port 0 lists the MIDI dialect (CC / pitch bend as MIDI events)
 
     // Activate, process `blocks` silent blocks on an audio thread with these parameter
     // events in the first one, then deactivate. Some plugins (JUCE-based ones) only commit

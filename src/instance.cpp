@@ -337,6 +337,9 @@ uint32_t Instance::inputChannels(uint32_t port) const {
     clap_audio_port_info_t info{};
     return audioPorts_->get(plugin_, port, true, &info) ? info.channel_count : 0;
 }
+bool Instance::textToValue(uint32_t id, const std::string &text, double &value) const {
+    return params_ && params_->text_to_value && params_->text_to_value(plugin_, id, text.c_str(), &value);
+}
 bool Instance::acceptsMidi() const {
     if (!notePorts_ || notePorts_->count(plugin_, true) == 0) return false;
     clap_note_port_info_t info{};
