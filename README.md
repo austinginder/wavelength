@@ -104,6 +104,7 @@ A minimal job:
 | `plugins [--rescan] [--json]` | Lists CLAP and VST3 plugins and the built-in instruments. It searches the standard plug-in folders, `$WAVELENGTH_CLAP_PATH` and `$WAVELENGTH_VST3_PATH`, and caches results per bundle. |
 | `presets <plugin> [--search T] [--rescan] [--json]` | Lists a plugin's presets to use by name as `"preset"`, with category and notes (e.g. Guitar Rig racks marked free edition or Pro). |
 | `samples [--search T] [--kit NAME] [--json]` | Lists sample libraries for `builtin:sampler` (Bitwig content and `$WAVELENGTH_SAMPLES_PATH`); `--kit` prints a kit's key map. |
+| `audition <plugin> [--jobs N] [--limit N] [--rebuild]` | Renders every preset once in worker processes and indexes how it sounds (octave offset, brightness, band balance, envelope, width), so `presets` can show and search sound tags. |
 | `analyze <file.wav \| render-dir> [--start S] [--end S] [--json]` | Measures pitch, brightness, band balance, stereo width, onsets and envelope of a WAV, or of a render's mix, stems and sections. |
 | `params <plugin> [--preset N] [--state F] [--all] [--json]` | Shows parameters with ranges, current values and display text, optionally after loading a preset or state. |
 | `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--json]` | Renders stems, `mix.wav` and `report.json`. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |

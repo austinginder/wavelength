@@ -97,6 +97,7 @@ add_executable(wavelength
   src/preset_files.cpp
   src/microtonic.cpp
   src/analyze.cpp
+  src/audition.cpp
   src/instance.cpp
   src/catalog.cpp
   src/clap_plugin.cpp

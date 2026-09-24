@@ -113,6 +113,17 @@ in the job (details in `docs/effects.md`):
   arps −23 LUFS), then add `markers` and ride faders with `automation.gain` until the
   per-section loudness in the report follows the music (quiet sections really quiet).
 
+## Choosing sounds: `wavelength audition`
+
+Preset names don't say how a preset sounds or in which octave. Run `wavelength audition <plugin>`
+once per plugin (Altitude's 450 presets take about two minutes); after that `wavelength presets
+<plugin>` shows tags measured from a C4 note, and `--search` finds them: `--search "octave -1"`,
+`--search dark`, `--search pluck`, `--search sub`, `--search rhythmic`, `--search wide`. Presets
+tagged `octave -1` sound an octave below the written note: add `"transpose": 12` or write the
+part higher. `self-playing` presets make sound without notes (latched arps, drones); `rhythmic`
+ones turn a held note into a pattern. `presets --json` has the numbers (centroid, bands,
+envelope, pitch offset in semitones and cents).
+
 ## Listening by numbers: `wavelength analyze`
 
 You can't hear the render, so measure it. `wavelength analyze out/<dir> --json` gives, for the

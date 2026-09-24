@@ -115,9 +115,11 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
         if (env[i] > floorLin) { first = std::min(first, i); last = i; active.push_back(env[i]); }
     r.activeSeconds = (double)active.size() * hop / sr;
     if (first < env.size()) { r.firstSoundSeconds = start + (double)first * hop / sr; r.lastSoundSeconds = start + (double)(last + 1) * hop / sr; }
-    size_t i10 = pk, i90 = pk;
-    while (i10 > 0 && env[i10] > 0.1 * peak) --i10;
-    while (i90 > i10 && env[i90 - 1] >= 0.9 * peak) --i90;
+    // attack: from first reaching 10% of the peak to first reaching 90% of it
+    size_t i10 = 0;
+    while (i10 < pk && env[i10] < 0.1 * peak) ++i10;
+    size_t i90 = i10;
+    while (i90 < pk && env[i90] < 0.9 * peak) ++i90;
     r.attackMs = (double)(i90 - i10) * hop / sr * 1000;
     size_t id = pk;
     while (id < env.size() && env[id] > peak * 0.1) ++id;

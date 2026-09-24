@@ -31,6 +31,15 @@ using json = nlohmann::json;
 
 namespace wl {
 
+std::string selfExecutable() {
+#ifdef __APPLE__
+    char buf[4096];
+    uint32_t size = sizeof buf;
+    if (_NSGetExecutablePath(buf, &size) == 0) return fs::canonical(buf).string();
+#endif
+    return "/proc/self/exe";
+}
+
 namespace {
 
 std::string home() {
@@ -74,15 +83,6 @@ std::vector<fs::path> findBundles(const std::string &dir, const char *ext) {
     }
     std::sort(bundles.begin(), bundles.end());
     return bundles;
-}
-
-std::string selfExecutable() {
-#ifdef __APPLE__
-    char buf[4096];
-    uint32_t size = sizeof buf;
-    if (_NSGetExecutablePath(buf, &size) == 0) return fs::canonical(buf).string();
-#endif
-    return "/proc/self/exe";
 }
 
 // Scan one VST3 bundle in a child process (`wavelength __scan-vst3 <bundle>`), so a plugin

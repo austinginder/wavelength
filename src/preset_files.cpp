@@ -193,6 +193,7 @@ std::vector<PresetInfo> nksPresets(const PluginInfo &plugin, bool rescan) {
         p.category = e.category.empty() ? e.bank : e.category;
         p.creator = e.vendor;
         p.location = p.loadKey = e.path;
+        p.stateFile = true;
         out.push_back(p);
     }
     return out;
@@ -274,6 +275,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             }
             pi.location = file;
             pi.loadKey = file;
+            pi.stateFile = true;
             pi.kind = 0;   // CLAP_PRESET_DISCOVERY_LOCATION_FILE
             out.push_back(pi);
         }
@@ -290,6 +292,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 PresetInfo pi;
                 pi.name = progs[i].name;
                 pi.category = progs[i].category;
+                pi.stateFile = true;
                 pi.location = pi.loadKey = "aas:" + e.path().string() + "#" + std::to_string(i + 1);
                 out.push_back(pi);
             }
@@ -305,6 +308,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 PresetInfo pi;
                 pi.name = presets[i].name;
                 pi.category = presets[i].category;
+                pi.stateFile = true;
                 pi.location = pi.loadKey = "melda:" + bank + "#" + std::to_string(i);
                 out.push_back(pi);
             }
@@ -322,7 +326,8 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             PresetInfo pi;
             pi.name = e.path().filename().string();
             pi.category = "Analog Lab";
-            pi.location = pi.loadKey = e.path().string();
+            pi.stateFile = true;
+                pi.location = pi.loadKey = e.path().string();
             out.push_back(pi);
         }
     }
@@ -345,6 +350,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 PresetInfo pi;
                 pi.name = name;
                 pi.category = it->path().stem().string();
+                pi.stateFile = true;
                 pi.location = pi.loadKey = it->path().string() + "#" + std::to_string(v);
                 out.push_back(pi);
             }

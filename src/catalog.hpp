@@ -22,4 +22,7 @@ bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err);
 nlohmann::json pluginToJson(const PluginInfo &p);
 PluginInfo pluginFromJson(const nlohmann::json &j);
 
+// Path of the running wavelength binary (for worker processes).
+std::string selfExecutable();
+
 } // namespace wl

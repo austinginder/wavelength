@@ -8,6 +8,7 @@
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
 //   wavelength version
 #include "analyze.hpp"
+#include "audition.hpp"
 #include "catalog.hpp"
 #include "instance.hpp"
 #include "plugin.hpp"
@@ -55,6 +56,10 @@ Usage:
   wavelength samples [--search TEXT] [--kit NAME] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples and drum kit folders);
       --kit shows the General MIDI key each of a kit's files is mapped to.
+  wavelength audition <plugin> [--jobs 4] [--limit N] [--rebuild] [--json]
+      Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
+      offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
+      (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
   wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--json]
       Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
       onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
@@ -86,7 +91,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -175,25 +180,12 @@ int cmdPresets(const Args &a) {
     PluginInfo info;
     std::string err;
     if (!resolvePlugin(a.positional[1], info, err)) return fail(a, err);
-    std::vector<PresetInfo> presets;
-    if (info.format == "vst3") {   // factory programs from the plugin's program list
-        auto plugin = createPlugin(info, err);
-        if (!plugin) return fail(a, err);
-        for (auto &n : plugin->programs()) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
-    } else {
-        std::string discoverErr;
-        discoverPresets(info.bundlePath, info.id, presets, discoverErr);
-    }
-    // plus preset files in the plugin's preset folders (Serum 2, Odin2, u-he, Surge XT, OB-Xf, .vstpreset),
-    // Dexed cartridges and NKS presets
-    if (a.has("--rescan")) nksPresets(info, true);
-    std::set<std::string> listed;   // a preset file with a program's name is the same sound: list it once
-    for (auto &p : presets) { std::string n = p.name; std::transform(n.begin(), n.end(), n.begin(), ::tolower); listed.insert(n); }
-    for (auto &p : filePresets(info)) {
-        std::string n = p.name;
-        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-        if (listed.insert(n).second) presets.push_back(p);
-    }
+    std::vector<PresetInfo> presets = listPresets(info, a.has("--rescan"), err);
+    // sounds from the audition index: tags join the searchable text, measurements the JSON
+    const json audition = auditionIndex(info);
+    for (auto &p : presets)
+        if (audition.contains(p.name) && audition[p.name].contains("tags"))
+            for (auto &t : audition[p.name]["tags"]) p.features.push_back(t.get<std::string>());
     if (presets.empty()) return fail(a, info.name + " has no presets Wavelength can find (no preset discovery, program list or preset folder); load a state file");
     std::string q = a.get("--search");
     std::transform(q.begin(), q.end(), q.begin(), ::tolower);
@@ -209,12 +201,21 @@ int cmdPresets(const Args &a) {
     for (const auto &p : presets) {
         if (!matches(p)) continue;
         ++shown;
-        if (a.has("--json")) list.push_back({{"name", p.name}, {"category", p.category}, {"description", p.description},
-                                             {"creator", p.creator}, {"features", p.features}});
-        else std::fprintf(OUT, "%-24.24s %s%s%s\n", p.category.c_str(), p.name.c_str(), p.description.empty() ? "" : "   (", p.description.empty() ? "" : (p.description.substr(0, 90) + ")").c_str());
+        if (a.has("--json")) {
+            json item = {{"name", p.name}, {"category", p.category}, {"description", p.description}, {"creator", p.creator}, {"features", p.features}};
+            if (audition.contains(p.name)) item["audition"] = audition[p.name];
+            list.push_back(item);
+        } else {
+            std::string tags;
+            if (audition.contains(p.name) && audition[p.name].contains("tags"))
+                for (auto &t : audition[p.name]["tags"]) tags += (tags.empty() ? "" : ", ") + t.get<std::string>();
+            std::fprintf(OUT, "%-24.24s %s%s%s%s\n", p.category.c_str(), p.name.c_str(), p.description.empty() ? "" : "   (",
+                         p.description.empty() ? "" : (p.description.substr(0, 90) + ")").c_str(), tags.empty() ? "" : ("   [" + tags + "]").c_str());
+        }
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2, ' ', false, json::error_handler_t::replace));
-    else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".\n", shown, presets.size(), info.name.c_str());
+    else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".%s\n", shown, presets.size(), info.name.c_str(),
+                      audition.empty() ? " Run `wavelength audition` to tag them by sound." : "");
     return 0;
 }
 
@@ -257,6 +258,19 @@ int cmdSamples(const Args &a) {
     if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"} or {\"kit\": \"<name>\"}.\n",
                       shown, lib.size());
+    return 0;
+}
+
+// ---- audition --------------------------------------------------------------------------
+int cmdAudition(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength audition <plugin> [--jobs N] [--limit N] [--rebuild]");
+    PluginInfo info;
+    std::string err, summary;
+    if (!resolvePlugin(a.positional[1], info, err)) return fail(a, err);
+    const int jobs = std::atoi(a.get("--jobs", "4").c_str()), limit = std::atoi(a.get("--limit", "0").c_str());
+    if (runAudition(info, jobs, limit, a.has("--rebuild"), a.has("--verbose"), err, summary)) return fail(a, err);
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"summary", summary}}.dump(2, ' ', false, json::error_handler_t::replace));
+    else std::fprintf(OUT, "%s\n", summary.c_str());
     return 0;
 }
 
@@ -458,6 +472,7 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
+    if (cmd == "__audition" && a.positional.size() > 3) return auditionWorker(a.positional[1], a.positional[2], a.positional[3]);
     if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
         std::vector<PluginInfo> plugins;
         std::string err;
@@ -474,6 +489,7 @@ int run(int argc, char **argv) {
         if (cmd == "presets") return cmdPresets(a);
         if (cmd == "samples") return cmdSamples(a);
         if (cmd == "analyze") return cmdAnalyze(a);
+        if (cmd == "audition") return cmdAudition(a);
         if (cmd == "render") return cmdRender(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
