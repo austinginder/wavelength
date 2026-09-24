@@ -75,8 +75,9 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     };
     auto checkChanged = [&](const std::vector<double> &before, const std::string &what) {
         // plugins whose state selects a program without moving any parameter (AAS Player, DecentSampler,
-        // SynthMaster) would always trip this check
-        if (out.stateFormat == "aas" || out.stateFormat == "decentsampler" || info.name.rfind("SynthMaster", 0) == 0) return;
+        // SynthMaster, BBC Symphony Orchestra's NKS instruments) would always trip this check
+        if (out.stateFormat == "aas" || out.stateFormat == "decentsampler" || info.name.rfind("SynthMaster", 0) == 0 ||
+            info.name == "BBC Symphony Orchestra") return;
         const auto after = snapshot();
         if (before.empty() || before.size() != after.size()) return;
         for (size_t i = 0; i < before.size(); ++i) if (std::fabs(before[i] - after[i]) > 1e-7) return;
