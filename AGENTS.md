@@ -58,6 +58,13 @@ before the notes they apply to. Performance controls are parameters: `Expression
 `Dynamics`, `Vibrato`, `Release`, `Tightness`, `Reverb` and the `Mic: ...` mixes, all
 automatable.
 
+Plugins with no program parameter and no preset files (factory presets compiled into the
+binary) can still be driven by state. JUCE plugins' state is `VC2!` + u32 little-endian
+length + an XML document + NUL; write that XML yourself with plain parameter values and load
+it as `{"file": ..., "format": "raw"}`. Relica 2's factory
+presets, for example, can be read out of its binary and overridden per part.
+Run `wavelength state save <plugin> --out x.vstpreset` first to see the plugin's real layout.
+
 ## Writing jobs
 
 See `docs/job-format.md` for every field. The essentials:
