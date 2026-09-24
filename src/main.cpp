@@ -94,7 +94,7 @@ Args parse(int argc, char **argv) {
 }
 
 int fail(const Args &a, const std::string &msg) {
-    if (a.has("--json")) emit(json{{"ok", false}, {"error", msg}}.dump(2));
+    if (a.has("--json")) emit(json{{"ok", false}, {"error", msg}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(stderr, "error: %s\n", msg.c_str());
     return 1;
 }
@@ -122,7 +122,7 @@ int cmdPlugins(const Args &a) {
         for (auto &p : all)
             list.push_back({{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version}, {"format", p.format},
                             {"features", p.features}, {"bundle", p.bundlePath}});
-        emit(json{{"ok", true}, {"plugins", list}, {"warnings", warnings}}.dump(2));
+        emit(json{{"ok", true}, {"plugins", list}, {"warnings", warnings}}.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     for (auto &p : all) {
@@ -205,7 +205,7 @@ int cmdPresets(const Args &a) {
                                              {"creator", p.creator}, {"features", p.features}});
         else std::fprintf(OUT, "%-24.24s %s%s%s\n", p.category.c_str(), p.name.c_str(), p.description.empty() ? "" : "   (", p.description.empty() ? "" : (p.description.substr(0, 90) + ")").c_str());
     }
-    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2));
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".\n", shown, presets.size(), info.name.c_str());
     return 0;
 }
@@ -227,7 +227,7 @@ int cmdSamples(const Args &a) {
             if (a.has("--json")) list.push_back({{"key", k}, {"file", file}, {"recognised", !guessed}, {"extraTake", extra}});
             else std::fprintf(OUT, "%3d  %s%s\n", k, file.c_str(), extra ? "   (another take: --roundrobin stacks takes on one key)" : guessed ? "   (unrecognised name: next free key)" : "");
         }
-        if (a.has("--json")) emit(json{{"ok", true}, {"kit", dir}, {"map", list}}.dump(2));
+        if (a.has("--json")) emit(json{{"ok", true}, {"kit", dir}, {"map", list}}.dump(2, ' ', false, json::error_handler_t::replace));
         else std::fprintf(OUT, "\n%s\nUse as \"sampler\": {\"kit\": \"%s\"}; override keys with \"map\": {\"36\": \"<file>\"}.\n",
                           dir.c_str(), fs::path(dir).filename().string().c_str());
         return 0;
@@ -246,7 +246,7 @@ int cmdSamples(const Args &a) {
         else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
                           e.kind == "kit" ? "wavs" : "zones");
     }
-    if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2));
+    if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"} or {\"kit\": \"<name>\"}.\n",
                       shown, lib.size());
     return 0;
@@ -275,7 +275,7 @@ int cmdParams(const Args &a) {
             std::fprintf(OUT, "#%-6u %-40s %10.4g  [%g .. %g]  %s\n", p.id,
                         (p.module.empty() ? p.name : p.module + "/" + p.name).c_str(), p.value, p.min, p.max, p.display.c_str());
     }
-    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"params", list}}.dump(2));
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"params", list}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "\n%zu of %zu parameters (%s)%s\n", shown, params.size(), info.name.c_str(),
                       midiHidden && !a.has("--all") ? (", " + std::to_string(midiHidden) + " MIDI controller placeholders hidden: use \"cc\" / \"pitchbend\" automation").c_str() : "");
     return 0;
@@ -305,7 +305,7 @@ int cmdRender(const Args &a) {
     catch (const std::exception &e) { err = std::string("render failed: ") + e.what(); }
     if (!ok) {   // a failed render leaves a failed report, never the previous render's
         std::error_code ec;
-        if (fs::is_directory(outDir, ec)) std::ofstream(fs::path(outDir) / "report.json") << json{{"ok", false}, {"error", err}}.dump(2) << "\n";
+        if (fs::is_directory(outDir, ec)) std::ofstream(fs::path(outDir) / "report.json") << json{{"ok", false}, {"error", err}}.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
         return fail(a, err);
     }
 
@@ -328,8 +328,8 @@ int cmdRender(const Args &a) {
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings}};
-    std::ofstream(fs::path(outDir) / "report.json") << report.dump(2) << "\n";
-    if (a.has("--json")) { emit(report.dump(2)); return 0; }
+    std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
+    if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
     for (auto &t : r.tracks) {
         std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", t.name.c_str(), t.pluginName.c_str(), t.levels.peakDb,
                     t.lufs, t.file.c_str());
@@ -364,7 +364,7 @@ int cmdState(const Args &a) {
     inst->pump(100);
     size_t bytes = 0;
     if (!inst->saveStateFile(a.get("--out"), bytes, err)) return fail(a, err);
-    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"file", a.get("--out")}, {"bytes", bytes}}.dump(2));
+    if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"format", info.format}, {"file", a.get("--out")}, {"bytes", bytes}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "saved %zu bytes of %s state to %s\n", bytes, info.name.c_str(), a.get("--out").c_str());
     return 0;
 }
