@@ -152,6 +152,7 @@ void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std
 bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &err) {
     try {
         out.baseDir = baseDir;
+        out.parallel = j.value("parallel", -1);
         out.sampleRate = j.value("sampleRate", 48000);
         out.blockSize = j.value("blockSize", 512);
         out.tail = j.value("tail", 3.0);

@@ -67,8 +67,10 @@ Usage:
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--json] [--verbose]
-      Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out).
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--json] [--verbose]
+      Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
+      in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
+      a track whose plugin crashes or hangs is left out and listed in "failedTracks".
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
@@ -375,6 +377,8 @@ int cmdRender(const Args &a) {
     std::string err;
     std::string base = fs::absolute(path).parent_path().string();
     if (!parseJob(j, base, job, err)) return fail(a, err);
+    job.sourcePath = fs::absolute(path).string();
+    if (a.has("--jobs")) job.parallel = std::atoi(a.get("--jobs").c_str());
     if (a.has("--stems")) {
         const std::string s = a.get("--stems");
         job.stemBits = s == "none" ? 0 : s == "16" ? 16 : s == "24" ? 24 : s == "float" || s == "32" ? 32 : -1;
@@ -410,7 +414,8 @@ int cmdRender(const Args &a) {
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}}},
-                   {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings}};
+                   {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
+                   {"failedTracks", r.failedTracks}};
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
     for (auto &t : r.tracks) {
@@ -472,6 +477,7 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
+    if (cmd == "__track" && a.positional.size() > 3) return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3]);
     if (cmd == "__audition" && a.positional.size() > 3) return auditionWorker(a.positional[1], a.positional[2], a.positional[3]);
     if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
         std::vector<PluginInfo> plugins;

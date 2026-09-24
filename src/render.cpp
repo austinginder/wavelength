@@ -5,14 +5,23 @@
 #include "effects.hpp"
 #include "engine.hpp"
 #include "loudness.hpp"
+#include "catalog.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <unistd.h>
+#include <thread>
+#include <sys/wait.h>
+#include <spawn.h>
+#include <fstream>
+#include <fcntl.h>
+#include <csignal>
 
 namespace fs = std::filesystem;
+extern char **environ;
 
 namespace wl {
 
@@ -82,7 +91,61 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     return true;
 }
 
+
+// Instrument + effect chain for track `i` (what a worker process renders).
+bool renderTrackAudio(const Job &job, size_t i, Chain &chain, const FxContext &ctx, Audio &audio, TrackResult &tr, bool verbose,
+                      std::string &err) {
+    const Track &track = job.tracks[i];
+    if (!renderInstrument(job, track, audio, tr, verbose, err)) return false;
+    if (!runChain(chain, audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err)) return false;
+    for (auto &fx : chain) tr.latencySamples += fx->latencySamples;
+    return true;
+}
+
+nlohmann::json trackToJson(const TrackResult &t) {
+    return {{"ok", true}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"stateFormat", t.stateFormat}, {"preset", t.preset},
+            {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automated", t.automated}, {"fx", t.fx},
+            {"warnings", t.warnings}, {"latencySamples", t.latencySamples}};
+}
+
+void trackFromJson(const nlohmann::json &j, TrackResult &t) {
+    t.plugin = j.value("plugin", ""); t.pluginName = j.value("pluginName", ""); t.stateFormat = j.value("stateFormat", "");
+    t.preset = j.value("preset", ""); t.notes = j.value("notes", (size_t)0); t.paramsApplied = j.value("paramsApplied", (size_t)0);
+    t.automated = j.value("automated", (size_t)0); t.fx = j.value("fx", std::vector<std::string>());
+    t.warnings = j.value("warnings", std::vector<std::string>()); t.latencySamples = j.value("latencySamples", 0u);
+}
+
 } // namespace
+
+int renderTrackWorker(const std::string &jobPath, size_t index, const std::string &prefix) {
+    auto fail = [&](const std::string &e) { std::ofstream(prefix + ".json") << nlohmann::json{{"ok", false}, {"error", e}}.dump(); return 1; };
+    std::ifstream in(jobPath);
+    const nlohmann::json j = in ? nlohmann::json::parse(in, nullptr, false) : nlohmann::json();
+    Job job;
+    std::string err;
+    if (j.is_discarded() || !parseJob(j, fs::absolute(jobPath).parent_path().string(), job, err)) return fail("cannot read job: " + err);
+    if (index >= job.tracks.size()) return fail("no track " + std::to_string(index));
+    double end = 0;
+    for (const auto &t : job.tracks) for (const auto &n : t.notes) end = std::max(end, n.start + n.length);
+    const double seconds = job.length > 0 ? job.length : end + job.tail;
+    const size_t frames = (size_t)std::ceil(seconds * job.sampleRate);
+    Chain chain;
+    if (!buildChain(job.tracks[index].fx, job, "track '" + job.tracks[index].name + "'", chain, err)) return fail(err);
+    const FxContext ctx{job, false};
+    Audio audio;
+    audio.resize(frames);
+    TrackResult tr;
+    tr.name = job.tracks[index].name;
+    if (!renderTrackAudio(job, index, chain, ctx, audio, tr, false, err)) return fail(err);
+    std::ofstream pcm(prefix + ".pcm", std::ios::binary);
+    pcm.write(reinterpret_cast<const char *>(audio.left.data()), (std::streamsize)(frames * sizeof(float)));
+    pcm.write(reinterpret_cast<const char *>(audio.right.data()), (std::streamsize)(frames * sizeof(float)));
+    pcm.close();
+    if (!pcm) return fail("cannot write track audio (disk full?)");
+    std::ofstream(prefix + ".json") << trackToJson(tr).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    return 0;
+}
+
 
 bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderResult &result, std::string &err) {
     const auto t0 = std::chrono::steady_clock::now();
@@ -130,19 +193,12 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     std::vector<Audio> buses(job.buses.size());
     for (auto &b : buses) b.resize(frames);
 
-    // 1. tracks: instrument → effects → stem; then fader → mix and sends → buses
-    for (size_t i = 0; i < job.tracks.size(); ++i) {
+    // 1. tracks: instrument → effects (in this process, or plugin tracks in worker processes, several
+    //    at once) → stem; then fader → mix and sends → buses, as each track finishes
+    std::vector<TrackResult> trackResults(job.tracks.size());
+    std::vector<bool> trackDone(job.tracks.size(), false);
+    auto mixTrack = [&](size_t i, Audio &audio, TrackResult &tr) -> bool {
         const Track &track = job.tracks[i];
-        TrackResult tr;
-        tr.name = track.name;
-        Audio audio;
-        audio.resize(frames);
-        const auto tt = std::chrono::steady_clock::now();
-        if (verbose) std::fprintf(stderr, "rendering %s (%s)...\n", track.name.c_str(), track.plugin.c_str());
-        if (!renderInstrument(job, track, audio, tr, verbose, err)) return false;
-        if (!runChain(trackChains[i], audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err)) return false;
-        for (auto &fx : trackChains[i]) tr.latencySamples += fx->latencySamples;
-
         char prefix[8];
         std::snprintf(prefix, sizeof prefix, "%02zu-", i + 1);
         if (job.stemBits) {
@@ -190,9 +246,104 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 tr.sectionLufs.push_back(integratedLufs(post, job.sampleRate, (size_t)(a0 * sr), (size_t)(b0 * sr)));
             }
         }
+        return true;
+    };
+
+    int parallel = job.parallel;
+    if (parallel < 0) parallel = (int)std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
+    const bool isolate = parallel > 0 && !job.sourcePath.empty();
+    std::vector<size_t> remote;   // plugin tracks for worker processes
+    for (size_t i = 0; i < job.tracks.size(); ++i) {
+        const Track &track = job.tracks[i];
+        if (isolate && !isBuiltin(track.plugin)) { remote.push_back(i); continue; }
+        TrackResult &tr = trackResults[i];
+        tr.name = track.name;
+        Audio audio;
+        audio.resize(frames);
+        const auto tt = std::chrono::steady_clock::now();
+        if (verbose) std::fprintf(stderr, "rendering %s (%s)...\n", track.name.c_str(), track.plugin.c_str());
+        if (!renderTrackAudio(job, i, trackChains[i], ctx, audio, tr, verbose, err)) return false;
+        if (!mixTrack(i, audio, tr)) return false;
         tr.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - tt).count();
-        result.tracks.push_back(std::move(tr));
+        trackDone[i] = true;
     }
+    if (!remote.empty()) {
+        const fs::path tmp = fs::temp_directory_path() / ("wavelength-render-" + std::to_string(getpid()));
+        fs::create_directories(tmp, ec);
+        struct Running { size_t index; pid_t pid; std::chrono::steady_clock::time_point started; };
+        std::vector<Running> running;
+        size_t next = 0;
+        const double limit = 300 + 10 * seconds;   // a track that takes longer than this is hung
+        const std::string self = selfExecutable();
+        auto startTrack = [&](size_t i) {
+            const std::string prefix = (tmp / std::to_string(i)).string();
+            std::vector<std::string> args = {self, "__track", job.sourcePath, std::to_string(i), prefix};
+            std::vector<char *> argv;
+            for (auto &x : args) argv.push_back(x.data());
+            argv.push_back(nullptr);
+            posix_spawn_file_actions_t fa;
+            posix_spawn_file_actions_init(&fa);
+            posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+            if (!verbose) posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+            pid_t pid = 0;
+            if (posix_spawn(&pid, self.c_str(), &fa, nullptr, argv.data(), environ) != 0) pid = 0;
+            posix_spawn_file_actions_destroy(&fa);
+            if (verbose) std::fprintf(stderr, "rendering %s (%s) in worker %d...\n", job.tracks[i].name.c_str(), job.tracks[i].plugin.c_str(), (int)pid);
+            running.push_back({i, pid, std::chrono::steady_clock::now()});
+        };
+        bool failed = false;
+        while ((next < remote.size() || !running.empty()) && !failed) {
+            while (next < remote.size() && running.size() < (size_t)parallel) startTrack(remote[next++]);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            for (size_t r = 0; r < running.size();) {
+                Running &run = running[r];
+                int status = 0;
+                const bool exited = run.pid == 0 || waitpid(run.pid, &status, WNOHANG) == run.pid;
+                const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - run.started).count();
+                const bool hung = !exited && took > limit;
+                if (hung) { kill(run.pid, SIGKILL); waitpid(run.pid, &status, 0); }
+                if (!exited && !hung) { ++r; continue; }
+                const size_t i = run.index;
+                const std::string prefix = (tmp / std::to_string(i)).string();
+                TrackResult &tr = trackResults[i];
+                tr.name = job.tracks[i].name;
+                std::ifstream jin(prefix + ".json");
+                const nlohmann::json res = jin ? nlohmann::json::parse(jin, nullptr, false) : nlohmann::json();
+                if (res.is_object() && res.value("ok", false)) {
+                    trackFromJson(res, tr);
+                    Audio audio;
+                    audio.resize(frames);
+                    std::ifstream pin(prefix + ".pcm", std::ios::binary);
+                    pin.read(reinterpret_cast<char *>(audio.left.data()), (std::streamsize)(frames * sizeof(float)));
+                    pin.read(reinterpret_cast<char *>(audio.right.data()), (std::streamsize)(frames * sizeof(float)));
+                    if (!pin) { err = "track '" + tr.name + "': worker output is incomplete"; failed = true; }
+                    else if (!mixTrack(i, audio, tr)) failed = true;
+                    tr.seconds = took;
+                } else if (res.is_object() && res.contains("error")) {   // a job mistake (unknown preset, bad state): as before, the render fails
+                    err = res["error"].get<std::string>();
+                    failed = true;
+                } else {   // the plugin crashed or hung: the song renders without this track
+                    tr.plugin = tr.pluginName = job.tracks[i].plugin;
+                    const std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)" : "crashed while rendering";
+                    tr.warnings.push_back("track failed: " + job.tracks[i].plugin + " " + why + "; the mix is rendered without it");
+                    tr.lufs = -120;
+                    tr.levels = Levels{-240, -240, -240, true};
+                    result.failedTracks.push_back(tr.name);
+                    result.warnings.push_back("track '" + tr.name + "' failed (" + why + ") and is missing from the mix");
+                    tr.seconds = took;
+                }
+                trackDone[i] = true;
+                std::error_code rec;
+                fs::remove(prefix + ".pcm", rec);
+                fs::remove(prefix + ".json", rec);
+                running.erase(running.begin() + (long)r);
+            }
+        }
+        for (auto &run : running) if (run.pid) { kill(run.pid, SIGKILL); waitpid(run.pid, nullptr, 0); }
+        fs::remove_all(tmp, ec);
+        if (failed) return false;
+    }
+    for (auto &tr : trackResults) result.tracks.push_back(std::move(tr));
 
     // 2. buses (reverbs, delays, groups) run after every bus that feeds them, then return into
     //    their output bus or the mix

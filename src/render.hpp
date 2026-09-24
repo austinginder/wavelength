@@ -41,7 +41,12 @@ struct RenderResult {
     double mixLufs = -120, normalizeGainDb = 0, truePeakDb = -120;
     std::vector<SectionResult> sections;
     std::vector<std::string> warnings;
+    std::vector<std::string> failedTracks;   // tracks whose plugin crashed or hung; the song rendered without them
 };
+
+// Worker entry point: render track `index` of the job file (instrument + effects) into
+// <prefix>.pcm (float left, then right) and <prefix>.json (its TrackResult). Exit code 0 on success.
+int renderTrackWorker(const std::string &jobPath, size_t index, const std::string &prefix);
 
 // Renders every track (instrument → effects) to its own stem, applies faders and sends,
 // processes buses and the master chain, and writes mix.wav under outDir.

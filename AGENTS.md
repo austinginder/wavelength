@@ -139,6 +139,8 @@ drum pattern has the hits you expect. `--start/--end` narrow it to a window.
 
 - `tracks[].sectionLufs`, each track's loudness per marker section after its fader and rides:
   find which part dominates a section without writing measuring scripts.
+- `failedTracks`, tracks whose plugin crashed or hung in its worker process: the song still
+  rendered without them (each also has a warning). Swap the plugin or preset and render again.
 - `tracks[].renderSeconds`, where the render time goes (plugin load and warmup included).
 - `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
   removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.

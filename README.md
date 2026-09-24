@@ -107,7 +107,7 @@ A minimal job:
 | `audition <plugin> [--jobs N] [--limit N] [--rebuild]` | Renders every preset once in worker processes and indexes how it sounds (octave offset, brightness, band balance, envelope, width), so `presets` can show and search sound tags. |
 | `analyze <file.wav \| render-dir> [--start S] [--end S] [--json]` | Measures pitch, brightness, band balance, stereo width, onsets and envelope of a WAV, or of a render's mix, stems and sections. |
 | `params <plugin> [--preset N] [--state F] [--all] [--json]` | Shows parameters with ranges, current values and display text, optionally after loading a preset or state. |
-| `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--json]` | Renders stems, `mix.wav` and `report.json`. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |
+| `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--jobs N] [--json]` | Renders stems, `mix.wav` and `report.json`. Plugin tracks render in worker processes, several at once; a crashing plugin costs its track, not the song. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 
 `scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin

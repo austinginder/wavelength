@@ -78,6 +78,8 @@ struct Job {
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<Marker> markers;  // sections for per-section loudness in the report
     std::string baseDir;        // relative paths resolve from here
+    std::string sourcePath;     // the job file (worker processes re-read it); empty = render in process
+    int parallel = -1;          // plugin tracks rendered at once in worker processes; 0 = all in this process; <0 = auto
 };
 
 bool parseJob(const nlohmann::json &j, const std::string &baseDir, Job &out, std::string &err);
