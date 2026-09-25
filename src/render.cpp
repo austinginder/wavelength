@@ -682,18 +682,30 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         return !buildLike(n) && !has(n, {"end"}, true) && has(n, {"drop", "chorus", "peak", "climax", "finale", "hook", "final"}, false);
     };
     auto escalation = [&](const std::string &n) { return has(n, {"climax", "peak", "finale"}, false); };
+    // every boundary: the last 2 bars before it against the first 4 after it (what a listener compares)
+    for (size_t m = 1; m < result.sections.size() && m < job.markers.size(); ++m) {
+        const double prevStart = job.markers[m - 1].beat, at = job.markers[m].beat;
+        const double next = m + 1 < job.markers.size() ? job.markers[m + 1].beat : job.tempo.secToBeat(seconds);
+        auto win = [&](double b0, double b1) {
+            return integratedLufs(mix, job.sampleRate, (size_t)(job.tempo.beatToSec(b0) * sr), (size_t)(job.tempo.beatToSec(b1) * sr));
+        };
+        result.sections[m].tailBefore = win(std::max(prevStart, at - 8), at);
+        result.sections[m].head = win(at, std::min(next, at + 16));
+    }
     for (size_t m = 1; m < result.sections.size(); ++m) {
         const auto &a = result.sections[m - 1], &b = result.sections[m];
         if (!b.checks || a.lufs < -60 || b.lufs < -60) continue;
-        const double jump = b.lufs - a.lufs;
+        double jump = b.lufs - a.lufs;
         double need = 0;
         if (buildLike(a.name) && !buildLike(b.name)) need = 2.0;          // whatever a build leads into must land
         else if (payoff(b.name) && !payoff(a.name)) need = 2.0;           // a payoff after a non-payoff
         else if (payoff(a.name) && escalation(b.name)) need = 0.5;        // Final Act -> Climax: at least rise
+        // a drop is heard at its boundary: compare the build's last 2 bars with the drop's first 4
+        if (need >= 2.0 && b.tailBefore > -60 && b.head > -60) jump = b.head - b.tailBefore;
         if (need == 0 || jump >= need) continue;
         char buf[360];
-        std::snprintf(buf, sizeof buf, "section '%s' lands only %+.1f dB over '%s': %s (mark the section \"checks\": false if it is meant this way)",
-                      b.name.c_str(), jump, a.name.c_str(),
+        std::snprintf(buf, sizeof buf, "section '%s' lands only %+.1f dB over '%s'%s: %s (mark the section \"checks\": false if it is meant this way)",
+                      b.name.c_str(), jump, a.name.c_str(), need >= 2 ? " (its first 4 bars against the last 2 before them)" : "",
                       need >= 2 ? "empty the build (kick and bass out, high-pass sweep) rather than turning it down, and stack the downbeat; 3-5 dB reads as a drop"
                                 : "an escalation should rise: add a layer, open filters, lift it a little");
         result.warnings.push_back(buf);

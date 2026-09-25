@@ -128,8 +128,9 @@ defaults fix them (break them on purpose, not by accident):
   usually sit 4-8 dB under it and are ducked lightly (3-5 dB), not buried.
 
 The report checks the first two: a **dropout** warning (the song goes 15 dB quiet for 0.75 s or more,
-then comes back, with bars and file time), and a **weak drop** warning when a section lands under
-+2 dB over the one before it and either follows a build-like section (Build, Rise, Pre..., Ramp,
+then comes back, with bars and file time), and a **weak drop** warning when a section's first 4 bars
+land under +2 dB over the last 2 bars before it (`sections[].transition`, the boundary as heard)
+and it either follows a build-like section (Build, Rise, Pre..., Ramp,
 Climb, Lead-in, Ignition) or is named like a payoff (Drop, Chorus, Peak, Hook, Final, Climax, Finale)
 after a non-payoff; an escalation (Climax, Peak, Finale after another payoff) must rise at least
 0.5 dB. `sections[].change` gives every section's step. When a section is meant that way (a trailer's
@@ -272,7 +273,9 @@ job.json` lines the sections up and keeps the lead-in.
   after the fader and rides: find which part dominates a section without writing measuring
   scripts. `sectionLufs` is the same as a bare list in `sections` order.
 - `dropouts` and `sections[].change`: near-silence the song comes back from (start/end in the
-  file, bars, LUFS), and each section's loudness step over the previous one. See "Arranging".
+  file, bars, LUFS), and each section's loudness step over the previous one. `sections[].transition`
+  measures the boundary itself: the last 2 bars before it, the first 4 after it and the jump (a
+  whole-section average can read +3 dB while the drop itself lands +1.5). See "Arranging".
 - `mix.lra`, the loudness range in LU (EBU Tech 3342, equal to ffmpeg's `ebur128` LRA): how far
   quiet and loud passages sit apart. `analyze` and `master` report it too.
 - `failedTracks`, tracks whose plugin crashed on every attempt (a crashed worker is started

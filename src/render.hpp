@@ -32,6 +32,7 @@ struct SectionResult {
     double start, end, lufs;
     double preMasterLufs = -120;   // the same window before the master gain, rides and chain: what track and bus rides moved
     bool checks = true;
+    double tailBefore = -120, head = -120;   // the previous section's last 2 bars and this one's first 4 (4/4): the transition
 };
 
 struct RenderResult {

@@ -143,6 +143,9 @@ command rejects options it doesn't know.
   warns with the time, and a track reading above +6 LUFS warns that its output is broken.
 
 ### Changed
+- The weak-drop check measures the boundary as it is heard: the section's first 4 bars against the
+  last 2 bars before it (`sections[].transition` in the report, for every boundary). Whole-section
+  averages read Hammerklang's Final as +3.3 dB while its drop landed +1.5.
 - The weak-drop check also covers any section after a build-like one (Build, Rise, Pre..., Ramp,
   Climb, Lead-in, Ignition), whatever it is called, and asks an escalation (Climax, Peak, Finale after
   another payoff) to rise at least 0.5 dB. Build -> Discovery and Final Act -> Climax went unchecked.
