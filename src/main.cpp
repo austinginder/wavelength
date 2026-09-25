@@ -8,8 +8,10 @@
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
 //   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
+//   wavelength lint <job.json> --harmony [--key K] [--ignore "A,B"] [--chords] [--max-bars N] [--json]
 //   wavelength version
 #include "analyze.hpp"
+#include "harmony.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
 #include "instance.hpp"
@@ -122,6 +124,12 @@ Usage:
       octaves in similar motion, and with --crossings a voice below the next one in order (high
       to low). Each problem shows both chords' notes and where they are; --from/--to/--section
       limit the report to a bar range or a marker's section.
+  wavelength lint <job.json> --harmony [--key "D minor"] [--ignore "SFX,Ping"] [--chords] [--max-bars 2]
+                  [--from BAR] [--to BAR] [--section NAME] [--json]
+      Harmony check on the notes: the key of every stretch of bars (the job's "keys", --key, or
+      detected), a chord chart with --chords, one- or two-bar chords outside the key that go
+      straight back (heard as a key change), clashes (a minor 2nd/9th held a beat, one note outside
+      the key) and in-key rubs grouped per pair of tracks.
   wavelength version
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
@@ -142,7 +150,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -864,6 +872,63 @@ int cmdRender(const Args &a) {
     return 0;
 }
 
+// ---- lint --harmony: keys, chords, one-bar excursions and clashes ---------------------------
+int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks, double fromBeat, double toBeat) {
+    HarmonyOptions o;
+    o.tracks = tracks;
+    o.keys = job.keys;
+    o.fromBeat = fromBeat;
+    o.toBeat = toBeat;
+    if (a.has("--key")) {   // one key for the whole song, instead of the job's "keys" or detection
+        KeyMark k{0, 0, false, -1, true};
+        std::string err;
+        if (!parseKeyName(a.get("--key"), k.tonic, k.minor, err, &k.mode)) return fail(a, "--key: " + err);
+        o.keys = {k};
+    }
+    if (a.has("--max-bars")) o.maxExcursionBars = std::max(1, std::atoi(a.get("--max-bars").c_str()));
+    const json r = analyzeHarmony(job, o);
+    json names = json::array();
+    for (size_t i : tracks) names.push_back(job.tracks[i].name);
+    if (a.has("--json")) {
+        json out = {{"ok", true}, {"tracks", names}};
+        out.update(r);
+        if (!a.has("--chords")) out.erase("bars");
+        emit(out.dump(2, ' ', false, json::error_handler_t::replace));
+        return 0;
+    }
+    std::fprintf(OUT, "tracks: %s\n", names.dump().c_str());
+    for (auto &k : r["keys"])
+        std::fprintf(OUT, "key: %-9s bars %d-%d (%s%s)\n", k["key"].get<std::string>().c_str(), k["from"].get<int>(), k["to"].get<int>(),
+                     k["source"].get<std::string>().c_str(), k.contains("checks") ? ", checks off" : "");
+    if (a.has("--chords")) {   // a chord chart, 8 bars a line; "F>E" = the chord changes halfway through the bar
+        std::string line;
+        int n = 0;
+        for (auto &b : r["bars"]) {
+            if (n % 8 == 0) { if (!line.empty()) std::fprintf(OUT, "%s\n", line.c_str()); char h[16]; std::snprintf(h, sizeof h, "  %4d:", b["bar"].get<int>()); line = h; }
+            std::string c = b.contains("halves") ? b["halves"][0].get<std::string>() + ">" + b["halves"][1].get<std::string>() : b["chord"].get<std::string>();
+            if (b.contains("outside")) c += "!";
+            char cell[24];
+            std::snprintf(cell, sizeof cell, " %-9s", c.c_str());
+            line += cell;
+            ++n;
+        }
+        if (!line.empty()) std::fprintf(OUT, "%s\n", line.c_str());
+    }
+    for (auto &p : r["problems"])
+        std::fprintf(OUT, "  %-14s %-20s %s\n", p["kind"].get<std::string>().c_str(), p["at"].get<std::string>().c_str(), p["detail"].get<std::string>().c_str());
+    for (auto &p : r["info"])
+        std::fprintf(OUT, "  (ok) %-19s %-20s %s\n", p["kind"].get<std::string>().c_str(), p["at"].get<std::string>().c_str(), p["detail"].get<std::string>().c_str());
+    for (auto &rb : r["rubs"]) {   // in-key semitone rubs, one line per pair of tracks
+        std::string bars;
+        size_t shown = 0;
+        for (auto &b : rb["bars"]) { if (shown++ == 8) { bars += ", ..."; break; } bars += (bars.empty() ? "" : ", ") + std::to_string(b.get<int>()); }
+        std::fprintf(OUT, "  rub %-28s %3dx  bars %s  e.g. %s\n", (rb["tracks"][0].get<std::string>() + " / " + rb["tracks"][1].get<std::string>()).c_str(),
+                     rb["count"].get<int>(), bars.c_str(), rb["example"].get<std::string>().c_str());
+    }
+    std::fprintf(OUT, "%zu problem%s\n", r["problems"].size(), r["problems"].size() == 1 ? "" : "s");
+    return 0;
+}
+
 // ---- lint: voice leading between melodic tracks --------------------------------------------
 // Each track is one voice (its highest sounding note; "--low" names tracks read by their lowest,
 // for basses). At every onset where two voices both move, a perfect fifth or octave (or unison)
@@ -871,7 +936,7 @@ int cmdRender(const Args &a) {
 // high to low and a lower voice above a higher one is reported.
 int cmdLint(const Args &a) {
     if (a.positional.size() < 2)
-        return fail(a, "usage: wavelength lint <job.json> [--tracks \"Soprano,Alto,Bass\"] [--low \"Bass\"] [--split \"Organ=4\"] [--from BAR] [--to BAR] [--section NAME] [--crossings]");
+        return fail(a, "usage: wavelength lint <job.json> [--tracks \"Soprano,Alto,Bass\"] [--low \"Bass\"] [--split \"Organ=4\"] [--from BAR] [--to BAR] [--section NAME] [--crossings] | --harmony [--key \"D minor\"] [--ignore \"SFX\"] [--chords]");
     const std::string path = a.positional[1];
     std::ifstream in(path);
     if (!in) return fail(a, "cannot read " + path);
@@ -931,6 +996,15 @@ int cmdLint(const Args &a) {
         fromBeat = job.markers[m].beat;
         toBeat = m + 1 < job.markers.size() ? job.markers[m + 1].beat : 1e18;
     }
+    if (a.has("--harmony")) return lintHarmony(a, job, [&] {
+        std::vector<size_t> idx;
+        const auto ignore = split(a.get("--ignore"));
+        for (auto &v : voices) {
+            const size_t i = (size_t)(v.t - job.tracks.data());
+            if (std::find(idx.begin(), idx.end(), i) == idx.end() && std::find(ignore.begin(), ignore.end(), v.t->name) == ignore.end()) idx.push_back(i);
+        }
+        return idx;
+    }(), fromBeat, toBeat);
     auto noteAt = [&](const Voice &v, double t) {
         std::vector<int> keys;
         for (auto &n : v.t->notes)
@@ -1138,7 +1212,7 @@ int run(int argc, char **argv) {
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},
             {"export", {"--out", "--json"}},
-            {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json"}},
+            {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
         if (it != known.end())

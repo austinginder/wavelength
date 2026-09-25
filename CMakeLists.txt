@@ -133,6 +133,7 @@ add_executable(wavelength
   src/catalog.cpp
   src/clap_plugin.cpp
   src/job.cpp
+  src/harmony.cpp
   src/render.cpp
   src/state_file.cpp
   src/vst3_plugin.cpp

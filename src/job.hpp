@@ -65,6 +65,14 @@ struct Marker {
     bool checks = true;   // "checks": false = this section is meant as it is (a false-ending silence, a soft peak): no arrangement warnings
 };
 
+struct KeyMark {
+    double beat;          // where the key starts
+    int tonic;            // pitch class 0-11
+    bool minor;           // minor-type (minor, dorian, phrygian): detection only tells major from minor
+    int mode = -1;        // declared modes: 0 major, 1 minor, 2 dorian, 3 phrygian, 4 lydian, 5 mixolydian (-1 = from minor)
+    bool checks = true;   // "checks": false = chromatic on purpose here: lint --harmony reports nothing in this key's bars
+};
+
 struct Job {
     int sampleRate = 48000;
     int blockSize = 512;
@@ -87,7 +95,8 @@ struct Job {
     std::string loudnessGain = "peak";   // where the target's gain goes: "peak" (before the trailing clip/limiter run), "limiter" (before the last limiter), "start"
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<Marker> markers;  // sections for per-section loudness in the report
-    std::string baseDir;        // relative paths resolve from here
+    std::vector<KeyMark> keys;    // declared keys by bar, for `lint --harmony` (the render ignores them)
+    std::string baseDir;       // relative paths resolve from here
     std::string sourcePath;     // the job file (worker processes re-read it); empty = render in process
     int parallel = -1;          // plugin tracks rendered at once in worker processes; 0 = all in this process; <0 = auto
     int retries = 2;            // times a worker whose plugin crashed is started again before the track counts as failed

@@ -14,8 +14,9 @@ the question is taste ("is this pad lush enough?").
 wavelength plugins --json                    # 1. what instruments exist
 wavelength params <plugin> --json            # 2. what can be shaped (optionally --state preset)
 $EDITOR job.json                             # 3. notes + sounds + gains
-wavelength render job.json --out out/x --json  # 4. render, read the report
-# 5. adjust gains/params/notes from the report and render again
+wavelength lint job.json --harmony           # 4. wrong notes, before any render (see Harmony)
+wavelength render job.json --out out/x --json  # 5. render, read the report
+# 6. adjust gains/params/notes from the report and render again
 ```
 
 Always pass `--json`. Stdout then carries exactly one JSON document; plugin chatter goes
@@ -261,6 +262,34 @@ and voice crossings, each with both chords' notes and where they sound ("A#4/A#2
 Each pair is compared at its own note starts, so a third voice's rhythm doesn't hide or invent a
 parallel. Limit the report with `--from 5 --to 17` (bars) or `--section Exposition`. Without `--tracks` every melodic track is checked and pairs that double each other most of
 the time are listed as doublings instead of faults.
+
+## Harmony: `wavelength lint --harmony`
+
+Run it on every song before the first render: `wavelength lint job.json --harmony --chords`. It
+works on the notes (exact, instant, no audio) and prints the key of every stretch of bars, a chord
+chart (`F>E` = the chord changes halfway through the bar, `!` = outside the key) and the problems a
+listener hears as wrong notes:
+
+- **key excursion**: one or two bars of a chord outside the key that go straight back ("Eb (Eb G Bb)
+  with Eb is outside D minor for 1 bar"). A human hears it as a one-bar key change, never as colour.
+  Build with chords of the key (`bVI - bVII - V` climbs in minor: Bb C A in D minor); put chromatic
+  colour in single notes (the leading tone, a passing note, a walk-down), which the check allows.
+  A major chord that resolves down a fifth to a chord of the key is a secondary dominant and is
+  listed as fine.
+- **clash**: two parts a minor 2nd or 9th apart, both held a beat or more, with one note outside the
+  key.
+- **rub** (not a problem): the same between two notes of the key: a major 7th voiced under its root,
+  a suspension, or a part playing one chord early or late. A rub on the same pair of tracks bar after
+  bar is usually a part out of step with the chords (a chord cycle counted from the wrong bar).
+
+The key comes from `"keys"` in the job (declare every planned key change there, with a mode:
+`"D minor"`, `"C phrygian"`), from `--key "D minor"` for the whole song, or is detected over
+8-bar windows (a new key has to hold 4 bars; bars with no third, such as an open-fifth drone, take
+the key around them). Detection can put a boundary a bar or two early; declared keys are exact.
+Pitched tracks that aren't harmony (sound effects, synth drums played on plugins, a sonar ping)
+go in `--ignore "SFX,ChipKick"`; drum kits and `builtin:fx` are left out already. `--from`,
+`--to` and `--section` limit the report, `--max-bars 3` widens what counts as a short excursion,
+`--json` gives `keys`, `problems`, `rubs`, `info` (and `bars` with `--chords`).
 
 ## Mastering
 

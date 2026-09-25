@@ -1,4 +1,5 @@
 #include "job.hpp"
+#include "harmony.hpp"
 
 #include "platform.hpp"
 
@@ -438,6 +439,21 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             out.markers.push_back({beat, out.tempo.beatToSec(beat), m.value("name", ""), m.value("checks", true)});
         }
         std::sort(out.markers.begin(), out.markers.end(), [](auto &a, auto &b) { return a.beat < b.beat; });
+        if (j.contains("keys")) {   // [{"bar": 1, "key": "D minor"}, {"bar": 69, "key": "E minor"}]: read by lint --harmony
+            if (!j["keys"].is_array()) throw std::runtime_error("\"keys\" is a list: [{\"bar\": 1, \"key\": \"D minor\"}, ...]");
+            const double beatsPerBar = out.tsigNum * 4.0 / out.tsigDen;
+            for (auto &k : j["keys"]) {
+                if (!k.is_object() || !k.contains("key") || !(k.contains("bar") || k.contains("beat")))
+                    throw std::runtime_error("each \"keys\" entry needs \"key\" (\"D minor\") and \"bar\" (or \"beat\")");
+                KeyMark km{};
+                std::string kerr;
+                if (!parseKeyName(k["key"].get<std::string>(), km.tonic, km.minor, kerr, &km.mode)) throw std::runtime_error("\"keys\": " + kerr);
+                km.beat = k.contains("bar") ? (k["bar"].get<double>() - 1) * beatsPerBar : k["beat"].get<double>();
+                km.checks = k.value("checks", true);
+                out.keys.push_back(km);
+            }
+            std::sort(out.keys.begin(), out.keys.end(), [](auto &a, auto &b) { return a.beat < b.beat; });
+        }
         const std::string stems = j.contains("stems") ? (j["stems"].is_string() ? j["stems"].get<std::string>() : std::to_string(j["stems"].get<int>())) : "float";
         if (stems == "float" || stems == "32") out.stemBits = 32;
         else if (stems == "24") out.stemBits = 24;

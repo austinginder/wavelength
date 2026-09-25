@@ -5,6 +5,14 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `wavelength lint --harmony`: a harmony check on the notes. It finds the key of every stretch of
+  bars (the job's new `"keys"` list, `--key`, or detection over 8-bar windows that tells a real key
+  change from a passing chord), prints a chord chart (`--chords`) and reports one- or two-bar chords
+  outside the key that go straight back (heard as a one-bar key change), clashes (a minor 2nd or 9th
+  held a beat with one note outside the key) and in-key rubs grouped per pair of tracks, which point
+  at a part playing out of step with the chords. Secondary dominants are listed as fine. Keys take
+  modes (major, minor, dorian, phrygian, lydian, mixolydian). `examples/harmony-tour.json` and
+  `scripts/check.sh` hold the rules to it.
 - DAWproject import, more of the song: audio clips become `builtin:audio` tracks (warp markers give
   the file's tempo so clips follow the song, play start trims, looped clips repeat, fades, "repitch"
   plays tape-style), automation of the instrument plugin's parameters and of the master volume comes

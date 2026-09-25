@@ -27,4 +27,14 @@ for job in examples/*.json; do
     fi
   fi
 done
+# harmony lint: the example's one-bar Eb (bar 10) must be flagged; its declared key change (bar 13) and
+# secondary dominant (bar 19) must not be
+if ! "./$build/wavelength" lint examples/harmony-tour.json --harmony --json | python3 -c '
+import json, sys
+j = json.load(sys.stdin)
+p = [(x["kind"], x["bars"]) for x in j["problems"]]
+i = [(x["kind"], x["bars"]) for x in j["info"]]
+sys.exit(0 if p == [("key excursion", [10, 10])] and i == [("secondary dominant", [19, 19])] else 1)'; then
+  echo "FAIL harmony-tour: lint --harmony"; fail=1
+fi
 exit $fail
