@@ -6,6 +6,7 @@
 //   wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
 //   wavelength render <job.json> [--out DIR] [--json] [--verbose]
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
+//   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength version
 #include "analyze.hpp"
 #include "audition.hpp"
@@ -89,6 +90,10 @@ Usage:
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
+  wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--crossings] [--json]
+      Voice-leading check between melodic tracks (one voice each: its top note, or its lowest
+      for --low tracks): parallel fifths and octaves in similar motion, and with --crossings a
+      voice below the next one in --tracks order (high to low). Bar and beat for each.
   wavelength version
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
@@ -109,7 +114,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -654,6 +659,122 @@ int cmdRender(const Args &a) {
     return 0;
 }
 
+// ---- lint: voice leading between melodic tracks --------------------------------------------
+// Each track is one voice (its highest sounding note; "--low" names tracks read by their lowest,
+// for basses). At every onset where two voices both move, a perfect fifth or octave (or unison)
+// before and after, in similar motion, is a parallel. With --crossings the --tracks order is
+// high to low and a lower voice above a higher one is reported.
+int cmdLint(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength lint <job.json> [--tracks \"Soprano,Alto,Bass\"] [--low \"Bass\"] [--crossings]");
+    const std::string path = a.positional[1];
+    std::ifstream in(path);
+    if (!in) return fail(a, "cannot read " + path);
+    json j;
+    try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    Job job;
+    std::string err;
+    if (!parseJob(j, fs::absolute(path).parent_path().string(), job, err)) return fail(a, err);
+    auto split = [](const std::string &s) {
+        std::vector<std::string> out;
+        std::stringstream ss(s);
+        for (std::string n; std::getline(ss, n, ',');) {
+            n.erase(0, n.find_first_not_of(' '));
+            n.erase(n.find_last_not_of(' ') + 1);
+            if (!n.empty()) out.push_back(n);
+        }
+        return out;
+    };
+    const auto low = split(a.get("--low"));
+    std::vector<const Track *> voices;
+    if (a.has("--tracks")) {
+        for (auto &n : split(a.get("--tracks"))) {
+            auto it = std::find_if(job.tracks.begin(), job.tracks.end(), [&](const Track &t) { return t.name == n; });
+            if (it == job.tracks.end()) return fail(a, "--tracks: no track named '" + n + "'");
+            voices.push_back(&*it);
+        }
+    } else
+        for (auto &t : job.tracks)   // melodic tracks: not drums, kits or effects
+            if (!t.notes.empty() && t.plugin != "builtin:drums" && t.plugin != "builtin:fx" && t.plugin != "builtin:audio" && !(t.sampler.is_object() && (t.sampler.contains("kit") || t.sampler.contains("map"))))
+                voices.push_back(&t);
+    // the voice's note at time t (-1 = silent)
+    auto noteAt = [&](const Track *v, double t) {
+        const bool lo = std::find(low.begin(), low.end(), v->name) != low.end();
+        int best = -1;
+        for (auto &n : v->notes)
+            if (n.start <= t + 1e-6 && t < n.start + n.length - 1e-6)
+                if (best < 0 || (lo ? n.key < best : n.key > best)) best = n.key;
+        return best;
+    };
+    std::set<double> onsetSet;
+    for (auto *v : voices) for (auto &n : v->notes) onsetSet.insert(std::round(n.start * 1e4) / 1e4);
+    const std::vector<double> onsets(onsetSet.begin(), onsetSet.end());
+    json problems = json::array();
+    auto where = [&](double t) {
+        const double beat = job.tempo.secToBeat(t);
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "bar %d beat %.2f", (int)(beat / 4) + 1, std::fmod(beat, 4.0) + 1);
+        return std::string(buf);
+    };
+    std::map<std::string, int> counts;
+    // pairs that move together in octaves (or fifths) most of the time are doublings, not voice-leading faults
+    std::map<std::pair<size_t, size_t>, int> moves, par8, par5;
+    std::vector<std::tuple<size_t, size_t, int, double>> found;   // x, y, interval class, time
+    for (size_t k = 1; k < onsets.size(); ++k) {
+        const double t0 = onsets[k - 1], t1 = onsets[k];
+        for (size_t x = 0; x < voices.size(); ++x)
+            for (size_t y = x + 1; y < voices.size(); ++y) {
+                const int a0 = noteAt(voices[x], t0), a1 = noteAt(voices[x], t1), b0 = noteAt(voices[y], t0), b1 = noteAt(voices[y], t1);
+                if (a0 < 0 || a1 < 0 || b0 < 0 || b1 < 0 || a0 == a1 || b0 == b1) continue;
+                const int i0 = std::abs(a0 - b0) % 12, i1 = std::abs(a1 - b1) % 12;
+                const bool similar = (a1 - a0 > 0) == (b1 - b0 > 0);
+                ++moves[{x, y}];
+                if (similar && i0 == i1 && (i0 == 0 || i0 == 7)) {
+                    ++(i0 == 7 ? par5 : par8)[{x, y}];
+                    found.push_back({x, y, i0, t1});
+                }
+            }
+        if (a.has("--crossings"))
+            for (size_t x = 0; x + 1 < voices.size(); ++x) {
+                const int hi = noteAt(voices[x], t1), lo = noteAt(voices[x + 1], t1);
+                if (hi >= 0 && lo >= 0 && lo > hi) {
+                    problems.push_back({{"kind", "voice crossing"}, {"voices", {voices[x]->name, voices[x + 1]->name}}, {"at", where(t1)}, {"time", std::round(t1 * 1000) / 1000}});
+                    ++counts["voice crossing"];
+                }
+            }
+    }
+    json doublings = json::array();
+    auto doubling = [&](size_t x, size_t y, int ic) {
+        const int m = moves[{x, y}], p = ic == 7 ? par5[{x, y}] : par8[{x, y}];
+        return m >= 4 && p * 2 > m;   // parallel on most of their shared moves: written as a doubling
+    };
+    for (auto &[pair, m] : moves)
+        for (int ic : {0, 7})
+            if (doubling(pair.first, pair.second, ic))
+                doublings.push_back({{"voices", {voices[pair.first]->name, voices[pair.second]->name}}, {"interval", ic ? "fifths" : "octaves"}});
+    for (auto &[x, y, ic, t] : found) {
+        if (doubling(x, y, ic)) continue;
+        const std::string kind = ic == 7 ? "parallel fifths" : "parallel octaves";
+        problems.push_back({{"kind", kind}, {"voices", {voices[x]->name, voices[y]->name}}, {"at", where(t)}, {"time", std::round(t * 1000) / 1000}});
+        ++counts[kind];
+    }
+    std::stable_sort(problems.begin(), problems.end(), [](const json &p, const json &q) { return p["time"].get<double>() < q["time"].get<double>(); });
+    json names = json::array();
+    for (auto *v : voices) names.push_back(v->name);
+    if (a.has("--json")) {
+        emit(json{{"ok", true}, {"voices", names}, {"counts", counts}, {"doublings", doublings}, {"problems", problems}}.dump(2, ' ', false, json::error_handler_t::replace));
+        return 0;
+    }
+    std::fprintf(OUT, "voices: %s\n", names.dump().c_str());
+    for (auto &d : doublings)
+        std::fprintf(OUT, "  doubling (ignored): %s / %s in %s\n", d["voices"][0].get<std::string>().c_str(), d["voices"][1].get<std::string>().c_str(),
+                     d["interval"].get<std::string>().c_str());
+    for (auto &p : problems)
+        std::fprintf(OUT, "  %-17s %-28s %s\n", p["kind"].get<std::string>().c_str(),
+                     (p["voices"][0].get<std::string>() + " / " + p["voices"][1].get<std::string>()).c_str(), p["at"].get<std::string>().c_str());
+    std::fprintf(OUT, "%zu problem%s\n", problems.size(), problems.size() == 1 ? "" : "s");
+    return 0;
+}
+
 // ---- state save ------------------------------------------------------------------------
 int cmdState(const Args &a) {
     if (a.positional.size() < 3 || a.positional[1] != "save") return fail(a, "usage: wavelength state save <plugin> --out FILE");
@@ -724,6 +845,7 @@ int run(int argc, char **argv) {
         if (cmd == "render") return cmdRender(a);
         if (cmd == "master") return cmdMaster(a);
         if (cmd == "state") return cmdState(a);
+        if (cmd == "lint") return cmdLint(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {
         return fail(a, e.what());

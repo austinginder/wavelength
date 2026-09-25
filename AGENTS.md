@@ -170,6 +170,14 @@ window around one note. Audition tags come from a single C4: instruments that ca
    energy can't tell a bright sound from hiss or static. When the numbers can't decide, cut
    short solo clips of the suspect stems for the human and ask which one it is.
 
+## Counterpoint: `wavelength lint`
+
+For fugues, chorales and any part-writing, `wavelength lint job.json --tracks "Soprano,Alto,Tenor,Bass"
+--low "Bass" --crossings` lists parallel fifths and octaves (similar motion, both voices moving)
+and voice crossings with bar and beat. Each track is one voice: its top note, or its lowest for
+`--low`. Without `--tracks` every melodic track is checked and pairs that double each other most of
+the time are listed as doublings instead of faults.
+
 ## Mastering
 
 The last stage, like a DAW's master channel. Put a chain on `master.fx` (an `eq`, a `multiband`

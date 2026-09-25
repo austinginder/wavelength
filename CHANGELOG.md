@@ -5,6 +5,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `wavelength lint <job.json>`: voice leading between melodic tracks (parallel fifths and octaves in
+  similar motion, voice crossings with `--crossings`), with bar and beat. Pairs that move in
+  octaves or fifths most of the time are reported as doublings, not faults. Best with `--tracks`
+  naming the contrapuntal voices (a fugue's subject, answer and bass).
 - `analyze --grid BPM [--div 4]`: each onset's song-time beat and its offset in ms from the nearest
   grid step, plus the mean offset, to check a break or a groove against the grid.
 - `tracks[].postFaderPeakDb`, and when the master limiter works hard a warning naming the three
