@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Gain staging for a song folder: set each track's fader so it hits a target loudness.
 
-usage: scripts/stage-gains.py <song folder>
+usage: scripts/stage-gains.py <song folder> [render folder, default <song>/out]
 
 Reads <song>/targets.json (track name -> target LUFS after the fader) and the last
 render's <song>/out/report.json (stem LUFS, measured before the fader), and writes
@@ -13,7 +13,8 @@ import sys
 
 song = sys.argv[1] if len(sys.argv) > 1 else sys.exit(__doc__)
 targets = json.load(open(os.path.join(song, 'targets.json')))
-report = json.load(open(os.path.join(song, 'out', 'report.json')))
+out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(song, 'out')
+report = json.load(open(os.path.join(out, 'report.json')))
 path = os.path.join(song, 'gains.json')
 gains = json.load(open(path)) if os.path.exists(path) else {}
 for t in report['tracks']:
