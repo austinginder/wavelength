@@ -4,6 +4,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- `skills/wavelength/`: an agent skill that installs the engine (release build, else from source, docs matched to the binary) and runs the whole song workflow.
+
 ## [0.1.0] - 2026-09-24
 
 The first release. Wavelength renders JSON music jobs through installed CLAP and VST3 plugins

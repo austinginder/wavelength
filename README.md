@@ -118,6 +118,10 @@ A minimal job:
 | `master <mix.wav> --chain <chain \| job> [--loudness L] [--lead-in S] [--out DIR] [--json]` | Masters a finished mix: plays it through a master chain (an effect list, a master object, or a song's job with its markers; a file or inline JSON) and reports loudness and true peak before and after, per section. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 
+`skills/wavelength/` is a skill for Claude Code and other agents (`/wavelength`): it installs
+the engine (release build, else from source) and walks the agent through writing, mixing and
+mastering a song. Copy the folder into `~/.claude/skills/`.
+
 `scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin
 binaries, for example TAL-NoiseMaker and Relica 2, so `presets` can list them.
 `scripts/stage-gains.py <song> [render dir]` sets a song's faders from its target loudness and a
