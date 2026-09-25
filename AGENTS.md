@@ -99,6 +99,11 @@ See `docs/job-format.md` for every field. The essentials:
 Raw instrument renders sound flat. Do the work a mix engineer does in a DAW; everything is
 in the job (details in `docs/effects.md`):
 
+- **Transients decide how loud a song can get.** A 909/808 kick, a clap, a sampled piano or a
+  clavinet can peak 17-22 dB above its own loudness; the master limiter then works 8-15 dB and
+  flattens the sections. Tame them per track (`clip` or a `limiter` on the track) or with a
+  `clip` before the master limiter, and read `tracks[].postFaderPeakDb`. Sub-heavy sounds (808
+  kicks, sub bass) read low in LUFS, so a LUFS target alone overshoots their peaks.
 - **Drums and FX:** `builtin:drums` (General MIDI kit) and `builtin:fx` (impact, riser,
   reverse swell, sub drop) are always available. Big moments need them.
 - **Audio on the timeline:** `builtin:audio` places WAV clips in beats: breaks fitted to the song
