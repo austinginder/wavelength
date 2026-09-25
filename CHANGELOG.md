@@ -5,6 +5,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `clip` `"kneeDb"`: where the curve starts, in dB under the ceiling. `knee` (a fraction of the
+  ceiling's amplitude) confused three agents: 0.5 starts shaping 6 dB down and distorts.
+- Master `"loudnessGain": "peak"`, now the default: the loudness target's gain goes in front of
+  the trailing clip/limiter run, so a `clip` before the limiter sees the loud signal.
+  `"limiter"` keeps the placement of the previous build.
 - `clip` effect: a soft clipper (ceiling, knee, drive) to shave transients before the master
   limiter; album agents built one out of gain, saturate and gain to stop a 909 kick pumping the
   limiter.
@@ -55,6 +60,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- `analyze` took a lead-in from any report.json next to (or above) a file, so a decoded MP3 in an
+  unrelated folder got a lead-in note. It now uses a report only when it wrote that file (a
+  render's mix or stem, or a `master` output).
 - `analyze` gave no pitch for windows shorter than about 85 ms; a 60 ms window (one short note) now
   reads its pitch (fundamentals down to about 50 Hz).
 - `analyze` onset times were about 25 ms early (the spectral frame's start, not the attack); they

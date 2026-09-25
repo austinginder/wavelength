@@ -374,9 +374,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 out.masterLoudness = j["master"]["loudness"].get<double>();
                 if (out.masterLoudness > -3 || out.masterLoudness < -40)
                     throw std::runtime_error("master \"loudness\" is a target in LUFS between -40 and -3 (streaming: -14)");
-                const std::string at = j["master"].value("loudnessGain", std::string("limiter"));
-                if (at != "limiter" && at != "start") throw std::runtime_error("master \"loudnessGain\" is \"limiter\" (default) or \"start\"");
-                out.loudnessAtStart = at == "start";
+                const std::string at = j["master"].value("loudnessGain", std::string("peak"));
+                if (at != "peak" && at != "limiter" && at != "start")
+                    throw std::runtime_error("master \"loudnessGain\" is \"peak\" (default), \"limiter\" or \"start\"");
+                out.loudnessGain = at;
             }
             if (j["master"].contains("automation") && j["master"]["automation"].contains("gain"))
                 out.masterGainAutomation = Envelope::parse(j["master"]["automation"]["gain"], out.tempo, false);

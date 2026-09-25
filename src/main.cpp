@@ -322,10 +322,19 @@ int cmdAnalyze(const Args &a) {
     {
         std::error_code ec;
         const fs::path base = fs::is_directory(target, ec) ? fs::path(target) : fs::absolute(target).parent_path();
+        // only a report that wrote this file (a render's mix or stem, or a master's output) knows its lead-in
+        const bool isDir = fs::is_directory(target, ec);
+        const std::string name = fs::path(target).filename().string();
         for (const fs::path &dir : {base, base.parent_path()}) {
             std::ifstream rin(dir / "report.json");
             const json rep = rin ? json::parse(rin, nullptr, false) : json();
-            if (rep.is_object() && rep.contains("leadIn")) { leadIn = rep.value("leadIn", 0.0); break; }
+            if (!rep.is_object() || !rep.contains("leadIn")) continue;
+            bool mine = isDir && dir == base;
+            auto named = [&](const json &o) { return o.is_object() && fs::path(o.value("file", "")).filename().string() == name; };
+            if (rep.contains("mix") && named(rep["mix"])) mine = true;
+            if (rep.contains("output") && named(rep["output"])) mine = true;
+            for (auto &t : rep.value("tracks", json::array())) if (named(t)) mine = true;
+            if (mine) { leadIn = rep.value("leadIn", 0.0); break; }
         }
     }
     std::string windowNote;

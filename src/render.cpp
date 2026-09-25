@@ -519,9 +519,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         // the mix as mixed and keep the section contrast; "loudnessGain": "start" puts it before
         // everything. Limiters compress, so the output moves less than the input; a few passes converge.
         size_t split = 0;
-        if (!job.loudnessAtStart)
+        auto typeAt = [&](size_t k) { return job.masterFx[k].is_object() ? job.masterFx[k].value("type", "") : std::string(); };
+        if (job.loudnessGain != "start")
             for (size_t k = 0; k < job.masterFx.size(); ++k)
-                if (job.masterFx[k].is_object() && job.masterFx[k].value("type", "") == "limiter") split = k;
+                if (typeAt(k) == "limiter") split = k;
+        // "peak": also in front of the clips (and limiters) right before that limiter, so they see the loud signal
+        if (job.loudnessGain == "peak" && typeAt(split) == "limiter")
+            while (split > 0 && (typeAt(split - 1) == "clip" || typeAt(split - 1) == "limiter")) --split;
         const nlohmann::json head(job.masterFx.begin(), job.masterFx.begin() + (long)split),
                              tail(job.masterFx.begin() + (long)split, job.masterFx.end());
         std::vector<std::string> headLabels, headWarnings;

@@ -413,7 +413,9 @@ struct Clip : Effect {
         drive = param(j, "drive", 0, job.tempo);
         ceiling = j.value("ceiling", -1.0);
         knee = std::clamp(j.value("knee", 0.5), 0.01, 1.0);
-        checkKeys(j, {"drive", "ceiling", "knee"}, *this);
+        if (j.contains("kneeDb"))   // where shaping starts, in dB under the ceiling (3 = 3 dB below it)
+            knee = std::clamp(1.0 - dbToLin(-std::max(0.1, j["kneeDb"].get<double>())), 0.01, 1.0);
+        checkKeys(j, {"drive", "ceiling", "knee", "kneeDb"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate, ceil = dbToLin(ceiling), k = knee * ceil, lin = ceil - k;
@@ -433,8 +435,9 @@ struct Clip : Effect {
         }
         if (sounding && shaped > sounding / 5) {   // shaping a fifth of the samples is distortion, not peak control
             char buf[200];
-            std::snprintf(buf, sizeof buf, "clip: %.0f%% of the sounding samples are above the knee: this is distortion now (lower drive or raise ceiling)",
-                          100.0 * shaped / (2.0 * sounding));
+            std::snprintf(buf, sizeof buf, "clip: %.0f%% of the sounding samples are shaped (the curve starts %.1f dB under the ceiling): this is "
+                          "distortion now; narrow the knee (\"kneeDb\": 2), raise the ceiling or send less level in",
+                          100.0 * shaped / (2.0 * sounding), -dsp::linToDb(1.0 - knee));
             warnings.push_back(buf);
         }
         return true;
