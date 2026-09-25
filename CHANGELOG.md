@@ -5,6 +5,14 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Arrangement checks in the render report: `dropouts` (the song goes 15 dB quiet for 0.75 s or more
+  and then comes back, with bars and file time) and a warning when a Drop/Chorus/Peak/Hook/Final
+  section lands under +2 dB over the section before it; `sections[].change` gives every step.
+  Album listening found both on most tracks (a two-bar hole before Afterburner's final hit, drops
+  0-2 dB over their builds).
+- `analyze --every S`: loudness of every S-second window, labelled with the render's sections.
+- AGENTS.md "Arranging: builds, drops and endings": the defaults that fixed the album's drops and
+  endings.
 - `clip` `"kneeDb"`: where the curve starts, in dB under the ceiling. `knee` (a fraction of the
   ceiling's amplitude) confused three agents: 0.5 starts shaping 6 dB down and distorts.
 - Master `"loudnessGain": "peak"`, now the default: the loudness target's gain goes in front of

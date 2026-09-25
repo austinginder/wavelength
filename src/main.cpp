@@ -65,12 +65,14 @@ Usage:
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
       (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
-  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--json]
+  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--every S] [--json]
       Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
       onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
       every stem and every marker section. --start/--end are seconds into the file; with
       --song-time they are song time (a render's lead-in is added from its report.json).
       --grid lists each onset's beat and its timing offset from the nearest 1/div-beat step.
+      --every S prints the loudness of every S-second window (file time, labelled with the
+      render's sections): the song's contour at a glance, dropouts and drops included.
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -319,6 +321,7 @@ int cmdAnalyze(const Args &a) {
     double start = std::atof(a.get("--start", "0").c_str()), end = std::atof(a.get("--end", "0").c_str());
     // --start/--end are file times; a render's files begin with its lead-in (the report next to them says how long)
     double leadIn = 0;
+    json ownReport;   // the report that wrote the analyzed file, if any (lead-in, sections)
     {
         std::error_code ec;
         const fs::path base = fs::is_directory(target, ec) ? fs::path(target) : fs::absolute(target).parent_path();
@@ -334,7 +337,7 @@ int cmdAnalyze(const Args &a) {
             if (rep.contains("mix") && named(rep["mix"])) mine = true;
             if (rep.contains("output") && named(rep["output"])) mine = true;
             for (auto &t : rep.value("tracks", json::array())) if (named(t)) mine = true;
-            if (mine) { leadIn = rep.value("leadIn", 0.0); break; }
+            if (mine) { leadIn = rep.value("leadIn", 0.0); ownReport = rep; break; }
         }
     }
     std::string windowNote;
@@ -383,6 +386,27 @@ int cmdAnalyze(const Args &a) {
         result["ok"] = true;
     }
     if (!windowNote.empty()) result["note"] = windowNote;
+    // --every S: loudness over time (one value per S seconds), labelled with the render's sections
+    if (a.has("--every")) {
+        const double every = std::atof(a.get("--every").c_str());
+        if (every < 0.1) return fail(a, "--every needs a window in seconds (0.1 or more)");
+        const std::string file = fs::is_directory(target) ? (fs::path(target) / "mix.wav").string() : target;
+        Audio audio;
+        int sr = 0;
+        if (!readWav(file, audio, sr, err)) return fail(a, err);
+        const size_t from = (size_t)(std::max(0.0, start) * sr), to = end > 0 ? (size_t)(end * sr) : audio.frames();
+        const auto tl = loudnessTimeline(audio, sr, every, every, from, to);
+        json list = json::array();
+        for (size_t i = 0; i < tl.size(); ++i) {
+            const double t = (double)from / sr + i * every;
+            json o = {{"time", std::round(t * 100) / 100}, {"songTime", std::round((t - leadIn) * 100) / 100}, {"lufs", std::round(tl[i] * 10) / 10}};
+            if (ownReport.contains("sections"))
+                for (auto &s : ownReport["sections"])
+                    if (t >= s.value("start", 0.0) - 1e-6 && t < s.value("end", 0.0)) o["section"] = s.value("name", "");
+            list.push_back(o);
+        }
+        result["timeline"] = {{"every", every}, {"windows", list}};
+    }
     // --grid BPM [--div 4]: how far each onset sits from the nearest grid step (song time, constant tempo)
     json &main = result.contains("mix") ? result["mix"] : result;
     if (a.has("--grid") && main.contains("onsets")) {
@@ -400,6 +424,14 @@ int cmdAnalyze(const Args &a) {
                           {"meanAbsOffsetMs", list.empty() ? 0.0 : std::round(sumAbs / list.size() * 10) / 10}};
     }
     if (a.has("--json")) { emit(result.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    if (result.contains("timeline")) {
+        for (auto &w : result["timeline"]["windows"]) {
+            const double t = w["time"].get<double>();
+            std::fprintf(OUT, "  %2d:%04.1f  %6.1f LUFS  %s\n", (int)(t / 60), std::fmod(t, 60.0), w["lufs"].get<double>(),
+                         w.value("section", std::string()).c_str());
+        }
+        return 0;
+    }
     if (result.contains("grid")) {
         const auto &g = result["grid"];
         std::fprintf(OUT, "grid %g BPM, 1/%d beat: mean offset %.1f ms (+ = late)\n", g["bpm"].get<double>(), g["div"].get<int>(), g["meanAbsOffsetMs"].get<double>());
@@ -634,8 +666,16 @@ int cmdRender(const Args &a) {
         buses.push_back({{"name", b.name}, {"fx", b.fx}, {"lufs", r1(b.lufs)}, {"sections", labelled(b.sectionLufs)},
                          {"sectionLufs", bare(b.sectionLufs)}, {"levels", levelsJson(b.levels)}});
     json sections = json::array();
-    for (auto &sec : r.sections)
-        sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
+    for (size_t m = 0; m < r.sections.size(); ++m) {
+        const auto &sec = r.sections[m];
+        json o = {{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}};
+        if (m > 0 && sec.lufs > -60 && r.sections[m - 1].lufs > -60) o["change"] = r1(sec.lufs - r.sections[m - 1].lufs);   // dB over the previous section
+        sections.push_back(o);
+    }
+    json dropouts = json::array();
+    for (auto &d : r.dropouts)
+        dropouts.push_back({{"start", std::round((d.start + r.leadIn) * 100) / 100}, {"end", std::round((d.end + r.leadIn) * 100) / 100},
+                            {"lufs", r1(d.lufs)}, {"musicLufs", r1(d.around)}, {"bars", {std::floor(d.startBar), std::floor(d.endBar)}}});
     const bool complete = r.failedTracks.empty();
     std::string incomplete;
     if (!complete) {
@@ -648,7 +688,7 @@ int cmdRender(const Args &a) {
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
-                   {"failedTracks", r.failedTracks}};
+                   {"dropouts", dropouts}, {"failedTracks", r.failedTracks}};
     if (!only.empty()) report["onlyTracks"] = only;
     if (!complete) report["error"] = incomplete;
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
@@ -850,7 +890,7 @@ int run(int argc, char **argv) {
             {"params", {"--preset", "--state", "--format", "--all", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
-            {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--json"}},
+            {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
             {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},

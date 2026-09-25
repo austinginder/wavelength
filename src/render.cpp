@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <set>
@@ -605,6 +606,66 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     }
     if (result.mix.peakDb > 0.0)
         result.warnings.push_back("mix peaks above 0 dBFS: add a limiter to \"master\", lower track gains, or set \"normalize\"");
+
+    // dropouts: the song seems to stop (15 dB under the last 8 s) for 0.75 s or more, then comes back
+    // (within 6 dB of that level inside 3 s). A half-beat breath is shorter; an ending never comes back.
+    {
+        const double hop = 0.25;
+        const std::vector<double> tl = loudnessTimeline(mix, job.sampleRate, 0.5, hop);
+        auto fileTime = [&](double s) {
+            char buf[16];
+            const double t = s + job.leadIn;
+            std::snprintf(buf, sizeof buf, "%d:%04.1f", (int)(t / 60), std::fmod(t, 60.0));
+            return std::string(buf);
+        };
+        for (size_t i = (size_t)(2.0 / hop); i < tl.size();) {
+            // reference: the upper quartile of the previous 8 s (the music, not its quiet moments)
+            const size_t back = (size_t)(8.0 / hop);
+            std::vector<double> prev(tl.begin() + (long)(i > back ? i - back : 0), tl.begin() + (long)i);
+            std::sort(prev.begin(), prev.end());
+            const double ref = prev.empty() ? -120 : prev[prev.size() * 3 / 4];
+            if (ref < -40 || tl[i] > ref - 15) { ++i; continue; }
+            size_t j = i;
+            double sum = 0;
+            while (j < tl.size() && tl[j] <= ref - 15) { sum += std::pow(10.0, tl[j] / 10); ++j; }
+            const double len = (double)(j - i) * hop + 0.25;
+            size_t k = j;
+            while (k < tl.size() && k < j + (size_t)(3.0 / hop) && tl[k] < ref - 6) ++k;
+            if (len >= 0.75 && k < tl.size() && k < j + (size_t)(3.0 / hop)) {
+                const double s0 = i * hop + 0.25, s1 = j * hop + 0.25;   // window centres
+                const double level = 10 * std::log10(std::max(sum / (double)(j - i), 1e-12));
+                const double b0 = job.tempo.secToBeat(s0) / 4 + 1, b1 = job.tempo.secToBeat(s1) / 4 + 1;
+                result.dropouts.push_back({s0, s1, level, ref, b0, b1});
+                char buf[400];
+                std::snprintf(buf, sizeof buf, "dropout: %.1f s at %.1f LUFS (bar %.0f-%.0f, %s in the file), %.0f dB under the music before it, "
+                              "then it comes back: listeners hear the song stop. Keep the groove going or build into the hit (a half-beat breath is fine)",
+                              s1 - s0, level, std::floor(b0), std::floor(b1), fileTime(s0).c_str(), ref - level);
+                result.warnings.push_back(buf);
+            }
+            i = std::max(j, i + 1);
+        }
+    }
+    // drops that don't land: a section named like a payoff that is barely louder than the one before it
+    for (size_t m = 1; m < result.sections.size(); ++m) {
+        auto payoff = [](std::string n) {
+            std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+            for (const char *w : {"pre", "build", "end", "lead", "into", "rise", "riser", "up"})   // "Hook A pre", "Build end", "lead-in"
+                for (size_t p = n.find(w); p != std::string::npos; p = n.find(w, p + 1))
+                    if ((p == 0 || !std::isalpha((unsigned char)n[p - 1])) && (p + std::strlen(w) == n.size() || !std::isalpha((unsigned char)n[p + std::strlen(w)])))
+                        return false;
+            for (const char *w : {"drop", "chorus", "peak", "climax", "finale", "hook", "final"}) if (n.find(w) != std::string::npos) return true;
+            return false;
+        };
+        const auto &a = result.sections[m - 1], &b = result.sections[m];
+        if (!payoff(b.name) || payoff(a.name) || a.lufs < -60 || b.lufs < -60) continue;
+        const double jump = b.lufs - a.lufs;
+        if (jump < 2.0) {
+            char buf[300];
+            std::snprintf(buf, sizeof buf, "section '%s' lands only %+.1f dB over '%s': empty the build (kick and bass out, high-pass sweep) "
+                          "rather than turning it down, and stack the downbeat; 3-5 dB reads as a drop", b.name.c_str(), jump, a.name.c_str());
+            result.warnings.push_back(buf);
+        }
+    }
     result.renderSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return true;
 }

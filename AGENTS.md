@@ -94,6 +94,34 @@ See `docs/job-format.md` for every field. The essentials:
 - One track = one plugin instance. Layer sounds by adding tracks.
 - Relative `state` paths resolve from the job file's folder.
 
+## Arranging: builds, drops and endings
+
+A mix can meet every loudness target and still feel flat, because the arrangement decides where the
+energy goes. A 16-track album made by agents produced two defects on almost every song; these
+defaults fix them (break them on purpose, not by accident):
+
+- **Empty the build, don't turn it down.** In the last bars before a drop take out the kick and the
+  full bass (or go half-time), sweep a high-pass up across the drums and music, and let a snare roll,
+  a riser and a filtered lead carry the tension. The master limiter gives back any level you remove
+  with faders, so faders alone leave the build as loud as the drop. Aim for the drop's first bars
+  3-5 dB over the build's last two.
+- **A breath, not a dropout.** Before a drop, at most half a beat of gap, with reverb and delay tails
+  ringing (never mute the returns). Fill it: a snare roll cut on the last 16th, a reverse swell that
+  ends exactly on the downbeat, a pickup note.
+- **Stack the downbeat and add something.** Kick + crash + impact + sub drop on beat 1, every filter
+  opening there, and a part the build didn't have (rolling bass, full-width lead, an octave layer).
+- **Drive into the ending.** Keep the groove and bass running into the final hit, make the last bar a
+  small build, and let the home chord ring 2-4 s under the hit. Stopping the drums two bars early
+  sounds like the song died before its last note. (A fade or a hard stop is fine when meant.)
+- **Keep supporting parts audible.** A pad 10-15 dB under the lead disappears; background parts
+  usually sit 4-8 dB under it and are ducked lightly (3-5 dB), not buried.
+
+The report checks the first two: a **dropout** warning (the song goes 15 dB quiet for 0.75 s or more,
+then comes back, with bars and file time) and a warning when a section named like a payoff (Drop,
+Chorus, Peak, Hook, Final, Climax) lands under +2 dB over the section before it; `sections[].change`
+gives every section's step. `wavelength analyze out --every 1` prints the whole contour second by
+second, labelled with the sections.
+
 ## Mixing (this is where the music comes alive)
 
 Raw instrument renders sound flat. Do the work a mix engineer does in a DAW; everything is
@@ -222,6 +250,8 @@ job.json` lines the sections up and keeps the lead-in.
 - `tracks[].sections` and `buses[].sections`, loudness per marker section (`{"name", "lufs"}`)
   after the fader and rides: find which part dominates a section without writing measuring
   scripts. `sectionLufs` is the same as a bare list in `sections` order.
+- `dropouts` and `sections[].change`: near-silence the song comes back from (start/end in the
+  file, bars, LUFS), and each section's loudness step over the previous one. See "Arranging".
 - `mix.lra`, the loudness range in LU (EBU Tech 3342, equal to ffmpeg's `ebur128` LRA): how far
   quiet and loud passages sit apart. `analyze` and `master` report it too.
 - `failedTracks`, tracks whose plugin crashed on every attempt (a crashed worker is started

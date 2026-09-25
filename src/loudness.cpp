@@ -68,6 +68,21 @@ double integratedLufs(const Audio &a, int sampleRate, size_t from, size_t to) {
     return cnt ? lufs(sum / cnt) : -120;
 }
 
+std::vector<double> loudnessTimeline(const Audio &a, int sampleRate, double windowSec, double hopSec, size_t from, size_t to) {
+    std::vector<double> out;
+    to = std::min(to, a.frames());
+    if (to <= from || windowSec <= 0 || hopSec <= 0) return out;
+    const size_t n = to - from, w = std::max<size_t>(1, (size_t)(windowSec * sampleRate)), h = std::max<size_t>(1, (size_t)(hopSec * sampleRate));
+    const std::vector<double> pre = weightedPower(a, sampleRate, from, n);
+    for (size_t s = 0; s < n; s += h) {
+        const size_t e = std::min(n, s + w);
+        if (e <= s) break;
+        const double l = lufs((pre[e] - pre[s]) / (double)(e - s));
+        out.push_back(l > -70.0 ? l : -120);
+    }
+    return out;
+}
+
 double loudnessRange(const Audio &a, int sampleRate, size_t from, size_t to) {
     to = std::min(to, a.frames());
     if (to <= from) return 0;
