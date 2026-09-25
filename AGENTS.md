@@ -137,6 +137,16 @@ and the envelope (attack, decay, sustain). Use it to check a preset sounds in th
 wrote, a bass isn't brighter than intended, a section's low end is balanced, a pad is wide, and a
 drum pattern has the hits you expect. `--start/--end` narrow it to a window.
 
+## Mastering
+
+The last stage, like a DAW's master channel. Put a chain on `master.fx` (an `eq`, a `multiband`
+with a compressor per band, a limiter or a plugin limiter such as MLimiterX, a true-peak `limiter`
+at -1 dB) and set `"loudness": -14` to land the song on a streaming target. To try mastering
+settings without re-rendering the song, render once with a plain master (a high-pass only, the
+"pre-master"), then run `wavelength master out/mix.wav --chain job.json --out mastered`: it plays
+the file through the job's `master` (or a chain file) and reports loudness before and after, per
+section. Don't master a mix that already went through a limiter.
+
 ## Reading the report
 
 `out/<dir>/report.json` (also printed with `--json`):

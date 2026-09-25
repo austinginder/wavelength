@@ -13,6 +13,8 @@
 #include "instance.hpp"
 #include "plugin.hpp"
 #include "engine.hpp"
+#include "effects.hpp"
+#include "loudness.hpp"
 #include "presets.hpp"
 #include "preset_files.hpp"
 #include "sampler.hpp"
@@ -71,6 +73,9 @@ Usage:
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a track whose plugin crashes or hangs is left out and listed in "failedTracks".
+  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--out DIR] [--json]
+      Put a finished mix through a master chain (effects list, master object or a song's job:
+      its master, markers and tempo) without re-rendering; reports loudness before and after.
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
@@ -367,6 +372,66 @@ int cmdParams(const Args &a) {
     return 0;
 }
 
+// ---- master ----------------------------------------------------------------------------
+// A finished mix through a master chain, without re-rendering the song: the file plays on a
+// builtin:audio track and the chain runs as the job's master (loudness target included).
+int cmdMaster(const Args &a) {
+    if (a.positional.size() < 2 || !a.has("--chain"))
+        return fail(a, "usage: wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--out DIR]");
+    const std::string input = fs::absolute(a.positional[1]).string();
+    Audio in;
+    int sr = 0;
+    std::string err;
+    if (!readWav(input, in, sr, err)) return fail(a, err);
+    std::ifstream cf(a.get("--chain"));
+    if (!cf) return fail(a, "cannot read " + a.get("--chain"));
+    json chain;
+    try { cf >> chain; } catch (const std::exception &e) { return fail(a, std::string("chain is not valid JSON: ") + e.what()); }
+    json master, markers = json::array(), tempo = 120;
+    if (chain.is_array()) master = {{"fx", chain}};
+    else if (chain.is_object() && chain.contains("tracks")) {   // a song's job: its master, markers and tempo
+        master = chain.value("master", json::object());
+        markers = chain.value("markers", json::array());
+        if (chain.contains("tempo")) tempo = chain["tempo"];
+    } else if (chain.is_object()) master = chain;
+    else return fail(a, "the chain must be an effect list, a master object ({\"fx\": [...], \"loudness\": -14}) or a job");
+    if (a.has("--loudness")) master["loudness"] = std::atof(a.get("--loudness").c_str());
+    const double seconds = (double)in.frames() / sr;
+    const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"},
+                          {"markers", markers}, {"master", master},
+                          {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({{{"file", input}, {"beat", 0}}})}}})}};
+    const std::string chainPath = fs::absolute(a.get("--chain")).string();
+    Job job;
+    if (!parseJob(jobJson, fs::path(chainPath).parent_path().string(), job, err)) return fail(a, err);
+    const std::string outDir = a.get("--out", (fs::path(input).parent_path() / "mastered").string());
+    RenderResult r;
+    bool ok = false;
+    try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
+    catch (const std::exception &e) { err = std::string("master failed: ") + e.what(); }
+    if (!ok) return fail(a, err);
+    std::error_code ec;
+    fs::remove_all(fs::path(outDir) / "stems", ec);
+    auto r1 = [](double v) { return std::round(v * 10) / 10; };
+    json sections = json::array();
+    for (auto &sec : r.sections)
+        sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100},
+                            {"inputLufs", r1(integratedLufs(in, sr, (size_t)(sec.start * sr), (size_t)(sec.end * sr)))}, {"lufs", r1(sec.lufs)}});
+    json report = {{"ok", true},
+                   {"input", {{"file", input}, {"lufs", r1(integratedLufs(in, sr))}, {"truePeakDb", r1(truePeakDb(in))}}},
+                   {"output", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)},
+                               {"loudnessGainDb", r1(r.loudnessGainDb)}, {"levels", levelsJson(r.mix)}}},
+                   {"masterFx", r.masterFx}, {"sections", sections}, {"warnings", r.warnings},
+                   {"renderSeconds", std::round(r.renderSeconds * 100) / 100}};
+    std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
+    if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    std::fprintf(OUT, "input   %6.1f LUFS  %5.1f dBTP  %s\n", report["input"]["lufs"].get<double>(), report["input"]["truePeakDb"].get<double>(), input.c_str());
+    std::fprintf(OUT, "output  %6.1f LUFS  %5.1f dBTP  %s\n", r.mixLufs, r.truePeakDb, r.mixFile.c_str());
+    for (auto &sec : sections)
+        std::fprintf(OUT, "  %-20s %6.1f -> %6.1f LUFS\n", sec["name"].get<std::string>().c_str(), sec["inputLufs"].get<double>(), sec["lufs"].get<double>());
+    for (auto &w : r.warnings) std::fprintf(OUT, "warning: %s\n", w.c_str());
+    return 0;
+}
+
 // ---- render ----------------------------------------------------------------------------
 int cmdRender(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json>");
@@ -501,6 +566,7 @@ int run(int argc, char **argv) {
         if (cmd == "analyze") return cmdAnalyze(a);
         if (cmd == "audition") return cmdAudition(a);
         if (cmd == "render") return cmdRender(a);
+        if (cmd == "master") return cmdMaster(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {
