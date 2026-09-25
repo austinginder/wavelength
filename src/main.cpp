@@ -835,6 +835,28 @@ int run(int argc, char **argv) {
         std::fflush(OUT);
         platform::quickExit(0);   // skip plugin static destructors, which some plugins crash in
     }
+    {   // an option a command doesn't know is an error: a typo (or a newer flag on an older binary) must not be ignored
+        static const std::map<std::string, std::set<std::string>> known = {
+            {"plugins", {"--rescan", "--json", "--block", "--unblock", "--reason"}},
+            {"params", {"--preset", "--state", "--format", "--all", "--json", "--verbose"}},
+            {"presets", {"--search", "--rescan", "--json"}},
+            {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
+            {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--json"}},
+            {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
+            {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose"}},
+            {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
+            {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
+            {"lint", {"--tracks", "--low", "--crossings", "--json"}},
+            {"version", {"--json"}}};
+        auto it = known.find(cmd);
+        if (it != known.end())
+            for (auto &[k, v] : a.opts)
+                if (!it->second.count(k)) {
+                    std::string list;
+                    for (auto &o : it->second) list += (list.empty() ? "" : " ") + o;
+                    return fail(a, "unknown option " + k + " for `" + cmd + "` (it takes: " + list + (cmd == "state" ? " --set" : "") + ")");
+                }
+    }
     try {
         if (cmd == "plugins") return cmdPlugins(a);
         if (cmd == "params") return cmdParams(a);

@@ -82,6 +82,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- Every command rejects options it doesn't know, naming the ones it takes. They used to be
+  ignored: an agent with newer docs than its binary ran `render --tracks` and silently got the
+  whole song.
 - The limiter's warning adds its gain reduction per marker section (average and maximum), so the
   drops' limiting shows next to the quiet sections'.
 - A master `loudness` target now adds its gain in front of the chain's last built-in `limiter`
