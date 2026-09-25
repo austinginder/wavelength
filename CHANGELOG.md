@@ -4,6 +4,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+Upgrading from 0.1.0: a song with a master `loudness` target mixes a little differently (the
+target's gain now goes in front of the final clip/limiter, see Changed; `"loudnessGain": "start"`
+restores the old sound), bus faders staged from `buses[].lufs` need restaging (buses are now
+measured before their fader), a render that loses a track exits 1 with `"ok": false`, and every
+command rejects options it doesn't know.
+
 ### Added
 - Marker `"checks": false` for sections that are meant as they are: their dropouts are reported as
   `"intended": true` and they get no arrangement warnings (a trailer's false-ending silence, a soft
@@ -24,14 +30,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `analyze --every S`: loudness of every S-second window, labelled with the render's sections.
 - AGENTS.md "Arranging: builds, drops and endings": the defaults that fixed the album's drops and
   endings.
-- `clip` `"kneeDb"`: where the curve starts, in dB under the ceiling. `knee` (a fraction of the
-  ceiling's amplitude) confused three agents: 0.5 starts shaping 6 dB down and distorts.
-- Master `"loudnessGain": "peak"`, now the default: the loudness target's gain goes in front of
-  the trailing clip/limiter run, so a `clip` before the limiter sees the loud signal.
-  `"limiter"` keeps the placement of the previous build.
 - `clip` effect: a soft clipper (ceiling, knee, drive) to shave transients before the master
   limiter; album agents built one out of gain, saturate and gain to stop a 909 kick pumping the
-  limiter.
+  limiter. `"kneeDb"` sets where the curve starts in dB under the ceiling (`knee`, a fraction of
+  the ceiling's amplitude, confused three agents: 0.5 starts shaping 6 dB down and distorts).
 - Track `"stem": false` skips that track's stem file; `render --tracks` sets it on the muted helper
   tracks, which wrote 2 GB of silent stems on a nearly full disk.
 - `wavelength lint <job.json>`: voice leading between melodic tracks (parallel fifths and octaves in
@@ -69,8 +71,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   arm64) and Windows (x86_64), with the platforms' standard CLAP and VST3 folders, worker
   processes, and caches and settings in each platform's usual place.
 - Release binaries for all five targets, built on one Mac with `scripts/build-release.sh`
-  (Docker for Linux, llvm-mingw for Windows), each smoke-tested before packaging.
-
+  (Docker for Linux, llvm-mingw for Windows), each smoke-tested before packaging. The Windows
+  archive carries the licences of the runtime libraries linked into it (`licenses/`).
+- The `/wavelength` skill's installer downloads the release build on Linux and Windows (Git Bash)
+  too, and builds from source on Linux when there is none.
+- `examples/arrangement-tour.json`, which `scripts/check.sh` renders and checks: rides, `clip`,
+  level-matched `saturate`, vibrato, a skipped stem, a loudness target and a build that earns its
+  drop.
 - `wavelength plugins --block <plugin> [--reason TEXT]` and `--unblock`: a blocked plugin (an
   unlicensed one that opens a registration window on every load, one that keeps crashing) is
   marked BLOCKED in `plugins`, and render, params, presets and audition refuse it by name.
@@ -79,6 +86,21 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- `analyze` could read a note a twelfth or an octave low when a waveform repeats exactly only every
+  few cycles: a chip square lead's B5 read as E4 (an oscillator whose edges fall on the sample grid
+  in a 3-cycle pattern). A reading is now moved up to k times the frequency when nearly all the
+  energy sits on every k-th harmonic and the signal is nearly as periodic at the shorter period,
+  which leaves real low notes alone (a cello's C2 is mostly its 3rd harmonic and still reads C2).
+  Checked on 256 synthetic tones, 85 sampled and BBC SO notes, and the stems of five songs.
+- An unknown option at the end of a command (`analyze mix.wav --bogus`) was reported as missing
+  its value; it is now named as unknown, with the options the command takes.
+- `analyze --grid` printed the mean distance from the grid as "mean offset (+ = late)". It now
+  prints both: the signed mean offset (the groove's push or lay) and the mean distance
+  (`grid.meanOffsetMs` and `meanAbsOffsetMs` in JSON).
+- `analyze --every` ignored `--song-time`; with it, windows now start on the first beat and print
+  song time.
+- The `clip` distortion warning fired when a tenth of the samples were shaped (it counted both
+  channels against a fifth), and always advised `"kneeDb": 2`, even when the knee already was.
 - `analyze` took a lead-in from any report.json next to (or above) a file, so a decoded MP3 in an
   unrelated folder got a lead-in note. It now uses a report only when it wrote that file (a
   render's mix or stem, or a `master` output).
@@ -104,14 +126,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - The chorus, delay, reverb and rotary effects could read one sample past their delay buffer
   when a modulated delay time landed a hair below a whole sample, returning whatever memory
   came next (the likely cause of a Dexed lead through chorus and delay reading +460 LUFS once).
-- Garbage samples (not a number, or above +30 dBFS) are now also muted after every effect and
-  built-in instrument, not only in plugin output, and a track reading above +6 LUFS warns that
-  its output is broken.
 - A render with failed tracks reports `"ok": false` with an `error` naming them and exits 1. It
   used to say `"ok": true` with only `failedTracks` showing that the mix was missing a part.
-- A plugin that outputs garbage samples (not a number, or above +30 dBFS; DUNE 3 once wrote a
-  single +79 dBFS sample into a brass chord) no longer clicks, excites every reverb downstream and
-  wrecks the track's loudness reading: those samples are muted and the track warns with the time.
+- Garbage samples (not a number, or above +30 dBFS; DUNE 3 once wrote a single +79 dBFS sample
+  into a brass chord) no longer click, excite every reverb downstream and wreck the track's
+  loudness reading: they are muted after every plugin, effect and built-in instrument, the track
+  warns with the time, and a track reading above +6 LUFS warns that its output is broken.
 
 ### Changed
 - The weak-drop check also covers any section after a build-like one (Build, Rise, Pre..., Ramp,
@@ -124,10 +144,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   whole song.
 - The limiter's warning adds its gain reduction per marker section (average and maximum), so the
   drops' limiting shows next to the quiet sections'.
-- A master `loudness` target now adds its gain in front of the chain's last built-in `limiter`
-  instead of before the whole chain, so glue compressors and EQ ahead of the limiter keep their
-  settings and the section contrast (three album tracks lost 1-2 dB of contrast to this).
-  `"loudnessGain": "start"` restores the old placement.
+- A master `loudness` target adds its gain in front of the chain's trailing run of `clip` and
+  `limiter` effects (`"loudnessGain": "peak"`, the default) instead of before the whole chain, so
+  glue compressors and EQ ahead of it keep their settings and the section contrast (three album
+  tracks lost 1-2 dB of contrast to the old placement) while a `clip` before the limiter still sees
+  the loud signal. `"limiter"` puts it in front of the last limiter only; `"start"` restores 0.1.
 - The limiter's gain-reduction warning says how long it worked (share of the time above 3 dB and
   6 dB), so one hot transient reads differently from sustained crushing, and it also warns when
   more than 10 % of the song sits above 6 dB of reduction.
