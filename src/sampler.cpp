@@ -602,6 +602,23 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
         taken.insert(next);
         map.push_back({next, w});
     }
+    // round robin stacks every take on the drum's main key, which leaves the General MIDI alternate
+    // keys empty: a GM part (43 floor tom, 57 crash 2) would go silent. Alias them to their drum.
+    if (roundRobin) {
+        static const std::vector<std::pair<int, std::vector<int>>> aliases = {
+            {35, {36}}, {40, {38}}, {41, {43, 45}}, {43, {41, 45}}, {48, {47, 50}}, {57, {49}}, {59, {51}}, {52, {49}}, {55, {49}}};
+        std::set<int> have;
+        for (auto &m : map) have.insert(m.first);
+        const auto original = map;
+        for (auto &[alt, mains] : aliases) {
+            if (have.count(alt)) continue;
+            for (int main : mains) {
+                if (!have.count(main)) continue;
+                for (auto &m : original) if (m.first == main) map.push_back({alt, m.second});
+                break;
+            }
+        }
+    }
     std::sort(map.begin(), map.end());
     if (map.empty()) { err = resolved + " has no WAV files"; return false; }
     return true;

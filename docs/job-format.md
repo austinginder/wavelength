@@ -122,7 +122,7 @@ Studio package folders; paths work too (relative to the job).
 | `oneShot` | kits true | Play samples to their end, ignoring note length. |
 | `choke` | kits `[[42, 44, 46]]` | Key groups that cut each other (a closed hat stops the open hat). A one-key group chokes itself. |
 | `retrigger` | `"overlap"` | `"cut"`: a new note on a key stops the previous one on that key. |
-| `variants` | `"keys"` | Kits: takes of one sound (`Snare 01`, `Snare 02`) go to the drum's alternate General MIDI keys, then free keys from 60; `"roundrobin"` stacks them on one key and cycles through them. |
+| `variants` | `"keys"` | Kits: takes of one sound (`Snare 01`, `Snare 02`) go to the drum's alternate General MIDI keys, then free keys from 60; `"roundrobin"` stacks them on one key and cycles through them; the General MIDI alternate keys (35, 40, 41/43, 48, 52, 55, 57, 59) then play their drum's takes, so a GM part still sounds. |
 | `mono`, `glide` | false, 0 s | One voice at a time; overlapping notes play legato and glide (seconds) from the previous pitch: 808 slides, portamento leads. |
 | `bpm` | none | The sample's own tempo: resampled (pitch and speed) to the song tempo at each note. |
 | `slices` | none | With `sample`: cut the file into this many equal slices on keys `root`, `root+1`, ... (chop a break). |

@@ -24,6 +24,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- Kits with `"variants": "roundrobin"` left the General MIDI alternate keys (35 kick 2, 40 snare 2,
+  43 floor tom, 48 tom, 57 crash 2...) empty, so a GM drum part went partly silent. They now play
+  their drum's round-robin takes.
 - `wavelength master --chain` read a `{"master": {...}, "markers": [...]}` file (a job without
   tracks) as an empty chain and passed the mix through unchanged without a word. That shape now
   works, and a chain with no effects and no loudness target is an error naming the keys it found.
