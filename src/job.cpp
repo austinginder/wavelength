@@ -5,7 +5,9 @@
 #include <functional>
 #include <map>
 #include <random>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 using json = nlohmann::json;
@@ -149,7 +151,25 @@ void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std
 
 } // namespace
 
-bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &err) {
+json userJobDefaults(std::string *path) {
+    std::string p;
+    if (const char *env = getenv("WAVELENGTH_DEFAULTS")) p = env;
+    else if (const char *h = getenv("HOME")) p = std::string(h) + "/Library/Application Support/Wavelength/defaults.json";
+    if (path) *path = p;
+    std::ifstream in(p);
+    if (!in) return json::object();
+    const json d = json::parse(in, nullptr, false);
+    return d.is_object() ? d : json::object();
+}
+
+bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::string &err, bool useDefaults) {
+    // the user's defaults fill in top-level settings the job leaves out
+    json j = jobIn;
+    if (useDefaults) {
+        const json defaults = userJobDefaults();   // named: items() must not outlive its object
+        for (auto &[k, v] : defaults.items())
+            if (!j.contains(k)) { j[k] = v; out.appliedDefaults.push_back(k); }
+    }
     try {
         out.baseDir = baseDir;
         out.parallel = j.value("parallel", -1);

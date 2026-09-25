@@ -61,6 +61,7 @@ Working towards **v0.1.0**, the first release.
 - `multiband` effect: 2-4 bands on Linkwitz-Riley crossovers that sum back flat, each band with its own effect chain, gain, solo and mute (multiband compression, band saturation).
 - `master.loudness`: a target in LUFS; the gain into the master chain is found in a few passes so the mastered mix lands on it (`mix.loudnessGainDb` in the report).
 - `wavelength master <mix.wav> --chain <chain | job>`: masters a finished mix without re-rendering, with loudness before and after per section; the chain can be a file or inline JSON.
+- Personal job defaults: `~/Library/Application Support/Wavelength/defaults.json` (or `$WAVELENGTH_DEFAULTS`) holds top-level job settings, e.g. `{"leadIn": 1}`, that every job gets unless it sets them itself; the report lists them in `defaultsApplied`. Jobs Wavelength builds internally (`wavelength master`) ignore them.
 - `leadIn`: seconds of silence before the song in the mix and stems (streaming uploads), and `--lead-in` on `wavelength master`.
 
 ### Changed

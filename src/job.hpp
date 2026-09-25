@@ -70,6 +70,7 @@ struct Job {
     double warmup = 0.4;        // seconds of wall-clock settling after activation
     double length = 0;          // optional fixed length in seconds (0 = auto)
     double leadIn = 0;          // seconds of silence written before the audio in every output file
+    std::vector<std::string> appliedDefaults;   // settings that came from the user's defaults file
     bool hasNormalize = false;
     double normalizeDb = -1.0;  // mix peak target when normalizing
     std::vector<Track> tracks;
@@ -86,7 +87,12 @@ struct Job {
     int parallel = -1;          // plugin tracks rendered at once in worker processes; 0 = all in this process; <0 = auto
 };
 
-bool parseJob(const nlohmann::json &j, const std::string &baseDir, Job &out, std::string &err);
+// `useDefaults`: fill in the user's job defaults (off for jobs Wavelength builds internally).
+bool parseJob(const nlohmann::json &j, const std::string &baseDir, Job &out, std::string &err, bool useDefaults = true);
+
+// The user's job defaults: top-level settings (e.g. {"leadIn": 1}) a job gets unless it sets them
+// itself. Read from $WAVELENGTH_DEFAULTS or ~/Library/Application Support/Wavelength/defaults.json.
+nlohmann::json userJobDefaults(std::string *path = nullptr);
 int parseKey(const nlohmann::json &k);   // 60, "C4", "F#3", "Bb5" (C4 = 60)
 
 } // namespace wl

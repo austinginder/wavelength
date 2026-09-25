@@ -411,7 +411,7 @@ int cmdMaster(const Args &a) {
                           {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({{{"file", input}, {"beat", 0}}})}}})}};
     const std::string base = inlineChain ? fs::current_path().string() : fs::absolute(chainArg).parent_path().string();
     Job job;
-    if (!parseJob(jobJson, base, job, err)) return fail(a, err);
+    if (!parseJob(jobJson, base, job, err, false)) return fail(a, err);
     const std::string outDir = a.get("--out", (fs::path(input).parent_path() / "mastered").string());
     RenderResult r;
     bool ok = false;
@@ -487,7 +487,7 @@ int cmdRender(const Args &a) {
     for (auto &sec : r.sections)
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
     json report = {{"ok", true}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
-                   {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn},
+                   {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn}, {"defaultsApplied", job.appliedDefaults},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
