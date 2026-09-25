@@ -71,8 +71,9 @@ Usage:
       every stem and every marker section. --start/--end are seconds into the file; with
       --song-time they are song time (a render's lead-in is added from its report.json).
       --grid lists each onset's beat and its timing offset from the nearest 1/div-beat step.
-      --every S prints the loudness of every S-second window (file time, labelled with the
-      render's sections): the song's contour at a glance, dropouts and drops included.
+      --every S prints the loudness of every S-second window (file time, or song time from the
+      first beat with --song-time), labelled with the render's sections: the song's contour at a
+      glance, dropouts and drops included.
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -394,7 +395,9 @@ int cmdAnalyze(const Args &a) {
         Audio audio;
         int sr = 0;
         if (!readWav(file, audio, sr, err)) return fail(a, err);
-        const size_t from = (size_t)(std::max(0.0, start) * sr), to = end > 0 ? (size_t)(end * sr) : audio.frames();
+        // in song time the windows start on the first beat (after the lead-in), so they line up with bars
+        const double first = a.has("--song-time") && start <= 0 ? leadIn : start;
+        const size_t from = (size_t)(std::max(0.0, first) * sr), to = end > 0 ? (size_t)(end * sr) : audio.frames();
         const auto tl = loudnessTimeline(audio, sr, every, every, from, to);
         json list = json::array();
         for (size_t i = 0; i < tl.size(); ++i) {
@@ -413,20 +416,22 @@ int cmdAnalyze(const Args &a) {
         const double bpm = std::atof(a.get("--grid").c_str()), div = std::max(1, std::atoi(a.get("--div", "4").c_str()));
         if (bpm <= 0) return fail(a, "--grid needs the song's tempo in BPM");
         json list = json::array();
-        double sumAbs = 0;
+        double sumAbs = 0, sum = 0;
         for (auto &o : main["onsets"]) {
             const double t = o.get<double>() - leadIn, beat = t * bpm / 60.0, step = std::round(beat * div) / div;
             const double offMs = (beat - step) * 60000.0 / bpm;
             sumAbs += std::fabs(offMs);
+            sum += offMs;
             list.push_back({{"time", std::round(t * 1000) / 1000}, {"beat", std::round(step * 1000) / 1000}, {"offsetMs", std::round(offMs * 10) / 10}});
         }
         result["grid"] = {{"bpm", bpm}, {"div", div}, {"onsets", list},
+                          {"meanOffsetMs", list.empty() ? 0.0 : std::round(sum / list.size() * 10) / 10},
                           {"meanAbsOffsetMs", list.empty() ? 0.0 : std::round(sumAbs / list.size() * 10) / 10}};
     }
     if (a.has("--json")) { emit(result.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
     if (result.contains("timeline")) {
         for (auto &w : result["timeline"]["windows"]) {
-            const double t = w["time"].get<double>();
+            const double t = w[a.has("--song-time") ? "songTime" : "time"].get<double>();
             std::fprintf(OUT, "  %2d:%04.1f  %6.1f LUFS  %s\n", (int)(t / 60), std::fmod(t, 60.0), w["lufs"].get<double>(),
                          w.value("section", std::string()).c_str());
         }
@@ -434,7 +439,8 @@ int cmdAnalyze(const Args &a) {
     }
     if (result.contains("grid")) {
         const auto &g = result["grid"];
-        std::fprintf(OUT, "grid %g BPM, 1/%d beat: mean offset %.1f ms (+ = late)\n", g["bpm"].get<double>(), g["div"].get<int>(), g["meanAbsOffsetMs"].get<double>());
+        std::fprintf(OUT, "grid %g BPM, 1/%d beat: mean offset %+.1f ms (+ = late), mean distance %.1f ms\n", g["bpm"].get<double>(),
+                     g["div"].get<int>(), g["meanOffsetMs"].get<double>(), g["meanAbsOffsetMs"].get<double>());
         size_t k = 0;
         for (auto &o : g["onsets"]) {
             if (k++ == 64) { std::fprintf(OUT, "  ... (%zu onsets; --json lists all)\n", g["onsets"].size()); break; }
@@ -872,7 +878,6 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
-    if (!a.missing.empty()) return fail(a, a.missing.front() + " needs a value");
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
                                  std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));
@@ -909,6 +914,8 @@ int run(int argc, char **argv) {
                     return fail(a, "unknown option " + k + " for `" + cmd + "` (it takes: " + list + (cmd == "state" ? " --set" : "") + ")");
                 }
     }
+    // after the unknown-option check, so a stray `--typo` at the end is named as unknown, not as missing a value
+    if (!a.missing.empty()) return fail(a, a.missing.front() + " needs a value");
     try {
         if (cmd == "plugins") return cmdPlugins(a);
         if (cmd == "params") return cmdParams(a);
