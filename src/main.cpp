@@ -413,13 +413,19 @@ int cmdMaster(const Args &a) {
     } catch (const std::exception &e) { return fail(a, std::string("chain is not valid JSON: ") + e.what()); }
     json master, markers = json::array(), tempo = 120;
     if (chain.is_array()) master = {{"fx", chain}};
-    else if (chain.is_object() && chain.contains("tracks")) {   // a song's job: its master, markers and tempo
+    else if (chain.is_object() && (chain.contains("tracks") || chain.contains("master"))) {   // a song's job (or its master part): master, markers, tempo
         master = chain.value("master", json::object());
         markers = chain.value("markers", json::array());
         if (chain.contains("tempo")) tempo = chain["tempo"];
     } else if (chain.is_object()) master = chain;
     else return fail(a, "the chain must be an effect list, a master object ({\"fx\": [...], \"loudness\": -14}) or a job");
     if (a.has("--loudness")) master["loudness"] = std::atof(a.get("--loudness").c_str());
+    if (!master.is_object() || ((!master.contains("fx") || master["fx"].empty()) && !master.contains("loudness"))) {
+        std::string keys;
+        if (chain.is_object()) for (auto &[k, v] : chain.items()) keys += (keys.empty() ? "" : ", ") + k;
+        return fail(a, "the chain has no effects and no loudness target (found keys: " + (keys.empty() ? std::string("none") : keys) +
+                        "); pass an effect list, {\"fx\": [...]}, {\"master\": {\"fx\": [...]}} or a job");
+    }
     const double leadIn = a.has("--lead-in") ? std::atof(a.get("--lead-in").c_str()) : 0;
     const double seconds = (double)in.frames() / sr;
     const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"}, {"leadIn", leadIn},

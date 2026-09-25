@@ -24,6 +24,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- `wavelength master --chain` read a `{"master": {...}, "markers": [...]}` file (a job without
+  tracks) as an empty chain and passed the mix through unchanged without a word. That shape now
+  works, and a chain with no effects and no loudness target is an error naming the keys it found.
 - The chorus, delay, reverb and rotary effects could read one sample past their delay buffer
   when a modulated delay time landed a hair below a whole sample, returning whatever memory
   came next (the likely cause of a Dexed lead through chorus and delay reading +460 LUFS once).
