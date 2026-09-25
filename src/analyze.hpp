@@ -8,7 +8,7 @@
 namespace wl {
 
 struct Analysis {
-    double seconds = 0, peakDb = -120, truePeakDb = -120, lufs = -120, rmsDb = -120;
+    double seconds = 0, peakDb = -120, truePeakDb = -120, lufs = -120, lra = 0, rmsDb = -120;
     bool silent = true;
     // pitch: the median fundamental of voiced frames (YIN); confidence = voiced share of active frames
     double pitchHz = 0, pitchConfidence = 0;

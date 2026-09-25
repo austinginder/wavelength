@@ -193,8 +193,11 @@ section. Don't master a mix that already went through a limiter. For a release, 
 
 `out/<dir>/report.json` (also printed with `--json`):
 
-- `tracks[].sectionLufs`, each track's loudness per marker section after its fader and rides:
-  find which part dominates a section without writing measuring scripts.
+- `tracks[].sections` and `buses[].sections`, loudness per marker section (`{"name", "lufs"}`)
+  after the fader and rides: find which part dominates a section without writing measuring
+  scripts. `sectionLufs` is the same as a bare list in `sections` order.
+- `mix.lra`, the loudness range in LU (EBU Tech 3342, equal to ffmpeg's `ebur128` LRA): how far
+  quiet and loud passages sit apart. `analyze` and `master` report it too.
 - `failedTracks`, tracks whose plugin crashed on every attempt (a crashed worker is started
   again, `"retries"`, default 2) or hung. The mix is written without them, but `ok` is `false`,
   `error` names them and the exit status is 1: levels, ducking and loudness are wrong, so never
@@ -207,7 +210,7 @@ section. Don't master a mix that already went through a limiter. For a release, 
 - `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
   removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.
 - `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
-- `tracks[].lufs`, integrated loudness of the stem (after its `fx`, before its fader).
+- `tracks[].lufs` and `buses[].lufs`, integrated loudness after the `fx`, before the fader.
   Use it for gain staging: `gain` = target − lufs. `mix.lufs` is the whole song
   (−14 LUFS is a common streaming level); `sections[].lufs` is per marker section.
   These match `ffmpeg -af ebur128` exactly.

@@ -467,6 +467,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         for (auto &w : warnings) result.warnings.push_back("bus '" + br.name + "': " + w);
         Audio *dest = &mix;
         for (size_t o = 0; o < job.buses.size(); ++o) if (job.buses[o].name == job.buses[b].output) dest = &buses[o];
+        br.levels = measure(buses[b]);   // before the fader, like a track's stem: `gain` = target - lufs
+        br.lufs = integratedLufs(buses[b], job.sampleRate);
         const auto &env = job.buses[b].gainAutomation;
         float g = (float)dsp::dbToLin(job.buses[b].gainDb);
         for (size_t f = 0; f < frames; ++f) {
@@ -474,8 +476,10 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             buses[b].left[f] *= g; buses[b].right[f] *= g;
             dest->left[f] += buses[b].left[f]; dest->right[f] += buses[b].right[f];
         }
-        br.levels = measure(buses[b]);
-        br.lufs = integratedLufs(buses[b], job.sampleRate);
+        for (size_t m = 0; m < job.markers.size(); ++m) {
+            const double a0 = job.markers[m].sec, b0 = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
+            br.sectionLufs.push_back(integratedLufs(buses[b], job.sampleRate, (size_t)(a0 * sr), (size_t)(b0 * sr)));
+        }
     }
     for (auto &br : busResults) result.buses.push_back(std::move(br));
     buses.clear();
@@ -535,6 +539,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     result.mix = measure(mix);
     result.truePeakDb = truePeakDb(mix);
     result.mixLufs = integratedLufs(mix, job.sampleRate);
+    result.mixLra = loudnessRange(mix, job.sampleRate);
     for (size_t m = 0; m < job.markers.size(); ++m) {
         const double a = job.markers[m].sec, b = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
         result.sections.push_back({job.markers[m].name, a + job.leadIn, b + job.leadIn,   // times in the written file

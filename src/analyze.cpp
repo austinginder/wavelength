@@ -93,6 +93,7 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
     r.silent = lv.silent;
     r.truePeakDb = truePeakDb(a);
     r.lufs = integratedLufs(a, sampleRate);
+    r.lra = loudnessRange(a, sampleRate);
     if (r.silent) return r;
 
     std::vector<float> mono(n);
@@ -218,7 +219,7 @@ nlohmann::json analysisToJson(const Analysis &x, bool withOnsets) {
     auto r1 = [](double v) { return std::round(v * 10) / 10; };
     nlohmann::json j = {
         {"seconds", r1(x.seconds)}, {"silent", x.silent}, {"lufs", r1(x.lufs)}, {"peakDb", r1(x.peakDb)},
-        {"truePeakDb", r1(x.truePeakDb)}, {"rmsDb", r1(x.rmsDb)},
+        {"truePeakDb", r1(x.truePeakDb)}, {"lra", r1(x.lra)}, {"rmsDb", r1(x.rmsDb)},
         {"pitch", {{"hz", r1(x.pitchHz)}, {"note", keyName(x.pitchKey)}, {"key", x.pitchKey}, {"cents", std::lround(x.pitchCents)},
                    {"confidence", std::round(x.pitchConfidence * 100) / 100}}},
         {"spectrum", {{"centroidHz", std::lround(x.centroidHz)}, {"rolloffHz", std::lround(x.rolloffHz)},

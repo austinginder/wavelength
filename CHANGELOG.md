@@ -5,6 +5,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- The loudness range (LRA, EBU Tech 3342, matches ffmpeg's `ebur128`) in the render report
+  (`mix.lra`), `master` (input and output) and `analyze`.
+- Labelled per-section loudness: `tracks[].sections` and `buses[].sections` are
+  `[{"name", "lufs"}]` lists; buses get per-section loudness for the first time.
 - `skills/wavelength/`: an agent skill that installs the engine (release build, else from source, docs matched to the binary) and runs the whole song workflow.
 - Linux and Windows support. Wavelength builds and runs on macOS (universal), Linux (x86_64 and
   arm64) and Windows (x86_64), with the platforms' standard CLAP and VST3 folders, worker
@@ -33,6 +37,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- `buses[].lufs` and `buses[].levels` are measured before the bus fader, like a track's, so
+  `gain` = target − lufs works for buses too. They used to be measured after it.
 - A plugin library that fails to load names the library and the reason (on Linux the VST3 SDK
   only said "dlopen failed").
 

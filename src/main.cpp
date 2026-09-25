@@ -442,8 +442,8 @@ int cmdMaster(const Args &a) {
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100},
                             {"inputLufs", r1(integratedLufs(in, sr, (size_t)((sec.start - leadIn) * sr), (size_t)((sec.end - leadIn) * sr)))}, {"lufs", r1(sec.lufs)}});
     json report = {{"ok", true},
-                   {"input", {{"file", input}, {"lufs", r1(integratedLufs(in, sr))}, {"truePeakDb", r1(truePeakDb(in))}}},
-                   {"output", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)},
+                   {"input", {{"file", input}, {"lufs", r1(integratedLufs(in, sr))}, {"lra", r1(loudnessRange(in, sr))}, {"truePeakDb", r1(truePeakDb(in))}}},
+                   {"output", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)},
                                {"loudnessGainDb", r1(r.loudnessGainDb)}, {"levels", levelsJson(r.mix)}}},
                    {"masterFx", r.masterFx}, {"sections", sections}, {"warnings", r.warnings},
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100}};
@@ -488,6 +488,13 @@ int cmdRender(const Args &a) {
     }
 
     auto r1 = [](double v) { return std::round(v * 10) / 10; };
+    // per-section loudness, labelled ({"name", "lufs"}) and as a bare list in "sections" order
+    auto labelled = [&](const std::vector<double> &v) {
+        json o = json::array();
+        for (size_t i = 0; i < v.size() && i < r.sections.size(); ++i) o.push_back({{"name", r.sections[i].name}, {"lufs", r1(v[i])}});
+        return o;
+    };
+    auto bare = [&](const std::vector<double> &v) { json o = json::array(); for (double x : v) o.push_back(r1(x)); return o; };
     json tracks = json::array();
     for (auto &t : r.tracks)
         tracks.push_back({{"name", t.name}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"file", t.file},
@@ -495,10 +502,12 @@ int cmdRender(const Args &a) {
                           {"stateFormat", t.stateFormat}, {"fx", t.fx}, {"lufs", r1(t.lufs)},
                           {"renderSeconds", std::round(t.seconds * 100) / 100},
                           {"latencyCompensatedMs", std::round(t.latencySamples * 1000.0 / r.sampleRate * 100) / 100},
-                          {"sectionLufs", [&] { json o = json::array(); for (double v : t.sectionLufs) o.push_back(r1(v)); return o; }()},   // same order as "sections"
+                          {"sections", labelled(t.sectionLufs)}, {"sectionLufs", bare(t.sectionLufs)},
                           {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
     json buses = json::array();
-    for (auto &b : r.buses) buses.push_back({{"name", b.name}, {"fx", b.fx}, {"lufs", r1(b.lufs)}, {"levels", levelsJson(b.levels)}});
+    for (auto &b : r.buses)
+        buses.push_back({{"name", b.name}, {"fx", b.fx}, {"lufs", r1(b.lufs)}, {"sections", labelled(b.sectionLufs)},
+                         {"sectionLufs", bare(b.sectionLufs)}, {"levels", levelsJson(b.levels)}});
     json sections = json::array();
     for (auto &sec : r.sections)
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
@@ -511,7 +520,7 @@ int cmdRender(const Args &a) {
     }
     json report = {{"ok", complete}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn}, {"defaultsApplied", job.appliedDefaults},
-                   {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
+                   {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"failedTracks", r.failedTracks}};
@@ -524,7 +533,8 @@ int cmdRender(const Args &a) {
         for (auto &w : t.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
     }
     for (auto &b : r.buses) std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS\n", ("bus: " + b.name).c_str(), "", b.levels.peakDb, b.lufs);
-    std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", "MIX", "", r.mix.peakDb, r.mixLufs, r.mixFile.c_str());
+    std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  LRA %.1f LU  true peak %.1f dBTP  %s\n", "MIX", "", r.mix.peakDb, r.mixLufs,
+                 r.mixLra, r.truePeakDb, r.mixFile.c_str());
     for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
     for (auto &w : r.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
     std::fprintf(OUT, "%.2f s of audio rendered in %.2f s\n", r.seconds, r.renderSeconds);

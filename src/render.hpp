@@ -21,8 +21,9 @@ struct TrackResult {
 struct BusResult {
     std::string name;
     std::vector<std::string> fx;
-    Levels levels{};
+    Levels levels{};                  // after its fx, before its fader (like a track's stem)
     double lufs = -120;
+    std::vector<double> sectionLufs;  // per marker section, after its fader and rides
 };
 
 struct SectionResult {
@@ -38,7 +39,7 @@ struct RenderResult {
     std::vector<std::string> masterFx;
     std::string mixFile;
     Levels mix{};
-    double mixLufs = -120, normalizeGainDb = 0, truePeakDb = -120;
+    double mixLufs = -120, normalizeGainDb = 0, truePeakDb = -120, mixLra = 0;
     double loudnessGainDb = 0;
     double leadIn = 0;           // seconds of silence before the audio in the written files   // gain into the master chain that met master.loudness
     std::vector<SectionResult> sections;
