@@ -1,6 +1,6 @@
 ---
 name: wavelength
-description: Compose, arrange, mix and master original music with Wavelength, the headless music engine for AI agents. It plays notes through the real CLAP and VST3 synths and sample libraries installed on this Mac and returns a mastered mix plus measurements. Installs or builds the engine when it is missing. Use when the user asks to make a song, track, theme, score, soundtrack, jingle or beat, or to render music with their plugins.
+description: Compose, arrange, mix and master original music with Wavelength, the headless music engine for AI agents. It plays notes through the real CLAP and VST3 synths and sample libraries installed on this computer (macOS, Linux or Windows) and returns a mastered mix plus measurements. Installs or builds the engine when it is missing. Use when the user asks to make a song, track, theme, score, soundtrack, jingle or beat, or to render music with their plugins.
 ---
 
 # Wavelength
@@ -13,9 +13,10 @@ cannot hear the result, so you measure it, and you ask the human to listen.
 ## 1. Get the engine
 
 Run the installer that ships with this skill. It uses an installed `wavelength` if there is one,
-otherwise downloads a release build for this Mac, otherwise clones
-https://github.com/austinginder/wavelength and compiles it (needs CMake and the Xcode command
-line tools; it says so if they are missing).
+otherwise downloads the release build for this system (macOS, Linux x86_64/arm64, or Windows
+x86_64 from Git Bash), otherwise clones https://github.com/austinginder/wavelength and compiles
+it (needs CMake and the Xcode command line tools on macOS, or g++/clang on Linux; it says so if
+they are missing).
 
 ```sh
 bash <this skill's folder>/scripts/install.sh      # add --update to refresh, --source to force a build

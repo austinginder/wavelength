@@ -26,12 +26,20 @@ esac
 say() { printf '%s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Darwin" ] || die "Wavelength runs on macOS for now (it hosts macOS CLAP and VST3 plugins)."
-ARCH="$(uname -m)"   # arm64 or x86_64
+case "$(uname -s)" in
+  Darwin) OS="macos" ;;
+  Linux) OS="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) OS="windows" ;;   # Git Bash on Windows
+  *) die "unsupported system $(uname -s): Wavelength runs on macOS, Linux and Windows" ;;
+esac
+ARCH="$(uname -m)"
+case "$ARCH" in aarch64) ARCH="arm64" ;; amd64) ARCH="x86_64" ;; esac
+EXE="wavelength"; [ "$OS" = "windows" ] && EXE="wavelength.exe"
+ncpu() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
 
 # 1. already installed?
 find_existing() {
-  for c in "${WAVELENGTH:-}" "$(command -v wavelength 2>/dev/null || true)" "$BIN_DIR/wavelength" "$SRC_DIR/build/wavelength"; do
+  for c in "${WAVELENGTH:-}" "$(command -v wavelength 2>/dev/null || true)" "$BIN_DIR/$EXE" "$SRC_DIR/build/$EXE"; do
     if [ -n "$c" ] && [ -x "$c" ] && "$c" version >/dev/null 2>&1; then echo "$c"; return 0; fi
   done
   return 1
@@ -39,7 +47,7 @@ find_existing() {
 
 # source checkout: docs and scripts come from here even when the binary is a release
 ensure_source() {
-  command -v git >/dev/null || die "git is required (xcode-select --install)"
+  command -v git >/dev/null || die "git is required"
   if [ -d "$SRC_DIR/.git" ]; then
     git -C "$SRC_DIR" fetch --quiet --tags origin || say "note: could not fetch updates for $SRC_DIR; using it as is"
   else
@@ -52,13 +60,14 @@ checkout_ref() {
   git -C "$SRC_DIR" checkout --quiet "$1" 2>/dev/null || say "note: could not switch $SRC_DIR to $1 (local changes?)"
 }
 
-# 2. a release asset for this Mac
+# 2. a release asset for this system: wavelength-macos-universal.tar.gz,
+#    wavelength-linux-<x86_64|arm64>.tar.gz, wavelength-windows-x86_64.zip
 install_release() {
   command -v curl >/dev/null || return 1
   local api="https://api.github.com/repos/$REPO/releases/latest" json url tmp
   json="$(curl -fsSL "$api" 2>/dev/null)" || return 1
   url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"\(http[^"]*\)"/\1/' \
-        | grep -i "macos" | grep -i -E "$ARCH|universal" | head -1)"
+        | grep -i "/wavelength[^/]*-$OS-" | grep -i -E "$ARCH|universal" | head -1)"
   [ -n "$url" ] || return 1
   say "downloading $url"
   tmp="$(mktemp -d)"
@@ -69,25 +78,30 @@ install_release() {
     *) return 1 ;;
   esac
   local found
-  found="$(find "$tmp/x" -type f -name wavelength -perm -u+x | head -1)"
+  found="$(find "$tmp/x" -type f -name "$EXE" | head -1)"
   [ -n "$found" ] || return 1
   mkdir -p "$BIN_DIR"
-  cp "$found" "$BIN_DIR/wavelength"
-  xattr -d com.apple.quarantine "$BIN_DIR/wavelength" 2>/dev/null || true
-  "$BIN_DIR/wavelength" version >/dev/null 2>&1 || return 1
+  cp "$found" "$BIN_DIR/$EXE"
+  chmod +x "$BIN_DIR/$EXE"
+  [ "$OS" = "macos" ] && { xattr -d com.apple.quarantine "$BIN_DIR/$EXE" 2>/dev/null || true; }
+  "$BIN_DIR/$EXE" version >/dev/null 2>&1 || return 1
 }
 
 # 3. build from source
 install_source() {
-  command -v cmake >/dev/null || die "CMake 3.20+ is required to build from source (brew install cmake)"
-  xcode-select -p >/dev/null 2>&1 || die "the Xcode command line tools are required (xcode-select --install)"
+  command -v cmake >/dev/null || die "CMake 3.20+ is required to build from source (macOS: brew install cmake; Linux: your package manager)"
+  case "$OS" in
+    macos) xcode-select -p >/dev/null 2>&1 || die "the Xcode command line tools are required (xcode-select --install)" ;;
+    linux) { command -v c++ || command -v g++ || command -v clang++; } >/dev/null || die "a C++17 compiler is required (g++ or clang)" ;;
+    windows) die "no release build downloaded, and building on Windows needs llvm-mingw: see the README's Build section" ;;
+  esac
   ensure_source
   checkout_ref origin/main
   say "building Wavelength (first build fetches the CLAP and VST3 SDKs; a few minutes)"
   cmake -S "$SRC_DIR" -B "$SRC_DIR/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build "$SRC_DIR/build" -j "$(sysctl -n hw.ncpu)" >/dev/null
+  cmake --build "$SRC_DIR/build" -j "$(ncpu)" >/dev/null
   mkdir -p "$BIN_DIR"
-  cp "$SRC_DIR/build/wavelength" "$BIN_DIR/wavelength"
+  cp "$SRC_DIR/build/$EXE" "$BIN_DIR/$EXE"
 }
 
 BIN=""
@@ -95,10 +109,10 @@ if [ "$MODE" = "auto" ]; then BIN="$(find_existing || true)"; fi
 if [ -z "$BIN" ]; then
   if [ "$MODE" != "source" ] && install_release; then say "installed the release build"
   else
-    [ "$MODE" = "source" ] || say "no release build for macOS $ARCH; building from source"
+    [ "$MODE" = "source" ] || say "no release build for $OS $ARCH; building from source"
     install_source
   fi
-  BIN="$BIN_DIR/wavelength"
+  BIN="$BIN_DIR/$EXE"
 fi
 
 # docs and helper scripts must match the binary: a checkout next to it (a source build
@@ -115,7 +129,7 @@ else
   DOCS="$SRC_DIR"
 fi
 
-command -v ffmpeg >/dev/null || say "note: ffmpeg is not installed (brew install ffmpeg); it is only needed to make MP3s"
+command -v ffmpeg >/dev/null || say "note: ffmpeg is not installed (brew install ffmpeg, apt install ffmpeg, winget install ffmpeg); it is only needed to make MP3s"
 [ -d "$BIN_DIR" ] && case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "note: add $BIN_DIR to PATH to run 'wavelength' directly";; esac
 
 echo "WAVELENGTH=$BIN"
