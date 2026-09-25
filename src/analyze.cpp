@@ -197,14 +197,14 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
     // pitch: YIN over active 4096-sample frames (fundamentals 30 Hz - 4 kHz)
     std::vector<double> f0s;
     size_t voicedTried = 0;
-    const size_t P = 4096;
+    const size_t P = n >= 4096 ? 4096 : 2048;   // a short window (one slap-bass note) still gets a reading, down to ~50 Hz
     const size_t stride = std::max<size_t>(P / 2, (n / 60 / (P / 2)) * (P / 2));   // at most ~60 frames: YIN is costly
     for (size_t p = 0; p + P <= n; p += stride) {
         double e = 0;
         for (size_t i = 0; i < P; ++i) e += (double)mono[p + i] * mono[p + i];
         if (std::sqrt(e / P) < peak * 0.1) continue;
         ++voicedTried;
-        const double f = yin(&mono[p], P, sr, 30, 4000);
+        const double f = yin(&mono[p], P, sr, P == 4096 ? 30 : 50, 4000);
         if (f > 0) f0s.push_back(f);
         if (voicedTried >= 400) break;
     }

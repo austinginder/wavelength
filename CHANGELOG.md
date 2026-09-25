@@ -50,6 +50,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- `analyze` gave no pitch for windows shorter than about 85 ms; a 60 ms window (one short note) now
+  reads its pitch (fundamentals down to about 50 Hz).
 - `analyze` onset times were about 25 ms early (the spectral frame's start, not the attack); they
   are now within one hop (about 5 ms), measured on a click track. A window that cuts into a sound
   no longer reports an onset at its first frame.
