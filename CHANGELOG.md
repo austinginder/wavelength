@@ -4,6 +4,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-25
+
 Upgrading from 0.1.0: a song with a master `loudness` target mixes a little differently (the
 target's gain now goes in front of the final clip/limiter, see Changed; `"loudnessGain": "start"`
 restores the old sound), bus faders staged from `buses[].lufs` need restaging (buses are now
