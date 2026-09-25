@@ -402,6 +402,45 @@ struct Saturate : Effect {
     }
 };
 
+// ---------------------------------------------------------------------------------- clip
+// Soft clipper: linear up to the knee, then a tanh curve that never passes the ceiling. Shaves a
+// 909 kick's or a clap's first milliseconds, which a limiter would turn into pumping of the whole mix.
+struct Clip : Effect {
+    Envelope drive;
+    double ceiling, knee;
+    Clip(const json &j, const Job &job) {
+        label = "clip";
+        drive = param(j, "drive", 0, job.tempo);
+        ceiling = j.value("ceiling", -1.0);
+        knee = std::clamp(j.value("knee", 0.5), 0.01, 1.0);
+        checkKeys(j, {"drive", "ceiling", "knee"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate, ceil = dbToLin(ceiling), k = knee * ceil, lin = ceil - k;
+        size_t shaped = 0, sounding = 0;
+        auto shape = [&](float x) {
+            const double ax = std::fabs(x);
+            if (ax <= lin) return (double)x;
+            ++shaped;
+            return std::copysign(lin + k * std::tanh((ax - lin) / k), (double)x);
+        };
+        for (size_t i = 0; i < a.frames(); ++i) {
+            const double g = dbToLin(drive.at(i / sr));
+            const float l = (float)(a.left[i] * g), r = (float)(a.right[i] * g);
+            if (std::fabs(l) > 1e-4 || std::fabs(r) > 1e-4) ++sounding;
+            a.left[i] = (float)shape(l);
+            a.right[i] = (float)shape(r);
+        }
+        if (sounding && shaped > sounding / 5) {   // shaping a fifth of the samples is distortion, not peak control
+            char buf[200];
+            std::snprintf(buf, sizeof buf, "clip: %.0f%% of the sounding samples are above the knee: this is distortion now (lower drive or raise ceiling)",
+                          100.0 * shaped / (2.0 * sounding));
+            warnings.push_back(buf);
+        }
+        return true;
+    }
+};
+
 // -------------------------------------------------------------------------------- chorus
 struct Chorus : Effect {
     double rate, depthMs, delayMs;
@@ -961,7 +1000,7 @@ double truePeakDb(const Audio &a) {
 }
 
 std::vector<std::string> builtinEffectTypes() {
-    return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "chorus", "width", "duck",
+    return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
             "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "multiband"};
 }
 
@@ -980,6 +1019,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "compressor") fx = std::make_unique<Compressor>(j, job);
             else if (t == "limiter") fx = std::make_unique<Limiter>(j, job);
             else if (t == "saturate") fx = std::make_unique<Saturate>(j, job);
+            else if (t == "clip") fx = std::make_unique<Clip>(j, job);
             else if (t == "chorus") fx = std::make_unique<Chorus>(j, job);
             else if (t == "width") fx = std::make_unique<Width>(j, job);
             else if (t == "duck") fx = std::make_unique<Duck>(j, job, err);

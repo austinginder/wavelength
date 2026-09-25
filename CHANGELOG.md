@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `clip` effect: a soft clipper (ceiling, knee, drive) to shave transients before the master
+  limiter; album agents built one out of gain, saturate and gain to stop a 909 kick pumping the
+  limiter.
 - Track `"stem": false` skips that track's stem file; `render --tracks` sets it on the muted helper
   tracks, which wrote 2 GB of silent stems on a nearly full disk.
 - `wavelength lint <job.json>`: voice leading between melodic tracks (parallel fifths and octaves in
