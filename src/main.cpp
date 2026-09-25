@@ -93,10 +93,13 @@ Usage:
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
-  wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--crossings] [--json]
-      Voice-leading check between melodic tracks (one voice each: its top note, or its lowest
-      for --low tracks): parallel fifths and octaves in similar motion, and with --crossings a
-      voice below the next one in --tracks order (high to low). Bar and beat for each.
+  wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--split "Organ=4"]
+                  [--from BAR] [--to BAR] [--section NAME] [--crossings] [--json]
+      Voice-leading check between melodic tracks (one voice each: its top note, its lowest for
+      --low tracks, or N voices top to bottom for --split chord tracks): parallel fifths and
+      octaves in similar motion, and with --crossings a voice below the next one in order (high
+      to low). Each problem shows both chords' notes and where they are; --from/--to/--section
+      limit the report to a bar range or a marker's section.
   wavelength version
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
@@ -677,6 +680,8 @@ int cmdRender(const Args &a) {
         json o = {{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)},
                   {"preMasterLufs", r1(sec.preMasterLufs)}};
         if (!sec.checks) o["checks"] = false;
+        if (m > 0 && sec.tailBefore > -60 && sec.head > -60)   // the boundary as heard: last 2 bars before it, first 4 after it
+            o["transition"] = {{"lastBarsBefore", r1(sec.tailBefore)}, {"firstBars", r1(sec.head)}, {"jump", r1(sec.head - sec.tailBefore)}};
         if (m > 0 && sec.lufs > -60 && r.sections[m - 1].lufs > -60) o["change"] = r1(sec.lufs - r.sections[m - 1].lufs);   // dB over the previous section
         sections.push_back(o);
     }
@@ -723,7 +728,8 @@ int cmdRender(const Args &a) {
 // before and after, in similar motion, is a parallel. With --crossings the --tracks order is
 // high to low and a lower voice above a higher one is reported.
 int cmdLint(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength lint <job.json> [--tracks \"Soprano,Alto,Bass\"] [--low \"Bass\"] [--crossings]");
+    if (a.positional.size() < 2)
+        return fail(a, "usage: wavelength lint <job.json> [--tracks \"Soprano,Alto,Bass\"] [--low \"Bass\"] [--split \"Organ=4\"] [--from BAR] [--to BAR] [--section NAME] [--crossings]");
     const std::string path = a.positional[1];
     std::ifstream in(path);
     if (!in) return fail(a, "cannot read " + path);
@@ -743,44 +749,82 @@ int cmdLint(const Args &a) {
         return out;
     };
     const auto low = split(a.get("--low"));
-    std::vector<const Track *> voices;
+    std::map<std::string, int> splits;   // "Organ=4": the chord track read as 4 voices, top to bottom
+    for (auto &s : split(a.get("--split"))) {
+        const size_t eq = s.find('=');
+        if (eq == std::string::npos || std::atoi(s.c_str() + eq + 1) < 2) return fail(a, "--split takes \"Track=N\" (N voices, 2 or more)");
+        splits[s.substr(0, eq)] = std::atoi(s.c_str() + eq + 1);
+    }
+    // a voice: a track's top note, its lowest (--low), or the rank-th note from the top of a split chord track
+    struct Voice { const Track *t; std::string name; int rank; bool lowest; };
+    std::vector<Voice> voices;
+    auto addTrack = [&](const Track &t) {
+        auto sp = splits.find(t.name);
+        if (sp != splits.end()) for (int r = 0; r < sp->second; ++r) voices.push_back({&t, t.name + "." + std::to_string(r + 1), r, false});
+        else voices.push_back({&t, t.name, -1, std::find(low.begin(), low.end(), t.name) != low.end()});
+    };
     if (a.has("--tracks")) {
         for (auto &n : split(a.get("--tracks"))) {
             auto it = std::find_if(job.tracks.begin(), job.tracks.end(), [&](const Track &t) { return t.name == n; });
             if (it == job.tracks.end()) return fail(a, "--tracks: no track named '" + n + "'");
-            voices.push_back(&*it);
+            addTrack(*it);
         }
     } else
         for (auto &t : job.tracks)   // melodic tracks: not drums, kits or effects
             if (!t.notes.empty() && t.plugin != "builtin:drums" && t.plugin != "builtin:fx" && t.plugin != "builtin:audio" && !(t.sampler.is_object() && (t.sampler.contains("kit") || t.sampler.contains("map"))))
-                voices.push_back(&t);
-    // the voice's note at time t (-1 = silent)
-    auto noteAt = [&](const Track *v, double t) {
-        const bool lo = std::find(low.begin(), low.end(), v->name) != low.end();
-        int best = -1;
-        for (auto &n : v->notes)
-            if (n.start <= t + 1e-6 && t < n.start + n.length - 1e-6)
-                if (best < 0 || (lo ? n.key < best : n.key > best)) best = n.key;
-        return best;
+                addTrack(t);
+    for (auto &sp : splits) {
+        const std::string n = sp.first;
+        if (std::none_of(voices.begin(), voices.end(), [&](const Voice &v) { return v.t->name == n; })) return fail(a, "--split: no track named '" + n + "' among the voices");
+    }
+    // range: --from/--to bars (from inclusive, to exclusive) or a section's markers
+    double fromBeat = -1e18, toBeat = 1e18;
+    if (a.has("--from")) fromBeat = (std::atof(a.get("--from").c_str()) - 1) * 4;
+    if (a.has("--to")) toBeat = (std::atof(a.get("--to").c_str()) - 1) * 4;
+    if (a.has("--section")) {
+        const std::string want = a.get("--section");
+        size_t m = 0;
+        for (; m < job.markers.size() && job.markers[m].name != want; ++m) {}
+        if (m == job.markers.size()) return fail(a, "--section: no marker named '" + want + "'");
+        fromBeat = job.markers[m].beat;
+        toBeat = m + 1 < job.markers.size() ? job.markers[m + 1].beat : 1e18;
+    }
+    auto noteAt = [&](const Voice &v, double t) {
+        std::vector<int> keys;
+        for (auto &n : v.t->notes)
+            if (n.start <= t + 1e-6 && t < n.start + n.length - 1e-6) keys.push_back(n.key);
+        if (keys.empty()) return -1;
+        std::sort(keys.begin(), keys.end(), std::greater<int>());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        if (v.rank >= 0) return v.rank < (int)keys.size() ? keys[(size_t)v.rank] : -1;
+        return v.lowest ? keys.back() : keys.front();
     };
-    std::set<double> onsetSet;
-    for (auto *v : voices) for (auto &n : v->notes) onsetSet.insert(std::round(n.start * 1e4) / 1e4);
-    const std::vector<double> onsets(onsetSet.begin(), onsetSet.end());
-    json problems = json::array();
+    auto starts = [&](const Voice &v) {
+        std::set<double> s;
+        for (auto &n : v.t->notes) s.insert(std::round(n.start * 1e4) / 1e4);
+        return s;
+    };
     auto where = [&](double t) {
-        const double beat = job.tempo.secToBeat(t);
+        const double beat = std::round(job.tempo.secToBeat(t) * 1000) / 1000;   // 71.99999 is bar 19 beat 1, not bar 18 beat 5
         char buf[48];
-        std::snprintf(buf, sizeof buf, "bar %d beat %.2f", (int)(beat / 4) + 1, std::fmod(beat, 4.0) + 1);
+        std::snprintf(buf, sizeof buf, "bar %d beat %.2f", (int)std::floor(beat / 4) + 1, beat - 4 * std::floor(beat / 4) + 1);
         return std::string(buf);
     };
+    auto inRange = [&](double t) { const double b = job.tempo.secToBeat(t); return b >= fromBeat - 1e-6 && b < toBeat - 1e-6; };
+    json problems = json::array();
     std::map<std::string, int> counts;
-    // pairs that move together in octaves (or fifths) most of the time are doublings, not voice-leading faults
     std::map<std::pair<size_t, size_t>, int> moves, par8, par5;
-    std::vector<std::tuple<size_t, size_t, int, double>> found;   // x, y, interval class, time
-    for (size_t k = 1; k < onsets.size(); ++k) {
-        const double t0 = onsets[k - 1], t1 = onsets[k];
-        for (size_t x = 0; x < voices.size(); ++x)
-            for (size_t y = x + 1; y < voices.size(); ++y) {
+    struct Found { size_t x, y; int ic; double t0, t1; int a0, a1, b0, b1; };
+    std::vector<Found> found;
+    for (size_t x = 0; x < voices.size(); ++x)
+        for (size_t y = x + 1; y < voices.size(); ++y) {
+            if (voices[x].t == voices[y].t && voices[x].rank < 0) continue;
+            // this pair's own verticalities: where either of the two starts a note (other voices don't split them)
+            std::set<double> s = starts(voices[x]);
+            for (double t : starts(voices[y])) s.insert(t);
+            const std::vector<double> on(s.begin(), s.end());
+            for (size_t k = 1; k < on.size(); ++k) {
+                const double t0 = on[k - 1], t1 = on[k];
                 const int a0 = noteAt(voices[x], t0), a1 = noteAt(voices[x], t1), b0 = noteAt(voices[y], t0), b1 = noteAt(voices[y], t1);
                 if (a0 < 0 || a1 < 0 || b0 < 0 || b1 < 0 || a0 == a1 || b0 == b1) continue;
                 const int i0 = std::abs(a0 - b0) % 12, i1 = std::abs(a1 - b1) % 12;
@@ -788,17 +832,24 @@ int cmdLint(const Args &a) {
                 ++moves[{x, y}];
                 if (similar && i0 == i1 && (i0 == 0 || i0 == 7)) {
                     ++(i0 == 7 ? par5 : par8)[{x, y}];
-                    found.push_back({x, y, i0, t1});
+                    found.push_back({x, y, i0, t0, t1, a0, a1, b0, b1});
                 }
             }
-        if (a.has("--crossings"))
+        }
+    if (a.has("--crossings")) {
+        std::set<double> all;
+        for (auto &v : voices) for (double t : starts(v)) all.insert(t);
+        for (double t : all) {
+            if (!inRange(t)) continue;
             for (size_t x = 0; x + 1 < voices.size(); ++x) {
-                const int hi = noteAt(voices[x], t1), lo = noteAt(voices[x + 1], t1);
+                const int hi = noteAt(voices[x], t), lo = noteAt(voices[x + 1], t);
                 if (hi >= 0 && lo >= 0 && lo > hi) {
-                    problems.push_back({{"kind", "voice crossing"}, {"voices", {voices[x]->name, voices[x + 1]->name}}, {"at", where(t1)}, {"time", std::round(t1 * 1000) / 1000}});
+                    problems.push_back({{"kind", "voice crossing"}, {"voices", {voices[x].name, voices[x + 1].name}}, {"at", where(t)},
+                                        {"time", std::round(t * 1000) / 1000}, {"notes", json::array({keyName(hi), keyName(lo)})}});
                     ++counts["voice crossing"];
                 }
             }
+        }
     }
     json doublings = json::array();
     auto doubling = [&](size_t x, size_t y, int ic) {
@@ -808,16 +859,18 @@ int cmdLint(const Args &a) {
     for (auto &[pair, m] : moves)
         for (int ic : {0, 7})
             if (doubling(pair.first, pair.second, ic))
-                doublings.push_back({{"voices", {voices[pair.first]->name, voices[pair.second]->name}}, {"interval", ic ? "fifths" : "octaves"}});
-    for (auto &[x, y, ic, t] : found) {
-        if (doubling(x, y, ic)) continue;
-        const std::string kind = ic == 7 ? "parallel fifths" : "parallel octaves";
-        problems.push_back({{"kind", kind}, {"voices", {voices[x]->name, voices[y]->name}}, {"at", where(t)}, {"time", std::round(t * 1000) / 1000}});
+                doublings.push_back({{"voices", {voices[pair.first].name, voices[pair.second].name}}, {"interval", ic ? "fifths" : "octaves"}});
+    for (auto &f : found) {
+        if (doubling(f.x, f.y, f.ic) || !inRange(f.t1)) continue;
+        const std::string kind = f.ic == 7 ? "parallel fifths" : "parallel octaves";
+        problems.push_back({{"kind", kind}, {"voices", {voices[f.x].name, voices[f.y].name}}, {"at", where(f.t1)}, {"from", where(f.t0)},
+                            {"time", std::round(f.t1 * 1000) / 1000},
+                            {"notes", json::array({json::array({keyName(f.a0), keyName(f.b0)}), json::array({keyName(f.a1), keyName(f.b1)})})}});
         ++counts[kind];
     }
     std::stable_sort(problems.begin(), problems.end(), [](const json &p, const json &q) { return p["time"].get<double>() < q["time"].get<double>(); });
     json names = json::array();
-    for (auto *v : voices) names.push_back(v->name);
+    for (auto &v : voices) names.push_back(v.name);
     if (a.has("--json")) {
         emit(json{{"ok", true}, {"voices", names}, {"counts", counts}, {"doublings", doublings}, {"problems", problems}}.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
@@ -826,9 +879,15 @@ int cmdLint(const Args &a) {
     for (auto &d : doublings)
         std::fprintf(OUT, "  doubling (ignored): %s / %s in %s\n", d["voices"][0].get<std::string>().c_str(), d["voices"][1].get<std::string>().c_str(),
                      d["interval"].get<std::string>().c_str());
-    for (auto &p : problems)
-        std::fprintf(OUT, "  %-17s %-28s %s\n", p["kind"].get<std::string>().c_str(),
-                     (p["voices"][0].get<std::string>() + " / " + p["voices"][1].get<std::string>()).c_str(), p["at"].get<std::string>().c_str());
+    for (auto &p : problems) {
+        std::string detail;
+        if (p.contains("from"))   // "G4/C4 (bar 3 beat 1.00) -> A4/D4"
+            detail = p["notes"][0][0].get<std::string>() + "/" + p["notes"][0][1].get<std::string>() + " (" + p["from"].get<std::string>() + ") -> " +
+                     p["notes"][1][0].get<std::string>() + "/" + p["notes"][1][1].get<std::string>();
+        else detail = p["notes"][0].get<std::string>() + " under " + p["notes"][1].get<std::string>();
+        std::fprintf(OUT, "  %-17s %-26s %-20s %s\n", p["kind"].get<std::string>().c_str(),
+                     (p["voices"][0].get<std::string>() + " / " + p["voices"][1].get<std::string>()).c_str(), p["at"].get<std::string>().c_str(), detail.c_str());
+    }
     std::fprintf(OUT, "%zu problem%s\n", problems.size(), problems.size() == 1 ? "" : "s");
     return 0;
 }
@@ -903,7 +962,7 @@ int run(int argc, char **argv) {
             {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
-            {"lint", {"--tracks", "--low", "--crossings", "--json"}},
+            {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
         if (it != known.end())

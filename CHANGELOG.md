@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Fixed
+- `lint` compared every pair at every voice's note starts, so a third voice's rhythm split a pair's
+  moves and hid real parallels (four parallel octaves in Fugue for the Night Shift's exposition went
+  unreported) or moved where they were reported. Each pair is now compared at its own note starts.
 - The skill's installer needed `curl` to download a release; without it (minimal Linux images) it
   quietly built from source and said there was no release build. It now uses `wget` when there is
   no `curl`, and says why it falls back to a source build.
@@ -20,6 +23,8 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- `lint --split "Organ=4"` (a chord track as voices, top to bottom), `--from`/`--to` bars and
+  `--section NAME`, and both chords' notes with each problem.
 - Marker `"checks": false` for sections that are meant as they are: their dropouts are reported as
   `"intended": true` and they get no arrangement warnings (a trailer's false-ending silence, a soft
   ambient peak).

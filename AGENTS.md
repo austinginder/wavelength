@@ -223,8 +223,11 @@ window around one note. Audition tags come from a single C4: instruments that ca
 
 For fugues, chorales and any part-writing, `wavelength lint job.json --tracks "Soprano,Alto,Tenor,Bass"
 --low "Bass" --crossings` lists parallel fifths and octaves (similar motion, both voices moving)
-and voice crossings with bar and beat. Each track is one voice: its top note, or its lowest for
-`--low`. Without `--tracks` every melodic track is checked and pairs that double each other most of
+and voice crossings, each with both chords' notes and where they sound ("A#4/A#2 (bar 10 beat
+1.50) -> D5/D3"). Each track is one voice: its top note, or its lowest for `--low`;
+`--split "Organ=4"` reads a chord track as 4 voices, top to bottom, for chorales on one track.
+Each pair is compared at its own note starts, so a third voice's rhythm doesn't hide or invent a
+parallel. Limit the report with `--from 5 --to 17` (bars) or `--section Exposition`. Without `--tracks` every melodic track is checked and pairs that double each other most of
 the time are listed as doublings instead of faults.
 
 ## Mastering
