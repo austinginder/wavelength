@@ -56,7 +56,7 @@ Usage:
   wavelength samples [--search TEXT] [--kit NAME] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples and drum kit folders);
       --kit shows the General MIDI key each of a kit's files is mapped to.
-  wavelength audition <plugin> [--jobs 4] [--limit N] [--rebuild] [--json]
+  wavelength audition <plugin> [--jobs 4] [--limit N] [--rebuild] [--json] | audition --retag
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
       (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
@@ -93,7 +93,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -266,9 +266,10 @@ int cmdSamples(const Args &a) {
 
 // ---- audition --------------------------------------------------------------------------
 int cmdAudition(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength audition <plugin> [--jobs N] [--limit N] [--rebuild]");
-    PluginInfo info;
     std::string err, summary;
+    if (a.has("--retag")) { retagAuditions(summary); std::fprintf(OUT, "%s\n", summary.c_str()); return 0; }
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength audition <plugin> [--jobs N] [--limit N] [--rebuild] | audition --retag");
+    PluginInfo info;
     if (!resolvePlugin(a.positional[1], info, err)) return fail(a, err);
     const int jobs = std::atoi(a.get("--jobs", "4").c_str()), limit = std::atoi(a.get("--limit", "0").c_str());
     if (runAudition(info, jobs, limit, a.has("--rebuild"), a.has("--verbose"), err, summary)) return fail(a, err);

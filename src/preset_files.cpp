@@ -53,6 +53,13 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".mtpreset" || ext == ".mtdrum") return p.find("microtonic") != std::string::npos;
     if (ext == ".sbset") return p == "soundbox";
     if (ext == ".dspreset") return p == "decentsampler";
+    if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
+        std::ifstream in(file, std::ios::binary);
+        char head[20] = {};
+        in.read(head, sizeof head);
+        if (std::memcmp(head, "CcnK", 4) == 0 && std::memcmp(head + 16, "XfsX", 4) == 0) return p == "serum";
+        return true;
+    }
     if (ext != ".h2p" && ext != ".vstpreset") return true;
     std::ifstream in(file, std::ios::binary);
     std::string head(4096, '\0');

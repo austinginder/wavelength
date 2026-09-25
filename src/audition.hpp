@@ -24,6 +24,9 @@ nlohmann::json auditionIndex(const PluginInfo &info);
 int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool verbose, std::string &err,
                 std::string &summary);
 
+// Recompute every index's tags from its stored measurements (after changing the tag rules).
+int retagAuditions(std::string &summary);
+
 // Worker entry point (`wavelength __audition <plugin> <batch.json> <results.jsonl>`).
 int auditionWorker(const std::string &plugin, const std::string &batchFile, const std::string &resultsFile);
 

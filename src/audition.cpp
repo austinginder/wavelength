@@ -60,7 +60,9 @@ std::vector<std::string> tagsFor(const json &r) {
     else if (b.value("bass", -120.0) > -4) t.push_back("bassy");
     if (b.value("air", -120.0) > -15 || b.value("presence", -120.0) > -8) t.push_back("airy");
     const double attack = r.value("attackMs", 0.0), sustain = r.value("sustainDb", 0.0), decay = r.value("decayMs", 0.0);
-    const bool rhythmic = r.value("onsets", 0) >= 3;
+    // 5+ onsets from one held second: arps and sequences (74% of those by name); fewer is usually a
+    // moving pad or lead (LFOs and chorus make spectral flux)
+    const bool rhythmic = r.value("onsets", 0) >= 5;
     if (rhythmic) t.push_back("rhythmic");
     else if (attack > 150) t.push_back("slow attack");
     if (sustain < -20) t.push_back(decay > 0 && decay < 400 ? "pluck" : "short");
@@ -135,6 +137,25 @@ json auditionIndex(const PluginInfo &info) {
     return j.is_object() && j.contains("presets") ? j["presets"] : json::object();
 }
 
+int retagAuditions(std::string &summary) {
+    const char *h = getenv("HOME");
+    const fs::path dir = std::string(h ? h : "") + "/Library/Caches/wavelength/audition";
+    size_t files = 0, presets = 0;
+    std::error_code ec;
+    for (auto &e : fs::directory_iterator(dir, ec)) {
+        if (e.path().extension() != ".json") continue;
+        std::ifstream in(e.path());
+        json j = json::parse(in, nullptr, false);
+        if (!j.is_object() || !j.contains("presets")) continue;
+        for (auto &[k, v] : j["presets"].items())
+            if (!v.contains("error")) { v["tags"] = tagsFor(v); ++presets; }
+        std::ofstream(e.path()) << j.dump(1, ' ', false, json::error_handler_t::replace);
+        ++files;
+    }
+    summary = "retagged " + std::to_string(presets) + " presets in " + std::to_string(files) + " indexes";
+    return 0;
+}
+
 int auditionWorker(const std::string &plugin, const std::string &batchFile, const std::string &resultsFile) {
     std::ifstream bin(batchFile);
     const json batch = json::parse(bin, nullptr, false);
@@ -196,7 +217,7 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
     json index = rebuild ? json::object() : auditionIndex(info);
     std::vector<json> todo;
     for (auto &p : presets) {
-        if (index.contains(p.name)) continue;
+        if (index.contains(p.name) && !index[p.name].contains("error")) continue;   // failures get another try
         todo.push_back({{"name", p.name}, {"location", p.stateFile ? p.location : ""}});
         if (limit > 0 && (int)todo.size() >= limit) break;
     }
@@ -277,6 +298,11 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
             spawn(std::move(rest));
             if (verbose) std::fprintf(stderr, "audition: %zu of %zu presets measured\n", index.size() - already, todo.size());
         }
+    }
+    {   // drop entries for presets that are no longer listed
+        std::set<std::string> names;
+        for (auto &p : presets) names.insert(p.name);
+        for (auto it = index.begin(); it != index.end();) it = names.count(it.key()) ? std::next(it) : index.erase(it);
     }
     fs::create_directories(fs::path(indexPath(info)).parent_path());
     std::ofstream(indexPath(info)) << json{{"plugin", info.name}, {"id", info.id}, {"note", "C4, 1 s at 0.5 s, velocity 0.8"},
