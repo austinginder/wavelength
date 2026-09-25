@@ -1,7 +1,8 @@
 # Third-party software
 
 Wavelength is MIT-licensed (see `LICENSE`). CMake fetches these libraries at configure time and they
-are compiled into the `wavelength` binary. zlib comes from the operating system.
+are compiled into the `wavelength` binary. zlib comes from the operating system on macOS and Linux;
+the Windows build compiles it in.
 
 | Library | Version | Licence | Used for |
 |---|---|---|---|
@@ -11,6 +12,14 @@ are compiled into the `wavelength` binary. zlib comes from the operating system.
 | [zstd](https://github.com/facebook/zstd) | 1.5.7 | BSD-3-Clause (dual BSD/GPLv2; used under BSD) | Serum 2 presets |
 | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | 57b93f4 | MIT | time stretch for audio clips |
 | [Signalsmith Linear](https://github.com/Signalsmith-Audio/linear) | 0.3.1 | MIT | FFT/STFT for Signalsmith Stretch |
+| [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
+
+Linux builds link libstdc++ and libgcc statically (GCC Runtime Library Exception: no notice
+needed). The Windows `.exe` is linked statically with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw):
+LLVM's libc++ and libunwind (Apache-2.0 with LLVM exception) and the MinGW-w64 runtime and
+winpthreads, whose licences ask for their notices in binary distributions. The Windows archive
+carries those files, copied from the toolchain that built it, in `licenses/`
+(`COPYING.MinGW-w64-runtime.txt`, `COPYING.winpthreads.txt`, `LLVM-LICENSE.txt`, `zlib-LICENSE.txt`).
 
 ## CLAP
 

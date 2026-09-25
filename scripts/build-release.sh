@@ -32,13 +32,15 @@ mkdir -p "$work/src" && git archive "$tag" | tar x -C "$work/src"
 want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
 docs="LICENSE THIRD_PARTY.md README.md CHANGELOG.md AGENTS.md docs examples"
 
-# package <target> <binary>: wavelength-<target>/ with the binary and the docs. Names carry no
-# version, so releases/latest/download/<name> links stay stable.
+# package <target> <binary> [licenses dir]: wavelength-<target>/ with the binary, the docs and
+# the licences of anything linked in statically. Names carry no version, so
+# releases/latest/download/<name> links stay stable.
 package() {
-  local target=$1 bin=$2 name="wavelength-$1"
+  local target=$1 bin=$2 licenses=${3:-} name="wavelength-$1"
   rm -rf "$work/pkg/$name"; mkdir -p "$work/pkg/$name"
   cp "$bin" "$work/pkg/$name/"
   (cd "$work/src" && cp -R $docs "$work/pkg/$name/")
+  [ -n "$licenses" ] && cp -R "$licenses" "$work/pkg/$name/licenses"
   rm -f "$dist/$name".*
   if [[ $target == windows* ]]; then (cd "$work/pkg" && zip -qr "$dist/$name.zip" "$name")
   else (cd "$work/pkg" && COPYFILE_DISABLE=1 tar czf "$dist/$name.tar.gz" "$name"); fi
@@ -80,11 +82,18 @@ done
 if want windows-x86_64; then
   echo "== Windows x86_64"
   docker run --rm -v "$work:/work" -w /work mstorsjo/llvm-mingw:latest bash -c \
-    "cmake -S src -B windows -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/work/src/cmake/mingw-x86_64.cmake > /dev/null && cmake --build windows -j 10 > /dev/null && x86_64-w64-mingw32-strip windows/wavelength.exe"
+    "cmake -S src -B windows -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/work/src/cmake/mingw-x86_64.cmake > /dev/null && cmake --build windows -j 10 > /dev/null && x86_64-w64-mingw32-strip windows/wavelength.exe \
+     && mkdir -p windows/licenses && m=/opt/llvm-mingw/x86_64-w64-mingw32/share/mingw32 \
+     && cp \$m/COPYING.MinGW-w64-runtime.txt \$m/COPYING.winpthreads.txt windows/licenses/ \
+     && cp /opt/llvm-mingw/LICENSE.TXT windows/licenses/LLVM-LICENSE.txt \
+     && cp windows/_deps/zlib-src/LICENSE windows/licenses/zlib-LICENSE.txt"
   docker build -q --platform linux/amd64 -t wavelength-wine -f scripts/docker/wine.Dockerfile scripts/docker > /dev/null
   smoke docker run --rm --platform linux/amd64 -v "$work:/work" -w /work wavelength-wine \
     wine64 windows/wavelength.exe render 'src\examples\mastering.json' --out 'C:\smoke' --json
-  package windows-x86_64 "$work/windows/wavelength.exe"
+  for f in COPYING.MinGW-w64-runtime.txt COPYING.winpthreads.txt LLVM-LICENSE.txt zlib-LICENSE.txt; do
+    [ -s "$work/windows/licenses/$f" ] || { echo "missing licence $f for the Windows build"; exit 1; }
+  done
+  package windows-x86_64 "$work/windows/wavelength.exe" "$work/windows/licenses"
   rm -rf "$work/windows"
 fi
 
