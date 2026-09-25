@@ -433,11 +433,14 @@ struct Clip : Effect {
             a.left[i] = (float)shape(l);
             a.right[i] = (float)shape(r);
         }
-        if (sounding && shaped > sounding / 5) {   // shaping a fifth of the samples is distortion, not peak control
-            char buf[200];
+        // shaping a fifth of the samples is distortion, not peak control (shaped counts both channels)
+        if (sounding && shaped > 2 * sounding / 5) {
+            const double kneeDb = -dsp::linToDb(1.0 - knee);
+            char buf[240];
             std::snprintf(buf, sizeof buf, "clip: %.0f%% of the sounding samples are shaped (the curve starts %.1f dB under the ceiling): this is "
-                          "distortion now; narrow the knee (\"kneeDb\": 2), raise the ceiling or send less level in",
-                          100.0 * shaped / (2.0 * sounding), -dsp::linToDb(1.0 - knee));
+                          "distortion now; %s", 100.0 * shaped / (2.0 * sounding), kneeDb,
+                          kneeDb > 2.5 ? "narrow the knee (\"kneeDb\": 2), raise the ceiling or send less level in"
+                                       : "raise the ceiling or send less level in (the knee is already narrow)");
             warnings.push_back(buf);
         }
         return true;
