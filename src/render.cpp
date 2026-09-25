@@ -195,7 +195,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         if (e.path().extension() == ".wav") fs::remove(e.path(), ec);
     {
         const double perFile = (double)frames * 2 * 4 + 64;
-        const double need = perFile + (job.stemBits ? job.tracks.size() * (double)frames * 2 * (job.stemBits / 8) : 0);
+        const size_t stems = (size_t)std::count_if(job.tracks.begin(), job.tracks.end(), [](const Track &t) { return t.stem; });
+        const double need = perFile + (job.stemBits ? stems * (double)frames * 2 * (job.stemBits / 8) : 0);
         const auto space = fs::space(outDir, ec);
         if (!ec && (double)space.available < need * 1.05) {
             char buf[200];
@@ -261,7 +262,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         const Track &track = job.tracks[i];
         char prefix[8];
         std::snprintf(prefix, sizeof prefix, "%02zu-", i + 1);
-        if (job.stemBits) {
+        if (job.stemBits && track.stem) {
             tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
             if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames)) return false;
         }

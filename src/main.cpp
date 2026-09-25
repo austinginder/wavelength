@@ -573,7 +573,7 @@ int cmdRender(const Args &a) {
             const std::string n = t.value("name", "");
             if (!need.count(n)) continue;
             json c = t;
-            if (!want.count(n)) c["mute"] = true;   // renders only to key an effect
+            if (!want.count(n)) { c["mute"] = true; c["stem"] = false; }   // renders only to key an effect: no mix, no stem file
             kept.push_back(c);
         }
         j["tracks"] = kept;

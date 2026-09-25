@@ -5,6 +5,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Track `"stem": false` skips that track's stem file; `render --tracks` sets it on the muted helper
+  tracks, which wrote 2 GB of silent stems on a nearly full disk.
 - `wavelength lint <job.json>`: voice leading between melodic tracks (parallel fifths and octaves in
   similar motion, voice crossings with `--crossings`), with bar and beat. Pairs that move in
   octaves or fifths most of the time are reported as doublings, not faults. Best with `--tracks`

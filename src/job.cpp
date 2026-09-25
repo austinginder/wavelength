@@ -199,6 +199,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             tr.gainDb = t.value("gain", 0.0);
             tr.pan = std::clamp(t.value("pan", 0.0), -1.0, 1.0);
             tr.mute = t.value("mute", false);
+            tr.stem = t.value("stem", true);
             tr.warmup = t.value("warmup", -1.0);
             tr.preset = t.value("preset", "");
             if (t.contains("state") && !t["state"].is_null()) {

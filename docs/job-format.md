@@ -64,6 +64,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `roll` | 0 | Beats between notes that start together, lowest first (strummed or rolled chords); negative rolls from the top. |
 | `bendRange` | 2 | The plugin's pitch-bend range in semitones, so `automation.pitchbend` can be written in semitones. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |
+| `stem` | `true` = write this track's stem file (when the job writes stems); `false` skips it. |
 | `mute` | false | Render the stem but leave it out of the mix. |
 | `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |
 | `notes` | `[]` | See below. |
