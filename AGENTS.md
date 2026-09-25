@@ -221,6 +221,9 @@ section. Don't master a mix that already went through a limiter. For a release, 
 - `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
   removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.
 - `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
+- `tracks[].postFaderPeakDb`, the track's peak as it reaches the mix. When the master limiter
+  works hard, a warning names the tracks whose peaks feed it; tame those (a `limiter` or
+  `saturate` on the track) instead of turning the whole song down.
 - `tracks[].lufs` and `buses[].lufs`, integrated loudness after the `fx`, before the fader.
   Use it for gain staging: `gain` = target − lufs. `mix.lufs` is the whole song
   (−14 LUFS is a common streaming level); `sections[].lufs` is per marker section.

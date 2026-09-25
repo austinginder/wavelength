@@ -13,6 +13,7 @@ struct TrackResult {
     std::vector<std::string> fx;
     Levels levels{};
     double lufs = -120, seconds = 0;   // seconds: wall time to render this track
+    double postPeakDb = -240;          // peak of what the track sends to its output, after fader and pan
     std::vector<double> sectionLufs;  // post-fader loudness in each marker section
     uint32_t latencySamples = 0;      // plugin processing delay removed from this track (instrument + effects)
     std::vector<std::string> warnings;

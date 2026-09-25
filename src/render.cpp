@@ -296,6 +296,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             double g = dsp::dbToLin(track.gainDb);
             Audio post;   // what this track adds to its output, for per-section loudness
             if (!job.markers.empty()) post.resize(frames);
+            float postPeak = 0;
             for (size_t f = 0; f < frames; ++f) {
                 if (automated && f % 32 == 0) g = dsp::dbToLin(track.gainDb + track.gainAutomation.at(f / sr));
                 if (f % 32 == 0) for (auto &s : sends) if (s.env) s.amt = dsp::dbToLin(s.env->at(f / sr));
@@ -305,9 +306,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 }
                 const float l = (float)(audio.left[f] * g * pl), r = (float)(audio.right[f] * g * pr);
                 dest->left[f] += l; dest->right[f] += r;
+                postPeak = std::max({postPeak, std::fabs(l), std::fabs(r)});
                 if (!post.left.empty()) { post.left[f] = l; post.right[f] = r; }
                 for (auto &s : sends) { s.bus->left[f] += (float)(l * s.amt); s.bus->right[f] += (float)(r * s.amt); }
             }
+            tr.postPeakDb = dsp::linToDb(postPeak);
             for (size_t m = 0; m < job.markers.size(); ++m) {
                 const double a0 = job.markers[m].sec, b0 = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
                 tr.sectionLufs.push_back(integratedLufs(post, job.sampleRate, (size_t)(a0 * sr), (size_t)(b0 * sr)));
@@ -559,6 +562,23 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             result.warnings.push_back(buf);
         }
         if (job.hasNormalize) result.warnings.push_back("master: \"normalize\" after a loudness target changes the loudness again; use one of them");
+    }
+    // a hard-working master limiter: name the tracks whose peaks drive it (peak after the fader, and
+    // how far the peaks stand above the track's loudness: a spiky kick or clap limits the whole song)
+    if (std::any_of(result.warnings.begin(), result.warnings.end(), [](const std::string &w) { return w.find("master: limiter:") == 0; })) {
+        std::vector<const TrackResult *> byPeak;
+        for (auto &t : result.tracks) if (t.postPeakDb > -100) byPeak.push_back(&t);
+        std::sort(byPeak.begin(), byPeak.end(), [](auto *a, auto *b) { return a->postPeakDb > b->postPeakDb; });
+        std::string list;
+        for (size_t k = 0; k < byPeak.size() && k < 3; ++k) {
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "%s'%s' peaks %.1f dBFS (%.0f dB above its loudness)", k ? ", " : "", byPeak[k]->name.c_str(),
+                          byPeak[k]->postPeakDb, byPeak[k]->levels.peakDb - byPeak[k]->lufs);
+            list += buf;
+        }
+        if (!list.empty())
+            result.warnings.push_back("master: the loudest track peaks feeding the limiter: " + list +
+                                      "; a limiter or saturate on a spiky track lets the song get loud with less master limiting");
     }
     const Levels before = measure(mix);
     if (job.hasNormalize && !before.silent) {

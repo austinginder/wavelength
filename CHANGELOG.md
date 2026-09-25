@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `tracks[].postFaderPeakDb`, and when the master limiter works hard a warning naming the three
+  tracks whose peaks feed it most (with how far their peaks stand above their loudness): album
+  agents needed extra renders to find that a spiky kick or clap was limiting the whole song.
 - A warning when an automation curve starts late and its first value differs from what the song
   would otherwise start at (the effect's or parameter's static value, 0 dB for gain rides): a
   curve holds its first value before its first point, which muffled a whole Theme behind a filter
