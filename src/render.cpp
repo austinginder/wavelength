@@ -48,6 +48,7 @@ bool runChain(Chain &chain, Audio &a, const FxContext &ctx, std::vector<std::str
               const std::string &context, std::string &err) {
     for (auto &fx : chain) {
         if (!fx->process(a, ctx, err)) { err = context + ": " + err; return false; }
+        muteGarbage(a, ctx.job.sampleRate, context + " " + fx->label, warnings);
         labels.push_back(fx->label);
         for (auto &w : fx->warnings) warnings.push_back(w);
     }
@@ -62,7 +63,9 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
         tr.plugin = tr.pluginName = track.plugin;
         if (!track.stateFile.empty() || !track.preset.empty() || !track.params.empty() || !track.paramAutomation.empty())
             tr.warnings.push_back("built-in instruments ignore state, params and parameter automation");
-        return renderBuiltin(track.plugin, job, track, audio, tr.warnings, err);
+        if (!renderBuiltin(track.plugin, job, track, audio, tr.warnings, err)) return false;
+        muteGarbage(audio, job.sampleRate, track.plugin, tr.warnings);
+        return true;
     }
     PluginSetup setup;
     setup.spec = track.plugin;
@@ -266,6 +269,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         tr.lufs = integratedLufs(audio, job.sampleRate);
         if (tr.levels.silent && !track.notes.empty())
             tr.warnings.push_back("rendered silence: check the notes, the state/preset, and that the plugin is an instrument");
+        if (tr.lufs > 6) {   // no instrument is this loud: garbage below the mute threshold or runaway feedback
+            char msg[200];
+            std::snprintf(msg, sizeof msg, "track '%s' reads %+.1f LUFS (peak %+.1f dBFS): broken output or runaway feedback, not a level to gain-stage from",
+                          track.name.c_str(), tr.lufs, tr.levels.peakDb);
+            tr.warnings.push_back(msg);
+            result.warnings.push_back(msg);
+        }
 
         if (!track.mute) {
             double angle = (track.pan + 1.0) * dsp::kPi / 4.0;

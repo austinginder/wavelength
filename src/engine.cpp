@@ -172,7 +172,6 @@ void scheduleControllers(const Track &track, int sampleRate, double seconds, std
     });
 }
 
-namespace {
 // Plugins occasionally emit a lone sample of garbage (DUNE 3 once wrote 9188.0, +79 dBFS, into a brass
 // chord): it clicks, excites every reverb downstream, pumps the limiter and wrecks the track's loudness
 // reading. Mute non-finite samples and anything above +30 dBFS, which no real signal reaches, and say where.
@@ -200,7 +199,6 @@ void muteGarbage(Audio &out, int sampleRate, const std::string &name, std::vecto
     if (worst > 0) what += (nonFinite ? " or" : "") + std::string(" up to ") + std::to_string((int)std::lround(20 * std::log10(worst))) + " dBFS";
     warnings.push_back(name + " output " + what + ", first at " + at + " (render time, before any lead-in); they were muted");
 }
-} // namespace
 
 bool runPlugin(const Job &job, OpenedPlugin &p, const std::vector<TimedEvent> &events, const Audio *input, Audio &out,
                std::string &err) {

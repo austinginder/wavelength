@@ -76,6 +76,7 @@ struct DelayLine {
         const double pos = (double)w - delay;
         double p = std::fmod(pos, (double)buf.size());
         if (p < 0) p += buf.size();
+        if (p >= (double)buf.size()) p = 0;   // -1e-14 + size rounds to size: i0 would read one float past the buffer
         const size_t i0 = (size_t)p, i1 = (i0 + 1) % buf.size();
         const double f = p - i0;
         return buf[i0] * (1 - f) + buf[i1] * f;

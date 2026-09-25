@@ -52,4 +52,9 @@ void scheduleControllers(const Track &track, int sampleRate, double seconds, std
 bool runPlugin(const Job &job, OpenedPlugin &p, const std::vector<TimedEvent> &events, const Audio *input, Audio &out,
                std::string &err);
 
+// Mutes non-finite samples and anything above +30 dBFS (no real signal gets there) and warns
+// with the count, the worst level and the first time. Runs on every plugin's output, every
+// built-in instrument and after every effect.
+void muteGarbage(Audio &out, int sampleRate, const std::string &name, std::vector<std::string> &warnings);
+
 } // namespace wl
