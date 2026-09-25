@@ -73,7 +73,7 @@ Usage:
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a track whose plugin crashes or hangs is left out and listed in "failedTracks".
-  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--out DIR] [--json]
+  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo) without re-rendering; reports loudness before and after.
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
@@ -377,7 +377,7 @@ int cmdParams(const Args &a) {
 // builtin:audio track and the chain runs as the job's master (loudness target included).
 int cmdMaster(const Args &a) {
     if (a.positional.size() < 2 || !a.has("--chain"))
-        return fail(a, "usage: wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--out DIR]");
+        return fail(a, "usage: wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--out DIR]");
     const std::string input = fs::absolute(a.positional[1]).string();
     Audio in;
     int sr = 0;
@@ -396,8 +396,9 @@ int cmdMaster(const Args &a) {
     } else if (chain.is_object()) master = chain;
     else return fail(a, "the chain must be an effect list, a master object ({\"fx\": [...], \"loudness\": -14}) or a job");
     if (a.has("--loudness")) master["loudness"] = std::atof(a.get("--loudness").c_str());
+    const double leadIn = a.has("--lead-in") ? std::atof(a.get("--lead-in").c_str()) : 0;
     const double seconds = (double)in.frames() / sr;
-    const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"},
+    const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"}, {"leadIn", leadIn},
                           {"markers", markers}, {"master", master},
                           {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({{{"file", input}, {"beat", 0}}})}}})}};
     const std::string chainPath = fs::absolute(a.get("--chain")).string();
@@ -415,7 +416,7 @@ int cmdMaster(const Args &a) {
     json sections = json::array();
     for (auto &sec : r.sections)
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100},
-                            {"inputLufs", r1(integratedLufs(in, sr, (size_t)(sec.start * sr), (size_t)(sec.end * sr)))}, {"lufs", r1(sec.lufs)}});
+                            {"inputLufs", r1(integratedLufs(in, sr, (size_t)((sec.start - leadIn) * sr), (size_t)((sec.end - leadIn) * sr)))}, {"lufs", r1(sec.lufs)}});
     json report = {{"ok", true},
                    {"input", {{"file", input}, {"lufs", r1(integratedLufs(in, sr))}, {"truePeakDb", r1(truePeakDb(in))}}},
                    {"output", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)},
@@ -478,7 +479,7 @@ int cmdRender(const Args &a) {
     for (auto &sec : r.sections)
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
     json report = {{"ok", true}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
-                   {"renderSeconds", std::round(r.renderSeconds * 100) / 100},
+                   {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},

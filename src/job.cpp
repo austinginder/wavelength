@@ -158,6 +158,8 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
         out.tail = j.value("tail", 3.0);
         out.warmup = j.value("warmup", 0.4);
         out.length = j.value("length", 0.0);
+        out.leadIn = j.value("leadIn", 0.0);
+        if (out.leadIn < 0 || out.leadIn > 30) throw std::runtime_error("\"leadIn\" is seconds of silence before the song, 0 to 30");
         if (j.contains("normalize") && !j["normalize"].is_null()) { out.hasNormalize = true; out.normalizeDb = j["normalize"].get<double>(); }
         if (j.contains("timeSignature")) { out.tsigNum = j["timeSignature"][0]; out.tsigDen = j["timeSignature"][1]; }
 

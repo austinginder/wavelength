@@ -41,6 +41,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `tail` | 3 | Seconds rendered after the last note-off, for releases and reverb. |
 | `warmup` | 0.4 | Wall-clock seconds each plugin gets after activation to finish loading samples or restoring state. |
 | `length` | 0 | Fixed render length in seconds (0 = last note + `tail`). |
+| `leadIn` | 0 | Seconds of digital silence written before the audio in `mix.wav` and every stem (streaming uploads such as Spotify and SoundCloud like about 1 s). Notes, automation and loudness are unaffected; report `sections` start/end times refer to the written file. |
 | `normalize` | none | If set, scale the mix so its peak is this many dBFS (e.g. `-1`). Stems are never normalized. |
 | `parallel` | auto | Plugin tracks rendered at once, each in its own worker process (default: half the cores, up to 4). `0` renders everything in one process. `render --jobs N` overrides it. |
 | `stems` | `"float"` | Stem files: `"float"` (32-bit, keeps overs), `"24"`, `"16"`, or `"none"` (the report still has every track's loudness). `render --stems` overrides it. A render checks free disk space first. |

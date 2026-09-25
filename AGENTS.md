@@ -145,7 +145,8 @@ at -1 dB) and set `"loudness": -14` to land the song on a streaming target. To t
 settings without re-rendering the song, render once with a plain master (a high-pass only, the
 "pre-master"), then run `wavelength master out/mix.wav --chain job.json --out mastered`: it plays
 the file through the job's `master` (or a chain file) and reports loudness before and after, per
-section. Don't master a mix that already went through a limiter.
+section. Don't master a mix that already went through a limiter. For a release, add `"leadIn": 1`
+(a second of silence before the song, for streaming platforms), or `--lead-in 1` on `master`.
 
 ## Reading the report
 

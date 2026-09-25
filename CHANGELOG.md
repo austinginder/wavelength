@@ -61,6 +61,7 @@ Working towards **v0.1.0**, the first release.
 - `multiband` effect: 2-4 bands on Linkwitz-Riley crossovers that sum back flat, each band with its own effect chain, gain, solo and mute (multiband compression, band saturation).
 - `master.loudness`: a target in LUFS; the gain into the master chain is found in a few passes so the mastered mix lands on it (`mix.loudnessGainDb` in the report).
 - `wavelength master <mix.wav> --chain <chain | job>`: masters a finished mix without re-rendering, with loudness before and after per section.
+- `leadIn`: seconds of silence before the song in the mix and stems (streaming uploads), and `--lead-in` on `wavelength master`.
 
 ### Changed
 - Automation points at the same beat keep the order they are written in (`[16, 0], [16, 1]` jumps from 0 to 1); they used to be sorted by value.

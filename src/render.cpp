@@ -175,6 +175,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     const double sr = job.sampleRate;
     result.sampleRate = job.sampleRate;
     result.seconds = seconds;
+    const size_t leadFrames = (size_t)std::llround(job.leadIn * job.sampleRate);
+    result.leadIn = job.leadIn;
 
     // 0. build every effect chain first, so a typo fails in milliseconds, not after a long render
     std::vector<Chain> trackChains(job.tracks.size()), busChains(job.buses.size());
@@ -263,7 +265,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         std::snprintf(prefix, sizeof prefix, "%02zu-", i + 1);
         if (job.stemBits) {
             tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
-            if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits)) return false;
+            if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames)) return false;
         }
         tr.levels = measure(audio);
         tr.lufs = integratedLufs(audio, job.sampleRate);
@@ -517,13 +519,14 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         result.normalizeGainDb = gainDb;
     }
     result.mixFile = (fs::path(outDir) / "mix.wav").string();
-    if (!writeWav(result.mixFile, mix, job.sampleRate, err)) return false;
+    if (!writeWav(result.mixFile, mix, job.sampleRate, err, 32, leadFrames)) return false;
     result.mix = measure(mix);
     result.truePeakDb = truePeakDb(mix);
     result.mixLufs = integratedLufs(mix, job.sampleRate);
     for (size_t m = 0; m < job.markers.size(); ++m) {
         const double a = job.markers[m].sec, b = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
-        result.sections.push_back({job.markers[m].name, a, b, integratedLufs(mix, job.sampleRate, (size_t)(a * sr), (size_t)(b * sr))});
+        result.sections.push_back({job.markers[m].name, a + job.leadIn, b + job.leadIn,   // times in the written file
+                                   integratedLufs(mix, job.sampleRate, (size_t)(a * sr), (size_t)(b * sr))});
     }
     if (result.mix.peakDb > 0.0)
         result.warnings.push_back("mix peaks above 0 dBFS: add a limiter to \"master\", lower track gains, or set \"normalize\"");

@@ -69,6 +69,7 @@ struct Job {
     double tail = 3.0;          // seconds rendered after the last note-off
     double warmup = 0.4;        // seconds of wall-clock settling after activation
     double length = 0;          // optional fixed length in seconds (0 = auto)
+    double leadIn = 0;          // seconds of silence written before the audio in every output file
     bool hasNormalize = false;
     double normalizeDb = -1.0;  // mix peak target when normalizing
     std::vector<Track> tracks;

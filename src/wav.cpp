@@ -16,11 +16,11 @@ void u16(std::ofstream &o, uint16_t v) { o.put(char(v)); o.put(char(v >> 8)); }
 double db(double lin) { return lin > 1e-12 ? 20.0 * std::log10(lin) : -240.0; }
 } // namespace
 
-bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits) {
+bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits, size_t leadFrames) {
     std::ofstream o(path, std::ios::binary);
     if (!o) { err = "cannot write " + path; return false; }
     if (bits != 16 && bits != 24) bits = 32;
-    const uint32_t bps = bits / 8, frames = (uint32_t)a.frames(), channels = 2, bytes = frames * channels * bps;
+    const uint32_t bps = bits / 8, frames = (uint32_t)(a.frames() + leadFrames), channels = 2, bytes = frames * channels * bps;
     const bool isFloat = bits == 32;
     o.write("RIFF", 4); u32(o, 4 + (8 + 18) + (isFloat ? 8 + 4 : 0) + (8 + bytes)); o.write("WAVE", 4);
     o.write("fmt ", 4); u32(o, 18); u16(o, isFloat ? 3 /* IEEE float */ : 1 /* PCM */); u16(o, channels); u32(o, sampleRate);
@@ -35,7 +35,8 @@ bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::stri
         rng = rng * 1664525u + 1013904223u; const double r2 = (rng >> 8) / 16777216.0;
         return r1 - r2;
     };
-    for (uint32_t i = 0; i < frames; ++i)
+    buf.resize((size_t)leadFrames * channels * bps, 0);   // silence (zero in float and PCM, undithered)
+    for (uint32_t i = 0; i < a.frames(); ++i)
         for (float s : {a.left[i], a.right[i]}) {
             if (isFloat) { const char *p = reinterpret_cast<const char *>(&s); buf.insert(buf.end(), p, p + 4); continue; }
             const double full = bits == 16 ? 32767.0 : 8388607.0;
