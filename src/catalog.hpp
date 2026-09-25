@@ -13,6 +13,7 @@ namespace wl {
 
 std::vector<std::string> clapSearchPaths();
 std::vector<std::string> vst3SearchPaths();
+std::vector<std::string> vst2SearchPaths();
 // All plugins, from cache where possible. `rescan` ignores the cache.
 std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warnings);
 // Resolve an id, a plugin name, a path to a .clap/.vst3 bundle, or "path#id". Prefix with

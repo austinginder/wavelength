@@ -34,6 +34,8 @@ struct StateFile {
     // Empty = load `state` as is.
     std::function<bool(Plugin &plugin, const std::vector<uint8_t> &current, std::vector<uint8_t> &out, std::string &err)> transform;
     std::string pluginId;         // from a clap-preset header or a vstpreset class id, if present
+    std::string fxKind;           // .fxp/.fxb: "FPCh" program chunk, "FBCh" bank chunk, "FxCk"/"FxBk" parameter lists
+    std::vector<float> fxParams;  // "FxCk"/"FxBk" (first program): normalized VST2 parameter values
     std::string format;           // the format that was used
 };
 

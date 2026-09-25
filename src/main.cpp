@@ -20,6 +20,7 @@
 #include "presets.hpp"
 #include "preset_files.hpp"
 #include "sampler.hpp"
+#include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
 #include "render.hpp"
@@ -33,6 +34,9 @@
 #include <iostream>
 #include <map>
 #include <set>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <sstream>
 #include <string>
 #include <vector>
@@ -176,14 +180,16 @@ int cmdPlugins(const Args &a) {
         json list = json::array();
         for (auto &p : all)
             list.push_back({{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version}, {"format", p.format},
-                            {"features", p.features}, {"bundle", p.bundlePath}, {"blocked", blocked.contains(p.id)}});
+                            {"features", p.features}, {"bundle", p.bundlePath}, {"blocked", blocked.contains(p.id)},
+                            {"arch", p.arch.empty() ? platform::hostArch() : p.arch}});
         emit(json{{"ok", true}, {"plugins", list}, {"warnings", warnings}}.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     for (auto &p : all) {
         bool instrument = std::find(p.features.begin(), p.features.end(), "instrument") != p.features.end();
         std::fprintf(OUT, "%-7s %-32.32s %-30.30s %-22.22s %s\n", p.format.c_str(), p.name.c_str(), p.id.c_str(), p.vendor.c_str(),
-                     (std::string(instrument ? "instrument" : "effect") + (blocked.contains(p.id) ? "  BLOCKED" : "")).c_str());
+                     (std::string(instrument ? "instrument" : "effect") + (p.arch.empty() ? "" : "  (" + p.arch + ", Rosetta)") +
+                      (blocked.contains(p.id) ? "  BLOCKED" : "")).c_str());
     }
     for (auto &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
     std::fprintf(OUT, "\n%zu plugins (CLAP, VST3 and built-in). Use \"vst3:Name\" or \"clap:Name\" when a name exists in both formats.\n", all.size());
@@ -942,6 +948,38 @@ int run(int argc, char **argv) {
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
                                  std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));
     if (cmd == "__audition" && a.positional.size() > 3) return auditionWorker(a.positional[1], a.positional[2], a.positional[3]);
+    if (cmd == "__scan-vst2" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
+        std::vector<PluginInfo> plugins;
+        std::string err;
+        json out = {{"ok", scanVst2Bundle(a.positional[1], plugins, err)}, {"plugins", json::array()}};
+        for (const auto &p : plugins) out["plugins"].push_back(pluginToJson(p));
+        if (!err.empty()) out["error"] = err;
+        emit(out.dump());
+        std::fflush(OUT);
+        platform::quickExit(0);
+    }
+#if defined(__APPLE__)
+    // commands that load one plugin in this process: an Intel-only plugin needs the whole command under
+    // Rosetta, so run this same command again as x86_64 (a universal build has both)
+    if ((cmd == "params" || cmd == "presets" || cmd == "audition" || cmd == "state") && !std::getenv("WAVELENGTH_ARCH_REEXEC")) {
+        const size_t at = cmd == "state" ? 2 : 1;
+        PluginInfo info;
+        std::string e;
+        if (a.positional.size() > at && resolvePlugin(a.positional[at], info, e) && !info.arch.empty() && info.arch != platform::hostArch()) {
+            std::vector<std::string> args;
+            if (!platform::archPrefix(info.arch, args, e)) return fail(a, info.name + ": " + e);
+            args.push_back(platform::selfExecutable());
+            for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+            std::vector<char *> cargs;
+            for (auto &s : args) cargs.push_back(s.data());
+            cargs.push_back(nullptr);
+            setenv("WAVELENGTH_ARCH_REEXEC", "1", 1);
+            std::fflush(nullptr);
+            execv(cargs[0], cargs.data());
+            return fail(a, "could not run " + info.name + " under Rosetta");
+        }
+    }
+#endif
     if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
         std::vector<PluginInfo> plugins;
         std::string err;

@@ -350,9 +350,23 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     auto lastWindowCheck = std::chrono::steady_clock::now();
     const double limit = 300 + 10 * seconds;   // a track that takes longer than this is hung
     const std::string self = isolate ? platform::selfExecutable() : "";
+    std::string workerErr;   // a worker that can't start (an Intel-only plugin on a non-universal build)
     auto startTrack = [&](size_t i) {
         const std::string prefix = (tmp / std::to_string(i)).string();
-        std::vector<std::string> args = {self, "__track", job.sourcePath, std::to_string(i), prefix};
+        // an Intel-only plugin (instrument or effect on this track) runs in a worker under Rosetta
+        std::string arch, archErr;
+        {
+            std::vector<std::string> specs = {job.tracks[i].plugin};
+            for (auto &fxj : job.tracks[i].fx) if (fxj.is_object() && fxj.contains("plugin") && fxj["plugin"].is_string()) specs.push_back(fxj["plugin"]);
+            for (auto &sp : specs) {
+                PluginInfo pi;
+                std::string e;
+                if (!isBuiltin(sp) && resolvePlugin(sp, pi, e) && !pi.arch.empty() && pi.arch != platform::hostArch()) arch = pi.arch;
+            }
+        }
+        std::vector<std::string> args;
+        if (!platform::archPrefix(arch, args, archErr)) { workerErr = "track '" + job.tracks[i].name + "': " + archErr; return; }
+        for (const std::string &x : {self, std::string("__track"), job.sourcePath, std::to_string(i), prefix}) args.push_back(x);
         for (size_t d : deps[i]) {   // sidechain sources as raw audio files
             const std::string f = (tmp / ("sc-" + std::to_string(d) + ".pcm")).string();
             if (!fs::exists(f)) {
@@ -380,7 +394,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             if (trackDone[i] || started[i] || !ready(i)) continue;
             const Track &track = job.tracks[i];
             if (isolate && !isBuiltin(track.plugin)) {   // plugin tracks: a worker process each
-                if (running.size() < (size_t)parallel) { startTrack(i); progressed = true; }
+                if (running.size() < (size_t)parallel) {
+                    startTrack(i);
+                    if (!workerErr.empty()) { err = workerErr; failed = true; break; }
+                    progressed = true;
+                }
                 continue;
             }
             started[i] = true;   // built-ins (and everything with --jobs 0): here

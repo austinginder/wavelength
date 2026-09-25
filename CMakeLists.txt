@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
+# macOS builds are universal by default: render workers run Intel-only plugins (Reaktor 6, older VST2s)
+# under Rosetta, which needs an x86_64 slice of this executable. -DCMAKE_OSX_ARCHITECTURES=arm64 opts out.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_TOOLCHAIN_FILE AND NOT CMAKE_OSX_ARCHITECTURES)
+  set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
+endif()
 project(wavelength VERSION 0.3.0 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
@@ -131,6 +136,7 @@ add_executable(wavelength
   src/render.cpp
   src/state_file.cpp
   src/vst3_plugin.cpp
+  src/vst2_plugin.cpp
   src/wav.cpp)
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")

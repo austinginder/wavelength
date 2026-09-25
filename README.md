@@ -1,7 +1,7 @@
 # Wavelength
 
 A headless music engine for AI agents. Wavelength plays notes through real, installed
-CLAP and VST3 instruments (Vital, Serum 2, Surge XT, OB-Xf, Dexed, BBC Symphony Orchestra, …)
+CLAP, VST3 and VST2 instruments (Vital, Serum 2, Surge XT, OB-Xf, Dexed, BBC Symphony Orchestra, Reaktor, …)
 and sample libraries, offline, with no DAW and no screen. It mixes them with built-in
 effects, buses and automation, and returns WAV stems, a mixdown and a machine-readable
 report with loudness per track and section.
@@ -16,8 +16,10 @@ https://wavelength.run
 
 ## What it can do
 
-- **Host plugins:** CLAP and VST3 instruments and effects, found by name, id or bundle path.
-  VST3 bundles are scanned in child processes so a crashing plugin can't take the scan down.
+- **Host plugins:** CLAP, VST3 and VST2 instruments and effects, found by name, id or bundle path.
+  VST3 and VST2 bundles are scanned in child processes so a crashing plugin can't take the scan down.
+  On Apple silicon, Intel-only plugins (Reaktor 6, Synth1, older VST2s) run in render workers under
+  Rosetta: macOS builds are universal for this.
 - **Load sounds by name:** about 17,000 presets across 33 installed plugins. Sources include:
   - CLAP preset discovery and VST3 program lists
   - preset files in each plugin's preset folders

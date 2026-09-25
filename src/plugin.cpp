@@ -2,6 +2,7 @@
 
 #include "bundle.hpp"
 #include "clap_plugin.hpp"
+#include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 
 #include <algorithm>
@@ -30,6 +31,7 @@ bool Plugin::findParam(const std::string &key, ParamInfo &out) const {
 
 std::unique_ptr<Plugin> createPlugin(const PluginInfo &info, std::string &err) {
     if (info.format == "vst3") return Vst3Plugin::create(info, err);
+    if (info.format == "vst2") return Vst2Plugin::create(info, err);
     return ClapPlugin::create(info, err);
 }
 

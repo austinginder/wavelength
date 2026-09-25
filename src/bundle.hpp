@@ -9,7 +9,8 @@ namespace wl {
 
 struct PluginInfo {
     std::string id, name, vendor, version, description, bundlePath;
-    std::string format = "clap";   // "clap" or "vst3"
+    std::string format = "clap";   // "clap", "vst3" or "vst2"
+    std::string arch;              // set when the bundle has no code for this process's architecture ("x86_64": runs under Rosetta)
     std::vector<std::string> features;
 };
 

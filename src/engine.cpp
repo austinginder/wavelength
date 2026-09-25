@@ -1,6 +1,7 @@
 #include "engine.hpp"
 
 #include "catalog.hpp"
+#include "platform.hpp"
 #include "preset_files.hpp"
 #include "state_file.hpp"
 
@@ -12,6 +13,10 @@
 namespace wl {
 
 bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err) {
+    if (sf.state.empty() && !sf.fxParams.empty() && std::string(plugin.format()) != "vst2") {
+        err = "a VST2 parameter-list preset (" + sf.fxKind + ") only loads into a VST2 plugin; set the values with \"params\" instead";
+        return false;
+    }
     if (sf.transform) {
         std::vector<uint8_t> current;
         if (!plugin.getState(current, err) || !sf.transform(plugin, current, sf.state, err)) return false;
@@ -51,6 +56,11 @@ bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string 
 bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlugin &out, std::string &err) {
     PluginInfo info;
     if (!resolvePlugin(setup.spec, info, err)) { err = context + ": " + err; return false; }
+    if (!info.arch.empty() && info.arch != platform::hostArch()) {
+        err = context + ": " + info.name + " is " + info.arch + "-only, so it runs in a worker process under Rosetta: use it on a track "
+              "(not with --jobs 0, and not as a bus or master effect yet)";
+        return false;
+    }
     out.id = info.id;
     out.name = info.name;
     out.format = info.format;

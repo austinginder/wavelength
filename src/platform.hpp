@@ -29,6 +29,14 @@ int processId();
 // True when process `pid` has a window on screen (macOS; false elsewhere). Headless plugins never
 // should: a window in a worker is a licence or registration dialog waiting for a click.
 bool hasOnscreenWindow(int pid);
+// macOS: the CPU architectures a plugin bundle (or a plain library/executable) contains, e.g.
+// {"x86_64"} for an Intel-only plugin; empty when it can't be read or elsewhere.
+std::vector<std::string> binaryArchs(const std::string &path);
+// The architecture this process runs as ("arm64", "x86_64").
+std::string hostArch();
+// The command prefix that runs this executable as `arch` (macOS Rosetta: {"/usr/bin/arch", "-x86_64"}),
+// or an error when this executable has no slice for it (not a universal build).
+bool archPrefix(const std::string &arch, std::vector<std::string> &prefix, std::string &err);
 // One-minute load average (runnable processes), or -1 where the system doesn't report it.
 double loadAverage();
 

@@ -1,6 +1,8 @@
 #include "platform.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <cstdlib>
 #include <mutex>
 #include <sstream>
@@ -178,6 +180,67 @@ int processId() {
     return (int)GetCurrentProcessId();
 #else
     return (int)getpid();
+#endif
+}
+
+std::vector<std::string> binaryArchs(const std::string &path) {
+    std::vector<std::string> out;
+#if defined(__APPLE__)
+    fs::path file = path;
+    std::error_code ec;
+    if (fs::is_directory(file, ec)) {   // a bundle: its executable in Contents/MacOS
+        const fs::path dir = file / "Contents" / "MacOS";
+        file.clear();
+        for (auto &e : fs::directory_iterator(dir, ec))
+            if (e.is_regular_file(ec)) { file = e.path(); break; }
+        if (file.empty()) return out;
+    }
+    std::ifstream in(file, std::ios::binary);
+    unsigned char h[8] = {};
+    if (!in.read(reinterpret_cast<char *>(h), 8)) return out;
+    auto be = [](const unsigned char *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; };
+    auto le = [](const unsigned char *p) { return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[1] << 8 | p[0]; };
+    auto name = [](uint32_t cpu) { return cpu == 0x01000007 ? std::string("x86_64") : cpu == 0x0100000C ? std::string("arm64") : std::string(); };
+    const uint32_t magic = be(h);
+    if (magic == 0xCAFEBABE || magic == 0xCAFEBABF) {   // universal: a list of architectures
+        const uint32_t n = be(h + 4), entry = magic == 0xCAFEBABE ? 20 : 32;
+        for (uint32_t i = 0; i < n && i < 16; ++i) {
+            unsigned char a[32] = {};
+            if (!in.read(reinterpret_cast<char *>(a), entry)) break;
+            if (auto s = name(be(a)); !s.empty()) out.push_back(s);
+        }
+    } else if (le(h) == 0xFEEDFACF) {   // one 64-bit architecture
+        if (auto s = name(le(h + 4)); !s.empty()) out.push_back(s);
+    }
+#else
+    (void)path;
+#endif
+    return out;
+}
+
+std::string hostArch() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    return "arm64";
+#else
+    return "x86_64";
+#endif
+}
+
+bool archPrefix(const std::string &arch, std::vector<std::string> &prefix, std::string &err) {
+    prefix.clear();
+    if (arch.empty() || arch == hostArch()) return true;
+#if defined(__APPLE__)
+    const auto self = binaryArchs(selfExecutable());
+    if (std::find(self.begin(), self.end(), arch) == self.end()) {
+        err = "this plugin is " + arch + "-only and this Wavelength build is " + hostArch() +
+              "-only: build it universal (cmake -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\") to run it under Rosetta";
+        return false;
+    }
+    prefix = {"/usr/bin/arch", "-" + arch};
+    return true;
+#else
+    err = "this plugin is built for " + arch + ", not " + hostArch();
+    return false;
 #endif
 }
 

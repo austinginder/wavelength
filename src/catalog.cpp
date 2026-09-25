@@ -59,9 +59,21 @@ std::vector<fs::path> findBundles(const std::string &dir, const char *ext) {
 
 // Scan one VST3 bundle in a child process (`wavelength __scan-vst3 <bundle>`), so a plugin
 // that crashes or hangs while loading can't take the scan down with it.
-bool scanVst3InChild(const std::string &bundle, std::vector<PluginInfo> &out, std::string &err, int timeoutSec = 45) {
+// The architecture a bundle must run as, when it has no code for this process's ("" = native).
+std::string foreignArch(const std::string &bundle) {
+    const auto archs = platform::binaryArchs(bundle);
+    if (archs.empty() || std::find(archs.begin(), archs.end(), platform::hostArch()) != archs.end()) return "";
+    return std::find(archs.begin(), archs.end(), "x86_64") != archs.end() ? "x86_64" : archs.front();
+}
+
+bool scanInChild(const char *command, const std::string &bundle, std::vector<PluginInfo> &out, std::string &err, int timeoutSec = 45) {
+    // an Intel-only bundle is scanned (and later rendered) by this executable under Rosetta
+    const std::string arch = foreignArch(bundle);
+    std::vector<std::string> args;
+    if (!platform::archPrefix(arch, args, err)) { err = bundle + ": " + err; return false; }
+    for (const std::string &a : {platform::selfExecutable(), std::string(command), bundle}) args.push_back(a);
     platform::Process proc;
-    if (!platform::spawn({platform::selfExecutable(), "__scan-vst3", bundle}, proc, true, true)) {
+    if (!platform::spawn(args, proc, true, true)) {
         err = "could not start the scanner";
         return false;
     }
@@ -74,7 +86,7 @@ bool scanVst3InChild(const std::string &bundle, std::vector<PluginInfo> &out, st
     try {
         const json j = json::parse(output);
         if (!j.value("ok", false)) { err = j.value("error", "scan failed"); return false; }
-        for (const auto &p : j["plugins"]) out.push_back(pluginFromJson(p));
+        for (const auto &p : j["plugins"]) { out.push_back(pluginFromJson(p)); out.back().arch = arch; }
     } catch (...) {
         err = "unreadable scan output for " + bundle;
         return false;
@@ -85,8 +97,10 @@ bool scanVst3InChild(const std::string &bundle, std::vector<PluginInfo> &out, st
 } // namespace
 
 json pluginToJson(const PluginInfo &p) {
-    return {{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version}, {"format", p.format},
-            {"description", p.description}, {"bundle", p.bundlePath}, {"features", p.features}};
+    json j = {{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version}, {"format", p.format},
+              {"description", p.description}, {"bundle", p.bundlePath}, {"features", p.features}};
+    if (!p.arch.empty()) j["arch"] = p.arch;
+    return j;
 }
 PluginInfo pluginFromJson(const json &j) {
     PluginInfo p;
@@ -98,6 +112,7 @@ PluginInfo pluginFromJson(const json &j) {
     p.description = j.value("description", "");
     p.bundlePath = j.value("bundle", "");
     p.features = j.value("features", std::vector<std::string>{});
+    p.arch = j.value("arch", "");
     return p;
 }
 
@@ -131,6 +146,23 @@ std::vector<std::string> vst3SearchPaths() {
     paths.push_back(home() + "/.vst3");
     paths.push_back("/usr/local/lib/vst3");
     paths.push_back("/usr/lib/vst3");
+#endif
+    return paths;
+}
+
+std::vector<std::string> vst2SearchPaths() {
+    auto paths = envPaths("WAVELENGTH_VST2_PATH");
+#ifdef __APPLE__
+    paths.push_back(home() + "/Library/Audio/Plug-Ins/VST");
+    paths.push_back("/Library/Audio/Plug-Ins/VST");
+#elif defined(_WIN32)
+    const char *pf = std::getenv("PROGRAMFILES"), *common = std::getenv("COMMONPROGRAMFILES");
+    if (pf) { paths.push_back(std::string(pf) + "\\VSTPlugins"); paths.push_back(std::string(pf) + "\\Steinberg\\VSTPlugins"); }
+    if (common) paths.push_back(std::string(common) + "\\VST2");
+#else
+    paths.push_back(home() + "/.vst");
+    paths.push_back("/usr/local/lib/vst");
+    paths.push_back("/usr/lib/vst");
 #endif
     return paths;
 }
@@ -176,8 +208,18 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     // VST3: loading a module runs plugin code, so unknown bundles are scanned in child
     // processes (a few at a time) and the result, including failures, is cached
     std::vector<std::pair<std::string, long long>> todo;
-    for (const auto &dir : vst3SearchPaths())
-        for (const auto &b : findBundles(dir, ".vst3")) {
+    std::vector<fs::path> childScanned;
+    for (const auto &dir : vst3SearchPaths()) for (const auto &b : findBundles(dir, ".vst3")) childScanned.push_back(b);
+    // VST 2: bundles on macOS, libraries elsewhere; scanned in child processes like VST3
+#if defined(__APPLE__)
+    const char *vst2Ext = ".vst";
+#elif defined(_WIN32)
+    const char *vst2Ext = ".dll";
+#else
+    const char *vst2Ext = ".so";
+#endif
+    for (const auto &dir : vst2SearchPaths()) for (const auto &b : findBundles(dir, vst2Ext)) childScanned.push_back(b);
+    for (const auto &b : childScanned) {
             const std::string key = b.string();
             const long long mt = mtimeOf(b);
             if (const json *c = cached(key, mt)) {
@@ -195,7 +237,7 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
                 for (size_t i; (i = next++) < todo.size();) {
                     std::vector<PluginInfo> plugins;
                     std::string error;
-                    if (!scanVst3InChild(todo[i].first, plugins, error)) plugins.clear();
+                    if (!scanInChild(todo[i].first.size() > 5 && todo[i].first.substr(todo[i].first.size() - 5) == ".vst3" ? "__scan-vst3" : "__scan-vst2", todo[i].first, plugins, error)) plugins.clear();
                     std::lock_guard<std::mutex> lock(m);
                     if (!error.empty()) warnings.push_back(error);
                     record(todo[i].first, todo[i].second, plugins, error);
@@ -250,9 +292,9 @@ bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err, b
 
 namespace {
 bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err) {
-    // optional format prefix: "vst3:Vital", "clap:Vital"
+    // optional format prefix: "vst3:Vital", "clap:Vital", "vst2:Reaktor 6"
     std::string spec = specIn, want;
-    for (const char *f : {"vst3", "clap"})
+    for (const char *f : {"vst3", "vst2", "clap"})
         if (spec.rfind(std::string(f) + ":", 0) == 0) { want = f; spec = spec.substr(std::string(f).size() + 1); }
 
     // explicit bundle path, optionally "#plugin id"
@@ -260,13 +302,16 @@ bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err) {
     if (auto hash = spec.find('#'); hash != std::string::npos) { path = spec.substr(0, hash); wantId = spec.substr(hash + 1); }
     const bool isClap = path.size() > 5 && path.substr(path.size() - 5) == ".clap";
     const bool isVst3 = path.size() > 5 && path.substr(path.size() - 5) == ".vst3";
-    if (isClap || isVst3) {
+    const bool isVst2 = path.size() > 4 && path.substr(path.size() - 4) == ".vst";
+    if (isClap || isVst3 || isVst2) {
         std::vector<PluginInfo> plugins;
         const std::string abs = fs::absolute(path).string();
         if (isClap) {
             auto bundle = Bundle::open(abs, err);
             if (!bundle) return false;
             plugins = bundle->plugins();
+        } else if (isVst2) {
+            if (!scanInChild("__scan-vst2", abs, plugins, err)) return false;
         } else if (!scanVst3Bundle(abs, plugins, err)) return false;
         for (auto &p : plugins)
             if (wantId.empty() || lower(p.id) == lower(wantId)) { out = p; return true; }
@@ -276,13 +321,14 @@ bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err) {
 
     std::vector<std::string> warnings;
     auto all = scanPlugins(false, warnings);
-    // a name that exists in both formats resolves to CLAP unless a prefix says otherwise
-    std::stable_sort(all.begin(), all.end(), [](const PluginInfo &a, const PluginInfo &b) { return a.format == "clap" && b.format != "clap"; });
+    // a name that exists in several formats resolves to CLAP, then VST3, then VST2, unless a prefix says otherwise
+    auto rank = [](const PluginInfo &p) { return p.format == "clap" ? 0 : p.format == "vst3" ? 1 : 2; };
+    std::stable_sort(all.begin(), all.end(), [&](const PluginInfo &a, const PluginInfo &b) { return rank(a) < rank(b); });
     auto ok = [&](const PluginInfo &p) { return want.empty() || p.format == want; };
     for (auto &p : all) if (ok(p) && p.id == spec) { out = p; return true; }
     for (auto &p : all) if (ok(p) && lower(p.id) == lower(spec)) { out = p; return true; }
     for (auto &p : all) if (ok(p) && lower(p.name) == lower(spec)) { out = p; return true; }
-    err = "no installed " + (want.empty() ? std::string("CLAP or VST3") : want) + " plugin matches '" + spec + "' (run `wavelength plugins`)";
+    err = "no installed " + (want.empty() ? std::string("CLAP, VST3 or VST2") : want) + " plugin matches '" + spec + "' (run `wavelength plugins`)";
     return false;
 }
 } // namespace

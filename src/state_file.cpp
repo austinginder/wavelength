@@ -148,8 +148,22 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         if (!isNksf(data) || !nksPluginChunk(data, out.state)) { err = path + " is not an NKS preset with a plugin chunk"; return false; }
     } else if (fmt == "fxp") {
         if (!isFxp(data)) { err = path + " is not a .fxp/.fxb file"; return false; }
-        if (!fxpChunk(data, out.state, err)) { err = path + " " + err; return false; }
-        adaptObxProgram(out.state);
+        out.fxKind.assign(data.begin() + 8, data.begin() + 12);
+        out.pluginId.assign(data.begin() + 16, data.begin() + 20);   // the VST2 unique id, four characters
+        if (out.fxKind == "FxCk" || out.fxKind == "FxBk") {   // parameter lists: VST2 plugins take them as values
+            const size_t at = out.fxKind == "FxCk" ? 56 : 156 + 56;   // a bank: its first program
+            const size_t n = out.fxKind == "FxCk" ? be32(data, 24) : (data.size() >= 180 ? be32(data, 156 + 24) : 0);
+            if (data.size() < at + 4 * n) { err = path + " is a truncated .fxp/.fxb file"; return false; }
+            for (size_t i = 0; i < n; ++i) {
+                const uint32_t bits = be32(data, at + 4 * i);
+                float f;
+                std::memcpy(&f, &bits, 4);
+                out.fxParams.push_back(f);
+            }
+        } else {
+            if (!fxpChunk(data, out.state, err)) { err = path + " " + err; return false; }
+            adaptObxProgram(out.state);
+        }
     } else if (fmt == "serum") {
         if (!serumPresetToStates(data, out.state, out.controllerState, err)) { err = path + ": " + err; return false; }
     } else if (fmt == "juce-valuetree") {
