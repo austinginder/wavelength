@@ -4,27 +4,6 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
-### Fixed
-- DAWproject import: volume automation on effect and group buses was added on top of the fader
-  twice (bus automation adds to the fader, like a track's).
-- `"stems": "none"` no longer creates an empty `stems/` folder.
-- `lint` compared every pair at every voice's note starts, so a third voice's rhythm split a pair's
-  moves and hid real parallels (four parallel octaves in Fugue for the Night Shift's exposition went
-  unreported) or moved where they were reported. Each pair is now compared at its own note starts.
-- The skill's installer needed `curl` to download a release; without it (minimal Linux images) it
-  quietly built from source and said there was no release build. It now uses `wget` when there is
-  no `curl`, and says why it falls back to a source build.
-- Linux release archives packed on a Mac carried a macOS extended attribute that made GNU `tar`
-  print a warning on extraction.
-
-## [0.2.0] - 2026-09-25
-
-Upgrading from 0.1.0: a song with a master `loudness` target mixes a little differently (the
-target's gain now goes in front of the final clip/limiter, see Changed; `"loudnessGain": "start"`
-restores the old sound), bus faders staged from `buses[].lufs` need restaging (buses are now
-measured before their fader), a render that loses a track exits 1 with `"ok": false`, and every
-command rejects options it doesn't know.
-
 ### Added
 - DAWproject import, more of the song: audio clips become `builtin:audio` tracks (warp markers give
   the file's tempo so clips follow the song, play start trims, looped clips repeat, fades, "repitch"
@@ -69,6 +48,37 @@ command rejects options it doesn't know.
 - `duration` in the render report: the written file's length, lead-in included.
 - `lint --split "Organ=4"` (a chord track as voices, top to bottom), `--from`/`--to` bars and
   `--section NAME`, and both chords' notes with each problem.
+
+### Changed
+- Every track warning is also listed in the top-level `warnings`, prefixed with the track's name.
+  Furnace Liturgy's agent read only the top-level list and missed a late gain curve that held the
+  lead organ 9 dB down through the first drop.
+- The weak-drop check measures the boundary as it is heard: the section's first 4 bars against the
+  last 2 bars before it (`sections[].transition` in the report, for every boundary). Whole-section
+  averages read Hammerklang's Final as +3.3 dB while its drop landed +1.5.
+
+### Fixed
+- DAWproject import: volume automation on effect and group buses was added on top of the fader
+  twice (bus automation adds to the fader, like a track's).
+- `"stems": "none"` no longer creates an empty `stems/` folder.
+- `lint` compared every pair at every voice's note starts, so a third voice's rhythm split a pair's
+  moves and hid real parallels (four parallel octaves in Fugue for the Night Shift's exposition went
+  unreported) or moved where they were reported. Each pair is now compared at its own note starts.
+- The skill's installer needed `curl` to download a release; without it (minimal Linux images) it
+  quietly built from source and said there was no release build. It now uses `wget` when there is
+  no `curl`, and says why it falls back to a source build.
+- Linux release archives packed on a Mac carried a macOS extended attribute that made GNU `tar`
+  print a warning on extraction.
+
+## [0.2.0] - 2026-09-25
+
+Upgrading from 0.1.0: a song with a master `loudness` target mixes a little differently (the
+target's gain now goes in front of the final clip/limiter, see Changed; `"loudnessGain": "start"`
+restores the old sound), bus faders staged from `buses[].lufs` need restaging (buses are now
+measured before their fader), a render that loses a track exits 1 with `"ok": false`, and every
+command rejects options it doesn't know.
+
+### Added
 - Marker `"checks": false` for sections that are meant as they are: their dropouts are reported as
   `"intended": true` and they get no arrangement warnings (a trailer's false-ending silence, a soft
   ambient peak).
@@ -192,12 +202,6 @@ command rejects options it doesn't know.
   warns with the time, and a track reading above +6 LUFS warns that its output is broken.
 
 ### Changed
-- Every track warning is also listed in the top-level `warnings`, prefixed with the track's name.
-  Furnace Liturgy's agent read only the top-level list and missed a late gain curve that held the
-  lead organ 9 dB down through the first drop.
-- The weak-drop check measures the boundary as it is heard: the section's first 4 bars against the
-  last 2 bars before it (`sections[].transition` in the report, for every boundary). Whole-section
-  averages read Hammerklang's Final as +3.3 dB while its drop landed +1.5.
 - The weak-drop check also covers any section after a build-like one (Build, Rise, Pre..., Ramp,
   Climb, Lead-in, Ignition), whatever it is called, and asks an escalation (Climax, Peak, Finale after
   another payoff) to rise at least 0.5 dB. Build -> Discovery and Final Act -> Climax went unchecked.
