@@ -329,18 +329,25 @@ struct Limiter : Effect {
         }
         const double rel = 1.0 - std::exp(-1.0 / (releaseMs * 0.001 * sr));
         double sum = 0, g = 1, minG = 1, worstAt = 0;
+        size_t over3 = 0, over6 = 0;
+        const double g3 = dbToLin(-3), g6 = dbToLin(-6);
         for (size_t i = 0; i < n; ++i) {
             sum += mn[i];
             if (i >= L) sum -= mn[i - L];
             const double avg = sum / (double)std::min(i + 1, L);      // smooth attack ramp
             g = avg < g ? avg : g + (avg - g) * rel;                 // release
             if (g < minG) { minG = g; worstAt = (double)i; }
+            over3 += g < g3; over6 += g < g6;
             a.left[i] = (float)std::clamp(a.left[i] * g, -ceil, ceil);
             a.right[i] = (float)std::clamp(a.right[i] * g, -ceil, ceil);
         }
-        if (dsp::linToDb(minG) < -8) {
-            char buf[160];
-            std::snprintf(buf, sizeof buf, "limiter: up to %.1f dB of gain reduction (at %.2f s); the input is very hot", -dsp::linToDb(minG), worstAt / sr);
+        // a lone transient and sustained crushing both reach -8 dB; how long it lasts tells them apart
+        const double pct3 = n ? 100.0 * over3 / n : 0, pct6 = n ? 100.0 * over6 / n : 0;
+        if (dsp::linToDb(minG) < -8 || pct6 > 10) {
+            char buf[260];
+            std::snprintf(buf, sizeof buf, "limiter: up to %.1f dB of gain reduction (at %.2f s); more than 3 dB for %.1f%% of the time, more than 6 dB for %.1f%%%s",
+                          -dsp::linToDb(minG), worstAt / sr, pct3, pct6,
+                          pct6 > 10 ? ": sustained, the input is too hot (lower the faders or the loudness target)" : ": brief peaks, usually fine");
             warnings.push_back(buf);
         }
         return true;

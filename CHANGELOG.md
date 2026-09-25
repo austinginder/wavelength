@@ -54,6 +54,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- The limiter's gain-reduction warning says how long it worked (share of the time above 3 dB and
+  6 dB), so one hot transient reads differently from sustained crushing, and it also warns when
+  more than 10 % of the song sits above 6 dB of reduction.
 - The automatic `parallel` setting takes the system load into account: with other renders
   already filling the cores, a render starts fewer workers instead of oversubscribing the CPU
   (ten agents rendering at once drove the load average past 70 on 8 cores).
