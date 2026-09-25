@@ -1,6 +1,7 @@
 #include "sampler.hpp"
 
 #include "platform.hpp"
+#include "zip.hpp"
 
 #include <zlib.h>
 
@@ -40,72 +41,6 @@ bool readFile(const std::string &path, std::vector<uint8_t> &out) {
 
 uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 uint32_t u32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
-
-// ---- zip (stored or deflated entries; no zip64) -------------------------------------------
-struct ZipEntry { std::string name; uint16_t method; uint32_t compSize, size, localOffset; };
-
-class Zip {
-public:
-    bool open(const std::string &path, std::string &err) {
-        path_ = path;
-        f_.open(path, std::ios::binary);
-        if (!f_) { err = "cannot open " + path; return false; }
-        f_.seekg(0, std::ios::end);
-        const size_t size = (size_t)f_.tellg();
-        const size_t tail = std::min<size_t>(size, 65536 + 22);
-        std::vector<uint8_t> buf(tail);
-        f_.seekg((std::streamoff)(size - tail));
-        f_.read(reinterpret_cast<char *>(buf.data()), (std::streamsize)tail);
-        long eocd = -1;
-        for (long i = (long)tail - 22; i >= 0; --i)
-            if (u32(&buf[i]) == 0x06054b50) { eocd = i; break; }
-        if (eocd < 0) { err = path + " is not a zip archive"; return false; }
-        const uint32_t cdSize = u32(&buf[eocd + 12]), cdOffset = u32(&buf[eocd + 16]);
-        std::vector<uint8_t> cd(cdSize);
-        f_.seekg(cdOffset);
-        f_.read(reinterpret_cast<char *>(cd.data()), cdSize);
-        for (size_t p = 0; p + 46 <= cd.size() && u32(&cd[p]) == 0x02014b50;) {
-            ZipEntry e;
-            e.method = u16(&cd[p + 10]);
-            e.compSize = u32(&cd[p + 20]);
-            e.size = u32(&cd[p + 24]);
-            const uint16_t nameLen = u16(&cd[p + 28]), extraLen = u16(&cd[p + 30]), commentLen = u16(&cd[p + 32]);
-            e.localOffset = u32(&cd[p + 42]);
-            e.name.assign(reinterpret_cast<const char *>(&cd[p + 46]), nameLen);
-            entries_.push_back(e);
-            p += 46 + nameLen + extraLen + commentLen;
-        }
-        return true;
-    }
-    bool read(const std::string &name, std::vector<uint8_t> &out, std::string &err) {
-        const ZipEntry *e = nullptr;
-        for (auto &x : entries_) if (x.name == name) { e = &x; break; }
-        if (!e) for (auto &x : entries_) if (lower(x.name) == lower(name)) { e = &x; break; }
-        if (!e) { err = path_ + " has no entry '" + name + "'"; return false; }
-        uint8_t lh[30];
-        f_.seekg(e->localOffset);
-        f_.read(reinterpret_cast<char *>(lh), 30);
-        if (u32(lh) != 0x04034b50) { err = "bad zip entry header for " + name; return false; }
-        f_.seekg(e->localOffset + 30 + u16(lh + 26) + u16(lh + 28));
-        std::vector<uint8_t> comp(e->compSize);
-        f_.read(reinterpret_cast<char *>(comp.data()), e->compSize);
-        if (e->method == 0) { out = std::move(comp); return true; }
-        if (e->method != 8) { err = name + ": unsupported zip compression " + std::to_string(e->method); return false; }
-        out.resize(e->size);
-        z_stream zs{};
-        if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) { err = "zlib init failed"; return false; }
-        zs.next_in = comp.data(); zs.avail_in = (uInt)comp.size();
-        zs.next_out = out.data(); zs.avail_out = (uInt)out.size();
-        const int rc = inflate(&zs, Z_FINISH);
-        inflateEnd(&zs);
-        if (rc != Z_STREAM_END) { err = name + ": corrupt deflate data"; return false; }
-        return true;
-    }
-private:
-    std::string path_;
-    std::ifstream f_;
-    std::vector<ZipEntry> entries_;
-};
 
 // ---- WAV decoding -------------------------------------------------------------------------
 struct SampleData {

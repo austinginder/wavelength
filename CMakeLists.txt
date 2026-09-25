@@ -137,6 +137,9 @@ add_executable(wavelength
   src/state_file.cpp
   src/vst3_plugin.cpp
   src/vst2_plugin.cpp
+  src/zip.cpp
+  src/xml.cpp
+  src/dawproject.cpp
   src/wav.cpp)
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")

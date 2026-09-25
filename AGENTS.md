@@ -26,6 +26,15 @@ Working on one part? `render job.json --tracks "Lead,Bass" --stems none` renders
 tracks (plus, muted, whatever keys their `duck`/`gate`/sidechain) through the song's buses and
 master: much faster than the whole song, and the report shows those tracks alone.
 
+## Starting from a DAW project
+
+`wavelength import song.dawproject --out songs/x --json` writes `songs/x/job.json` and the plugin
+states under `songs/x/plugins/`. Read the `notes` in the result: they name what didn't come across.
+A DAW's own devices (Bitwig's Drum Machine, Polymer, EQ+, its master chain) are only names in the
+file, so they are left out or replaced (Drum Machine becomes `builtin:drums`); put in a sampler kit
+and a master chain that match. Audio tracks, launcher clips and device-parameter automation aren't
+imported. Then edit the job like any other and render it; `render song.dawproject` does both steps.
+
 ## Choosing sounds
 
 In order of preference:
@@ -322,7 +331,8 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
 
 ## Known limits (v0.1)
 
-- CLAP, VST3 and VST2 (no Audio Units yet; no VST2 shell plugins). Built-in effects cover the
+- CLAP, VST3 and VST2 (no Audio Units yet; no VST2 shell plugins). DAWproject import brings notes,
+  plugins, mixer and automation of volume/pan, not audio clips or a DAW's own devices. Built-in effects cover the
   essentials; installed plugin effects work in any `fx` chain (Intel-only ones on tracks only).
 - All tracks render in one process. Some plugin families (the nakst synths) share
   Objective-C class names and print a warning when several load together; if a render

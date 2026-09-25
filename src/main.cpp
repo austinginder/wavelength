@@ -6,6 +6,7 @@
 //   wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
 //   wavelength render <job.json> [--out DIR] [--json] [--verbose]
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
+//   wavelength import <project.dawproject> [--out DIR] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength version
 #include "analyze.hpp"
@@ -20,6 +21,7 @@
 #include "presets.hpp"
 #include "preset_files.hpp"
 #include "sampler.hpp"
+#include "dawproject.hpp"
 #include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
@@ -97,6 +99,11 @@ Usage:
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
+  wavelength import <project.dawproject> [--out DIR] [--json]
+      Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
+      tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
+      markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
+      `render project.dawproject` imports into <out>/import and renders in one go.
   wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--split "Organ=4"]
                   [--from BAR] [--to BAR] [--section NAME] [--crossings] [--json]
       Voice-leading check between melodic tracks (one voice each: its top note, its lowest for
@@ -589,9 +596,37 @@ int cmdMaster(const Args &a) {
 }
 
 // ---- render ----------------------------------------------------------------------------
+// ---- import -------------------------------------------------------------------------
+int cmdImport(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject> [--out DIR]");
+    const std::string src = a.positional[1];
+    const std::string outDir = a.get("--out", fs::path(src).stem().string());
+    DawprojectImport r;
+    std::string err;
+    if (!importDawproject(src, outDir, r, err)) return fail(a, err);
+    const std::string jobPath = (fs::path(outDir) / "job.json").string();
+    if (a.has("--json")) {
+        emit(json{{"ok", true}, {"job", jobPath}, {"application", r.application}, {"tracks", r.tracks}, {"buses", r.buses},
+                  {"notes", r.noteCount}, {"plugins", r.plugins}, {"left out", r.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+        return 0;
+    }
+    std::fprintf(OUT, "imported %s%s: %zu tracks, %zu buses, %zu notes, %zu plugins -> %s\n", src.c_str(),
+                 r.application.empty() ? "" : (" (" + r.application + ")").c_str(), r.tracks, r.buses, r.noteCount, r.plugins, jobPath.c_str());
+    for (auto &n : r.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
+    return 0;
+}
+
 int cmdRender(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json>");
-    const std::string path = a.positional[1];
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json | project.dawproject>");
+    std::string path = a.positional[1];
+    if (fs::path(path).extension() == ".dawproject") {   // import next to the output, then render that job
+        const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
+        DawprojectImport r;
+        std::string err;
+        if (!importDawproject(path, importDir, r, err)) return fail(a, err);
+        for (auto &n : r.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
+        path = (fs::path(importDir) / "job.json").string();
+    }
     std::ifstream in(path);
     if (!in) return fail(a, "cannot read " + path);
     json j;
@@ -1001,6 +1036,7 @@ int run(int argc, char **argv) {
             {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
+            {"import", {"--out", "--json"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
@@ -1022,6 +1058,7 @@ int run(int argc, char **argv) {
         if (cmd == "analyze") return cmdAnalyze(a);
         if (cmd == "audition") return cmdAudition(a);
         if (cmd == "render") return cmdRender(a);
+        if (cmd == "import") return cmdImport(a);
         if (cmd == "master") return cmdMaster(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "lint") return cmdLint(a);

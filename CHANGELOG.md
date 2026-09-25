@@ -24,6 +24,13 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- `wavelength import song.dawproject` (and `render song.dawproject`): a DAWproject export (Bitwig,
+  Studio One, Cubase) becomes a job: the arrangement's notes (clips, loops, nested lanes), tracks with
+  their CLAP / VST3 / VST2 plugins and saved states, volume, pan, mute, sends to effect returns,
+  groups, tempo and tempo map, time signature, markers, volume and pan automation, and the standard
+  EQ, compressor and limiter devices. What the file can't carry (a DAW's own devices and their
+  samples, launcher clips, audio tracks, device automation) is listed. Robot Protectors (Bitwig 6):
+  8 tracks and 1808 notes, rendered in 26 s, within about 1 dB of the bounce once its drums play.
 - VST2 hosting: `.vst` bundles (macOS), `.dll` (Windows) and `.so` (Linux) are scanned in child
   processes and play like CLAP and VST3 plugins (MIDI notes, CC, pitch bend, pressure, transport,
   parameters and automation, `.fxp`/`.fxb` state chunks and parameter lists, factory programs by name,
