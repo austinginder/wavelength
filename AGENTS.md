@@ -243,8 +243,9 @@ section. Don't master a mix that already went through a limiter. For a release, 
 `master` reads a mix's own lead-in from the render's report.json, so `master out/mix.wav --chain
 job.json` lines the sections up and keeps the lead-in.
 
-- **MP3 and AAC overshoot.** Lossy encoding adds 0.4-0.8 dB of true peak: a `-1.3` limiter
-  decoded to -0.9 dBTP on four album tracks. For a lossy release use a ceiling near `-2.0` and
+- **MP3 and AAC overshoot.** Lossy encoding adds 0.4-1.0 dB of true peak: a `-1.3` limiter
+  decoded to -0.9 dBTP on four album tracks, a `-2.0` one to -1.1 on a dense orchestral mix. For
+  a lossy release use a ceiling near `-2.0` (`-2.3` to `-2.7` for dense or breakbeat mixes) and
   check the decoded file (`ffmpeg -i x.mp3 -af ebur128=peak=true -f null -`).
 - **Rides are a layer.** Put section rides in `automation.rides` (named curves allowed), not into
   `automation.gain`: they add to the written fader curve instead of replacing it.
@@ -273,7 +274,8 @@ job.json` lines the sections up and keeps the lead-in.
 `out/<dir>/report.json` (also printed with `--json`):
 
 - `tracks[].sections` and `buses[].sections`, loudness per marker section (`{"name", "lufs"}`)
-  after the fader and rides: find which part dominates a section without writing measuring
+  after the fader and rides (a long release or reverb tail counts in the next section: a chord that
+  rings over a boundary shows up there): find which part dominates a section without writing measuring
   scripts. `sectionLufs` is the same as a bare list in `sections` order.
 - `dropouts` and `sections[].change`: near-silence the song comes back from (start/end in the
   file, bars, LUFS), and each section's loudness step over the previous one. `sections[].transition`
@@ -293,7 +295,8 @@ job.json` lines the sections up and keeps the lead-in.
 - `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
   removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.
 - `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
-- `tracks[].postFaderPeakDb`, the track's peak as it reaches the mix. When the master limiter
+- `tracks[].postFaderPeakDb`, the track's peak after its fader and pan, as it leaves the track
+  (before any bus it feeds: a track into a limited bus can read hotter than what reaches the mix). When the master limiter
   works hard, a warning names the tracks whose peaks feed it; tame those (a `limiter` or
   `saturate` on the track) instead of turning the whole song down.
 - `tracks[].lufs` and `buses[].lufs`, integrated loudness after the `fx`, before the fader.

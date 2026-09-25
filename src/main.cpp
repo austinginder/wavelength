@@ -698,6 +698,7 @@ int cmdRender(const Args &a) {
                      "): mix.wav and this report are missing them, so levels, ducking and loudness are wrong; render again";
     }
     json report = {{"ok", complete}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
+                   {"duration", std::round((r.seconds + r.leadIn) * 100) / 100},   // the written file, lead-in included
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn}, {"defaultsApplied", job.appliedDefaults},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},

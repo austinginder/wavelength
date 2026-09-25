@@ -5,6 +5,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Fixed
+- `"stems": "none"` no longer creates an empty `stems/` folder.
 - `lint` compared every pair at every voice's note starts, so a third voice's rhythm split a pair's
   moves and hid real parallels (four parallel octaves in Fugue for the Night Shift's exposition went
   unreported) or moved where they were reported. Each pair is now compared at its own note starts.
@@ -23,6 +24,7 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- `duration` in the render report: the written file's length, lead-in included.
 - `lint --split "Organ=4"` (a chord track as voices, top to bottom), `--from`/`--to` bars and
   `--section NAME`, and both chords' notes with each problem.
 - Marker `"checks": false` for sections that are meant as they are: their dropouts are reported as

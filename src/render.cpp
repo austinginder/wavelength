@@ -192,7 +192,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     if (!buildChain(job.masterFx, job, "master", masterChain, err)) return false;
 
     std::error_code ec;
-    fs::create_directories(fs::path(outDir) / "stems", ec);
+    fs::create_directories(job.stemBits ? fs::path(outDir) / "stems" : fs::path(outDir), ec);   // no empty stems/ when stems are off
     if (ec) { err = "cannot create " + outDir + ": " + ec.message(); return false; }
     // never leave a previous render's files next to this one's: a failed render must not look finished
     fs::remove(fs::path(outDir) / "report.json", ec);
