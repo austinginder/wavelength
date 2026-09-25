@@ -114,7 +114,8 @@ scripts/check.sh              # build + render the examples; fails on errors, si
 
 `scripts/build-release.sh <tag>` builds the release archives for all five targets from a git tag
 on one Mac: macOS natively, Linux in Docker, Windows cross-compiled with llvm-mingw and
-smoke-tested under Wine. `--upload` attaches them to the GitHub release.
+smoke-tested under Wine. `--upload` attaches them to the GitHub release. The whole release checklist is in
+[docs/releasing.md](docs/releasing.md).
 
 ## Try it
 
