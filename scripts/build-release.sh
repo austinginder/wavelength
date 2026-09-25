@@ -43,7 +43,7 @@ package() {
   [ -n "$licenses" ] && cp -R "$licenses" "$work/pkg/$name/licenses"
   rm -f "$dist/$name".*
   if [[ $target == windows* ]]; then (cd "$work/pkg" && zip -qr "$dist/$name.zip" "$name")
-  else (cd "$work/pkg" && COPYFILE_DISABLE=1 tar czf "$dist/$name.tar.gz" "$name"); fi
+  else (cd "$work/pkg" && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf "$dist/$name.tar.gz" "$name"); fi
   echo "packaged $name"
 }
 
