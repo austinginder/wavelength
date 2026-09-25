@@ -307,7 +307,8 @@ job.json` lines the sections up and keeps the lead-in.
 - `tracks[].levels.peakDb`, stems are unclipped float; peaks above 0 only matter in the mix.
 - `tracks[].levels.silent: true` with notes present means the sound didn't play: wrong
   plugin (effect instead of instrument), a state that mutes it, or notes out of range.
-- `mix.levels` and `warnings`, prefer a master `limiter` over `"normalize"`.
+- `warnings` lists everything: the mix's own warnings and every track's (prefixed `track 'Name':`).
+  Read it after every render. `mix.levels`: prefer a master `limiter` over `"normalize"`.
 
 Stems are written **after** the track's `fx` and **before** its fader, so fader and send
 changes don't alter stems. They are 32-bit float by default and big (about 8 MB per track-minute

@@ -150,6 +150,9 @@ command rejects options it doesn't know.
   warns with the time, and a track reading above +6 LUFS warns that its output is broken.
 
 ### Changed
+- Every track warning is also listed in the top-level `warnings`, prefixed with the track's name.
+  Furnace Liturgy's agent read only the top-level list and missed a late gain curve that held the
+  lead organ 9 dB down through the first drop.
 - The weak-drop check measures the boundary as it is heard: the section's first 4 bars against the
   last 2 bars before it (`sections[].transition` in the report, for every boundary). Whole-section
   averages read Hammerklang's Final as +3.3 dB while its drop landed +1.5.

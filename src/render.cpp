@@ -710,6 +710,17 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                                 : "an escalation should rise: add a layer, open filters, lift it a little");
         result.warnings.push_back(buf);
     }
+    // every track warning also lands in the top-level list, named: an agent reading `warnings` must not
+    // miss a curve that holds a lead 9 dB down because it was only in tracks[].warnings
+    {
+        const std::vector<std::string> own = result.warnings;
+        for (const auto &t : result.tracks)
+            for (const auto &w : t.warnings) {
+                const std::string named = "track '" + t.name + "': " + w;
+                const bool already = std::any_of(own.begin(), own.end(), [&](const std::string &o) { return o == w || o.find(w) != std::string::npos; });
+                if (!already) result.warnings.push_back(named);
+            }
+    }
     result.renderSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return true;
 }
