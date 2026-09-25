@@ -141,6 +141,7 @@ add_executable(wavelength
   src/xml.cpp
   src/dawproject.cpp
   src/bitwig.cpp
+  src/midi_file.cpp
   src/wav.cpp)
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")

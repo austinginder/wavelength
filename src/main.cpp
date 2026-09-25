@@ -23,6 +23,7 @@
 #include "sampler.hpp"
 #include "bitwig.hpp"
 #include "dawproject.hpp"
+#include "midi_file.hpp"
 #include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
@@ -106,6 +107,14 @@ Usage:
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
       markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
       `render project.dawproject` imports into <out>/import and renders in one go.
+  wavelength import <song.mid> [--out DIR] [--instrument PLUGIN] [--json]
+      Turn a Standard MIDI File into a job: tempo map, time signature, markers, one track per
+      MIDI track and channel (notes, sustain pedal, volume/pan/expression, other CCs, pitch
+      bend). Channel 10 plays builtin:drums; other channels a General MIDI-family sound from
+      the sample library, or PLUGIN for all of them. `render song.mid` imports and renders.
+  wavelength export <job.json> [--out song.mid] [--json]
+      Write the job's parts as a MIDI file (type 1): tempo map, time signature, markers, and a
+      track per job track with its notes, CC, pitch bend and pressure automation.
   wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--split "Organ=4"]
                   [--from BAR] [--to BAR] [--section NAME] [--crossings] [--json]
       Voice-leading check between melodic tracks (one voice each: its top note, its lowest for
@@ -600,7 +609,7 @@ int cmdMaster(const Args &a) {
 // ---- render ----------------------------------------------------------------------------
 // ---- import -------------------------------------------------------------------------
 int cmdImport(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject> [--out DIR]");
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | project.bwproject> [--out DIR]");
     const std::string src = a.positional[1];
     if (fs::path(src).extension() == ".bwproject") {   // Bitwig's own format: list what it holds
         bitwig::Project p;
@@ -643,6 +652,21 @@ int cmdImport(const Args &a) {
         return 0;
     }
     const std::string outDir = a.get("--out", fs::path(src).stem().string());
+    std::string ext = fs::path(src).extension().string();
+    for (auto &ch : ext) ch = (char)std::tolower((unsigned char)ch);
+    if (ext == ".mid" || ext == ".midi" || ext == ".smf" || ext == ".kar" || ext == ".rmi") {
+        MidiImport m;
+        std::string err;
+        if (!importMidiFile(src, outDir, a.get("--instrument", ""), m, err)) return fail(a, err);
+        const std::string jobPath = (fs::path(outDir) / "job.json").string();
+        if (a.has("--json")) {
+            emit(json{{"ok", true}, {"job", jobPath}, {"format", m.format}, {"tracks", m.tracks}, {"notes", m.noteCount}, {"left out", m.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+            return 0;
+        }
+        std::fprintf(OUT, "imported %s (MIDI type %d): %zu tracks, %zu notes -> %s\n", src.c_str(), m.format, m.tracks, m.noteCount, jobPath.c_str());
+        for (auto &n : m.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
+        return 0;
+    }
     DawprojectImport r;
     std::string err;
     if (!importDawproject(src, outDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
@@ -659,9 +683,42 @@ int cmdImport(const Args &a) {
     return 0;
 }
 
+int cmdExport(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength export <job.json> [--out song.mid]");
+    const std::string src = a.positional[1];
+    std::ifstream in(src);
+    if (!in) return fail(a, "cannot read " + src);
+    json j;
+    try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    Job job;
+    std::string err;
+    if (!parseJob(j, fs::path(src).parent_path().string(), job, err)) return fail(a, err);
+    std::string out = a.get("--out", (fs::path(src).parent_path() / (fs::path(src).stem().string() + ".mid")).string());
+    if (fs::path(out).extension() != ".mid" && fs::path(out).extension() != ".midi") return fail(a, "export writes MIDI files: give --out a .mid name");
+    std::vector<std::string> notes;
+    if (!exportMidiFile(job, j, out, notes, err)) return fail(a, err);
+    size_t n = 0, tracks = 0;
+    for (auto &t : job.tracks) if (!t.notes.empty()) { n += t.notes.size(); ++tracks; }
+    if (a.has("--json")) {
+        emit(json{{"ok", true}, {"file", out}, {"tracks", tracks}, {"notes", n}, {"left out", notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+        return 0;
+    }
+    std::fprintf(OUT, "exported %zu tracks, %zu notes -> %s\n", tracks, n, out.c_str());
+    for (auto &x : notes) std::fprintf(OUT, "  ! %s\n", x.c_str());
+    return 0;
+}
+
 int cmdRender(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json | project.dawproject>");
     std::string path = a.positional[1];
+    if (const std::string ext = fs::path(path).extension().string(); ext == ".mid" || ext == ".midi") {   // import, then render
+        const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
+        MidiImport m;
+        std::string err;
+        if (!importMidiFile(path, importDir, a.get("--instrument", ""), m, err)) return fail(a, err);
+        for (auto &n : m.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
+        path = (fs::path(importDir) / "job.json").string();
+    }
     if (fs::path(path).extension() == ".dawproject") {   // import next to the output, then render that job
         const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
         DawprojectImport r;
@@ -1076,10 +1133,11 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose", "--bitwig"}},
+            {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose", "--bitwig", "--instrument"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
-            {"import", {"--out", "--json", "--bitwig"}},
+            {"import", {"--out", "--json", "--bitwig", "--instrument"}},
+            {"export", {"--out", "--json"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
@@ -1102,6 +1160,7 @@ int run(int argc, char **argv) {
         if (cmd == "audition") return cmdAudition(a);
         if (cmd == "render") return cmdRender(a);
         if (cmd == "import") return cmdImport(a);
+        if (cmd == "export") return cmdExport(a);
         if (cmd == "master") return cmdMaster(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "lint") return cmdLint(a);

@@ -41,6 +41,16 @@ automation aren't imported. `wavelength import song.bwproject` lists a Bitwig pr
 devices, pads and plugin states. Then edit the job like any other and render it; `render
 song.dawproject` does both steps.
 
+## Starting from a MIDI file
+
+`wavelength import part.mid --out songs/x --json` makes a job from a Standard MIDI File (from
+MuseScore, a DAW, music21, another agent). Channel 10 becomes `builtin:drums`; every other part gets
+a General MIDI-family sound from the sample library (piano, strings, brass, ...) so the job renders
+at once: then swap in real plugins and presets track by track (`"plugin"`, `"preset"`), keeping the
+notes. `--instrument "Surge XT"` puts one plugin on every melodic part instead (controllers and
+pitch bend then reach it as automation). `wavelength export job.json --out song.mid` goes the other
+way: hand a part to a person to open in Bitwig, Cubase or a notation program.
+
 ## Choosing sounds
 
 In order of preference:

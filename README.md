@@ -163,6 +163,8 @@ A minimal job:
 | `params <plugin> [--preset N] [--state F] [--all] [--json]` | Shows parameters with ranges, current values and display text, optionally after loading a preset or state. |
 | `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--jobs N] [--json]` | Renders stems, `mix.wav` and `report.json`. Plugin tracks render in worker processes, several at once; a crashing plugin costs its track, not the song. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |
 | `import <song.dawproject> [--out DIR] [--bitwig FILE \| none] [--json]` | Turns a DAWproject export (Bitwig, Studio One, Cubase) into a job: notes, tracks with their plugins and saved states, mixer, sends, groups, tempo map, markers, volume and pan automation. For Bitwig it also reads the `.bwproject` behind the export for Bitwig's own devices: Drum Machine pads (plugins and samples), Chain, EQ+, Compressor, Multiband FX-3, Peak Limiter, Tool. Lists what didn't come across. `import song.bwproject` lists a Bitwig project's devices; `render song.dawproject` imports and renders in one step. |
+| `import <song.mid> [--out DIR] [--instrument PLUGIN] [--json]` | Turns a Standard MIDI File into a job: tempo map, time signature, markers, and a track per MIDI track and channel with its notes (sustain pedal folded into note lengths), volume, pan and expression, other controllers, pitch bend (with the file's bend range) and pressure. Channel 10 plays `builtin:drums`; other channels a General MIDI-family sound from the installed sample library, or `--instrument` for all of them. `render song.mid` imports and renders. |
+| `export <job.json> [--out song.mid] [--json]` | Writes the job's parts as a type 1 MIDI file to open in a DAW or notation program: tempo map (ramps stepped every 1/16 beat), time signature, markers, and a track per job track with its notes, fader, pan, rides and CC, pitch bend and pressure automation. Export, import and export again gives the same file byte for byte. |
 | `master <mix.wav> --chain <chain \| job> [--loudness L] [--lead-in S] [--out DIR] [--json]` | Masters a finished mix: plays it through a master chain (an effect list, a master object, or a song's job with its markers; a file or inline JSON) and reports loudness and true peak before and after, per section. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 
@@ -206,10 +208,11 @@ render's stem loudness (`<song>/out` by default).
 
 ## Roadmap
 
-1. MIDI file import and export (parts from other tools; open a song in a DAW).
-2. Per-note pitch and level tracking in `analyze`; gain-reduction readouts for compressors and limiters.
-3. Auditions inside each instrument's range, and an envelope-depth measure for rhythmic patches.
-4. `render project.dawproject`: render DAWproject files directly, including their plugin states.
+1. Per-note pitch and level tracking in `analyze`; gain-reduction readouts for compressors and limiters.
+2. Auditions inside each instrument's range, and an envelope-depth measure for rhythmic patches.
+3. The rest of Bitwig's own devices (Filter, Reverb, Delay, EQ-5, Distortion) and device-parameter
+   automation in the DAWproject import; audio clips.
+4. FLAC and AIFF samples, SFZ instruments, and a General MIDI SoundFont fallback.
 5. A local service with a web UI and live playback through the speakers; Audio Unit hosting.
 
 ## License

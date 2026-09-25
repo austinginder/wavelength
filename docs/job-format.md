@@ -62,6 +62,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `transpose` | 0 | Semitones added to every note (presets that sound an octave off, key changes). |
 | `output` | master | A bus name: the track feeds that bus instead of the master (group buses / sub-mixes). |
 | `roll` | 0 | Beats between notes that start together, lowest first (strummed or rolled chords); negative rolls from the top. |
+| `midiProgram`, `midiChannel` | none | Kept by `import song.mid` (the part's General MIDI program and channel) and written back by `export`; rendering ignores them. |
 | `bendRange` | 2 | The plugin's pitch-bend range in semitones, so `automation.pitchbend` can be written in semitones. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |
 | `stem` | `true` = write this track's stem file (when the job writes stems); `false` skips it. |

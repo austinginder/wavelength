@@ -24,6 +24,14 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- MIDI files: `wavelength import song.mid` (and `render song.mid`) makes a job from a Standard MIDI
+  File (types 0, 1 and 2): tempo map, time signature, markers, one track per MIDI track and channel,
+  sustain pedal folded into note lengths, CC7 / CC10 / CC11 as fader, pan and rides, other CCs,
+  pitch bend with the file's RPN bend range (per-note bends on sampler tracks) and pressure.
+  Channel 10 plays `builtin:drums` and other parts a General MIDI-family multisample from the sample
+  library, so an imported file renders with no plugins; `--instrument` sets one plugin for all.
+  `wavelength export job.json --out song.mid` writes a type 1 file for a DAW. Export, import and
+  export again is byte-identical for every example and 62 test songs; `check.sh` tests it.
 - Bitwig projects: `import` reads the `.bwproject` behind a Bitwig DAWproject export (found by name,
   or `--bitwig`) for what the export leaves out: Drum Machine pads become a track each (plugins with
   their states, Sampler pads as `builtin:sampler`, pad volume, pan and mute) into a drum bus, and
