@@ -266,6 +266,14 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
             std::string crash;
             const bool exited = platform::finished(w.proc, crash);
             const bool hung = !exited && std::chrono::duration<double>(std::chrono::steady_clock::now() - w.last).count() > hangSeconds;
+            if (!exited && !hung && platform::hasOnscreenWindow(w.proc.id)) {   // a licence dialog: every preset would wait on it
+                for (auto &x : workers) platform::kill(x.proc);
+                std::error_code ec;
+                fs::remove_all(tmp, ec);
+                err = info.name + " opened a window while loading (most likely a licence or registration dialog); audition stopped. "
+                      "Licence it, or `wavelength plugins --block \"" + info.name + "\"`";
+                return 1;
+            }
             if (hung) platform::kill(w.proc);
             if (!exited && !hung) { ++i; continue; }
             w.done = readResults(w);
