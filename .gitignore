@@ -5,3 +5,6 @@ out/
 third_party/
 build-dev/
 __pycache__/
+dist/
+build-linux*/
+build-win/

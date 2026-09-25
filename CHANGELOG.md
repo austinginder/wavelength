@@ -6,6 +6,15 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ### Added
 - `skills/wavelength/`: an agent skill that installs the engine (release build, else from source, docs matched to the binary) and runs the whole song workflow.
+- Linux and Windows support. Wavelength builds and runs on macOS (universal), Linux (x86_64 and
+  arm64) and Windows (x86_64), with the platforms' standard CLAP and VST3 folders, worker
+  processes, and caches and settings in each platform's usual place.
+- Release binaries for all five targets, built on one Mac with `scripts/build-release.sh`
+  (Docker for Linux, llvm-mingw for Windows), each smoke-tested before packaging.
+
+### Changed
+- A plugin library that fails to load names the library and the reason (on Linux the VST3 SDK
+  only said "dlopen failed").
 
 ## [0.1.0] - 2026-09-24
 

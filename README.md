@@ -54,16 +54,56 @@ https://wavelength.run
 - **Measure:** BS.1770 loudness per track, bus, marker section and mix (it matches
   `ffmpeg -af ebur128`), per-track loudness per section, true peak and per-track render time.
 
+## Install
+
+Download the archive for your platform from the
+[latest release](https://github.com/austinginder/wavelength/releases/latest). Each has the
+`wavelength` binary plus the docs and examples (the names carry no version, so the links below always
+fetch the newest release):
+
+| Platform | Archive |
+|---|---|
+| macOS 12+ (Apple silicon and Intel) | `wavelength-macos-universal.tar.gz` |
+| Linux x86_64 / arm64 (glibc 2.35+: Ubuntu 22.04, Debian 12, Fedora 36 or newer) | `wavelength-linux-x86_64.tar.gz`, `wavelength-linux-arm64.tar.gz` |
+| Windows 10+ x64 | `wavelength-windows-x86_64.zip` |
+
+```sh
+curl -L https://github.com/austinginder/wavelength/releases/latest/download/wavelength-macos-universal.tar.gz | tar xz
+./wavelength-macos-universal/wavelength plugins
+```
+
+The macOS binary isn't notarized. `curl` downloads run as-is; if you download it in a browser,
+clear the quarantine flag first: `xattr -d com.apple.quarantine wavelength`. `SHA256SUMS.txt` on
+each release has the checksums.
+
+Wavelength finds plugins in each platform's standard folders, plus `$WAVELENGTH_CLAP_PATH` and
+`$WAVELENGTH_VST3_PATH` (lists separated by `:`, or `;` on Windows):
+
+| | CLAP | VST3 |
+|---|---|---|
+| macOS | `~/Library/Audio/Plug-Ins/CLAP`, `/Library/Audio/Plug-Ins/CLAP` | `~/Library/Audio/Plug-Ins/VST3`, `/Library/Audio/Plug-Ins/VST3` |
+| Linux | `~/.clap`, `/usr/local/lib/clap`, `/usr/lib/clap` | `~/.vst3`, `/usr/local/lib/vst3`, `/usr/lib/vst3` |
+| Windows | `%LOCALAPPDATA%\Programs\Common\CLAP`, `%COMMONPROGRAMFILES%\CLAP` | `%LOCALAPPDATA%\Programs\Common\VST3`, `%COMMONPROGRAMFILES%\VST3` |
+
+### Folders
+
+| | Settings (`defaults.json`, extracted presets) | Caches (plugin scan, NKS index, auditions) |
+|---|---|---|
+| macOS | `~/Library/Application Support/Wavelength` | `~/Library/Caches/wavelength` |
+| Linux | `$XDG_CONFIG_HOME/wavelength` (`~/.config/wavelength`) | `$XDG_CACHE_HOME/wavelength` (`~/.cache/wavelength`) |
+| Windows | `%APPDATA%\Wavelength` | `%LOCALAPPDATA%\wavelength\cache` |
+
 ## Build
 
-Requires CMake 3.20+ and a C++17 compiler (Xcode command line tools on macOS). CMake fetches
-these at configure time:
+Requires CMake 3.20+ and a C++17 compiler: the Xcode command line tools on macOS, g++ or clang
+on Linux, llvm-mingw for Windows. CMake fetches these at configure time:
 - the CLAP headers
 - the VST3 SDK (hosting sources only)
 - nlohmann/json
 - zstd
+- Signalsmith Stretch
 
-zlib comes from the system.
+zlib comes from the system, or is fetched where there is none (Windows).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -71,6 +111,10 @@ cmake --build build -j
 ./build/wavelength help
 scripts/check.sh              # build + render the examples; fails on errors, silence or clipping
 ```
+
+`scripts/build-release.sh <tag>` builds the release archives for all five targets from a git tag
+on one Mac: macOS natively, Linux in Docker, Windows cross-compiled with llvm-mingw and
+smoke-tested under Wine. `--upload` attaches them to the GitHub release.
 
 ## Try it
 
@@ -108,7 +152,7 @@ A minimal job:
 
 | Command | Does |
 |---|---|
-| `plugins [--rescan] [--json]` | Lists CLAP and VST3 plugins and the built-in instruments. It searches the standard plug-in folders, `$WAVELENGTH_CLAP_PATH` and `$WAVELENGTH_VST3_PATH`, and caches results per bundle. |
+| `plugins [--rescan] [--json]` | Lists CLAP and VST3 plugins and the built-in instruments. It searches the standard plug-in folders (see Install), `$WAVELENGTH_CLAP_PATH` and `$WAVELENGTH_VST3_PATH`, and caches results per bundle. |
 | `presets <plugin> [--search T] [--rescan] [--json]` | Lists a plugin's presets to use by name as `"preset"`, with category and notes (e.g. Guitar Rig racks marked free edition or Pro). |
 | `samples [--search T] [--kit NAME] [--json]` | Lists sample libraries for `builtin:sampler` (Bitwig content and `$WAVELENGTH_SAMPLES_PATH`); `--kit` prints a kit's key map. |
 | `audition <plugin> [--jobs N] [--limit N] [--rebuild]` | Renders every preset once in worker processes and indexes how it sounds (octave offset, brightness, band balance, envelope, width), so `presets` can show and search sound tags. |
@@ -130,6 +174,8 @@ render's stem loudness (`<song>/out` by default).
 ## How it works
 
 **Plugin hosting**
+- `src/platform.*` holds everything that differs between macOS, Linux and Windows: folders,
+  worker processes, loading plugin libraries, the main-thread event loop.
 - `src/bundle.*` and `src/instance.*` host CLAP plugins, following CLAP's threading rules:
   lifecycle and state on the main thread, `process()` on a dedicated audio thread.
 - `src/vst3_plugin.*` hosts VST3 plugins with the SDK's hosting helpers, including
