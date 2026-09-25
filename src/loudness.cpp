@@ -48,7 +48,12 @@ double integratedLufs(const Audio &a, int sampleRate, size_t from, size_t to) {
     to = std::min(to, a.frames());
     if (to <= from) return -120;
     const size_t n = to - from, block = (size_t)(0.4 * sampleRate), hop = (size_t)(0.1 * sampleRate);
-    if (n < block) return -120;
+    if (n < block) {   // shorter than one gating block (a 0.2 s analyze window, a one-hit section): its plain K-weighted loudness
+        if (n < (size_t)(0.01 * sampleRate)) return -120;
+        const std::vector<double> pre = weightedPower(a, sampleRate, from, n);
+        const double l = lufs(pre[n] / n);
+        return l > -70.0 ? l : -120;
+    }
     const std::vector<double> pre = weightedPower(a, sampleRate, from, n);
 
     std::vector<double> z;   // mean power of each 400 ms block

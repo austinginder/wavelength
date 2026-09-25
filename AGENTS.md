@@ -181,6 +181,13 @@ the file through the job's `master` (or a chain file) and reports loudness befor
 section. Don't master a mix that already went through a limiter. For a release, add `"leadIn": 1`
 (a second of silence before the song, for streaming platforms), or `--lead-in 1` on `master`.
 
+- **MP3 and AAC overshoot.** Lossy encoding adds 0.4-0.8 dB of true peak: a `-1.3` limiter
+  decoded to -0.9 dBTP on four album tracks. For a lossy release use a ceiling near `-2.0` and
+  check the decoded file (`ffmpeg -i x.mp3 -af ebur128=peak=true -f null -`).
+- **Master rides run before the chain.** `master.automation.gain` changes the level going into
+  the master compressors and limiter, which then pull part of it back: ride tracks or buses to
+  shape the section contour, and keep master rides for fades.
+
 - **Set band compressors from measurements.** Solo each band (`"bands": [{}, {"solo": true}, {}]`)
   through `wavelength master` and read its level; aim for 2-3 dB of reduction on the loud
   sections. The loudness target's gain is applied at the start of the chain, so a trim `gain`

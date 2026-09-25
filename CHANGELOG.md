@@ -35,6 +35,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- Loudness of a window shorter than 0.4 s (an `analyze` window, a one-hit section) read -120 LUFS;
+  it is now the window's plain K-weighted loudness.
 - A plugin that opens a window while rendering (a licence or registration dialog) no longer holds
   the render until the hang timeout: on macOS the worker is killed within about 2 s and the track
   fails with a message that suggests `plugins --block`.
