@@ -214,7 +214,42 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     return all;
 }
 
-bool resolvePlugin(const std::string &specIn, PluginInfo &out, std::string &err) {
+namespace {
+fs::path blockedFile() { return platform::dataDir() / "blocked.json"; }
+bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err);
+} // namespace
+
+nlohmann::json blockedPlugins() {
+    std::ifstream in(blockedFile());
+    nlohmann::json j = in ? nlohmann::json::parse(in, nullptr, false) : nlohmann::json::object();
+    return j.is_object() ? j : nlohmann::json::object();
+}
+
+bool setPluginBlocked(const PluginInfo &p, bool blocked, const std::string &reason, std::string &err) {
+    nlohmann::json j = blockedPlugins();
+    if (blocked) j[p.id] = {{"name", p.name}, {"format", p.format}, {"reason", reason}};
+    else j.erase(p.id);
+    std::error_code ec;
+    fs::create_directories(blockedFile().parent_path(), ec);
+    std::ofstream out(blockedFile());
+    out << j.dump(2) << "\n";
+    if (!out) { err = "cannot write " + blockedFile().string(); return false; }
+    return true;
+}
+
+bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err, bool allowBlocked) {
+    if (!resolveAny(spec, out, err)) return false;
+    if (allowBlocked) return true;
+    const nlohmann::json blocked = blockedPlugins();
+    if (!blocked.contains(out.id)) return true;
+    const std::string reason = blocked[out.id].value("reason", "");
+    err = out.name + " is blocked" + (reason.empty() ? "" : " (" + reason + ")") + ": pick another plugin, or run `wavelength plugins --unblock \"" +
+          out.name + "\"` if it works now";
+    return false;
+}
+
+namespace {
+bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err) {
     // optional format prefix: "vst3:Vital", "clap:Vital"
     std::string spec = specIn, want;
     for (const char *f : {"vst3", "clap"})
@@ -250,5 +285,6 @@ bool resolvePlugin(const std::string &specIn, PluginInfo &out, std::string &err)
     err = "no installed " + (want.empty() ? std::string("CLAP or VST3") : want) + " plugin matches '" + spec + "' (run `wavelength plugins`)";
     return false;
 }
+} // namespace
 
 } // namespace wl

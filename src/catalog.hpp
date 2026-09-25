@@ -17,7 +17,14 @@ std::vector<std::string> vst3SearchPaths();
 std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warnings);
 // Resolve an id, a plugin name, a path to a .clap/.vst3 bundle, or "path#id". Prefix with
 // "clap:" or "vst3:" to pick a format; plain names prefer CLAP when both exist.
-bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err);
+// A blocked plugin fails to resolve unless `allowBlocked` (used by `plugins --block/--unblock`).
+bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err, bool allowBlocked = false);
+
+// Plugins the user has blocked (blocked.json in platform::dataDir(), keyed by plugin id): an
+// unlicensed plugin that opens a registration window on every load, one that crashes. A blocked
+// plugin fails to resolve, so render, params, presets and audition never load it.
+nlohmann::json blockedPlugins();
+bool setPluginBlocked(const PluginInfo &p, bool blocked, const std::string &reason, std::string &err);
 
 nlohmann::json pluginToJson(const PluginInfo &p);
 PluginInfo pluginFromJson(const nlohmann::json &j);

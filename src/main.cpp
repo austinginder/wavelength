@@ -49,9 +49,10 @@ void emit(const std::string &s) { std::fputs(s.c_str(), OUT); std::fputc('\n', O
 const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https://wavelength.run)
 
 Usage:
-  wavelength plugins [--rescan] [--json]
+  wavelength plugins [--rescan] [--json] | plugins --block <plugin> [--reason TEXT] | --unblock <plugin>
       List installed CLAP and VST3 plugins and the built-in instruments (cached; --rescan
-      reloads every bundle).
+      reloads every bundle). A blocked plugin (one that opens a licence window on every load,
+      or crashes) is never loaded: render, params, presets and audition refuse it by name.
   wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
@@ -128,6 +129,18 @@ json levelsJson(const Levels &l) {
 
 // ---- plugins ---------------------------------------------------------------------------
 int cmdPlugins(const Args &a) {
+    for (const char *flag : {"--block", "--unblock"}) {
+        if (!a.has(flag)) continue;
+        const bool block = std::string(flag) == "--block";
+        PluginInfo info;
+        std::string err;
+        if (!resolvePlugin(a.get(flag), info, err, true)) return fail(a, err);
+        if (!setPluginBlocked(info, block, a.get("--reason"), err)) return fail(a, err);
+        if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"name", info.name}, {"blocked", block}}.dump(2));
+        else std::fprintf(OUT, "%s %s (%s %s)\n", block ? "blocked" : "unblocked", info.name.c_str(), info.format.c_str(), info.id.c_str());
+        return 0;
+    }
+    const json blocked = blockedPlugins();
     std::vector<std::string> warnings;
     auto all = scanPlugins(a.has("--rescan"), warnings);
     auto builtin = [](const char *id, const char *name, const char *desc, std::vector<std::string> features) {
@@ -144,14 +157,14 @@ int cmdPlugins(const Args &a) {
         json list = json::array();
         for (auto &p : all)
             list.push_back({{"id", p.id}, {"name", p.name}, {"vendor", p.vendor}, {"version", p.version}, {"format", p.format},
-                            {"features", p.features}, {"bundle", p.bundlePath}});
+                            {"features", p.features}, {"bundle", p.bundlePath}, {"blocked", blocked.contains(p.id)}});
         emit(json{{"ok", true}, {"plugins", list}, {"warnings", warnings}}.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     for (auto &p : all) {
         bool instrument = std::find(p.features.begin(), p.features.end(), "instrument") != p.features.end();
         std::fprintf(OUT, "%-7s %-32.32s %-30.30s %-22.22s %s\n", p.format.c_str(), p.name.c_str(), p.id.c_str(), p.vendor.c_str(),
-                     instrument ? "instrument" : "effect");
+                     (std::string(instrument ? "instrument" : "effect") + (blocked.contains(p.id) ? "  BLOCKED" : "")).c_str());
     }
     for (auto &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
     std::fprintf(OUT, "\n%zu plugins (CLAP, VST3 and built-in). Use \"vst3:Name\" or \"clap:Name\" when a name exists in both formats.\n", all.size());

@@ -87,7 +87,7 @@ Wavelength finds plugins in each platform's standard folders, plus `$WAVELENGTH_
 
 ### Folders
 
-| | Settings (`defaults.json`, extracted presets) | Caches (plugin scan, NKS index, auditions) |
+| | Settings (`defaults.json`, `blocked.json`, extracted presets) | Caches (plugin scan, NKS index, auditions) |
 |---|---|---|
 | macOS | `~/Library/Application Support/Wavelength` | `~/Library/Caches/wavelength` |
 | Linux | `$XDG_CONFIG_HOME/wavelength` (`~/.config/wavelength`) | `$XDG_CACHE_HOME/wavelength` (`~/.cache/wavelength`) |
