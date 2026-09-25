@@ -139,6 +139,9 @@ target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3h
 target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include
                            ${signalsmith_linear_SOURCE_DIR}/include)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  target_compile_options(wavelength PRIVATE -Wno-psabi)   # GCC 10 ABI notes on arm64, not problems
+endif()
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")
 elseif(WIN32)

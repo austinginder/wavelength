@@ -80,7 +80,7 @@ done
 if want windows-x86_64; then
   echo "== Windows x86_64"
   docker run --rm -v "$work:/work" -w /work mstorsjo/llvm-mingw:latest bash -c \
-    "cmake -S src -B windows -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=src/cmake/mingw-x86_64.cmake > /dev/null && cmake --build windows -j 10 > /dev/null && x86_64-w64-mingw32-strip windows/wavelength.exe"
+    "cmake -S src -B windows -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/work/src/cmake/mingw-x86_64.cmake > /dev/null && cmake --build windows -j 10 > /dev/null && x86_64-w64-mingw32-strip windows/wavelength.exe"
   docker build -q --platform linux/amd64 -t wavelength-wine -f scripts/docker/wine.Dockerfile scripts/docker > /dev/null
   smoke docker run --rm --platform linux/amd64 -v "$work:/work" -w /work wavelength-wine \
     wine64 windows/wavelength.exe render 'src\examples\mastering.json' --out 'C:\smoke' --json
