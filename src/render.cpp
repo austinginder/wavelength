@@ -474,10 +474,40 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             mix.left[f] *= g; mix.right[f] *= g;
         }
     }
-    {
+    if (!job.hasMasterLoudness) {
         std::vector<std::string> warnings;
         if (!runChain(masterChain, mix, ctx, result.masterFx, warnings, "master", err)) return false;
         for (auto &w : warnings) result.warnings.push_back("master: " + w);
+    } else {
+        // a loudness target: find the gain into the master chain that lands the output on it.
+        // Limiters compress, so the output moves less than the input; a few passes converge.
+        const Audio pre = mix;
+        double gainDb = 0, reached = -120;
+        std::vector<std::string> labels, warnings;
+        for (int pass = 0; pass < 8; ++pass) {
+            Chain chain;
+            if (pass > 0 && !buildChain(job.masterFx, job, "master", chain, err)) return false;
+            Chain &use = pass == 0 ? masterChain : chain;
+            mix = pre;
+            const float g = (float)dsp::dbToLin(gainDb);
+            for (size_t f = 0; f < frames; ++f) { mix.left[f] *= g; mix.right[f] *= g; }
+            labels.clear(); warnings.clear();
+            if (!runChain(use, mix, ctx, labels, warnings, "master", err)) return false;
+            reached = integratedLufs(mix, job.sampleRate);
+            const double miss = job.masterLoudness - reached;
+            if (std::fabs(miss) < 0.1 || reached < -69) break;
+            gainDb = std::clamp(gainDb + miss, -40.0, 30.0);
+        }
+        result.masterFx = labels;
+        for (auto &w : warnings) result.warnings.push_back("master: " + w);
+        result.loudnessGainDb = gainDb;
+        if (std::fabs(job.masterLoudness - reached) >= 0.3) {
+            char buf[200];
+            std::snprintf(buf, sizeof buf, "master: loudness target %.1f LUFS not reached (%.1f LUFS with %+.1f dB into the chain); the limiter or chain caps it",
+                          job.masterLoudness, reached, gainDb);
+            result.warnings.push_back(buf);
+        }
+        if (job.hasNormalize) result.warnings.push_back("master: \"normalize\" after a loudness target changes the loudness again; use one of them");
     }
     const Levels before = measure(mix);
     if (job.hasNormalize && !before.silent) {

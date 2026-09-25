@@ -59,6 +59,7 @@ Working towards **v0.1.0**, the first release.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 - Orchestral writing: per-note articulations (`"art": "spiccato"` with a track `articulations` map of keyswitch keys) insert the keyswitch just before each change; track `range` warns about notes an instrument can't play; `velocityTo` turns note velocities into a controller curve (`{"param": "Dynamics"}` or `{"cc": 1}`) for libraries whose long notes ignore velocity.
 - `multiband` effect: 2-4 bands on Linkwitz-Riley crossovers that sum back flat, each band with its own effect chain, gain, solo and mute (multiband compression, band saturation).
+- `master.loudness`: a target in LUFS; the gain into the master chain is found in a few passes so the mastered mix lands on it (`mix.loudnessGainDb` in the report).
 
 ### Changed
 - Automation points at the same beat keep the order they are written in (`[16, 0], [16, 1]` jumps from 0 to 1); they used to be sorted by value.

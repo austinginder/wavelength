@@ -302,6 +302,12 @@ bool parseJob(const json &j, const std::string &baseDir, Job &out, std::string &
         if (j.contains("master")) {
             out.masterFx = j["master"].value("fx", json::array());
             out.masterGainDb = j["master"].value("gain", 0.0);
+            if (j["master"].contains("loudness") && !j["master"]["loudness"].is_null()) {
+                out.hasMasterLoudness = true;
+                out.masterLoudness = j["master"]["loudness"].get<double>();
+                if (out.masterLoudness > -3 || out.masterLoudness < -40)
+                    throw std::runtime_error("master \"loudness\" is a target in LUFS between -40 and -3 (streaming: -14)");
+            }
             if (j["master"].contains("automation") && j["master"]["automation"].contains("gain"))
                 out.masterGainAutomation = Envelope::parse(j["master"]["automation"]["gain"], out.tempo, false);
         }

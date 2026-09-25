@@ -135,7 +135,7 @@ Studio package folders; paths work too (relative to the job).
 | Field | Meaning |
 |---|---|
 | `buses` | `[{"name": "Hall", "gain": 0, "fx": [...], "output": "Glue", "automation": {"gain": curve}}]`. Tracks reach them through `sends` or `output`; a bus returns to the master or to another bus (`output`), and runs after every bus that feeds it. |
-| `master` | `{"gain": 0, "fx": [...], "automation": {"gain": curve}}`, applied to the full mix before `normalize`. Gain automation fades the whole mix. |
+| `master` | `{"gain": 0, "fx": [...], "automation": {"gain": curve}, "loudness": -14}`, applied to the full mix before `normalize`. Gain automation fades the whole mix. `loudness` is a target in integrated LUFS after the chain: Wavelength finds the gain into the chain (so into its limiter) that lands on it, like a loudness meter's auto gain; the report gives `mix.loudnessGainDb`, and a warning when the chain caps it. |
 | `markers` | `[{"beat": 0, "name": "Intro"}, ...]`, the report gives loudness per section. |
 
 ## Notes

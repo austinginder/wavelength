@@ -76,6 +76,8 @@ struct Job {
     nlohmann::json masterFx = nlohmann::json::array();
     double masterGainDb = 0;
     Envelope masterGainAutomation;  // dB added to the master gain over time (fades)
+    bool hasMasterLoudness = false;
+    double masterLoudness = -14;    // target integrated LUFS after the master chain (gain into the chain is found)
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<Marker> markers;  // sections for per-section loudness in the report
     std::string baseDir;        // relative paths resolve from here

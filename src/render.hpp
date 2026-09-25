@@ -39,6 +39,7 @@ struct RenderResult {
     std::string mixFile;
     Levels mix{};
     double mixLufs = -120, normalizeGainDb = 0, truePeakDb = -120;
+    double loudnessGainDb = 0;   // gain into the master chain that met master.loudness
     std::vector<SectionResult> sections;
     std::vector<std::string> warnings;
     std::vector<std::string> failedTracks;   // tracks whose plugin crashed or hung; the song rendered without them

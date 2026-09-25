@@ -415,7 +415,7 @@ int cmdRender(const Args &a) {
     json report = {{"ok", true}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
-                            {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}}},
+                            {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"failedTracks", r.failedTracks}};
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
