@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(wavelength VERSION 0.2.0 LANGUAGES C CXX)
+project(wavelength VERSION 0.3.0 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
 endif()
@@ -133,7 +133,7 @@ add_executable(wavelength
   src/vst3_plugin.cpp
   src/wav.cpp)
 # "-dev" between releases; cleared when a release is cut
-set(WAVELENGTH_VERSION_SUFFIX "")
+set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
 target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB libzstd_static)
 target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include
