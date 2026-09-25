@@ -5,6 +5,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- A warning when an automation curve starts late and its first value differs from what the song
+  would otherwise start at (the effect's or parameter's static value, 0 dB for gain rides): a
+  curve holds its first value before its first point, which muffled a whole Theme behind a filter
+  curve that began at bar 65.
 - `saturate` `"match": true`: level-matched saturation (output RMS equal to the input's), so
   changing the drive doesn't change the track's loudness.
 - `render --tracks "Lead,Bass"`: render only the named tracks, through the song's buses and

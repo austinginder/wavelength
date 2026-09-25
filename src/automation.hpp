@@ -170,6 +170,28 @@ private:
     std::shared_ptr<Lfo> lfo_;
 };
 
+// The earliest point of an automation curve as written ([[beat, value], ...] or {"points": ...}).
+// A curve holds this value before its first point, which surprises when the point is late.
+inline bool firstPoint(const nlohmann::json &j, double &beat, double &value) {
+    const nlohmann::json *pts = j.is_object() ? (j.contains("points") ? &j["points"] : nullptr) : &j;
+    if (!pts || !pts->is_array() || pts->empty()) return false;
+    bool found = false;
+    for (const auto &p : *pts) {
+        double b, v;
+        if (p.is_array() && p.size() >= 2 && p[0].is_number() && p[1].is_number()) { b = p[0].get<double>(); v = p[1].get<double>(); }
+        else if (p.is_object() && p.contains("beat") && p.contains("value")) { b = p["beat"].get<double>(); v = p["value"].get<double>(); }
+        else continue;
+        if (!found || b < beat) { beat = b; value = v; found = true; }
+    }
+    return found;
+}
+inline std::string lateCurveWarning(const std::string &what, double beat, double value, double expected) {
+    char buf[300];
+    std::snprintf(buf, sizeof buf, "%s automation starts at beat %g, and a curve holds its first value (%g) before that, not %g: "
+                  "add a point at beat 0 with the value the song should start at", what.c_str(), beat, value, expected);
+    return buf;
+}
+
 // A number in the job that may be automated: `"cutoff": 800` plus optional
 // `"automate": {"cutoff": [[0, 200], [16, 8000]]}` on the same object.
 // `"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5}}` adds an LFO to either.

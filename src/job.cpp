@@ -241,6 +241,15 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 }
                 const json autoParams = au.value("params", json::object());
                 for (auto &[k, v] : autoParams.items()) tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, false)});
+                double fb, fv;   // curves that start late hold their first value from the top of the song
+                if (au.contains("gain") && firstPoint(au["gain"], fb, fv) && fb > 0 && std::fabs(fv) > 1e-9)
+                    tr.warnings.push_back(lateCurveWarning("gain", fb, fv, 0));
+                if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && std::fabs(fv - tr.pan) > 1e-9)
+                    tr.warnings.push_back(lateCurveWarning("pan", fb, fv, tr.pan));
+                for (auto &[k, v] : autoParams.items())
+                    for (auto &ps : tr.params)
+                        if (ps.key == k && ps.text.empty() && firstPoint(v, fb, fv) && fb > 0 && std::fabs(fv - ps.value) > 1e-9)
+                            tr.warnings.push_back(lateCurveWarning("parameter '" + k + "'", fb, fv, ps.value));
             }
             // groove: the job's settings with the track's on top
             json groove = j.value("groove", json::object());
