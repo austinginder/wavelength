@@ -357,18 +357,28 @@ struct Limiter : Effect {
 // ------------------------------------------------------------------------------ saturate
 struct Saturate : Effect {
     Envelope drive, mix;
+    bool match;
     Saturate(const json &j, const Job &job) {
         label = "saturate";
         drive = param(j, "drive", 6, job.tempo);
         mix = param(j, "mix", 1, job.tempo);
-        checkKeys(j, {"drive", "mix"}, *this);
+        match = j.value("match", false);
+        checkKeys(j, {"drive", "mix", "match"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
+        double inPow = 0, outPow = 0;
         for (size_t i = 0; i < a.frames(); ++i) {
             const double t = i / sr, k = dbToLin(drive.at(t)), norm = 1.0 / std::tanh(k), m = mix.at(t);
+            inPow += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
             a.left[i] = blend(a.left[i], std::tanh(a.left[i] * k) * norm, m);
             a.right[i] = blend(a.right[i], std::tanh(a.right[i] * k) * norm, m);
+            outPow += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
+        }
+        // tanh drive raises quiet parts by up to the drive: "match" brings the result back to the input's level
+        if (match && outPow > 1e-12 && inPow > 1e-12) {
+            const float g = (float)std::sqrt(inPow / outPow);
+            for (size_t i = 0; i < a.frames(); ++i) { a.left[i] *= g; a.right[i] *= g; }
         }
         return true;
     }

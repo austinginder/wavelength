@@ -5,6 +5,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `saturate` `"match": true`: level-matched saturation (output RMS equal to the input's), so
+  changing the drive doesn't change the track's loudness.
 - `render --tracks "Lead,Bass"`: render only the named tracks, through the song's buses and
   master; tracks that key their `duck`, `gate` or sidechain render muted. The report lists them in
   `onlyTracks`.

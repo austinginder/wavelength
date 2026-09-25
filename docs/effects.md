@@ -66,7 +66,7 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `reverb` | `decay` 2.5 s (RT60), `size` 0.7 (0–1), `predelay` 15 ms, `damping` 0.5 (0–1), `width` 1, `highpass` 150 Hz, `mix` 0.3 *(automatable)*, an 8-line feedback delay network |
 | `compressor` | `threshold` −18 dB, `ratio` 3, `attack` 10 ms, `release` 150 ms, `knee` 6 dB, `makeup` 0 dB, `mix` 1, stereo-linked; `sidechain` (track name) detects on that track's audio instead: real kick-keyed pumping |
 | `limiter` | `ceiling` −1 dB, `release` 80 ms, `lookahead` 5 ms, `truePeak` true (4x oversampled detection, so the ceiling holds for inter-sample peaks too; the report gives the mix's `truePeakDb`) |
-| `saturate` | `drive` 6 dB *(automatable)*, `mix` 1 *(automatable)*, tanh |
+| `saturate` | `drive` 6 dB *(automatable)*, `mix` 1 *(automatable)*, tanh. Quiet material comes out up to `drive` louder; `"match": true` brings the output back to the input's overall level (RMS), so the drive changes the tone and not the balance. |
 | `chorus` | `rate` 0.3 Hz, `depth` 4 ms, `delay` 14 ms, `mix` 0.35 *(automatable)* |
 | `width` | `amount` 1 (0 = mono, >1 wider) *(automatable)* |
 | `duck` | `trigger` (track name), `keys` (optional list, e.g. `[36]` = kicks only), `depth` 8 dB *(automatable)*, `attack` 8 ms, `hold` 20 ms, `release` 180 ms, sidechain-style pumping keyed from another track's notes |
