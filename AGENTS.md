@@ -195,8 +195,14 @@ section. Don't master a mix that already went through a limiter. For a release, 
 
 - `tracks[].sectionLufs`, each track's loudness per marker section after its fader and rides:
   find which part dominates a section without writing measuring scripts.
-- `failedTracks`, tracks whose plugin crashed or hung in its worker process: the song still
-  rendered without them (each also has a warning). Swap the plugin or preset and render again.
+- `failedTracks`, tracks whose plugin crashed on every attempt (a crashed worker is started
+  again, `"retries"`, default 2) or hung. The mix is written without them, but `ok` is `false`,
+  `error` names them and the exit status is 1: levels, ducking and loudness are wrong, so never
+  gain-stage from that report. Render again, or swap the plugin or preset. A track warning
+  "rendered again (attempt 2)" means a crash was recovered and the track is complete.
+- A track reading above +6 LUFS is broken output (runaway feedback, garbage samples), never a
+  level: the report warns. Samples that are not numbers or above +30 dBFS are muted after every
+  instrument and effect, with a warning saying where.
 - `tracks[].renderSeconds`, where the render time goes (plugin load and warmup included).
 - `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
   removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.
@@ -224,6 +230,9 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
   Objective-C class names and print a warning when several load together; if a render
   crashes, split tracks into separate jobs.
 - A plugin whose sound depends on its own GUI or licence dialog may render its demo/default.
+  An unlicensed plugin that opens a registration window on every load (it can also hang the
+  render until the window is closed) should be blocked: `wavelength plugins --block <plugin>
+  --reason "..."`; `plugins` marks it BLOCKED and render, params, presets and audition refuse it.
   An effect that only changes the level gets a warning; a state or preset that changes no
   parameter gets a warning too.
 - Presets by name come from CLAP preset discovery, VST3 program lists, and preset files in the

@@ -330,6 +330,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     struct Running { size_t index; platform::Process proc; std::chrono::steady_clock::time_point started; };
     std::vector<Running> running;
     std::vector<bool> started(job.tracks.size(), false);
+    std::vector<int> crashes(job.tracks.size(), 0);
     const double limit = 300 + 10 * seconds;   // a track that takes longer than this is hung
     const std::string self = isolate ? platform::selfExecutable() : "";
     auto startTrack = [&](size_t i) {
@@ -399,7 +400,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             Audio audio;
             audio.resize(frames);
             if (res.is_object() && res.value("ok", false)) {
+                const auto retried = tr.warnings;   // "rendered again" notes from earlier attempts
                 trackFromJson(res, tr);
+                tr.warnings.insert(tr.warnings.begin(), retried.begin(), retried.end());
                 std::ifstream pin(prefix + ".pcm", std::ios::binary);
                 pin.read(reinterpret_cast<char *>(audio.left.data()), (std::streamsize)(frames * sizeof(float)));
                 pin.read(reinterpret_cast<char *>(audio.right.data()), (std::streamsize)(frames * sizeof(float)));
@@ -408,9 +411,21 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             } else if (res.is_object() && res.contains("error")) {   // a job mistake (unknown preset, bad state): the render fails
                 err = res["error"].get<std::string>();
                 failed = true;
-            } else {   // the plugin crashed or hung: the song renders without this track (silence keys its dependents)
+            } else if (!hung && crashes[i] < job.retries) {   // plugin crashes are mostly races (Altitude): render the track again
+                ++crashes[i];
+                const std::string why = "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
+                tr.warnings.push_back(job.tracks[i].plugin + " " + why + "; rendered again (attempt " + std::to_string(crashes[i] + 1) + ")");
+                if (verbose) std::fprintf(stderr, "%s: %s, starting it again\n", tr.name.c_str(), why.c_str());
+                std::error_code rec;
+                fs::remove(prefix + ".pcm", rec);
+                fs::remove(prefix + ".json", rec);
+                running.erase(running.begin() + (long)r);
+                startTrack(i);
+                continue;
+            } else {   // the plugin crashed on every attempt or hung: the song renders without this track (silence keys its dependents)
                 tr.plugin = tr.pluginName = job.tracks[i].plugin;
-                const std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)" : "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
+                std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)" : "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
+                if (crashes[i]) why += " on all " + std::to_string(crashes[i] + 1) + " attempts";
                 tr.warnings.push_back("track failed: " + job.tracks[i].plugin + " " + why + "; the mix is rendered without it");
                 tr.lufs = -120;
                 tr.levels = Levels{-240, -240, -240, true};

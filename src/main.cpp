@@ -73,7 +73,9 @@ Usage:
   wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
-      a track whose plugin crashes or hangs is left out and listed in "failedTracks".
+      a worker whose plugin crashes is started again (job "retries", default 2); a track that
+      still fails is left out of the mix and listed in "failedTracks", and the render then
+      reports "ok": false and exits 1 (mix.wav and report.json are still written).
   wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
@@ -500,14 +502,22 @@ int cmdRender(const Args &a) {
     json sections = json::array();
     for (auto &sec : r.sections)
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}});
-    json report = {{"ok", true}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
+    const bool complete = r.failedTracks.empty();
+    std::string incomplete;
+    if (!complete) {
+        for (auto &n : r.failedTracks) incomplete += (incomplete.empty() ? "'" : ", '") + n + "'";
+        incomplete = std::to_string(r.failedTracks.size()) + (r.failedTracks.size() == 1 ? " track" : " tracks") + " failed (" + incomplete +
+                     "): mix.wav and this report are missing them, so levels, ducking and loudness are wrong; render again";
+    }
+    json report = {{"ok", complete}, {"sampleRate", r.sampleRate}, {"seconds", std::round(r.seconds * 100) / 100},
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn}, {"defaultsApplied", job.appliedDefaults},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"failedTracks", r.failedTracks}};
+    if (!complete) report["error"] = incomplete;
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
-    if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return complete ? 0 : 1; }
     for (auto &t : r.tracks) {
         std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", t.name.c_str(), t.pluginName.c_str(), t.levels.peakDb,
                     t.lufs, t.file.c_str());
@@ -518,6 +528,7 @@ int cmdRender(const Args &a) {
     for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
     for (auto &w : r.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
     std::fprintf(OUT, "%.2f s of audio rendered in %.2f s\n", r.seconds, r.renderSeconds);
+    if (!complete) { std::fprintf(stderr, "error: %s\n", incomplete.c_str()); return 1; }
     return 0;
 }
 

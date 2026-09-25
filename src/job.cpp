@@ -175,6 +175,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
     try {
         out.baseDir = baseDir;
         out.parallel = j.value("parallel", -1);
+        out.retries = std::clamp(j.value("retries", 2), 0, 10);
         out.sampleRate = j.value("sampleRate", 48000);
         out.blockSize = j.value("blockSize", 512);
         out.tail = j.value("tail", 3.0);

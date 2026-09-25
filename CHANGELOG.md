@@ -12,7 +12,22 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - Release binaries for all five targets, built on one Mac with `scripts/build-release.sh`
   (Docker for Linux, llvm-mingw for Windows), each smoke-tested before packaging.
 
+- `wavelength plugins --block <plugin> [--reason TEXT]` and `--unblock`: a blocked plugin (an
+  unlicensed one that opens a registration window on every load, one that keeps crashing) is
+  marked BLOCKED in `plugins`, and render, params, presets and audition refuse it by name.
+- `"retries"` job setting (default 2): a track whose plugin crashes in its worker process is
+  rendered again, and the track says so in its warnings. Altitude crashed about 1 render in 5
+  under load (a race in its own threads); the song now comes out complete.
+
 ### Fixed
+- The chorus, delay, reverb and rotary effects could read one sample past their delay buffer
+  when a modulated delay time landed a hair below a whole sample, returning whatever memory
+  came next (the likely cause of a Dexed lead through chorus and delay reading +460 LUFS once).
+- Garbage samples (not a number, or above +30 dBFS) are now also muted after every effect and
+  built-in instrument, not only in plugin output, and a track reading above +6 LUFS warns that
+  its output is broken.
+- A render with failed tracks reports `"ok": false` with an `error` naming them and exits 1. It
+  used to say `"ok": true` with only `failedTracks` showing that the mix was missing a part.
 - A plugin that outputs garbage samples (not a number, or above +30 dBFS; DUNE 3 once wrote a
   single +79 dBFS sample into a brass chord) no longer clicks, excites every reverb downstream and
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.

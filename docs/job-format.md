@@ -45,6 +45,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `leadIn` | 0 | Seconds of digital silence written before the audio in `mix.wav` and every stem (streaming uploads such as Spotify and SoundCloud like about 1 s). Notes, automation and loudness are unaffected; report `sections` start/end times refer to the written file. |
 | `normalize` | none | If set, scale the mix so its peak is this many dBFS (e.g. `-1`). Stems are never normalized. |
 | `parallel` | auto | Plugin tracks rendered at once, each in its own worker process (default: half the cores, up to 4). `0` renders everything in one process. `render --jobs N` overrides it. |
+| `retries` | 2 | Times a worker whose plugin crashed is started again (0 to 10). A track that crashes on every attempt, or hangs, is left out of the mix and listed in `failedTracks`; the render then reports `"ok": false` and exits 1. |
 | `stems` | `"float"` | Stem files: `"float"` (32-bit, keeps overs), `"24"`, `"16"`, or `"none"` (the report still has every track's loudness). `render --stems` overrides it. A render checks free disk space first. |
 | `groove` | none | Swing and humanize for every track (a track's own `groove` overrides keys): `{"swing": 0.58, "grid": 0.25, "lay": 0.02, "humanize": {"time": 0.01, "vel": 0.06, "seed": 7}}`. `swing` 0.5 = straight, 0.667 = triplet feel, applied to notes on the off-steps of `grid` (beats; 0.25 = 16ths); `lay` shifts every note (beats, + = behind the beat); `humanize` adds random timing (beats) and velocity (fraction) deviations, deterministic per `seed`. |
 

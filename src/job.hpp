@@ -85,6 +85,7 @@ struct Job {
     std::string baseDir;        // relative paths resolve from here
     std::string sourcePath;     // the job file (worker processes re-read it); empty = render in process
     int parallel = -1;          // plugin tracks rendered at once in worker processes; 0 = all in this process; <0 = auto
+    int retries = 2;            // times a worker whose plugin crashed is started again before the track counts as failed
 };
 
 // `useDefaults`: fill in the user's job defaults (off for jobs Wavelength builds internally).
