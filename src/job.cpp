@@ -99,18 +99,31 @@ void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std
                                   "-" + keyName(hi) + " (first at beat " + std::to_string((int)std::floor(tempo.secToBeat(first))) +
                                   "); the instrument will likely be silent for them");
     }
+    if (!t.contains("velocityTo") && std::any_of(tr.notes.begin(), tr.notes.end(), [](const Note &n) { return !n.dyn.empty(); }))
+        tr.warnings.push_back("notes have \"dyn\" but the track has no \"velocityTo\" (the controller that sets loudness, e.g. "
+                              "{\"param\": \"Dynamics\"} for BBC SO); dyn is ignored");
     if (t.contains("velocityTo")) {   // {"param": "Dynamics"} or {"cc": 1}, with "min"/"max" output values
         const json &v = t["velocityTo"];
         const bool cc = v.contains("cc");
         if (!cc && !v.contains("param")) throw std::runtime_error("track '" + tr.name + "': \"velocityTo\" needs \"param\" or \"cc\"");
         const double lo = v.value("min", cc ? 10.0 : 0.05), hi = v.value("max", cc ? 127.0 : 1.0);
-        std::vector<std::pair<double, double>> onsets;   // (beat, velocity), one per start
+        std::vector<std::pair<double, double>> onsets;   // (beat, level): one per start, or a note's own "dyn" curve
         for (size_t i = 0; i < played; ++i) {
-            const double b = std::round(tempo.secToBeat(tr.notes[i].start) * 1000) / 1000;
-            if (!onsets.empty() && onsets.back().first == b) onsets.back().second = std::max(onsets.back().second, tr.notes[i].velocity);
-            else onsets.push_back({b, tr.notes[i].velocity});
+            const Note &n = tr.notes[i];
+            if (!n.dyn.empty()) {
+                for (auto &[t, v] : n.dyn) onsets.push_back({std::round(tempo.secToBeat(n.start + t) * 1000) / 1000, v});
+                continue;
+            }
+            onsets.push_back({std::round(tempo.secToBeat(n.start) * 1000) / 1000, n.velocity});
         }
-        std::sort(onsets.begin(), onsets.end());
+        std::stable_sort(onsets.begin(), onsets.end(), [](auto &a, auto &b) { return a.first < b.first; });
+        {   // one value per beat position: the loudest (a chord's notes start together)
+            std::vector<std::pair<double, double>> merged;
+            for (auto &o : onsets)
+                if (!merged.empty() && merged.back().first == o.first) merged.back().second = std::max(merged.back().second, o.second);
+                else merged.push_back(o);
+            onsets.swap(merged);
+        }
         json pts = json::array();
         for (auto &[b, vel] : onsets) pts.push_back({b, lo + (hi - lo) * vel});
         if (pts.empty()) pts.push_back({0.0, hi});
@@ -343,6 +356,21 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                         curve.push_back({t, base(t) + depth * amount * std::sin(2 * M_PI * rate * std::max(0.0, t - delay))});
                     }
                     note.bend = std::move(curve);
+                }
+                if (n.contains("dyn")) {   // [start, end] over the note, or [[beats after the start, 0..1], ...]
+                    const auto &d = n["dyn"];
+                    const double b0 = out.tempo.secToBeat(note.start);
+                    auto at = [&](double beats) { return out.tempo.beatToSec(b0 + beats) - note.start; };
+                    if (d.is_array() && d.size() == 2 && d[0].is_number() && d[1].is_number())
+                        note.dyn = {{0.0, d[0].get<double>()}, {note.length, d[1].get<double>()}};
+                    else if (d.is_array())
+                        for (auto &p : d) note.dyn.push_back({at(p.at(0).get<double>()), p.at(1).get<double>()});
+                    else throw std::runtime_error("track '" + tr.name + "': note \"dyn\" is [start, end] or [[beats, level], ...] with levels 0-1");
+                    for (auto &[t, v] : note.dyn) {
+                        if (v > 1.0) v /= 127.0;   // MIDI-style values
+                        v = std::clamp(v, 0.0, 1.0);
+                    }
+                    std::sort(note.dyn.begin(), note.dyn.end());
                 }
                 if (!note.bend.empty() && tr.plugin != "builtin:sampler" && !bendWarned) {
                     bendWarned = true;

@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Per-note `dyn` curves: `[start, end]` or `[[beats, level], ...]` shape the `velocityTo` controller
+  (BBC SO's Dynamics) across a note, so a held brass chord crescendos with its timbre changing. The
+  album's orchestral builds had to fake crescendos with volume rides.
 - `automation.rides` on tracks, buses and the master: dB curves (one, or named ones) added on top of
   `automation.gain`. Album agents replaced their fader curves when they added section rides (a pad
   came out 9 dB too loud in the drops); rides are now a separate layer.

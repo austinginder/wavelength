@@ -72,7 +72,9 @@ and articulations are keyswitches from MIDI 0 (0 = the first articulation, usual
 `"articulations": {"long": 0, "spiccato": 1, "pizzicato": 2, "tremolo": 3}` and each note an
 `"art"`, add `"range": ["G3", "C#7"]` to be warned about unplayable notes, and
 `"velocityTo": {"param": "Dynamics"}` so long notes follow your velocities (they ignore
-velocity otherwise). Performance controls are parameters: `Expression`, `Dynamics`,
+velocity otherwise). For a swell or hairpin on a held note give it `"dyn": [0.2, 1.0]` (or
+`[[beats, level], ...]`): the Dynamics curve follows it, so the tone opens up as it grows, unlike
+a volume ride. Performance controls are parameters: `Expression`, `Dynamics`,
 `Vibrato`, `Release`, `Tightness`, `Reverb` and the `Mic: ...` mixes, all automatable.
 
 Plugins with no program parameter and no preset files (factory presets compiled into the

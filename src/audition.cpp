@@ -167,7 +167,7 @@ int auditionWorker(const std::string &plugin, const std::string &batchFile, cons
     job.sampleRate = 48000;
     job.blockSize = 512;
     job.warmup = 0.4;
-    const std::vector<TimedEvent> events = scheduleNotes({{kNoteOn, kNoteLen, kKey, 0, 0.8, {}}}, job.sampleRate);
+    const std::vector<TimedEvent> events = scheduleNotes({{kNoteOn, kNoteLen, kKey, 0, 0.8, {}, {}}}, job.sampleRate);
     for (auto &b : batch) {
         const std::string name = b.value("name", ""), location = b.value("location", "");
         json rec;

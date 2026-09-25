@@ -16,6 +16,7 @@ struct Note {
     int key, channel;
     double velocity;        // 0..1
     std::vector<std::pair<double, double>> bend;   // (seconds after the note start, semitones); empty = none
+    std::vector<std::pair<double, double>> dyn;    // (seconds after the note start, 0..1): shapes the velocityTo controller
 };
 
 struct ParamSetting {
