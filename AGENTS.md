@@ -77,6 +77,15 @@ velocity otherwise). For a swell or hairpin on a held note give it `"dyn": [0.2,
 a volume ride. Performance controls are parameters: `Expression`, `Dynamics`,
 `Vibrato`, `Release`, `Tightness`, `Reverb` and the `Mic: ...` mixes, all automatable.
 
+The percussion patches hold several instruments behind keyswitches with identical articulation
+names ("Short Hits Discover"); the instrument is in each articulation's `a_name` inside the
+`.nksf` (`strings file.nksf | grep a_name`, in keyswitch order). Discover: **Tuned Percussion**
+0 Tubular bells (61-79), 1 Marimba (36-96), 2 Xylophone (65-108), 3 Glockenspiel (77-108);
+**Percussion** 0 Timpani (48-74, pitched), 1 Untuned percussion (white keys 48-74 only, black keys
+silent; by measurement 48/50/62 are low drums, 53-55/60/71-73 long cymbal-like, 57/64/65/69 very
+bright short hits); **Harp and Celeste** 0 Harp, 1 Celeste. Bells are inharmonic: `analyze` pitch
+often reads them wrong (a tubular-bell A4 read as F3); trust the key, not the reading.
+
 Plugins with no program parameter and no preset files (factory presets compiled into the
 binary) can still be driven by state. JUCE plugins' state is `VC2!` + u32 little-endian
 length + an XML document + NUL; write that XML yourself with plain parameter values and load
