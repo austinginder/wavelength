@@ -44,6 +44,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- `wavelength master` on a mix rendered with a lead-in put every section 1 s off and added a
+  second lead-in. It now reads the lead-in from the render's report.json (or `--input-lead-in`),
+  lines the markers up, and keeps the lead-in on the output unless `--lead-in` says otherwise.
 - Loudness of a window shorter than 0.4 s (an `analyze` window, a one-hit section) read -120 LUFS;
   it is now the window's plain K-weighted loudness.
 - A plugin that opens a window while rendering (a licence or registration dialog) no longer holds
@@ -68,6 +71,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- The limiter's warning adds its gain reduction per marker section (average and maximum), so the
+  drops' limiting shows next to the quiet sections'.
 - A master `loudness` target now adds its gain in front of the chain's last built-in `limiter`
   instead of before the whole chain, so glue compressors and EQ ahead of the limiter keep their
   settings and the section contrast (three album tracks lost 1-2 dB of contrast to this).

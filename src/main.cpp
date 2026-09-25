@@ -80,10 +80,11 @@ Usage:
       reports "ok": false and exits 1 (mix.wav and report.json are still written).
       --tracks renders only the named tracks (and, muted, any track that keys their
       sidechains), with the song's buses and master, to check a part without the whole song.
-  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--out DIR] [--json]
+  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--input-lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
-      loudness before and after.
+      loudness before and after. A mix with a lead-in (read from the render's report.json, or
+      --input-lead-in) is lined up with the markers and keeps its lead-in unless --lead-in.
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
@@ -450,11 +451,24 @@ int cmdMaster(const Args &a) {
         return fail(a, "the chain has no effects and no loudness target (found keys: " + (keys.empty() ? std::string("none") : keys) +
                         "); pass an effect list, {\"fx\": [...]}, {\"master\": {\"fx\": [...]}} or a job");
     }
-    const double leadIn = a.has("--lead-in") ? std::atof(a.get("--lead-in").c_str()) : 0;
-    const double seconds = (double)in.frames() / sr;
+    // a mix rendered with a lead-in starts with that much silence: skip it so markers line up, and keep
+    // it on the output unless --lead-in says otherwise (the render's report next to the mix says how long)
+    double inputLeadIn = 0;
+    if (a.has("--input-lead-in")) inputLeadIn = std::atof(a.get("--input-lead-in").c_str());
+    else {
+        std::ifstream rin(fs::path(input).parent_path() / "report.json");
+        const json rep = rin ? json::parse(rin, nullptr, false) : json();
+        if (rep.is_object() && rep.contains("mix") && fs::path(rep["mix"].value("file", "")).filename() == fs::path(input).filename())
+            inputLeadIn = rep.value("leadIn", 0.0);
+    }
+    inputLeadIn = std::clamp(inputLeadIn, 0.0, std::max(0.0, (double)in.frames() / sr - 1));
+    const double leadIn = a.has("--lead-in") ? std::atof(a.get("--lead-in").c_str()) : inputLeadIn;
+    const double seconds = (double)in.frames() / sr - inputLeadIn;
+    json clip = {{"file", input}, {"beat", 0}};
+    if (inputLeadIn > 0) { clip["start"] = inputLeadIn; clip["fadeIn"] = 0; }
     const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"}, {"leadIn", leadIn},
                           {"markers", markers}, {"master", master},
-                          {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({{{"file", input}, {"beat", 0}}})}}})}};
+                          {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({clip})}}})}};
     const std::string base = inlineChain ? fs::current_path().string() : fs::absolute(chainArg).parent_path().string();
     Job job;
     if (!parseJob(jobJson, base, job, err, false)) return fail(a, err);
@@ -470,8 +484,8 @@ int cmdMaster(const Args &a) {
     json sections = json::array();
     for (auto &sec : r.sections)
         sections.push_back({{"name", sec.name}, {"start", std::round(sec.start * 100) / 100},
-                            {"inputLufs", r1(integratedLufs(in, sr, (size_t)((sec.start - leadIn) * sr), (size_t)((sec.end - leadIn) * sr)))}, {"lufs", r1(sec.lufs)}});
-    json report = {{"ok", true},
+                            {"inputLufs", r1(integratedLufs(in, sr, (size_t)((sec.start - leadIn + inputLeadIn) * sr), (size_t)((sec.end - leadIn + inputLeadIn) * sr)))}, {"lufs", r1(sec.lufs)}});
+    json report = {{"ok", true}, {"inputLeadIn", inputLeadIn}, {"leadIn", leadIn},
                    {"input", {{"file", input}, {"lufs", r1(integratedLufs(in, sr))}, {"lra", r1(loudnessRange(in, sr))}, {"truePeakDb", r1(truePeakDb(in))}}},
                    {"output", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)},
                                {"loudnessGainDb", r1(r.loudnessGainDb)}, {"levels", levelsJson(r.mix)}}},

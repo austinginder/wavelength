@@ -331,6 +331,10 @@ struct Limiter : Effect {
         double sum = 0, g = 1, minG = 1, worstAt = 0;
         size_t over3 = 0, over6 = 0;
         const double g3 = dbToLin(-3), g6 = dbToLin(-6);
+        const auto &marks = c.job.markers;   // gain reduction per marker section: where the limiting happens
+        std::vector<double> secSum(marks.size(), 0.0), secMin(marks.size(), 1.0);
+        std::vector<size_t> secCount(marks.size(), 0);
+        size_t sec = 0;
         for (size_t i = 0; i < n; ++i) {
             sum += mn[i];
             if (i >= L) sum -= mn[i - L];
@@ -338,6 +342,10 @@ struct Limiter : Effect {
             g = avg < g ? avg : g + (avg - g) * rel;                 // release
             if (g < minG) { minG = g; worstAt = (double)i; }
             over3 += g < g3; over6 += g < g6;
+            if (!marks.empty()) {
+                while (sec + 1 < marks.size() && i >= (size_t)(marks[sec + 1].sec * sr)) ++sec;
+                if (i >= (size_t)(marks[0].sec * sr)) { secSum[sec] += g; ++secCount[sec]; secMin[sec] = std::min(secMin[sec], g); }
+            }
             a.left[i] = (float)std::clamp(a.left[i] * g, -ceil, ceil);
             a.right[i] = (float)std::clamp(a.right[i] * g, -ceil, ceil);
         }
@@ -348,7 +356,17 @@ struct Limiter : Effect {
             std::snprintf(buf, sizeof buf, "limiter: up to %.1f dB of gain reduction (at %.2f s); more than 3 dB for %.1f%% of the time, more than 6 dB for %.1f%%%s",
                           -dsp::linToDb(minG), worstAt / sr, pct3, pct6,
                           pct6 > 10 ? ": sustained, the input is too hot (lower the faders or the loudness target)" : ": brief peaks, usually fine");
-            warnings.push_back(buf);
+            std::string w = buf, per;
+            for (size_t m = 0; m < marks.size(); ++m) {
+                if (!secCount[m]) continue;
+                const double avg = -dsp::linToDb(secSum[m] / secCount[m]), mx = -dsp::linToDb(secMin[m]);
+                if (mx < 1) continue;
+                char s2[120];
+                std::snprintf(s2, sizeof s2, "%s%s %.1f avg / %.1f max", per.empty() ? "" : ", ", marks[m].name.c_str(), avg, mx);
+                per += s2;
+            }
+            if (!per.empty()) w += ". Per section (dB): " + per;
+            warnings.push_back(w);
         }
         return true;
     }

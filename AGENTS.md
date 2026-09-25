@@ -180,6 +180,8 @@ settings without re-rendering the song, render once with a plain master (a high-
 the file through the job's `master` (or a chain file) and reports loudness before and after, per
 section. Don't master a mix that already went through a limiter. For a release, add `"leadIn": 1`
 (a second of silence before the song, for streaming platforms), or `--lead-in 1` on `master`.
+`master` reads a mix's own lead-in from the render's report.json, so `master out/mix.wav --chain
+job.json` lines the sections up and keeps the lead-in.
 
 - **MP3 and AAC overshoot.** Lossy encoding adds 0.4-0.8 dB of true peak: a `-1.3` limiter
   decoded to -0.9 dBTP on four album tracks. For a lossy release use a ceiling near `-2.0` and
