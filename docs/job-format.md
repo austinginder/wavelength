@@ -152,6 +152,7 @@ Studio package folders; paths work too (relative to the job).
 | `channel` | MIDI channel 0..15 (default 0). |
 | `art` | Articulation: a name from the track's `articulations`, or a keyswitch key number/name. |
 | `bend` | Pitch over the note, `[[beats after the note start, semitones], ...]` (sampler tracks: scoops, bends, slides). |
+| `vibrato` | Sampler tracks: depth in semitones (`0.3`), or `{"depth": 0.3, "rate": 5.5, "delay": 0.25, "rise": 0.25}` (rate in Hz, delay and fade-in in beats). Adds to `bend`, so a bent note can land and then shake. Plugin tracks warn: use `automation.pitchbend` there. |
 
 Notes are delivered as CLAP note events, or as MIDI if the plugin only accepts MIDI.
 

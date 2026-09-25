@@ -265,6 +265,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 std::stable_sort(ordered.begin(), ordered.end(), [](const json &a, const json &b) {
                     return parseKey(a.at("key")) < parseKey(b.at("key"));
                 });
+            bool bendWarned = false;
             for (auto &n : ordered) {
                 Note note;
                 double v = n.value("vel", 0.8);
@@ -295,6 +296,37 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                     const double b0 = out.tempo.secToBeat(note.start);
                     for (auto &p : n["bend"]) note.bend.push_back({out.tempo.beatToSec(b0 + p.at(0).get<double>()) - note.start, p.at(1).get<double>()});
                     std::sort(note.bend.begin(), note.bend.end());
+                }
+                if (n.contains("vibrato")) {   // depth in semitones, or {"depth", "rate" Hz, "delay" beats, "rise" beats}
+                    const auto &vb = n["vibrato"];
+                    const double depth = vb.is_number() ? vb.get<double>() : vb.value("depth", 0.3);
+                    const double rate = vb.is_number() ? 5.5 : vb.value("rate", 5.5);
+                    const double b0 = out.tempo.secToBeat(note.start);
+                    const double delayBeats = vb.is_number() ? 0.25 : vb.value("delay", 0.25);
+                    const double riseBeats = vb.is_number() ? 0.25 : vb.value("rise", 0.25);
+                    const double delay = out.tempo.beatToSec(b0 + delayBeats) - note.start;
+                    const double rise = std::max(1e-3, out.tempo.beatToSec(b0 + delayBeats + riseBeats) - note.start - delay);
+                    if (depth < 0 || depth > 2 || rate <= 0 || rate > 20)
+                        throw std::runtime_error("track '" + tr.name + "': vibrato depth is 0-2 semitones and rate 0-20 Hz");
+                    auto base = [&](double t) {   // the note's own bend curve (piecewise linear)
+                        const auto &b = note.bend;
+                        if (b.empty()) return 0.0;
+                        if (t <= b.front().first) return b.front().second;
+                        for (size_t i = 1; i < b.size(); ++i)
+                            if (t < b[i].first) return b[i - 1].second + (b[i].second - b[i - 1].second) * (t - b[i - 1].first) / (b[i].first - b[i - 1].first);
+                        return b.back().second;
+                    };
+                    std::vector<std::pair<double, double>> curve;
+                    const double step = 1.0 / (rate * 12);   // 12 points per cycle
+                    for (double t = 0; t <= note.length + 0.25; t += step) {
+                        const double amount = t <= delay ? 0 : std::min(1.0, (t - delay) / rise);
+                        curve.push_back({t, base(t) + depth * amount * std::sin(2 * M_PI * rate * std::max(0.0, t - delay))});
+                    }
+                    note.bend = std::move(curve);
+                }
+                if (!note.bend.empty() && tr.plugin != "builtin:sampler" && !bendWarned) {
+                    bendWarned = true;
+                    tr.warnings.push_back("per-note \"bend\" and \"vibrato\" only play on builtin:sampler tracks; use automation.pitchbend for plugins");
                 }
                 if (hVel > 0) v = (v > 1.0 ? v / 127.0 : v) * (1 + gauss(rng) * hVel);
                 note.velocity = std::clamp(v > 1.0 ? v / 127.0 : v, 0.0, 1.0);

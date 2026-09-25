@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Per-note `vibrato` on sampler tracks (depth, rate, delay, rise), layered on top of `bend`; guitar
+  leads needed dozens of hand-written bend points per note. Per-note `bend` or `vibrato` on a
+  plugin track now warns that it only plays on the sampler.
 - `analyze --song-time`: `--start`/`--end` in song time; the render's lead-in is read from the
   report next to the file. Without it, a window on a render with a lead-in prints a note that the
   times are file times (agents measured the wrong notes after the 1 s lead-in default).
