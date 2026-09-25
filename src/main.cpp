@@ -63,10 +63,11 @@ Usage:
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
       (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
-  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--json]
+  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--json]
       Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
       onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
-      every stem and every marker section.
+      every stem and every marker section. --start/--end are seconds into the file; with
+      --song-time they are song time (a render's lead-in is added from its report.json).
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -103,7 +104,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -302,10 +303,28 @@ int cmdAudition(const Args &a) {
 
 // ---- analyze ---------------------------------------------------------------------------
 int cmdAnalyze(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength analyze <file.wav | render-dir> [--start S] [--end S]");
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time]");
     const std::string target = a.positional[1];
     std::string err;
-    const double start = std::atof(a.get("--start", "0").c_str()), end = std::atof(a.get("--end", "0").c_str());
+    double start = std::atof(a.get("--start", "0").c_str()), end = std::atof(a.get("--end", "0").c_str());
+    // --start/--end are file times; a render's files begin with its lead-in (the report next to them says how long)
+    double leadIn = 0;
+    {
+        std::error_code ec;
+        const fs::path base = fs::is_directory(target, ec) ? fs::path(target) : fs::absolute(target).parent_path();
+        for (const fs::path &dir : {base, base.parent_path()}) {
+            std::ifstream rin(dir / "report.json");
+            const json rep = rin ? json::parse(rin, nullptr, false) : json();
+            if (rep.is_object() && rep.contains("leadIn")) { leadIn = rep.value("leadIn", 0.0); break; }
+        }
+    }
+    std::string windowNote;
+    if (a.has("--song-time")) { if (start > 0 || end > 0) { start += leadIn; if (end > 0) end += leadIn; } }
+    else if (leadIn > 0 && (start > 0 || end > 0)) {
+        char buf[200];
+        std::snprintf(buf, sizeof buf, "--start/--end are file times and this render begins with %.1f s of lead-in; add --song-time to measure song time", leadIn);
+        windowNote = buf;
+    }
     auto one = [&](const std::string &path, double s, double e, bool onsets, json &out) {
         Audio audio;
         int sr = 0;
@@ -344,7 +363,9 @@ int cmdAnalyze(const Args &a) {
         result = one1;
         result["ok"] = true;
     }
+    if (!windowNote.empty()) result["note"] = windowNote;
     if (a.has("--json")) { emit(result.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    if (!windowNote.empty()) std::fprintf(OUT, "note: %s\n", windowNote.c_str());
     auto line = [&](const std::string &label, const json &x) {
         const auto &p = x["pitch"], &s = x["spectrum"], &e = x["envelope"];
         std::fprintf(OUT, "%-22.22s %6.1f LUFS  pitch %-4s %+3d c (%.0f%%)  centroid %5d Hz  width %.2f  attack %4d ms  sustain %6.1f dB  onsets %zu\n",

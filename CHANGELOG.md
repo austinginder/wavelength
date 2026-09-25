@@ -5,6 +5,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `analyze --song-time`: `--start`/`--end` in song time; the render's lead-in is read from the
+  report next to the file. Without it, a window on a render with a lead-in prints a note that the
+  times are file times (agents measured the wrong notes after the 1 s lead-in default).
+- A warning when a master loudness target adds more than 8 dB before the master chain, which
+  makes every master compressor and the limiter work that much harder than their settings say.
 - The loudness range (LRA, EBU Tech 3342, matches ffmpeg's `ebur128`) in the render report
   (`mix.lra`), `master` (input and output) and `analyze`.
 - Labelled per-section loudness: `tracks[].sections` and `buses[].sections` are

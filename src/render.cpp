@@ -525,6 +525,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                           job.masterLoudness, reached, gainDb);
             result.warnings.push_back(buf);
         }
+        if (gainDb > 8) {   // the gain lands before the chain: every compressor threshold now sits that much lower in effect
+            char buf[300];
+            std::snprintf(buf, sizeof buf, "master: the loudness target adds %+.1f dB before the master chain, so its compressors and limiter work "
+                          "%.0f dB harder than their settings suggest; raise the track faders (or the compressor thresholds) instead",
+                          gainDb, gainDb);
+            result.warnings.push_back(buf);
+        }
         if (job.hasNormalize) result.warnings.push_back("master: \"normalize\" after a loudness target changes the loudness again; use one of them");
     }
     const Levels before = measure(mix);
