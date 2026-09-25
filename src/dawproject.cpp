@@ -1,12 +1,15 @@
 #include "dawproject.hpp"
 
+#include "bitwig.hpp"
 #include "catalog.hpp"
+#include "sampler.hpp"
 #include "vst2_abi.hpp"
 #include "xml.hpp"
 #include "zip.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -34,7 +37,56 @@ struct Ctx {
     std::map<std::string, std::string> channelOfTrack;  // track id -> channel id
     std::map<std::string, std::pair<std::string, std::string>> paramTarget;   // parameter id -> (track/bus name, "volume"|"pan")
     std::set<std::string> names;
+    bitwig::Project bw;            // the Bitwig project behind the export, when found
+    bool haveBw = false;
+    Zip bwZip;
 };
+
+// Bitwig's Drum Machine hands each pad's chain the note C3, whatever the pad's key
+constexpr int kPadNote = 60;
+
+std::string writeState(Ctx &c, const std::string &file, const std::vector<uint8_t> &data) {
+    const std::string rel = "plugins/" + file;
+    if (c.written.count(rel)) return rel;
+    std::error_code ec;
+    fs::create_directories(fs::path(c.outDir) / "plugins", ec);
+    std::ofstream o(fs::path(c.outDir) / rel, std::ios::binary);
+    o.write(reinterpret_cast<const char *>(data.data()), (std::streamsize)data.size());
+    c.written.insert(rel);
+    return rel;
+}
+
+// the component state inside a .vstpreset (VST2 builds of a plugin take the same chunk)
+bool vstpresetComponent(const std::vector<uint8_t> &in, std::vector<uint8_t> &out) {
+    auto le32 = [&](size_t at) { return (uint32_t)in[at] | (uint32_t)in[at + 1] << 8 | (uint32_t)in[at + 2] << 16 | (uint32_t)in[at + 3] << 24; };
+    auto le64 = [&](size_t at) { return (uint64_t)le32(at) | (uint64_t)le32(at + 4) << 32; };
+    if (in.size() < 48 || std::memcmp(in.data(), "VST3", 4) != 0) return false;
+    const uint64_t list = le64(40);
+    if (list + 8 > in.size() || std::memcmp(&in[list], "List", 4) != 0) return false;
+    const uint32_t n = le32(list + 4);
+    for (uint32_t k = 0; k < n && list + 8 + 20 * (k + 1) <= in.size(); ++k) {
+        const size_t e = list + 8 + 20 * k;
+        if (std::memcmp(&in[e], "Comp", 4) != 0) continue;
+        const uint64_t off = le64(e + 4), size = le64(e + 12);
+        if (off + size > in.size()) return false;
+        out.assign(in.begin() + (long)off, in.begin() + (long)(off + size));
+        return true;
+    }
+    return false;
+}
+
+// VST2 builds that save parameter lists, not chunks: their VST3 state decoded into parameters
+bool vst3StateToVst2Params(const std::string &vst2Id, const std::vector<uint8_t> &comp, json &params) {
+    auto f32 = [&](size_t at) { uint32_t b = (uint32_t)comp[at] | (uint32_t)comp[at + 1] << 8 | (uint32_t)comp[at + 2] << 16 | (uint32_t)comp[at + 3] << 24; float f; std::memcpy(&f, &b, 4); return (double)f; };
+    if (vst2Id == "LdMx" && comp.size() >= 12) {   // LoudMax: Thresh, Output (floats), Fader Link, ISP Detection (16-bit flags)
+        params = {{"Thresh", r3(f32(0))}, {"Output", r3(f32(4))}, {"Fader Link", comp[8] ? 1 : 0}, {"ISP Detection", comp[10] ? 1 : 0}};
+        return true;
+    }
+    return false;
+}
+
+// VST3 builds that render silence offline, where the VST2 build of the same plugin plays
+const std::set<std::string> kSilentVst3 = {"Komplete Kontrol"};
 
 std::string uniqueName(Ctx &c, std::string n) {
     if (n.empty()) n = "Track";
@@ -127,6 +179,199 @@ bool mapDevice(Ctx &c, const xml::Node &d, const std::string &where, json &out) 
     return false;
 }
 
+// ---- devices from the Bitwig project ---------------------------------------------------------
+
+// a plugin device: spec + state from the project's own plugin-states
+bool bwPlugin(Ctx &c, const bitwig::Device &d, const std::string &where, json &out) {
+    std::string spec = d.kind + ":" + d.pluginId;
+    std::vector<uint8_t> state;
+    std::string e;
+    if (!d.state.empty() && !c.bwZip.read(d.state, state, e)) {
+        c.res->notes.push_back(where + ": " + d.name + "'s saved state is missing from the Bitwig project");
+        state.clear();
+    }
+    PluginInfo pi;
+    bool ok = resolvePlugin(spec, pi, e);
+    if (ok && d.kind == "vst3" && kSilentVst3.count(pi.name)) {   // prefer the VST2 build
+        PluginInfo v2;
+        if (resolvePlugin("vst2:" + pi.name, v2, e)) {
+            c.res->notes.push_back(where + ": " + pi.name + " renders silence as VST3 here; using its VST2 build with the same state");
+            pi = v2;
+            spec = "vst2:" + v2.id;
+        }
+    } else if (!ok) {
+        PluginInfo byName;
+        if (resolvePlugin(d.name, byName, e)) {
+            c.res->notes.push_back(where + ": " + spec + " is not installed; using " + byName.format + " '" + byName.name + "' by name");
+            pi = byName;
+            spec = byName.format + ":" + byName.id;
+            ok = true;
+        } else c.res->notes.push_back(where + ": plugin '" + d.name + "' (" + spec + ") is not installed");
+    }
+    out = {{"plugin", spec}};
+    if (!state.empty()) {
+        std::string file = fs::path(d.state).filename().string();
+        if (ok && pi.format == "vst2" && fs::path(file).extension() == ".vstpreset") {   // VST3 preset -> the VST2 chunk
+            std::vector<uint8_t> chunk;
+            json params;
+            if (vstpresetComponent(state, chunk)) {
+                if (vst3StateToVst2Params(pi.id, chunk, params)) { out["params"] = params; state.clear(); }
+                else { state = chunk; file = fs::path(file).stem().string() + ".bin"; }
+            }
+        }
+        if (!state.empty()) out["state"] = writeState(c, file, state);
+    }
+    ++c.res->plugins;
+    return true;
+}
+
+double bwParam(const bitwig::Device &d, const std::string &id, double def) {
+    auto it = d.params.find(id);
+    return it == d.params.end() ? def : it->second;
+}
+
+void bwChain(Ctx &c, const std::vector<bitwig::Device> &devs, const std::string &where, json &fx);
+
+// Bitwig's own effects as built-in ones; appends to `fx`
+void bwEffect(Ctx &c, const bitwig::Device &d, const std::string &where, json &fx) {
+    if (!d.enabled) { c.res->notes.push_back(where + ": " + d.name + " is switched off in Bitwig; left out"); return; }
+    if (d.kind != "native") { json m; if (bwPlugin(c, d, where, m)) fx.push_back(m); return; }
+    const std::string &n = d.name;
+    if (n == "Chain" || n == "FX Layer") {
+        if (n == "FX Layer" || bwParam(d, "MIX", 1) < 0.999) c.res->notes.push_back(where + ": " + n + " is imported as a plain serial chain");
+        for (auto &ch : d.chains) bwChain(c, ch.second, where + " » " + n, fx);
+        if (const double g = bwParam(d, "GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        return;
+    }
+    if (n == "EQ+") {
+        json bands = json::array();
+        bool guessed = false;
+        for (int b = 1; b <= 8; ++b) {
+            const std::string k = std::to_string(b);
+            if (bwParam(d, "ENABLE" + k, 1) == 0) continue;
+            const int type = (int)bwParam(d, "TYPE" + k, 13);
+            std::string t;
+            switch (type) {
+            case 13: continue;                                  // off
+            case 3: case 5: t = "peak"; break;
+            case 1: case 10: t = "highpass"; guessed = true; break;
+            case 0: case 14: t = "lowpass"; guessed = true; break;
+            case 6: case 15: t = "highshelf"; guessed = true; break;
+            case 16: case 17: t = "lowshelf"; guessed = true; break;
+            default: c.res->notes.push_back(where + ": EQ+ band " + k + " has a filter type Wavelength doesn't know (" + std::to_string(type) + "); left out"); continue;
+            }
+            json bj = {{"type", t}, {"freq", r3(bitwig::pitchToHz(bwParam(d, "FREQ" + k, 69)))}, {"q", r3(std::pow(10.0, bwParam(d, "Q" + k, -0.15)))}};
+            if (t == "peak" || t == "lowshelf" || t == "highshelf") {
+                const double g = bwParam(d, "GAIN" + k, 0);
+                if (std::fabs(g) < 0.01) continue;
+                bj["gain"] = r3(g);
+            }
+            bands.push_back(bj);
+        }
+        if (guessed) c.res->notes.push_back(where + ": EQ+ cut and shelf slopes are approximated (Wavelength's are 12 dB/octave)");
+        if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
+        if (const double g = bwParam(d, "OUTPUT_GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        return;
+    }
+    if (n == "Compressor") {
+        if (const double g = bwParam(d, "INPUT", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        const double rx = std::clamp(bwParam(d, "RATIO", 0.5), 0.0, 0.99);
+        fx.push_back({{"type", "compressor"}, {"threshold", r3(bwParam(d, "THRESHOLD", -18))}, {"ratio", r3(1.0 / (1.0 - rx))},
+                      {"attack", r3(std::pow(10.0, bwParam(d, "ATTACK", -2)) * 1000)}, {"release", r3(std::pow(10.0, bwParam(d, "RELEASE", -1)) * 1000)},
+                      {"makeup", r3(bwParam(d, "OUTPUT", 0))}});
+        if (bwParam(d, "MAKEUP_GAIN", 0) != 0) c.res->notes.push_back(where + ": the Compressor's automatic makeup gain isn't modelled");
+        return;
+    }
+    if (n == "Multiband FX-3" || n == "Multiband FX-2") {
+        const bool three = n == "Multiband FX-3";
+        json cross = json::array(), bands = json::array();
+        if (three) { cross.push_back(r3(bitwig::pitchToHz(bwParam(d, "LOW_MID_SPLIT", 57)))); cross.push_back(r3(bitwig::pitchToHz(bwParam(d, "MID_HIGH_SPLIT", 100)))); }
+        else cross.push_back(r3(bitwig::pitchToHz(bwParam(d, "SPLIT", 80))));
+        for (const char *band : three ? std::vector<const char *>{"LOW", "MID", "HIGH"} : std::vector<const char *>{"LOW", "HIGH"}) {
+            json bfx = json::array();
+            auto it = d.chains.find(std::string(band) + "_CHAIN");
+            if (it != d.chains.end()) bwChain(c, it->second, where + " » " + n + " " + band, bfx);
+            json bj = {{"fx", bfx}};
+            const double lvl = bwParam(d, band, 1);   // stored like a fader: amplitude^(1/3)
+            if (std::fabs(lvl - 1) > 1e-3) bj["gain"] = lvl <= 1e-6 ? -60.0 : r3(60 * std::log10(lvl));
+            bands.push_back(bj);
+        }
+        fx.push_back({{"type", "multiband"}, {"crossovers", cross}, {"bands", bands}});
+        return;
+    }
+    if (n == "Peak Limiter") {
+        if (const double g = bwParam(d, "GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        fx.push_back({{"type", "limiter"}, {"ceiling", r3(bwParam(d, "CEILING", -1))}});
+        return;
+    }
+    if (n == "Tool") {
+        const double vol = bwParam(d, "VOLUME", 1);
+        const double g = bwParam(d, "AMPLITUDE", 0) + (vol <= 1e-6 ? -60.0 : 60 * std::log10(vol));
+        if (std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        if (const double p = bwParam(d, "PAN", 0); std::fabs(p) > 1e-3) fx.push_back({{"type", "pan"}, {"position", r3(p)}});
+        return;
+    }
+    c.res->notes.push_back(where + ": Bitwig's " + n + " has no Wavelength equivalent yet; left out");
+}
+
+void bwChain(Ctx &c, const std::vector<bitwig::Device> &devs, const std::string &where, json &fx) {
+    for (auto &d : devs) bwEffect(c, d, where, fx);
+}
+
+// a Sampler's sample on disk: Bitwig package paths ("Bitwig/Classic Drum Machines:14/samples/Legend
+// 707/Kick.wav") live under installed-packages/<format>/<vendor>/<package>/
+std::string bitwigSampleFile(const std::string &s) {
+    std::error_code ec;
+    if (s.empty()) return "";
+    if (s[0] == '/' || (s.size() > 2 && s[1] == ':')) return fs::exists(s, ec) ? s : "";
+    std::vector<std::string> parts;
+    for (size_t a = 0;;) { const size_t b = s.find('/', a); parts.push_back(s.substr(a, b - a)); if (b == std::string::npos) break; a = b + 1; }
+    if (parts.size() < 3) return "";
+    const std::string pkg = parts[1].substr(0, parts[1].find(':'));
+    fs::path inKind, rest;
+    for (size_t k = 2; k < parts.size(); ++k) { inKind /= parts[k]; if (k > 2) rest /= parts[k]; }
+    for (auto &root : sampleRoots())
+        for (auto &r : {rest, inKind}) {
+            const fs::path f = fs::path(root) / parts[0] / pkg / r;
+            if (fs::exists(f, ec)) return f.string();
+        }
+    return "";
+}
+
+// an instrument device: a plugin, or Bitwig's Sampler playing one sample
+bool bwInstrument(Ctx &c, const bitwig::Device &d, const std::string &where, bool drumPad, json &out) {
+    if (d.kind != "native") return bwPlugin(c, d, where, out);
+    if (d.name == "Sampler" && !d.multisample.empty()) {   // an installed .multisample of that name plays all its zones
+        for (auto &e : sampleLibrary())
+            if (e.kind == "multisample" && e.name == d.multisample) {
+                out = {{"plugin", "builtin:sampler"}, {"sampler", {{"multisample", e.path}}}};
+                return true;
+            }
+    }
+    if (d.name == "Sampler" && !d.sample.empty()) {
+        const std::string file = bitwigSampleFile(d.sample);
+        if (file.empty()) { c.res->notes.push_back(where + ": the Sampler's sample '" + d.sample + "' isn't installed; left out"); return false; }
+        json sm = {{"sample", file}, {"root", d.sampleRoot}};
+        if (drumPad) sm["oneShot"] = true;
+        out = {{"plugin", "builtin:sampler"}, {"sampler", sm}};
+        return true;
+    }
+    return false;
+}
+
+std::string findBitwigProject(const std::string &dawproject) {
+    const fs::path p(dawproject);
+    const std::string stem = p.stem().string();
+    std::vector<fs::path> cands = {p.parent_path() / (stem + ".bwproject")};
+    if (const char *home = std::getenv("HOME")) {
+        cands.push_back(fs::path(home) / "Documents" / "Bitwig Studio" / "Projects" / stem / (stem + ".bwproject"));
+        cands.push_back(fs::path(home) / "Bitwig Studio" / "Projects" / stem / (stem + ".bwproject"));
+    }
+    std::error_code ec;
+    for (auto &c : cands) if (fs::exists(c, ec)) return c.string();
+    return "";
+}
+
 // Notes of a lane or clip, into song beats. `offset` = song beat of content time 0; notes outside
 // [from, to) song beats are dropped and ones crossing `to` are shortened.
 void collectNotes(Ctx &c, const xml::Node &n, double offset, double from, double to, json &notes) {
@@ -188,11 +433,19 @@ void collectAutomation(Ctx &c, const xml::Node &lanes, std::map<std::string, jso
 
 } // namespace
 
-bool importDawproject(const std::string &path, const std::string &outDir, DawprojectImport &res, std::string &err) {
+bool importDawproject(const std::string &path, const std::string &outDir, DawprojectImport &res, std::string &err, const std::string &bitwigPath) {
     Ctx c;
     c.outDir = outDir;
     c.res = &res;
     if (!c.zip.open(path, err)) return false;
+    // the Bitwig project behind the export holds what DAWproject leaves out (Bitwig's own devices)
+    const std::string bwPath = bitwigPath == "none" ? "" : bitwigPath.empty() ? findBitwigProject(path) : bitwigPath;
+    if (!bwPath.empty()) {
+        std::string e;
+        if (bitwig::load(bwPath, c.bw, e) && c.bwZip.open(bwPath, e)) { c.haveBw = true; res.bitwig = bwPath; }
+        else if (!bitwigPath.empty()) { err = e; return false; }
+        else res.notes.push_back("found " + bwPath + " but couldn't read it (" + e + "); Bitwig's own devices are left out");
+    }
     std::vector<uint8_t> xmlBytes;
     if (!c.zip.read("project.xml", xmlBytes, err)) { err = path + ": " + err; return false; }
     auto root = xml::parse(std::string(xmlBytes.begin(), xmlBytes.end()), err);
@@ -269,6 +522,25 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
         if (launcher) res.notes.push_back(std::to_string(launcher) + " clip-launcher clip(s) aren't rendered: only the arrangement plays");
     }
 
+    // match the export's tracks to the Bitwig project's (both in arranger order)
+    std::map<const xml::Node *, const bitwig::Track *> bwTrackOf;
+    if (c.haveBw) {
+        std::vector<const TrackRef *> regular, effects;
+        for (auto &r : refs) {
+            if (!r.channel || r.role == "master") continue;
+            (r.role == "effect" ? effects : regular).push_back(&r);
+        }
+        auto match = [&](const std::vector<const TrackRef *> &mine, const std::vector<bitwig::Track> &theirs, const char *what) {
+            if (mine.size() != theirs.size()) {
+                res.notes.push_back(std::string("the Bitwig project has ") + std::to_string(theirs.size()) + " " + what + " and the export " + std::to_string(mine.size()) + "; their devices come from the export only");
+                return;
+            }
+            for (size_t k = 0; k < mine.size(); ++k) bwTrackOf[mine[k]->track] = &theirs[k];
+        };
+        match(regular, c.bw.tracks, "tracks");
+        match(effects, c.bw.effects, "effect tracks");
+    }
+
     // build tracks and buses
     json tracks = json::array(), buses = json::array();
     json master = {{"gain", 0}, {"fx", json::array()}};
@@ -280,7 +552,38 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
         const bool muted = ch.child("Mute") && ch.child("Mute")->get("value") == "true";
         json fx = json::array();
         json instrument;
-        if (const xml::Node *devs = ch.child("Devices"))
+        std::vector<const bitwig::Device::Pad *> pads;   // a Drum Machine's pads, from the Bitwig project
+        const bitwig::Track *bt = nullptr;
+        if (r.role == "master") bt = c.haveBw && c.bw.hasMaster ? &c.bw.master : nullptr;
+        else if (bwTrackOf.count(r.track)) bt = bwTrackOf[r.track];
+        if (bt) {
+            // the export's device roles, device for device, when the two lists line up
+            std::vector<std::string> roles;
+            if (const xml::Node *devs = ch.child("Devices")) for (auto &dp : devs->children) roles.push_back(dp->get("deviceRole", "audioFX"));
+            const bool aligned = roles.size() == bt->devices.size();
+            const bool instrumentTrack = r.role != "master" && r.role != "effect" && !r.group;
+            for (size_t k = 0; k < bt->devices.size(); ++k) {
+                const bitwig::Device &d = bt->devices[k];
+                const std::string role = aligned ? roles[k] : (k == 0 && instrumentTrack ? "instrument" : "audioFX");
+                if (role == "noteFX") { res.notes.push_back(r.name + ": note effect '" + d.name + "' left out (note effects aren't imported)"); continue; }
+                if (role == "instrument" && instrument.is_null() && pads.empty()) {
+                    if (!d.pads.empty()) {   // the kit's own effects go on the drum bus
+                        for (auto &p : d.pads) pads.push_back(&p);
+                        if (auto g = d.chains.find("GLOBAL_EFFECT_CHAIN"); g != d.chains.end()) bwChain(c, g->second, r.name, fx);
+                        continue;
+                    }
+                    json m;
+                    if (bwInstrument(c, d, r.name, false, m)) {
+                        instrument = m;
+                        if (auto sfx = d.chains.find("FX"); d.kind == "native" && sfx != d.chains.end()) bwChain(c, sfx->second, r.name + " » " + d.name, fx);
+                        continue;
+                    }
+                    res.notes.push_back(r.name + ": Bitwig's " + d.name + " instrument has no Wavelength equivalent yet; left out");
+                    continue;
+                }
+                bwEffect(c, d, r.name, fx);
+            }
+        } else if (const xml::Node *devs = ch.child("Devices"))
             for (auto &dp : devs->children) {
                 const std::string role = dp->get("deviceRole", "audioFX");
                 if (role == "noteFX") { res.notes.push_back(r.name + ": note effect '" + dp->get("name") + "' left out (note effects aren't imported)"); continue; }
@@ -323,6 +626,55 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
         if (!notesOf.count(r.name)) {
             if (r.track->get("contentType").find("notes") != std::string::npos) res.notes.push_back(r.name + ": no notes in the arrangement; left out");
             else res.notes.push_back(r.name + ": audio tracks (recorded clips) aren't imported yet; left out");
+            continue;
+        }
+        if (!pads.empty()) {
+            // a Drum Machine: one track per pad (its instrument gets C3, as in Bitwig) into a bus that
+            // carries the drum track's fader, pan and effects
+            const double busGain = vol <= 1e-6 ? -60.0 : r3(linToDb(vol));
+            json b = {{"name", r.name}, {"gain", busGain}, {"fx", fx}};
+            if (std::fabs(pan) > 1e-3) b["fx"].push_back({{"type", "pan"}, {"position", r3(pan)}});
+            if (!output.empty()) b["output"] = output;
+            if (gainPts.count(r.name)) {
+                json rel = json::array();
+                for (auto &p : gainPts[r.name]) rel.push_back({p[0], r3(p[1].get<double>() - busGain)});
+                b["automation"] = {{"gain", rel}};
+            }
+            if (!sends.empty()) res.notes.push_back(r.name + ": sends from a Drum Machine track are left out");
+            buses.push_back(b);
+            ++res.buses;
+            for (const bitwig::Device::Pad *pad : pads) {
+                json padNotes = json::array();
+                for (auto &nj : notesOf[r.name])
+                    if (nj["key"].get<int>() == pad->key) { json x = nj; x["key"] = kPadNote; padNotes.push_back(x); }
+                if (padNotes.empty()) continue;
+                const std::string where = r.name + " pad " + std::to_string(pad->key);
+                if (pad->mute) { res.notes.push_back(where + " is muted in Bitwig; left out"); continue; }
+                json t;
+                json padFx = json::array();
+                for (auto &d : pad->devices) {
+                    if (t.is_null()) {
+                        if (bwInstrument(c, d, where, true, t)) {
+                            const std::string label = d.name == "Sampler" ? fs::path(d.sample).stem().string() : d.name;
+                            t["name"] = uniqueName(c, r.name + " " + std::to_string(pad->key) + " " + label);
+                            if (auto sfx = d.chains.find("FX"); d.kind == "native" && sfx != d.chains.end()) bwChain(c, sfx->second, where + " » " + d.name, padFx);
+                            continue;
+                        }
+                        if (d.kind == "native" && d.name != "Sampler") res.notes.push_back(where + ": Bitwig's " + d.name + " has no Wavelength equivalent yet; left out");
+                        break;
+                    }
+                    bwEffect(c, d, where, padFx);
+                }
+                if (t.is_null()) continue;
+                t["gain"] = pad->volume <= 1e-6 ? -60.0 : r3(60 * std::log10(pad->volume));   // pad faders store amplitude^(1/3)
+                if (std::fabs(pad->pan) > 1e-3) t["pan"] = r3(pad->pan);
+                if (muted) t["mute"] = true;
+                if (!padFx.empty()) t["fx"] = padFx;
+                t["output"] = r.name;
+                t["notes"] = padNotes;
+                tracks.push_back(t);
+                ++res.tracks;
+            }
             continue;
         }
         if (instrument.is_null()) { res.notes.push_back(r.name + ": no instrument the file can describe; left out"); continue; }

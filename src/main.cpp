@@ -6,7 +6,7 @@
 //   wavelength params <plugin> [--state FILE] [--format F] [--all] [--json]
 //   wavelength render <job.json> [--out DIR] [--json] [--verbose]
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
-//   wavelength import <project.dawproject> [--out DIR] [--json]
+//   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength version
 #include "analyze.hpp"
@@ -21,6 +21,7 @@
 #include "presets.hpp"
 #include "preset_files.hpp"
 #include "sampler.hpp"
+#include "bitwig.hpp"
 #include "dawproject.hpp"
 #include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
@@ -33,6 +34,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <set>
@@ -99,7 +101,7 @@ Usage:
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
-  wavelength import <project.dawproject> [--out DIR] [--json]
+  wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
       Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
       markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
@@ -600,18 +602,59 @@ int cmdMaster(const Args &a) {
 int cmdImport(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject> [--out DIR]");
     const std::string src = a.positional[1];
+    if (fs::path(src).extension() == ".bwproject") {   // Bitwig's own format: list what it holds
+        bitwig::Project p;
+        std::string err;
+        if (!bitwig::load(src, p, err)) return fail(a, err);
+        std::function<json(const std::vector<bitwig::Device> &)> devs = [&](const std::vector<bitwig::Device> &ds) {
+            json out = json::array();
+            for (auto &d : ds) {
+                json j = {{"name", d.name}, {"kind", d.kind}};
+                if (!d.pluginId.empty()) j["id"] = d.pluginId;
+                if (!d.state.empty()) j["state"] = d.state;
+                if (!d.sample.empty()) j["sample"] = {{"file", d.sample}, {"root", d.sampleRoot}};
+                if (!d.enabled) j["enabled"] = false;
+                if (!d.params.empty()) j["params"] = d.params;
+                for (auto &c : d.chains) j["chains"][c.first] = devs(c.second);
+                for (auto &pd : d.pads) j["pads"].push_back({{"key", pd.key}, {"volume", pd.volume}, {"pan", pd.pan}, {"mute", pd.mute}, {"devices", devs(pd.devices)}});
+                out.push_back(j);
+            }
+            return out;
+        };
+        auto trackJson = [&](const bitwig::Track &t) { return json{{"name", t.name}, {"devices", devs(t.devices)}}; };
+        json tj = json::array(), ej = json::array();
+        for (auto &t : p.tracks) tj.push_back(trackJson(t));
+        for (auto &t : p.effects) ej.push_back(trackJson(t));
+        json out = {{"ok", true}, {"format", p.format}, {"tracks", tj}, {"effectTracks", ej}};
+        if (p.hasMaster) out["master"] = trackJson(p.master);
+        if (a.has("--json")) { emit(out.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+        std::function<void(const json &, int)> show = [&](const json &ds, int ind) {
+            for (auto &d : ds) {
+                std::fprintf(OUT, "%*s%s (%s)%s\n", ind, "", d["name"].get<std::string>().c_str(), d["kind"].get<std::string>().c_str(), d.contains("state") ? " +state" : "");
+                if (d.contains("chains")) for (auto &c : d["chains"].items()) { std::fprintf(OUT, "%*s[%s]\n", ind + 2, "", c.key().c_str()); show(c.value(), ind + 4); }
+                if (d.contains("pads")) for (auto &pd : d["pads"]) { std::fprintf(OUT, "%*spad %d\n", ind + 2, "", pd["key"].get<int>()); show(pd["devices"], ind + 4); }
+            }
+        };
+        int k = 1;
+        for (auto &t : tj) { std::fprintf(OUT, "track %d %s\n", k++, t["name"].get<std::string>().c_str()); show(t["devices"], 2); }
+        for (auto &t : ej) { std::fprintf(OUT, "effect track %s\n", t["name"].get<std::string>().c_str()); show(t["devices"], 2); }
+        if (out.contains("master")) { std::fprintf(OUT, "master\n"); show(out["master"]["devices"], 2); }
+        std::fprintf(OUT, "(notes and clips aren't read from .bwproject files: export a DAWproject and import that)\n");
+        return 0;
+    }
     const std::string outDir = a.get("--out", fs::path(src).stem().string());
     DawprojectImport r;
     std::string err;
-    if (!importDawproject(src, outDir, r, err)) return fail(a, err);
+    if (!importDawproject(src, outDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
     const std::string jobPath = (fs::path(outDir) / "job.json").string();
     if (a.has("--json")) {
         emit(json{{"ok", true}, {"job", jobPath}, {"application", r.application}, {"tracks", r.tracks}, {"buses", r.buses},
-                  {"notes", r.noteCount}, {"plugins", r.plugins}, {"left out", r.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+                  {"notes", r.noteCount}, {"plugins", r.plugins}, {"bitwig", r.bitwig}, {"left out", r.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     std::fprintf(OUT, "imported %s%s: %zu tracks, %zu buses, %zu notes, %zu plugins -> %s\n", src.c_str(),
                  r.application.empty() ? "" : (" (" + r.application + ")").c_str(), r.tracks, r.buses, r.noteCount, r.plugins, jobPath.c_str());
+    if (!r.bitwig.empty()) std::fprintf(OUT, "  Bitwig's own devices from %s\n", r.bitwig.c_str());
     for (auto &n : r.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
     return 0;
 }
@@ -623,7 +666,7 @@ int cmdRender(const Args &a) {
         const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
         DawprojectImport r;
         std::string err;
-        if (!importDawproject(path, importDir, r, err)) return fail(a, err);
+        if (!importDawproject(path, importDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
         for (auto &n : r.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
         path = (fs::path(importDir) / "job.json").string();
     }
@@ -1033,10 +1076,10 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose"}},
+            {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose", "--bitwig"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
-            {"import", {"--out", "--json"}},
+            {"import", {"--out", "--json", "--bitwig"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);

@@ -24,13 +24,22 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- Bitwig projects: `import` reads the `.bwproject` behind a Bitwig DAWproject export (found by name,
+  or `--bitwig`) for what the export leaves out: Drum Machine pads become a track each (plugins with
+  their states, Sampler pads as `builtin:sampler`, pad volume, pan and mute) into a drum bus, and
+  Chain, EQ+, Compressor, Multiband FX-3, Peak Limiter and Tool become built-in effects with the
+  plugins inside them (a master chain comes across whole). A plugin whose VST3 isn't installed falls
+  back to its VST2 with the preset converted; Komplete Kontrol uses its VST2 (the VST3 renders
+  silence). `import song.bwproject` lists a project's tracks, devices, pads and states. Reads 743 of
+  745 test projects (Bitwig 4 to 6); an imported song renders within 0.3 dB of its Bitwig bounce's
+  section-by-section loudness contour.
 - `wavelength import song.dawproject` (and `render song.dawproject`): a DAWproject export (Bitwig,
   Studio One, Cubase) becomes a job: the arrangement's notes (clips, loops, nested lanes), tracks with
   their CLAP / VST3 / VST2 plugins and saved states, volume, pan, mute, sends to effect returns,
   groups, tempo and tempo map, time signature, markers, volume and pan automation, and the standard
   EQ, compressor and limiter devices. What the file can't carry (a DAW's own devices and their
-  samples, launcher clips, audio tracks, device automation) is listed. Robot Protectors (Bitwig 6):
-  8 tracks and 1808 notes, rendered in 26 s, within about 1 dB of the bounce once its drums play.
+  samples, launcher clips, audio tracks, device automation) is listed. A Bitwig 6 export of 8 tracks
+  and 1808 notes imports in under a second and renders in 26 s.
 - VST2 hosting: `.vst` bundles (macOS), `.dll` (Windows) and `.so` (Linux) are scanned in child
   processes and play like CLAP and VST3 plugins (MIDI notes, CC, pitch bend, pressure, transport,
   parameters and automation, `.fxp`/`.fxb` state chunks and parameter lists, factory programs by name,

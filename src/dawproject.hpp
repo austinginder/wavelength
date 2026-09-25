@@ -15,9 +15,13 @@ struct DawprojectImport {
     std::vector<std::string> notes;     // what was substituted or left out, one line each
     size_t tracks = 0, buses = 0, noteCount = 0, plugins = 0;
     std::string application;            // the exporting DAW ("Bitwig Studio 5.3")
+    std::string bitwig;                 // the Bitwig project read for Bitwig's own devices ("" when none)
 };
 
 // Reads `path` (.dawproject), writes `outDir`/job.json and the plugin states under `outDir`/plugins/.
-bool importDawproject(const std::string &path, const std::string &outDir, DawprojectImport &out, std::string &err);
+// `bitwig`: the .bwproject behind a Bitwig export ("" = look for it next to the file and in
+// ~/Documents/Bitwig Studio/Projects/<name>/, "none" = don't).
+bool importDawproject(const std::string &path, const std::string &outDir, DawprojectImport &out, std::string &err,
+                      const std::string &bitwig = "");
 
 } // namespace wl

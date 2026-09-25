@@ -37,8 +37,11 @@ public:
             if (zipdetail::u32(&buf[i]) == 0x06054b50) { eocd = i; break; }
         if (eocd < 0) { err = path + " is not a zip archive"; return false; }
         const uint32_t cdSize = zipdetail::u32(&buf[eocd + 12]), cdOffset = zipdetail::u32(&buf[eocd + 16]);
+        // a zip after other data (a Bitwig project's plugin states): offsets count from the zip's start
+        const size_t eocdAt = size - tail + (size_t)eocd;
+        base_ = eocdAt >= (size_t)cdSize + cdOffset ? eocdAt - cdSize - cdOffset : 0;
         std::vector<uint8_t> cd(cdSize);
-        f_.seekg(cdOffset);
+        f_.seekg((std::streamoff)(base_ + cdOffset));
         f_.read(reinterpret_cast<char *>(cd.data()), cdSize);
         for (size_t p = 0; p + 46 <= cd.size() && zipdetail::u32(&cd[p]) == 0x02014b50;) {
             ZipEntry e;
@@ -59,10 +62,10 @@ public:
         if (!e) for (auto &x : entries_) if (zipdetail::lower(x.name) == zipdetail::lower(name)) { e = &x; break; }
         if (!e) { err = path_ + " has no entry '" + name + "'"; return false; }
         uint8_t lh[30];
-        f_.seekg(e->localOffset);
+        f_.seekg((std::streamoff)(base_ + e->localOffset));
         f_.read(reinterpret_cast<char *>(lh), 30);
         if (zipdetail::u32(lh) != 0x04034b50) { err = "bad zip entry header for " + name; return false; }
-        f_.seekg(e->localOffset + 30 + zipdetail::u16(lh + 26) + zipdetail::u16(lh + 28));
+        f_.seekg((std::streamoff)(base_ + e->localOffset + 30 + zipdetail::u16(lh + 26) + zipdetail::u16(lh + 28)));
         std::vector<uint8_t> comp(e->compSize);
         f_.read(reinterpret_cast<char *>(comp.data()), e->compSize);
         if (e->method == 0) { out = std::move(comp); return true; }
@@ -74,6 +77,7 @@ public:
 private:
     std::string path_;
     std::ifstream f_;
+    size_t base_ = 0;
     std::vector<ZipEntry> entries_;
 };
 

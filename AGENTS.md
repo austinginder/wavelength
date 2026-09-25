@@ -30,10 +30,16 @@ master: much faster than the whole song, and the report shows those tracks alone
 
 `wavelength import song.dawproject --out songs/x --json` writes `songs/x/job.json` and the plugin
 states under `songs/x/plugins/`. Read the `notes` in the result: they name what didn't come across.
-A DAW's own devices (Bitwig's Drum Machine, Polymer, EQ+, its master chain) are only names in the
-file, so they are left out or replaced (Drum Machine becomes `builtin:drums`); put in a sampler kit
-and a master chain that match. Audio tracks, launcher clips and device-parameter automation aren't
-imported. Then edit the job like any other and render it; `render song.dawproject` does both steps.
+A DAW's own devices are only names in a DAWproject. For Bitwig exports the importer also reads the
+project itself (`<name>.bwproject`, found next to the export or in `~/Documents/Bitwig Studio/Projects/
+<name>/`, or given with `--bitwig`): Drum Machine pads become one track each (plugins with their
+states, Sampler pads as `builtin:sampler`) into a bus named after the drum track, and Chain, EQ+,
+Compressor, Multiband FX-3, Peak Limiter and Tool become built-in effects, with the plugins inside
+them. Other Bitwig devices (Polymer, Filter, Reverb, ...) are listed as left out. Without the Bitwig
+project a Drum Machine becomes `builtin:drums`. Audio tracks, launcher clips and device-parameter
+automation aren't imported. `wavelength import song.bwproject` lists a Bitwig project's tracks,
+devices, pads and plugin states. Then edit the job like any other and render it; `render
+song.dawproject` does both steps.
 
 ## Choosing sounds
 
