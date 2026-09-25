@@ -1,7 +1,7 @@
 #pragma once
 // The audition index: every preset of a plugin rendered once (C4 for one second) and measured,
 // so an agent can choose sounds by what they sound like and knows each preset's octave offset.
-// Stored in ~/Library/Caches/wavelength/audition/<plugin id>.json, keyed by preset name.
+// Stored in audition/<plugin id>.json in platform::cacheDir(), keyed by preset name.
 #include "bundle.hpp"
 #include "presets.hpp"
 

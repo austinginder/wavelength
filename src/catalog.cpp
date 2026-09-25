@@ -1,5 +1,7 @@
 #include "catalog.hpp"
 
+#include "platform.hpp"
+
 #include "vst3_plugin.hpp"
 
 #include <nlohmann/json.hpp>
@@ -14,40 +16,18 @@
 #include <sstream>
 #include <thread>
 
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#endif
-
-extern char **environ;
-
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 namespace wl {
 
-std::string selfExecutable() {
-#ifdef __APPLE__
-    char buf[4096];
-    uint32_t size = sizeof buf;
-    if (_NSGetExecutablePath(buf, &size) == 0) return fs::canonical(buf).string();
-#endif
-    return "/proc/self/exe";
-}
-
 namespace {
 
-std::string home() {
-    const char *h = std::getenv("HOME");
-    return h ? h : "";
-}
+#ifndef _WIN32
+std::string home() { return platform::homeDir().string(); }
+#endif
 
-fs::path cacheFile() { return fs::path(home()) / "Library/Caches/wavelength/plugins.json"; }
+fs::path cacheFile() { return platform::cacheDir() / "plugins.json"; }
 
 long long mtimeOf(const fs::path &p) {
     std::error_code ec;
@@ -61,15 +41,7 @@ std::string lower(std::string s) {
     return s;
 }
 
-std::vector<std::string> envPaths(const char *var) {
-    std::vector<std::string> paths;
-    if (const char *extra = std::getenv(var)) {
-        std::stringstream ss(extra);
-        std::string item;
-        while (std::getline(ss, item, ':')) if (!item.empty()) paths.push_back(item);
-    }
-    return paths;
-}
+std::vector<std::string> envPaths(const char *var) { return platform::envPathList(var); }
 
 // bundles are directories: collect them without descending into their contents
 std::vector<fs::path> findBundles(const std::string &dir, const char *ext) {
@@ -88,41 +60,17 @@ std::vector<fs::path> findBundles(const std::string &dir, const char *ext) {
 // Scan one VST3 bundle in a child process (`wavelength __scan-vst3 <bundle>`), so a plugin
 // that crashes or hangs while loading can't take the scan down with it.
 bool scanVst3InChild(const std::string &bundle, std::vector<PluginInfo> &out, std::string &err, int timeoutSec = 45) {
-    int pipefd[2];
-    if (pipe(pipefd) != 0) { err = "pipe failed"; return false; }
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
-    posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
-    const std::string self = selfExecutable();
-    char *argv[] = {const_cast<char *>(self.c_str()), const_cast<char *>("__scan-vst3"), const_cast<char *>(bundle.c_str()), nullptr};
-    pid_t pid = 0;
-    const int rc = posix_spawn(&pid, self.c_str(), &fa, nullptr, argv, environ);
-    posix_spawn_file_actions_destroy(&fa);
-    close(pipefd[1]);
-    if (rc != 0) { close(pipefd[0]); err = "could not start the scanner"; return false; }
-
-    std::string output;
-    char buf[65536];
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
-    bool timedOut = false;
-    for (;;) {
-        pollfd pfd{pipefd[0], POLLIN, 0};
-        const int left = (int)std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
-        if (left <= 0) { timedOut = true; break; }
-        if (poll(&pfd, 1, std::min(left, 500)) > 0) {
-            const ssize_t n = read(pipefd[0], buf, sizeof buf);
-            if (n <= 0) break;
-            output.append(buf, (size_t)n);
-        }
+    platform::Process proc;
+    if (!platform::spawn({platform::selfExecutable(), "__scan-vst3", bundle}, proc, true, true)) {
+        err = "could not start the scanner";
+        return false;
     }
-    close(pipefd[0]);
-    if (timedOut) kill(pid, SIGKILL);
-    int status = 0;
-    waitpid(pid, &status, 0);
+    std::string output, crash;
+    const bool timedOut = !platform::readOutput(proc, output, timeoutSec);
+    if (timedOut) platform::kill(proc);
+    while (!platform::finished(proc, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (timedOut) { err = "timed out loading " + bundle; return false; }
-    if (WIFSIGNALED(status)) { err = "crashed while loading " + bundle + " (signal " + std::to_string(WTERMSIG(status)) + ")"; return false; }
+    if (!crash.empty()) { err = "crashed while loading " + bundle + " (" + crash + ")"; return false; }
     try {
         const json j = json::parse(output);
         if (!j.value("ok", false)) { err = j.value("error", "scan failed"); return false; }
@@ -158,8 +106,13 @@ std::vector<std::string> clapSearchPaths() {
 #ifdef __APPLE__
     paths.push_back(home() + "/Library/Audio/Plug-Ins/CLAP");
     paths.push_back("/Library/Audio/Plug-Ins/CLAP");
+#elif defined(_WIN32)
+    const char *common = std::getenv("COMMONPROGRAMFILES"), *local = std::getenv("LOCALAPPDATA");
+    if (local) paths.push_back(std::string(local) + "\\Programs\\Common\\CLAP");
+    if (common) paths.push_back(std::string(common) + "\\CLAP");
 #else
     paths.push_back(home() + "/.clap");
+    paths.push_back("/usr/local/lib/clap");
     paths.push_back("/usr/lib/clap");
 #endif
     return paths;
@@ -170,8 +123,13 @@ std::vector<std::string> vst3SearchPaths() {
 #ifdef __APPLE__
     paths.push_back(home() + "/Library/Audio/Plug-Ins/VST3");
     paths.push_back("/Library/Audio/Plug-Ins/VST3");
+#elif defined(_WIN32)
+    const char *common = std::getenv("COMMONPROGRAMFILES"), *local = std::getenv("LOCALAPPDATA");
+    if (local) paths.push_back(std::string(local) + "\\Programs\\Common\\VST3");
+    if (common) paths.push_back(std::string(common) + "\\VST3");
 #else
     paths.push_back(home() + "/.vst3");
+    paths.push_back("/usr/local/lib/vst3");
     paths.push_back("/usr/lib/vst3");
 #endif
     return paths;

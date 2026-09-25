@@ -1,5 +1,7 @@
 #include "vst3_plugin.hpp"
 
+#include "platform.hpp"
+
 #include "public.sdk/source/common/memorystream.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
@@ -22,14 +24,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
 #include <thread>
 
-#ifdef __APPLE__
-#include <CoreFoundation/CoreFoundation.h>
-#endif
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
@@ -54,6 +54,19 @@ VST3::Hosting::Module::Ptr loadModule(const std::string &path, std::string &err)
     if (auto it = modules.find(path); it != modules.end()) return it->second;
     std::string why;
     auto m = VST3::Hosting::Module::create(path, why);
+#if !defined(__APPLE__) && !defined(_WIN32)
+    if (!m && why.find("dlopen failed") != std::string::npos) {   // the SDK hides the reason
+#if defined(__aarch64__)
+        const char *arch = "aarch64-linux";
+#else
+        const char *arch = "x86_64-linux";
+#endif
+        const std::filesystem::path bundle(path);
+        const auto so = bundle / "Contents" / arch / (bundle.stem().string() + ".so");
+        const std::string reason = platform::libraryLoadError(so.string());
+        if (!reason.empty()) why = reason;
+    }
+#endif
     if (!m) { err = "could not load VST3 module " + path + (why.empty() ? "" : ": " + why); return nullptr; }
     modules[path] = m;
     return m;
@@ -66,16 +79,7 @@ std::string lower(std::string s) {
 
 std::string uidString(const VST3::UID &uid) { return uid.toString(); }
 
-void pumpFor(double ms) {
-    const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds((int64_t)(ms * 1000));
-    do {
-#ifdef __APPLE__
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.002, true);
-#else
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-#endif
-    } while (std::chrono::steady_clock::now() < until);
-}
+void pumpFor(double ms) { platform::pumpEvents(ms); }
 
 } // namespace
 

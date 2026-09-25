@@ -1,6 +1,7 @@
 #pragma once
 // Beats <-> seconds through a tempo map. A point with `ramp` reaches its bpm by a linear
 // ramp (in beats) from the previous point (accelerando / ritardando); otherwise tempo steps.
+#include <cstddef>
 #include <vector>
 
 namespace wl {

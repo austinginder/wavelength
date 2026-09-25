@@ -1,5 +1,7 @@
 #include "preset_files.hpp"
 
+#include "platform.hpp"
+
 #include "preset_formats.hpp"
 
 #include <algorithm>
@@ -77,8 +79,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
 struct NksEntry { std::string path, name, category, vendor, bank, magic, uid; };
 
 std::string cachePath() {
-    const char *h = getenv("HOME");
-    return std::string(h ? h : "") + "/Library/Caches/wavelength/nks-v2.json";
+    return (platform::cacheDir() / "nks-v2.json").string();
 }
 
 bool readNks(const std::string &path, NksEntry &e) {
@@ -140,7 +141,7 @@ bool readNks(const std::string &path, NksEntry &e) {
 
 std::vector<NksEntry> scanNks() {
     std::vector<NksEntry> out;
-    const std::string home = getenv("HOME") ? getenv("HOME") : "";
+    const std::string home = platform::homeDir().string();
     for (const auto &root : {home + "/Documents", std::string("/Users/Shared"), std::string("/Library/Application Support"),
                                    home + "/Library/Application Support", home + "/Spitfire", std::string("/Library/Audio/Presets"),
                                    home + "/Library/Audio/Presets"}) {
@@ -207,7 +208,7 @@ std::vector<PresetInfo> nksPresets(const PluginInfo &plugin, bool rescan) {
 }
 
 std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
-    const std::string home = getenv("HOME") ? getenv("HOME") : "";
+    const std::string home = platform::homeDir().string();
     const std::string p = squash(plugin.name);
     const std::vector<std::string> names = {p, p + "presets", p + "patches"};
     std::vector<fs::path> dirs;
@@ -219,12 +220,20 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             if (vendor.is_directory(ec)) for (auto &d : childrenNamed(vendor.path(), names)) dirs.push_back(d);
     }
     // vendors that keep patches elsewhere
-    if (p == "surgext")
-        for (auto d : {"/Library/Application Support/Surge XT/patches_factory", "/Library/Application Support/Surge XT/patches_3rdparty"})
-            dirs.push_back(d);
+    if (p == "surgext") {
+#if defined(__APPLE__)
+        const fs::path surge = "/Library/Application Support/Surge XT";
+#elif defined(_WIN32)
+        const fs::path surge = fs::path(getenv("PROGRAMDATA") ? getenv("PROGRAMDATA") : "C:\\ProgramData") / "Surge XT";
+#else
+        const fs::path surge = fs::exists("/usr/share/surge-xt") ? "/usr/share/surge-xt" : "/usr/local/share/surge-xt";
+#endif
+        dirs.push_back(surge / "patches_factory");
+        dirs.push_back(surge / "patches_3rdparty");
+    }
     if (p == "surgext") dirs.push_back(fs::path(home) / "Documents/Surge XT/Patches");
     // presets Wavelength extracted itself (scripts/extract-embedded-presets.py)
-    dirs.push_back(fs::path(home) / "Library/Application Support/Wavelength/Presets" / plugin.name);
+    dirs.push_back(platform::dataDir() / "Presets" / plugin.name);
     // Cherry Audio keeps presets in Application Support
     dirs.push_back(fs::path(home) / "Library/Application Support/CherryAudio" / plugin.name);
     if (p == "voltagemodular") dirs.push_back(fs::path(home) / "Library/Application Support/Voltage");

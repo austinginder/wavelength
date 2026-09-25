@@ -91,7 +91,7 @@ struct Job {
 bool parseJob(const nlohmann::json &j, const std::string &baseDir, Job &out, std::string &err, bool useDefaults = true);
 
 // The user's job defaults: top-level settings (e.g. {"leadIn": 1}) a job gets unless it sets them
-// itself. Read from $WAVELENGTH_DEFAULTS or ~/Library/Application Support/Wavelength/defaults.json.
+// itself. Read from $WAVELENGTH_DEFAULTS or defaults.json in platform::dataDir().
 nlohmann::json userJobDefaults(std::string *path = nullptr);
 int parseKey(const nlohmann::json &k);   // 60, "C4", "F#3", "Bb5" (C4 = 60)
 

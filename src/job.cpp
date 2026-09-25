@@ -1,5 +1,7 @@
 #include "job.hpp"
 
+#include "platform.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -154,7 +156,7 @@ void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std
 json userJobDefaults(std::string *path) {
     std::string p;
     if (const char *env = getenv("WAVELENGTH_DEFAULTS")) p = env;
-    else if (const char *h = getenv("HOME")) p = std::string(h) + "/Library/Application Support/Wavelength/defaults.json";
+    else p = (platform::dataDir() / "defaults.json").string();
     if (path) *path = p;
     std::ifstream in(p);
     if (!in) return json::object();

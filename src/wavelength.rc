@@ -1,0 +1,3 @@
+// Windows resources: the manifest makes UTF-8 the process code page, so file names with
+// non-ASCII characters work through the narrow-string file APIs.
+1 24 "wavelength.manifest"

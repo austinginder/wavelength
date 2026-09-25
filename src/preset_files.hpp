@@ -16,7 +16,7 @@ namespace wl {
 // cartridge voices ("<cart>.syx#<n>") and NKS presets (.nksf) that name this plugin.
 std::vector<PresetInfo> filePresets(const PluginInfo &plugin);
 
-// NKS presets for the plugin from the NKS index (~/Library/Caches/wavelength/nks.json, built by
+// NKS presets for the plugin from the NKS index (nks-v2.json in platform::cacheDir(), built by
 // walking the usual NKS folders); `rescan` rebuilds it.
 std::vector<PresetInfo> nksPresets(const PluginInfo &plugin, bool rescan);
 

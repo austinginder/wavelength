@@ -11,6 +11,7 @@
 #include "audition.hpp"
 #include "catalog.hpp"
 #include "instance.hpp"
+#include "platform.hpp"
 #include "plugin.hpp"
 #include "engine.hpp"
 #include "effects.hpp"
@@ -26,7 +27,6 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
-#include <unistd.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -541,16 +541,15 @@ int run(int argc, char **argv);
 // Plugins (JUCE ones especially) often crash in their static destructors when a host process
 // exits. Everything useful is written by then, so leave without running them.
 int main(int argc, char **argv) {
+    platform::init(argc, argv);
     const int code = run(argc, argv);
     std::fflush(OUT);
     std::fflush(stderr);
-    _exit(code);
+    platform::quickExit(code);
 }
 
 int run(int argc, char **argv) {
-    int realStdout = dup(STDOUT_FILENO);
-    if (realStdout >= 0 && (OUT = fdopen(realStdout, "w"))) dup2(STDERR_FILENO, STDOUT_FILENO);
-    else OUT = stdout;
+    OUT = platform::takeStdout();
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
@@ -567,7 +566,7 @@ int run(int argc, char **argv) {
         if (!err.empty()) out["error"] = err;
         emit(out.dump());
         std::fflush(OUT);
-        _exit(0);   // skip plugin static destructors, which some plugins crash in
+        platform::quickExit(0);   // skip plugin static destructors, which some plugins crash in
     }
     try {
         if (cmd == "plugins") return cmdPlugins(a);

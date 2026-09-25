@@ -3,24 +3,18 @@
 #include "analyze.hpp"
 #include "catalog.hpp"
 #include "engine.hpp"
+#include "platform.hpp"
 #include "preset_files.hpp"
 #include "state_file.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <csignal>
-#include <fcntl.h>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <set>
-#include <spawn.h>
-#include <sys/wait.h>
 #include <thread>
-#include <unistd.h>
-
-extern char **environ;
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -32,10 +26,9 @@ namespace {
 std::string lower(std::string s) { std::transform(s.begin(), s.end(), s.begin(), ::tolower); return s; }
 
 std::string indexPath(const PluginInfo &info) {
-    const char *h = getenv("HOME");
     std::string id;
     for (char c : info.id) id += std::isalnum((unsigned char)c) || c == '.' || c == '-' ? c : '_';
-    return std::string(h ? h : "") + "/Library/Caches/wavelength/audition/" + info.format + "-" + id + ".json";
+    return (platform::cacheDir() / "audition" / (info.format + "-" + id + ".json")).string();
 }
 
 // audition: C4 from 0.5 s for 1 s, 3 s in all
@@ -138,8 +131,7 @@ json auditionIndex(const PluginInfo &info) {
 }
 
 int retagAuditions(std::string &summary) {
-    const char *h = getenv("HOME");
-    const fs::path dir = std::string(h ? h : "") + "/Library/Caches/wavelength/audition";
+    const fs::path dir = platform::cacheDir() / "audition";
     size_t files = 0, presets = 0;
     std::error_code ec;
     for (auto &e : fs::directory_iterator(dir, ec)) {
@@ -223,11 +215,11 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
     }
     const size_t already = index.size();
     const auto t0 = std::chrono::steady_clock::now();
-    const std::string self = selfExecutable(), spec = info.bundlePath + "#" + info.id;
-    const fs::path tmp = fs::temp_directory_path() / ("wavelength-audition-" + std::to_string(getpid()));
+    const std::string self = platform::selfExecutable(), spec = info.bundlePath + "#" + info.id;
+    const fs::path tmp = fs::temp_directory_path() / ("wavelength-audition-" + std::to_string(platform::processId()));
     fs::create_directories(tmp);
 
-    struct Worker { pid_t pid = 0; std::vector<json> batch; std::string results; size_t done = 0; std::chrono::steady_clock::time_point last; int n = 0; };
+    struct Worker { platform::Process proc; std::vector<json> batch; std::string results; size_t done = 0; std::chrono::steady_clock::time_point last; int n = 0; };
     std::vector<Worker> workers;
     size_t crashed = 0, timedOut = 0, serial = 0;
     auto spawn = [&](std::vector<json> batch) {
@@ -239,16 +231,7 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
         w.results = (tmp / ("results" + std::to_string(w.n) + ".jsonl")).string();
         std::ofstream(bf) << json(w.batch).dump();
         std::ofstream(w.results).close();
-        posix_spawn_file_actions_t fa;
-        posix_spawn_file_actions_init(&fa);
-        posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
-        if (!verbose) posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-        std::vector<std::string> args = {self, "__audition", spec, bf, w.results};
-        std::vector<char *> argv;
-        for (auto &s : args) argv.push_back(s.data());
-        argv.push_back(nullptr);
-        if (posix_spawn(&w.pid, self.c_str(), &fa, nullptr, argv.data(), environ) != 0) w.pid = 0;
-        posix_spawn_file_actions_destroy(&fa);
+        platform::spawn({self, "__audition", spec, bf, w.results}, w.proc, false, !verbose);
         w.last = std::chrono::steady_clock::now();
         workers.push_back(std::move(w));
     };
@@ -280,10 +263,10 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
             Worker &w = workers[i];
             const size_t n = readResults(w);
             if (n > w.done) { w.done = n; w.last = std::chrono::steady_clock::now(); }
-            int status = 0;
-            const bool exited = w.pid == 0 || waitpid(w.pid, &status, WNOHANG) == w.pid;
+            std::string crash;
+            const bool exited = platform::finished(w.proc, crash);
             const bool hung = !exited && std::chrono::duration<double>(std::chrono::steady_clock::now() - w.last).count() > hangSeconds;
-            if (hung) { kill(w.pid, SIGKILL); waitpid(w.pid, &status, 0); }
+            if (hung) platform::kill(w.proc);
             if (!exited && !hung) { ++i; continue; }
             w.done = readResults(w);
             std::vector<json> rest(w.batch.begin() + (long)std::min(w.done, w.batch.size()), w.batch.end());

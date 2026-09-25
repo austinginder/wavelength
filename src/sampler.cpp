@@ -1,5 +1,7 @@
 #include "sampler.hpp"
 
+#include "platform.hpp"
+
 #include <zlib.h>
 
 #include <algorithm>
@@ -268,7 +270,7 @@ bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::str
 }
 
 // ---- library index ------------------------------------------------------------------------
-std::string home() { const char *h = getenv("HOME"); return h ? h : ""; }
+std::string home() { return platform::homeDir().string(); }
 
 int gmKeyFor(const std::string &file, std::set<int> &taken, int *primary = nullptr) {
     const std::string n = lower(fs::path(file).stem().string());
@@ -486,17 +488,15 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
 std::string resolveSampleFile(const std::string &name, const std::string &baseDir) { return resolveIn(name, baseDir); }
 
 std::vector<std::string> sampleRoots() {
-    std::vector<std::string> roots;
-    if (const char *env = getenv("WAVELENGTH_SAMPLES_PATH")) {
-        std::string s = env;
-        for (size_t a = 0, b; a <= s.size(); a = b + 1) {
-            b = s.find(':', a);
-            if (b == std::string::npos) b = s.size();
-            if (b > a) roots.push_back(s.substr(a, b - a));
-        }
-    }
+    std::vector<std::string> roots = platform::envPathList("WAVELENGTH_SAMPLES_PATH");
     // Bitwig Studio's installed sound content, newest package format first
+#if defined(__APPLE__)
     const fs::path bitwig = fs::path(home()) / "Library/Application Support/Bitwig/Bitwig Studio/installed-packages";
+#elif defined(_WIN32)
+    const fs::path bitwig = fs::path(getenv("LOCALAPPDATA") ? getenv("LOCALAPPDATA") : "") / "Bitwig Studio/installed-packages";
+#else
+    const fs::path bitwig = fs::path(home()) / ".BitwigStudio/installed-packages";
+#endif
     std::error_code ec;
     std::vector<std::string> versions;
     for (auto &e : fs::directory_iterator(bitwig, ec)) if (e.is_directory(ec)) versions.push_back(e.path().string());

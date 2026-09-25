@@ -5,9 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
-#ifdef __APPLE__
-#include <CoreFoundation/CoreFoundation.h>
-#endif
+#include "platform.hpp"
 
 namespace wl {
 
@@ -154,11 +152,7 @@ void Instance::pump(double ms) {
     auto until = std::chrono::steady_clock::now() + std::chrono::microseconds((int64_t)(ms * 1000));
     do {
         serviceCallbacks();
-#ifdef __APPLE__
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.002, true);
-#else
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-#endif
+        platform::pumpEvents(2);
     } while (std::chrono::steady_clock::now() < until);
     serviceCallbacks();
 }

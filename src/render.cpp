@@ -7,6 +7,7 @@
 #include "engine.hpp"
 #include "loudness.hpp"
 #include "catalog.hpp"
+#include "platform.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -15,16 +16,10 @@
 #include <functional>
 #include <set>
 #include <map>
-#include <unistd.h>
 #include <thread>
-#include <sys/wait.h>
-#include <spawn.h>
 #include <fstream>
-#include <fcntl.h>
-#include <csignal>
 
 namespace fs = std::filesystem;
-extern char **environ;
 
 namespace wl {
 
@@ -314,7 +309,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     int parallel = job.parallel;
     if (parallel < 0) parallel = (int)std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
     const bool isolate = parallel > 0 && !job.sourcePath.empty();
-    const fs::path tmp = fs::temp_directory_path() / ("wavelength-render-" + std::to_string(getpid()));
+    const fs::path tmp = fs::temp_directory_path() / ("wavelength-render-" + std::to_string(platform::processId()));
     if (isolate) fs::create_directories(tmp, ec);
     auto finish = [&](size_t i, Audio &audio) {   // mix a finished track; keep it if it keys an effect
         if (sources.count(i)) scAudio[i] = audio;
@@ -322,11 +317,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         trackDone[i] = true;
         return true;
     };
-    struct Running { size_t index; pid_t pid; std::chrono::steady_clock::time_point started; };
+    struct Running { size_t index; platform::Process proc; std::chrono::steady_clock::time_point started; };
     std::vector<Running> running;
     std::vector<bool> started(job.tracks.size(), false);
     const double limit = 300 + 10 * seconds;   // a track that takes longer than this is hung
-    const std::string self = isolate ? selfExecutable() : "";
+    const std::string self = isolate ? platform::selfExecutable() : "";
     auto startTrack = [&](size_t i) {
         const std::string prefix = (tmp / std::to_string(i)).string();
         std::vector<std::string> args = {self, "__track", job.sourcePath, std::to_string(i), prefix};
@@ -339,24 +334,16 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             }
             args.push_back(std::to_string(d) + "=" + f);
         }
-        std::vector<char *> argv;
-        for (auto &x : args) argv.push_back(x.data());
-        argv.push_back(nullptr);
-        posix_spawn_file_actions_t fa;
-        posix_spawn_file_actions_init(&fa);
-        posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
-        if (!verbose) posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-        pid_t pid = 0;
-        if (posix_spawn(&pid, self.c_str(), &fa, nullptr, argv.data(), environ) != 0) pid = 0;
-        posix_spawn_file_actions_destroy(&fa);
-        if (verbose) std::fprintf(stderr, "rendering %s (%s) in worker %d...\n", job.tracks[i].name.c_str(), job.tracks[i].plugin.c_str(), (int)pid);
-        running.push_back({i, pid, std::chrono::steady_clock::now()});
+        platform::Process proc;
+        platform::spawn(args, proc, false, !verbose);
+        if (verbose) std::fprintf(stderr, "rendering %s (%s) in worker %d...\n", job.tracks[i].name.c_str(), job.tracks[i].plugin.c_str(), proc.id);
+        running.push_back({i, proc, std::chrono::steady_clock::now()});
         started[i] = true;
     };
     auto ready = [&](size_t i) { for (size_t d : deps[i]) if (!trackDone[d]) return false; return true; };
     bool failed = false;
     auto cleanup = [&] {
-        for (auto &run : running) if (run.pid) { kill(run.pid, SIGKILL); waitpid(run.pid, nullptr, 0); }
+        for (auto &run : running) platform::kill(run.proc);
         if (isolate) fs::remove_all(tmp, ec);
     };
     while (!failed && std::find(trackDone.begin(), trackDone.end(), false) != trackDone.end()) {
@@ -387,11 +374,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         for (size_t r = 0; r < running.size() && !failed;) {
             Running &run = running[r];
-            int status = 0;
-            const bool exited = run.pid == 0 || waitpid(run.pid, &status, WNOHANG) == run.pid;
+            std::string crash;
+            const bool exited = platform::finished(run.proc, crash);
             const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - run.started).count();
             const bool hung = !exited && took > limit;
-            if (hung) { kill(run.pid, SIGKILL); waitpid(run.pid, &status, 0); }
+            if (hung) platform::kill(run.proc);
             if (!exited && !hung) { ++r; continue; }
             const size_t i = run.index;
             const std::string prefix = (tmp / std::to_string(i)).string();
@@ -413,7 +400,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 failed = true;
             } else {   // the plugin crashed or hung: the song renders without this track (silence keys its dependents)
                 tr.plugin = tr.pluginName = job.tracks[i].plugin;
-                const std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)" : "crashed while rendering";
+                const std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)" : "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
                 tr.warnings.push_back("track failed: " + job.tracks[i].plugin + " " + why + "; the mix is rendered without it");
                 tr.lufs = -120;
                 tr.levels = Levels{-240, -240, -240, true};

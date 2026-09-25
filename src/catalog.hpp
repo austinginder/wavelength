@@ -1,6 +1,6 @@
 #pragma once
 // Finds CLAP and VST3 plugins on disk. Descriptors are cached (keyed by bundle path +
-// modification time) in ~/Library/Caches/wavelength/plugins.json. VST3 bundles are scanned
+// modification time) in plugins.json in platform::cacheDir(). VST3 bundles are scanned
 // in child processes, because loading them runs plugin code that may crash or hang.
 #include "bundle.hpp"
 
@@ -21,8 +21,5 @@ bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err);
 
 nlohmann::json pluginToJson(const PluginInfo &p);
 PluginInfo pluginFromJson(const nlohmann::json &j);
-
-// Path of the running wavelength binary (for worker processes).
-std::string selfExecutable();
 
 } // namespace wl

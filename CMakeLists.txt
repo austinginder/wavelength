@@ -50,6 +50,17 @@ FetchContent_Declare(signalsmith_linear
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR wavelength-no-build)
 FetchContent_MakeAvailable(clap json vst3sdk zstd signalsmith_stretch signalsmith_linear)
+# zlib (zlib licence): from the system on macOS and Linux, built here where there is none (Windows)
+find_package(ZLIB)
+if(NOT ZLIB_FOUND)
+  FetchContent_Declare(zlib
+    URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(zlib)
+  target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
+  add_library(ZLIB::ZLIB ALIAS zlibstatic)
+endif()
 
 set(SDK ${vst3sdk_SOURCE_DIR})
 add_library(vst3hosting STATIC
@@ -85,6 +96,9 @@ if(APPLE)
   target_sources(vst3hosting PRIVATE ${SDK}/public.sdk/source/vst/hosting/module_mac.mm ${SDK}/public.sdk/source/common/threadchecker_mac.mm)
   set_source_files_properties(${SDK}/public.sdk/source/vst/hosting/module_mac.mm ${SDK}/public.sdk/source/common/threadchecker_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
   target_link_libraries(vst3hosting PUBLIC "-framework CoreFoundation" "-framework Foundation")
+elseif(WIN32)
+  target_sources(vst3hosting PRIVATE ${SDK}/public.sdk/source/vst/hosting/module_win32.cpp ${SDK}/public.sdk/source/common/threadchecker_win32.cpp)
+  target_link_libraries(vst3hosting PUBLIC ole32 shell32)
 elseif(UNIX)
   target_sources(vst3hosting PRIVATE ${SDK}/public.sdk/source/vst/hosting/module_linux.cpp ${SDK}/public.sdk/source/common/threadchecker_linux.cpp)
   target_link_libraries(vst3hosting PUBLIC dl pthread)
@@ -110,6 +124,7 @@ add_executable(wavelength
   src/audition.cpp
   src/clips.cpp
   src/instance.cpp
+  src/platform.cpp
   src/catalog.cpp
   src/clap_plugin.cpp
   src/job.cpp
@@ -120,11 +135,18 @@ add_executable(wavelength
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
-find_package(ZLIB REQUIRED)
 target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB libzstd_static)
 target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include
                            ${signalsmith_linear_SOURCE_DIR}/include)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")
+elseif(WIN32)
+  # UTF-8 as the process code page (file names), and a self-contained .exe
+  target_sources(wavelength PRIVATE src/wavelength.rc)
+  target_link_options(wavelength PRIVATE -static)
+  target_compile_definitions(wavelength PRIVATE UNICODE _UNICODE)
+elseif(UNIX)
+  # runs on any distribution with glibc as new as the build machine's, without a matching libstdc++
+  target_link_options(wavelength PRIVATE -static-libstdc++ -static-libgcc)
 endif()

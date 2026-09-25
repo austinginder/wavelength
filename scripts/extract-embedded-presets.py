@@ -6,7 +6,8 @@ usage: scripts/extract-embedded-presets.py [plugin ...]      (no argument: try e
 
 For each plugin: save its default state with `wavelength state save`, learn the shape of its XML
 state, find same-shaped XML fragments in the bundle (plain, zipped or gzipped), and write each as
-~/Library/Application Support/Wavelength/Presets/<Plugin>/<Category>/<Name>.wlstate. `wavelength
+Presets/<Plugin>/<Category>/<Name>.wlstate in Wavelength's user folder (on macOS
+~/Library/Application Support/Wavelength). `wavelength
 presets <plugin>` then lists them. Known to work: TAL-NoiseMaker (256), Thump One (164), Wavetable
 (99), Relica 2 (35), Flux Mini 2 (22). Needs only the Python standard library.
 """
@@ -122,7 +123,11 @@ def build(root, target, frag, kind):                 # default tree with `target
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WAVELENGTH = os.path.join(ROOT, 'build', 'wavelength')
-LIBRARY = os.path.expanduser('~/Library/Application Support/Wavelength/Presets')
+def data_dir():                                      # Wavelength's user folder (platform::dataDir)
+    if sys.platform == 'darwin': return os.path.expanduser('~/Library/Application Support/Wavelength')
+    if os.name == 'nt': return os.path.join(os.environ.get('APPDATA', ''), 'Wavelength')
+    return os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'), 'wavelength')
+LIBRARY = os.path.join(data_dir(), 'Presets')
 
 def category_and_name(n, frag):
     """split a preset label into (category, name): "Bass--Deep Sub", "KB Piano House TAL", tags"""
