@@ -30,8 +30,8 @@ command rejects options it doesn't know.
   Chain, EQ+, Compressor, Multiband FX-3, Peak Limiter and Tool become built-in effects with the
   plugins inside them (a master chain comes across whole). A plugin whose VST3 isn't installed falls
   back to its VST2 with the preset converted; Komplete Kontrol uses its VST2 (the VST3 renders
-  silence). `import song.bwproject` lists a project's tracks, devices, pads and states. Reads 743 of
-  745 test projects (Bitwig 4 to 6); an imported song renders within 0.3 dB of its Bitwig bounce's
+  silence). `import song.bwproject` lists a project's tracks, devices, pads and states. Reads all 745
+  test projects (Bitwig 4 to 6) through to the end; an imported song renders within 0.3 dB of its Bitwig bounce's
   section-by-section loudness contour.
 - `wavelength import song.dawproject` (and `render song.dawproject`): a DAWproject export (Bitwig,
   Studio One, Cubase) becomes a job: the arrangement's notes (clips, loops, nested lanes), tracks with

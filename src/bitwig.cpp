@@ -8,6 +8,7 @@
 #include <deque>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <set>
 #include <unordered_map>
 
@@ -38,14 +39,19 @@ struct Obj {
     std::vector<std::pair<uint32_t, Val>> fields;
 };
 
-const std::set<uint32_t> kTwoLevel = {144, 71, 138, 1833, 109, 163, 573, 4725, 4116, 422, 238};
-const std::set<uint32_t> kPadAfterFirst = {477, 144, 71, 138, 1833, 109, 163, 573, 4725, 4116, 422, 238};
-const std::set<uint32_t> kPadAfterFirstV6 = {215};   // format 0xc0 and later
+struct ClassTable { std::set<uint32_t> twoLevel, byteAfterFirst; };
+// Bitwig 4 and 5 (formats up to 0xba)
+const ClassTable kTable5 = {{144, 71, 138, 1833, 109, 163, 573, 4725, 4116, 422, 238},
+                            {477, 144, 71, 138, 1833, 109, 163, 573, 4725, 4116, 422, 238}};
+// Bitwig 6 (0xc0 on): the project gains a second group, clips (71) lose theirs, three more classes gain one
+const ClassTable kTable6 = {{144, 138, 1833, 109, 163, 573, 4725, 4116, 422, 238, 46, 3831, 191, 60},
+                            {477, 144, 138, 1833, 109, 163, 573, 4725, 4116, 422, 238, 215, 3831, 191, 60}};
 
 struct Reader {
     const std::vector<uint8_t> &d;
     size_t pos = 0;
     int format = 0;
+    ClassTable table;
     std::deque<Obj> pool;
     std::unordered_map<uint32_t, Obj *> byNumber;
     uint32_t next = 1;
@@ -118,7 +124,7 @@ struct Reader {
             return err.empty();
         }
         case 0x15: case 0x16: if (!need(16)) return false; pos += 16; return true;   // uuid, colour
-        case 0x17: case 0x19: { const uint32_t n = u32(); if (!need(4 * (size_t)n)) return false; pos += 4 * (size_t)n; return true; }
+        case 0x0f: case 0x17: case 0x19: { const uint32_t n = u32(); if (!need(4 * (size_t)n)) return false; pos += 4 * (size_t)n; return true; }
         case 0x1a: { v.obj = object(); if (!v.obj) return false; return str(v.s); }   // object + its key
         default: return fail("unknown value type " + std::to_string(t));
         }
@@ -133,12 +139,12 @@ struct Reader {
         if (cls == 1) { o->ref = u32(); --depth; return o; }
         if (cls == 0 || cls > 0x10000) return fail("bad class id " + std::to_string(cls)), nullptr;
         byNumber[next++] = o;
-        const int levels = kTwoLevel.count(cls) ? 2 : 1;
+        const int levels = table.twoLevel.count(cls) ? 2 : 1;
         for (int level = 0;;) {
             const uint32_t f = u32();
             if (!err.empty()) return nullptr;
             if (f == 0) {
-                if (level == 0 && (kPadAfterFirst.count(cls) || (format >= 0xc0 && kPadAfterFirstV6.count(cls)))) ++pos;
+                if (level == 0 && table.byteAfterFirst.count(cls)) ++pos;
                 if (++level < levels) continue;
                 break;
             }
@@ -294,11 +300,30 @@ bool load(const std::string &path, Project &out, std::string &err) {
     out = Project{};
     out.path = path;
     out.format = (int)hex(12, 4);
-    Reader r(d);
-    r.format = out.format;
-    r.pos = hex(16, 8);
-    const Obj *root = r.object();
-    if (!root) { err = path + ": can't read this Bitwig project (" + r.err + ")"; return false; }
+    const size_t body = hex(16, 8), zipAt = hex(24, 16);
+    // the body ends where the plugin-state zip starts (a little padding between); older files have none
+    auto readBody = [&](Reader &r, const ClassTable &t) -> const Obj * {
+        r.format = out.format;
+        r.table = t;
+        r.pos = body;
+        const Obj *root = r.object();
+        if (root && zipAt && (r.pos > zipAt || zipAt - r.pos > 20000)) {
+            r.err = "stopped at byte " + std::to_string(r.pos) + " of a body that runs to " + std::to_string(zipAt);
+            return nullptr;
+        }
+        return root;
+    };
+    ClassTable table = out.format >= 0xc0 ? kTable6 : kTable5;
+    auto reader = std::make_unique<Reader>(d);
+    const Obj *root = readBody(*reader, table);
+    if (!root) {   // one project in 745 needs the project info (477) as a two-group class
+        const std::string first = reader->err;
+        table.twoLevel.insert(477);
+        reader = std::make_unique<Reader>(d);
+        root = readBody(*reader, table);
+        if (!root) { err = path + ": can't read this Bitwig project (" + first + ")"; return false; }
+    }
+    Reader &r = *reader;
     if (const Val *ts = field(root, F_TRACKS)) for (Obj *t : ts->list) if (const Obj *x = r.resolve(t)) out.tracks.push_back(track(r, x));
     if (const Val *ts = field(root, F_EFFECT_TRACKS)) for (Obj *t : ts->list) if (const Obj *x = r.resolve(t)) out.effects.push_back(track(r, x));
     if (const Val *m = field(root, F_MASTER)) {
