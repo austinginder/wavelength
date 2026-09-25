@@ -78,6 +78,7 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `bitcrush` | `bits` 8 *(automatable)*, `downsample` 1 (sample-and-hold factor) *(automatable)*, `mix` 1 *(automatable)* |
 | `vibrato` | pitch wobble (tape wow, flutter, vibrato): `rate` 5.5 Hz (or note value), `depth` 20 cents (max 100) *(automatable)* |
 | `tapestop` | `speed` 1 (1 = normal, 0 = stopped, up to 4) *(automatable)*: varispeed of the incoming audio, pitch and time together; whenever speed is back at 1 the output is in sync again |
+| `multiband` | `crossovers` [250, 2500] Hz (1-3, rising: 2-4 bands, Linkwitz-Riley 4th order, sums back flat), `bands`: one object per band with `fx` (any effect chain: compressor, saturate, eq, plugins), `gain` dB, `solo`, `mute`; `mix` 1. A multiband compressor: `{"type": "multiband", "crossovers": [257, 2840], "bands": [{"fx": [{"type": "compressor", "threshold": -20, "ratio": 2}]}, {}, {}]}` |
 
 `mix` is a dry/wet crossfade: 0 = dry only, 1 = wet only.
 

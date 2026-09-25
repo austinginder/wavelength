@@ -58,6 +58,7 @@ Working towards **v0.1.0**, the first release.
 - `wavelength analyze <file.wav | render-dir> [--start] [--end]`: pitch (YIN: note, cents, confidence), spectral centroid, rolloff and band balance (sub to air), stereo width and correlation, onsets, and envelope (attack, decay, sustain, active time). A render folder analyzes its mix, every stem and every marker section. Agents no longer need their own FFT scripts.
 - `scripts/stage-gains.py <song>`: sets each track's fader from the last render's stem LUFS and the song's `targets.json`.
 - Orchestral writing: per-note articulations (`"art": "spiccato"` with a track `articulations` map of keyswitch keys) insert the keyswitch just before each change; track `range` warns about notes an instrument can't play; `velocityTo` turns note velocities into a controller curve (`{"param": "Dynamics"}` or `{"cc": 1}`) for libraries whose long notes ignore velocity.
+- `multiband` effect: 2-4 bands on Linkwitz-Riley crossovers that sum back flat, each band with its own effect chain, gain, solo and mute (multiband compression, band saturation).
 
 ### Changed
 - Automation points at the same beat keep the order they are written in (`[16, 0], [16, 1]` jumps from 0 to 1); they used to be sorted by value.

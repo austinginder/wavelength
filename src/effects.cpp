@@ -821,6 +821,98 @@ struct TapeStop : Effect {
     }
 };
 
+// ---------------------------------------------------------------------------- multiband
+// Splits the signal into 2-4 bands with Linkwitz-Riley (4th order) crossovers, runs each band
+// through its own effect chain, and sums them. Lower bands pass through the all-pass of every
+// crossover above them, so an untouched multiband sums back flat (same magnitude, all-pass phase).
+struct Multiband : Effect {
+    struct Band { double gain = 0; bool solo = false, mute = false; std::vector<std::unique_ptr<Effect>> fx; };
+    std::vector<double> xover;
+    std::vector<Band> bands;
+    double mix;
+    Multiband(const json &j, const Job &job, std::string &err) {
+        label = "multiband";
+        for (auto &f : j.value("crossovers", json::array({250.0, 2500.0}))) xover.push_back(f.get<double>());
+        if (xover.empty() || xover.size() > 3) { err = "multiband: \"crossovers\" needs 1 to 3 frequencies"; return; }
+        for (size_t i = 1; i < xover.size(); ++i)
+            if (xover[i] <= xover[i - 1]) { err = "multiband: crossovers must rise (e.g. [250, 2500])"; return; }
+        const json list = j.value("bands", json::array());
+        if (!list.empty() && list.size() != xover.size() + 1) {
+            err = "multiband: " + std::to_string(xover.size()) + " crossovers make " + std::to_string(xover.size() + 1) +
+                  " bands, but \"bands\" has " + std::to_string(list.size());
+            return;
+        }
+        bands.resize(xover.size() + 1);
+        for (size_t b = 0; b < list.size(); ++b) {
+            const json &bj = list[b];
+            bands[b].gain = bj.value("gain", 0.0);
+            bands[b].solo = bj.value("solo", false);
+            bands[b].mute = bj.value("mute", false);
+            const json fxList = bj.value("fx", json::array());
+            for (size_t i = 0; i < fxList.size(); ++i) {
+                if (fxList[i].is_object() && fxList[i].value("bypass", false)) continue;
+                auto fx = makeEffect(fxList[i], job, "band " + std::to_string(b + 1) + " fx[" + std::to_string(i) + "]", err);
+                if (!fx) return;
+                bands[b].fx.push_back(std::move(fx));
+            }
+            for (auto &[k, _] : bj.items())
+                if (k != "gain" && k != "solo" && k != "mute" && k != "fx")
+                    warnings.push_back("multiband band " + std::to_string(b + 1) + ": unknown setting '" + k + "' ignored");
+        }
+        mix = std::clamp(j.value("mix", 1.0), 0.0, 1.0);
+        checkKeys(j, {"crossovers", "bands", "mix"}, *this);
+    }
+    // one Linkwitz-Riley 4th-order section (two cascaded Butterworth biquads) over a channel
+    static void lr4(std::vector<float> &x, Biquad::Type type, double f, double sr) {
+        Biquad a, b;
+        a.set(type, f, M_SQRT1_2, 0, sr);
+        b.set(type, f, M_SQRT1_2, 0, sr);
+        for (auto &s : x) s = (float)b.process(a.process(s));
+    }
+    static void allpass(std::vector<float> &x, double f, double sr) {   // LR4 low + high at f
+        std::vector<float> hi = x;
+        lr4(x, Biquad::LowPass, f, sr);
+        lr4(hi, Biquad::HighPass, f, sr);
+        for (size_t i = 0; i < x.size(); ++i) x[i] += hi[i];
+    }
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
+        const double sr = c.job.sampleRate;
+        const size_t K = xover.size();
+        std::vector<Audio> split(K + 1);
+        Audio rest = a;
+        for (size_t k = 0; k < K; ++k) {   // peel each band off from the bottom
+            split[k] = rest;
+            for (auto *ch : {&split[k].left, &split[k].right}) lr4(*ch, Biquad::LowPass, xover[k], sr);
+            for (auto *ch : {&rest.left, &rest.right}) lr4(*ch, Biquad::HighPass, xover[k], sr);
+            for (size_t j = k + 1; j < K; ++j)   // phase-align with the bands split after it
+                for (auto *ch : {&split[k].left, &split[k].right}) allpass(*ch, xover[j], sr);
+        }
+        split[K] = std::move(rest);
+        bool anySolo = false;
+        for (auto &b : bands) anySolo |= b.solo;
+        Audio out;
+        out.resize(a.frames());
+        for (size_t b = 0; b < bands.size(); ++b) {
+            if (bands[b].mute || (anySolo && !bands[b].solo)) continue;
+            for (auto &fx : bands[b].fx) {
+                if (!fx->process(split[b], c, err)) { err = "multiband band " + std::to_string(b + 1) + ": " + err; return false; }
+                for (auto &w : fx->warnings) warnings.push_back("band " + std::to_string(b + 1) + " " + w);
+                fx->warnings.clear();
+            }
+            const float g = (float)dbToLin(bands[b].gain);
+            for (size_t i = 0; i < out.frames() && i < split[b].frames(); ++i) {
+                out.left[i] += split[b].left[i] * g;
+                out.right[i] += split[b].right[i] * g;
+            }
+        }
+        for (size_t i = 0; i < a.frames(); ++i) {
+            a.left[i] = blend(a.left[i], out.left[i], mix);
+            a.right[i] = blend(a.right[i], out.right[i], mix);
+        }
+        return true;
+    }
+};
+
 } // namespace
 
 double truePeakDb(const Audio &a) {
@@ -835,7 +927,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop"};
+            "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "multiband"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -864,6 +956,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
             else if (t == "vibrato") fx = std::make_unique<Vibrato>(j, job);
             else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
+            else if (t == "multiband") fx = std::make_unique<Multiband>(j, job, err);
             else {
                 std::string list;
                 for (auto &n : builtinEffectTypes()) list += (list.empty() ? "" : ", ") + n;
