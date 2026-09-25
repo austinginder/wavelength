@@ -4,7 +4,24 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
-Working towards **v0.1.0**, the first release.
+## [0.1.0] - 2026-09-24
+
+The first release. Wavelength renders JSON music jobs through installed CLAP and VST3 plugins
+and sample libraries, headlessly, and reports what an agent can't hear.
+
+Highlights:
+- CLAP and VST3 hosting with plugin delay compensation; plugin tracks render in parallel worker
+  processes, so a crashing plugin costs its track, not the song.
+- About 17,000 presets by name across 33 plugins, from CLAP preset discovery, VST3 program lists,
+  NKS, DX7 cartridges and plugins' own preset files (Serum 2, Odin2, u-he, Synplant, Cherry Audio,
+  Guitar Rig, Microtonic, Analog Lab, AAS, ...); parameters by value or by display text.
+- `wavelength audition` indexes how every preset sounds (octave offset, brightness, envelope, width)
+  and `wavelength analyze` measures renders (pitch, spectrum, stereo, onsets, envelope).
+- `builtin:sampler` (Bitwig multisamples, drum kits, loops), `builtin:audio` clips with
+  pitch-preserving stretch, and built-in drums and FX.
+- A mix engine: effect chains, sends, group buses, sidechain audio, LFOs and step automation,
+  tempo ramps, groove, MIDI CC and pitch bend, 20+ built-in effects, true-peak limiting, mastering
+  to a loudness target, per-track and per-section loudness in the report.
 
 ### Added
 - Headless CLAP host: loads installed `.clap` bundles, follows CLAP threading (main thread for lifecycle/state, a dedicated audio thread for `process()`), pumps the macOS run loop and `on_main_thread` requests while rendering.

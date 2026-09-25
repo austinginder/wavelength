@@ -149,10 +149,13 @@ render's stem loudness (`<song>/out` by default).
 
 ## Roadmap
 
-1. Per-track process isolation and parallel rendering. Loading and warming up plugins one
-   after another is most of the render time.
-2. A preset audition index: render one note of every preset and store its pitch offset,
-   loudness, brightness and envelope, so agents can choose sounds by description.
-3. `render project.dawproject`: render DAWproject files directly, including their plugin states.
-4. A local service with a web UI and live playback through the speakers.
-5. Audio Unit hosting.
+1. MIDI file import and export (parts from other tools; open a song in a DAW).
+2. Per-note pitch and level tracking in `analyze`; gain-reduction readouts for compressors and limiters.
+3. Auditions inside each instrument's range, and an envelope-depth measure for rhythmic patches.
+4. `render project.dawproject`: render DAWproject files directly, including their plugin states.
+5. A local service with a web UI and live playback through the speakers; Audio Unit hosting.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Third-party libraries compiled into the binary are listed with their
+licences in [THIRD_PARTY.md](THIRD_PARTY.md).
