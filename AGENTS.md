@@ -42,6 +42,17 @@ In order of preference:
 
 Default patches are usually plain and quiet; don't judge an instrument by its init patch.
 
+**Check a melodic preset over the range you write for it.** Some presets are voiced for the mod
+wheel or a macro: with the controller at 0 their filters stay nearly closed, so the sound is
+dull and loses about 1 dB per semitone as the melody climbs (a lead that fades on its high
+notes). Pushing the controller up can expose built-in distortion and an OTT-style compressor
+that sound harsh and lift noise between notes. Before committing a lead, render a small job
+that holds each note of the part's range and compare their levels; if they fall away, try the
+controller (`"Mod Wheel"`, `"Macro 1"` or `automation.cc`), switch the preset's own distortion
+or compressor off, or pick another preset. A Vital `.vital` file is JSON: its `modulations`
+list shows what `mod_wheel` and the macros drive. When the choice is taste, render the
+candidates playing the same phrase and let the human pick.
+
 ## VST3 and sample libraries
 
 VST3 plugins work everywhere CLAP plugins do. `wavelength plugins` lists both (`format`
@@ -111,7 +122,8 @@ in the job (details in `docs/effects.md`):
   `roll` for strummed chords; `automation.pitchbend` / `cc` for plugins, per-note `bend` and
   `mono` + `glide` for samples (808 slides, guitar bends); `transpose` for presets that sound
   an octave off; a tempo point with `"ramp": true` for ritardando.
-- **Master:** a gentle glue `compressor` (ratio ~1.6–2) then a `limiter` at −1.5 dB.
+- **Master:** while mixing, a gentle glue `compressor` (ratio ~1.6–2) then a `limiter` at −1.5 dB;
+  for the release, a real mastering chain (see Mastering).
 - **Balance, then dynamics:** first set each track's `gain` from its stem loudness
   (`gain = target − tracks[].lufs`; e.g. leads −18, brass −17, drums −15, pads −23,
   arps −23 LUFS), then add `markers` and ride faders with `automation.gain` until the
@@ -137,6 +149,19 @@ and the envelope (attack, decay, sustain). Use it to check a preset sounds in th
 wrote, a bass isn't brighter than intended, a section's low end is balanced, a pad is wide, and a
 drum pattern has the hits you expect. `--start/--end` narrow it to a window.
 
+**When the human names a moment** ("at 1:29 the melody fades"):
+1. Find the bar: `sections[].start` in the report is in seconds of the written file (after any
+   `leadIn`); count bars from there with the tempo map.
+2. Render just that stretch: a copy of the job keeping only the notes in those bars, `stems`
+   `"16"`. Keep every track an effect is keyed from (a `duck` trigger, a `sidechain`), or the
+   render fails.
+3. Measure each stem's short-term level through the moment (0.25-0.5 s steps) and look for
+   the stem that moves; then test that instrument alone (one note per pitch, one controller
+   value per render) until you know why.
+4. Know the limits: pitch confidence is 0 on chords (not a sign of noise), and high-frequency
+   energy can't tell a bright sound from hiss or static. When the numbers can't decide, cut
+   short solo clips of the suspect stems for the human and ask which one it is.
+
 ## Mastering
 
 The last stage, like a DAW's master channel. Put a chain on `master.fx` (an `eq`, a `multiband`
@@ -147,6 +172,18 @@ settings without re-rendering the song, render once with a plain master (a high-
 the file through the job's `master` (or a chain file) and reports loudness before and after, per
 section. Don't master a mix that already went through a limiter. For a release, add `"leadIn": 1`
 (a second of silence before the song, for streaming platforms), or `--lead-in 1` on `master`.
+
+- **Set band compressors from measurements.** Solo each band (`"bands": [{}, {"solo": true}, {}]`)
+  through `wavelength master` and read its level; aim for 2-3 dB of reduction on the loud
+  sections. The loudness target's gain is applied at the start of the chain, so a trim `gain`
+  first keeps the compressors' input steady whatever the target.
+- **Compare at equal loudness.** Louder sounds better to everyone. Before asking the human to
+  choose between two versions, bring both to the same LUFS: `wavelength master old.wav --chain
+  '{"fx": [], "loudness": -14}'` writes a level-matched copy.
+- **Check plugin limiters** in the report: `truePeakDb` should sit at their ceiling. The built-in
+  `limiter` with `truePeak` last in the chain guarantees it.
+- **Master the pre-master without a lead-in.** `--chain job.json` reads the job's markers, which
+  won't line up with a file that already starts with silence; add the lead-in with `--lead-in`.
 
 ## Reading the report
 

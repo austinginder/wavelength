@@ -75,7 +75,8 @@ Usage:
       a track whose plugin crashes or hangs is left out and listed in "failedTracks".
   wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
-      its master, markers and tempo) without re-rendering; reports loudness before and after.
+      its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
+      loudness before and after.
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
@@ -383,10 +384,17 @@ int cmdMaster(const Args &a) {
     int sr = 0;
     std::string err;
     if (!readWav(input, in, sr, err)) return fail(a, err);
-    std::ifstream cf(a.get("--chain"));
-    if (!cf) return fail(a, "cannot read " + a.get("--chain"));
+    const std::string chainArg = a.get("--chain");
+    const bool inlineChain = !chainArg.empty() && (chainArg[0] == '{' || chainArg[0] == '[');   // JSON on the command line
     json chain;
-    try { cf >> chain; } catch (const std::exception &e) { return fail(a, std::string("chain is not valid JSON: ") + e.what()); }
+    try {
+        if (inlineChain) chain = json::parse(chainArg);
+        else {
+            std::ifstream cf(chainArg);
+            if (!cf) return fail(a, "cannot read " + chainArg);
+            cf >> chain;
+        }
+    } catch (const std::exception &e) { return fail(a, std::string("chain is not valid JSON: ") + e.what()); }
     json master, markers = json::array(), tempo = 120;
     if (chain.is_array()) master = {{"fx", chain}};
     else if (chain.is_object() && chain.contains("tracks")) {   // a song's job: its master, markers and tempo
@@ -401,9 +409,9 @@ int cmdMaster(const Args &a) {
     const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"}, {"leadIn", leadIn},
                           {"markers", markers}, {"master", master},
                           {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({{{"file", input}, {"beat", 0}}})}}})}};
-    const std::string chainPath = fs::absolute(a.get("--chain")).string();
+    const std::string base = inlineChain ? fs::current_path().string() : fs::absolute(chainArg).parent_path().string();
     Job job;
-    if (!parseJob(jobJson, fs::path(chainPath).parent_path().string(), job, err)) return fail(a, err);
+    if (!parseJob(jobJson, base, job, err)) return fail(a, err);
     const std::string outDir = a.get("--out", (fs::path(input).parent_path() / "mastered").string());
     RenderResult r;
     bool ok = false;

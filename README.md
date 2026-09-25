@@ -39,13 +39,18 @@ https://wavelength.run
   pitch bend, slices and reverse.
 - **Play expressively:** swing and humanize (`groove`), strummed chords, tempo ramps, MIDI CC,
   pitch bend and pressure.
+- **Write for orchestral libraries:** per-note articulations that send their own keyswitches,
+  playable-range warnings, and velocity driving a controller such as BBC SO's Dynamics.
 - **Mix:** per-track effect chains, sends, group buses, bus and master automation (fades),
-  and 19 built-in effects:
-  - dynamics: compressor, true-peak limiter, sidechain duck, gate
+  and 20 built-in effects:
+  - dynamics: compressor, multiband (a chain per band), true-peak limiter, sidechain duck, gate
   - EQ, filter and saturation
   - space: reverb, delay, chorus, width
   - modulation: tremolo, pan, Leslie rotary, auto-wah, vibrato
   - bitcrush and tape stop
+- **Master:** a master chain with a loudness target (`"loudness": -14` finds the gain into the
+  limiter), `wavelength master` to master a finished mix without re-rendering, and `leadIn`
+  silence before the song for streaming uploads.
 - **Measure:** BS.1770 loudness per track, bus, marker section and mix (it matches
   `ffmpeg -af ebur128`), per-track loudness per section, true peak and per-track render time.
 
@@ -81,6 +86,8 @@ The examples:
 - `examples/hello.json`: four bars of C minor through Apricot, ExtraBold, OB-Xf and Vital.
 - `examples/effects-tour.json`: the built-in effects.
 - `examples/sampler-tour.json`: Bitwig's Grand Piano, a Farfisa organ and the Legend 707 kit.
+- `examples/clips-tour.json`: audio clips on the timeline (`builtin:audio`).
+- `examples/mastering.json`: EQ, a three-band compressor, a true-peak limiter and a -14 LUFS target.
 
 A minimal job:
 
@@ -108,11 +115,13 @@ A minimal job:
 | `analyze <file.wav \| render-dir> [--start S] [--end S] [--json]` | Measures pitch, brightness, band balance, stereo width, onsets and envelope of a WAV, or of a render's mix, stems and sections. |
 | `params <plugin> [--preset N] [--state F] [--all] [--json]` | Shows parameters with ranges, current values and display text, optionally after loading a preset or state. |
 | `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--jobs N] [--json]` | Renders stems, `mix.wav` and `report.json`. Plugin tracks render in worker processes, several at once; a crashing plugin costs its track, not the song. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |
+| `master <mix.wav> --chain <chain \| job> [--loudness L] [--lead-in S] [--out DIR] [--json]` | Masters a finished mix: plays it through a master chain (an effect list, a master object, or a song's job with its markers; a file or inline JSON) and reports loudness and true peak before and after, per section. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 
 `scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin
 binaries, for example TAL-NoiseMaker and Relica 2, so `presets` can list them.
-`scripts/stage-gains.py <song>` sets a song's faders from its target loudness.
+`scripts/stage-gains.py <song> [render dir]` sets a song's faders from its target loudness and a
+render's stem loudness (`<song>/out` by default).
 
 ## How it works
 
