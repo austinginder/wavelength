@@ -147,7 +147,11 @@ mix, each stem and each section: pitch (note, cents, confidence), spectral centr
 band balance (sub, bass, low-mid, high-mid, presence, air), stereo width and correlation, onsets
 and the envelope (attack, decay, sustain). Use it to check a preset sounds in the octave you
 wrote, a bass isn't brighter than intended, a section's low end is balanced, a pad is wide, and a
-drum pattern has the hits you expect. `--start/--end` narrow it to a window.
+drum pattern has the hits you expect. `--start/--end` narrow it to a window. Limits: pitch is one
+median fundamental, so it is only meaningful for a single line (a chord or several lines gives
+a wrong low note); attack/decay describe the whole window, so for a melodic part analyze a
+window around one note. Audition tags come from a single C4: instruments that can't play C4
+(basses, piccolo, tuned percussion) read `silent` there.
 
 **When the human names a moment** ("at 1:29 the melody fades"):
 1. Find the bar: `sections[].start` in the report is in seconds of the written file (after any

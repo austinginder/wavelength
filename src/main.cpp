@@ -94,6 +94,7 @@ struct Args {
     std::vector<std::string> positional;
     std::map<std::string, std::string> opts;
     std::vector<std::string> sets;
+    std::vector<std::string> missing;   // options given without their value
     bool has(const std::string &k) const { return opts.count(k) > 0; }
     std::string get(const std::string &k, const std::string &d = "") const { auto it = opts.find(k); return it == opts.end() ? d : it->second; }
 };
@@ -105,10 +106,10 @@ Args parse(int argc, char **argv) {
         std::string s = argv[i];
         if (s.rfind("--", 0) == 0) {
             if (std::find(flags.begin(), flags.end(), s) != flags.end()) a.opts[s] = "1";
-            else if (i + 1 < argc) {
+            else if (i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0) {
                 if (s == "--set") a.sets.push_back(argv[++i]);
                 else a.opts[s] = argv[++i];
-            } else a.opts[s] = "";
+            } else { a.opts[s] = ""; a.missing.push_back(s); }   // "--end --json": --end has no value
         } else a.positional.push_back(s);
     }
     return a;
@@ -553,6 +554,7 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
+    if (!a.missing.empty()) return fail(a, a.missing.front() + " needs a value");
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
                                  std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));
