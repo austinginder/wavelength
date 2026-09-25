@@ -35,6 +35,12 @@ esac
 ARCH="$(uname -m)"
 case "$ARCH" in aarch64) ARCH="arm64" ;; amd64) ARCH="x86_64" ;; esac
 EXE="wavelength"; [ "$OS" = "windows" ] && EXE="wavelength.exe"
+# fetch <url> [file]: to stdout, or to a file; curl, else wget
+fetch() {
+  if command -v curl >/dev/null; then curl -fsSL "$1" ${2:+-o "$2"}
+  elif command -v wget >/dev/null; then wget -q -O "${2:--}" "$1"
+  else return 1; fi
+}
 ncpu() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
 
 # 1. already installed?
@@ -63,15 +69,15 @@ checkout_ref() {
 # 2. a release asset for this system: wavelength-macos-universal.tar.gz,
 #    wavelength-linux-<x86_64|arm64>.tar.gz, wavelength-windows-x86_64.zip
 install_release() {
-  command -v curl >/dev/null || return 1
+  if ! command -v curl >/dev/null && ! command -v wget >/dev/null; then say "neither curl nor wget is installed, so no release download"; return 1; fi
   local api="https://api.github.com/repos/$REPO/releases/latest" json url tmp
-  json="$(curl -fsSL "$api" 2>/dev/null)" || return 1
+  json="$(fetch "$api" 2>/dev/null)" || { say "could not reach the GitHub releases API"; return 1; }
   url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"\(http[^"]*\)"/\1/' \
         | grep -i "/wavelength[^/]*-$OS-" | grep -i -E "$ARCH|universal" | head -1)"
-  [ -n "$url" ] || return 1
+  [ -n "$url" ] || { say "the latest release has no build for $OS $ARCH"; return 1; }
   say "downloading $url"
   tmp="$(mktemp -d)"
-  curl -fsSL "$url" -o "$tmp/asset" || return 1
+  fetch "$url" "$tmp/asset" || { say "download failed: $url"; return 1; }
   case "$url" in
     *.zip) unzip -q "$tmp/asset" -d "$tmp/x" ;;
     *.tar.gz|*.tgz) mkdir -p "$tmp/x" && tar -xzf "$tmp/asset" -C "$tmp/x" ;;
@@ -109,7 +115,7 @@ if [ "$MODE" = "auto" ]; then BIN="$(find_existing || true)"; fi
 if [ -z "$BIN" ]; then
   if [ "$MODE" != "source" ] && install_release; then say "installed the release build"
   else
-    [ "$MODE" = "source" ] || say "no release build for $OS $ARCH; building from source"
+    [ "$MODE" = "source" ] || say "building from source instead"
     install_source
   fi
   BIN="$BIN_DIR/$EXE"

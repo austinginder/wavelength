@@ -4,6 +4,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- The skill's installer needed `curl` to download a release; without it (minimal Linux images) it
+  quietly built from source and said there was no release build. It now uses `wget` when there is
+  no `curl`, and says why it falls back to a source build.
+- Linux release archives packed on a Mac carried a macOS extended attribute that made GNU `tar`
+  print a warning on extraction.
+
 ## [0.2.0] - 2026-09-25
 
 Upgrading from 0.1.0: a song with a master `loudness` target mixes a little differently (the
