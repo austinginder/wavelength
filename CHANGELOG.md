@@ -32,6 +32,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- A plugin that opens a window while rendering (a licence or registration dialog) no longer holds
+  the render until the hang timeout: on macOS the worker is killed within about 2 s and the track
+  fails with a message that suggests `plugins --block`.
 - Kits with `"variants": "roundrobin"` left the General MIDI alternate keys (35 kick 2, 40 snare 2,
   43 floor tom, 48 tom, 57 crash 2...) empty, so a GM drum part went partly silent. They now play
   their drum's round-robin takes.

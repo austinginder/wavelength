@@ -26,6 +26,9 @@ std::vector<std::string> envPathList(const char *var);
 
 std::string selfExecutable();
 int processId();
+// True when process `pid` has a window on screen (macOS; false elsewhere). Headless plugins never
+// should: a window in a worker is a licence or registration dialog waiting for a click.
+bool hasOnscreenWindow(int pid);
 // One-minute load average (runnable processes), or -1 where the system doesn't report it.
 double loadAverage();
 

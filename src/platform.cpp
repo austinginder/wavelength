@@ -28,6 +28,7 @@ extern char **environ;
 #endif
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <mach-o/dyld.h>
 #endif
 
@@ -177,6 +178,25 @@ int processId() {
     return (int)GetCurrentProcessId();
 #else
     return (int)getpid();
+#endif
+}
+
+bool hasOnscreenWindow(int pid) {
+#if defined(__APPLE__)
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (!list) return false;
+    bool found = false;
+    for (CFIndex i = 0, n = CFArrayGetCount(list); i < n && !found; ++i) {
+        auto info = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+        auto owner = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowOwnerPID);
+        int p = 0;
+        if (owner && CFNumberGetValue(owner, kCFNumberIntType, &p) && p == pid) found = true;
+    }
+    CFRelease(list);
+    return found;
+#else
+    (void)pid;
+    return false;
 #endif
 }
 

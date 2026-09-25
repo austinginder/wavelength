@@ -233,8 +233,8 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
   Objective-C class names and print a warning when several load together; if a render
   crashes, split tracks into separate jobs.
 - A plugin whose sound depends on its own GUI or licence dialog may render its demo/default.
-  An unlicensed plugin that opens a registration window on every load (it can also hang the
-  render until the window is closed) should be blocked: `wavelength plugins --block <plugin>
+  An unlicensed plugin that opens a registration window on every load (on macOS the render
+  kills that worker within about 2 s and the track fails saying so) should be blocked: `wavelength plugins --block <plugin>
   --reason "..."`; `plugins` marks it BLOCKED and render, params, presets and audition refuse it.
   An effect that only changes the level gets a warning; a state or preset that changes no
   parameter gets a warning too.

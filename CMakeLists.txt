@@ -143,7 +143,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   target_compile_options(wavelength PRIVATE -Wno-psabi)   # GCC 10 ABI notes on arm64, not problems
 endif()
 if(APPLE)
-  target_link_libraries(wavelength PRIVATE "-framework CoreFoundation")
+  target_link_libraries(wavelength PRIVATE "-framework CoreFoundation" "-framework CoreGraphics")
 elseif(WIN32)
   # UTF-8 as the process code page (file names), and a self-contained .exe
   target_sources(wavelength PRIVATE src/wavelength.rc)

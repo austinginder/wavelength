@@ -337,6 +337,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     std::vector<Running> running;
     std::vector<bool> started(job.tracks.size(), false);
     std::vector<int> crashes(job.tracks.size(), 0);
+    auto lastWindowCheck = std::chrono::steady_clock::now();
     const double limit = 300 + 10 * seconds;   // a track that takes longer than this is hung
     const std::string self = isolate ? platform::selfExecutable() : "";
     auto startTrack = [&](size_t i) {
@@ -389,14 +390,18 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             continue;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // a worker with a window on screen is waiting for someone to click a licence dialog: every 2 s, look
+        const bool lookForWindows = std::chrono::steady_clock::now() - lastWindowCheck > std::chrono::seconds(2);
+        if (lookForWindows) lastWindowCheck = std::chrono::steady_clock::now();
         for (size_t r = 0; r < running.size() && !failed;) {
             Running &run = running[r];
             std::string crash;
             const bool exited = platform::finished(run.proc, crash);
             const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - run.started).count();
             const bool hung = !exited && took > limit;
-            if (hung) platform::kill(run.proc);
-            if (!exited && !hung) { ++r; continue; }
+            const bool windowed = !exited && !hung && lookForWindows && platform::hasOnscreenWindow(run.proc.id);
+            if (hung || windowed) platform::kill(run.proc);
+            if (!exited && !hung && !windowed) { ++r; continue; }
             const size_t i = run.index;
             const std::string prefix = (tmp / std::to_string(i)).string();
             TrackResult &tr = trackResults[i];
@@ -417,7 +422,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             } else if (res.is_object() && res.contains("error")) {   // a job mistake (unknown preset, bad state): the render fails
                 err = res["error"].get<std::string>();
                 failed = true;
-            } else if (!hung && crashes[i] < job.retries) {   // plugin crashes are mostly races (Altitude): render the track again
+            } else if (!hung && !windowed && crashes[i] < job.retries) {   // plugin crashes are mostly races (Altitude): render the track again
                 ++crashes[i];
                 const std::string why = "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
                 tr.warnings.push_back(job.tracks[i].plugin + " " + why + "; rendered again (attempt " + std::to_string(crashes[i] + 1) + ")");
@@ -430,7 +435,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 continue;
             } else {   // the plugin crashed on every attempt or hung: the song renders without this track (silence keys its dependents)
                 tr.plugin = tr.pluginName = job.tracks[i].plugin;
-                std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)" : "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
+                std::string why = hung ? "hung (killed after " + std::to_string((int)limit) + " s)"
+                                  : windowed ? "opened a window, most likely a licence or registration dialog (killed; `wavelength plugins --block` it if it keeps asking)"
+                                  : "crashed while rendering" + (crash.empty() ? "" : " (" + crash + ")");
                 if (crashes[i]) why += " on all " + std::to_string(crashes[i] + 1) + " attempts";
                 tr.warnings.push_back("track failed: " + job.tracks[i].plugin + " " + why + "; the mix is rendered without it");
                 tr.lufs = -120;
