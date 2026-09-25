@@ -180,6 +180,15 @@ int processId() {
 #endif
 }
 
+double loadAverage() {
+#ifdef _WIN32
+    return -1;
+#else
+    double l[1];
+    return getloadavg(l, 1) == 1 ? l[0] : -1;
+#endif
+}
+
 bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout, bool quietStderr) {
     p = Process{};
     // one spawn at a time: a pipe's write end exists only inside this lock, so no other child

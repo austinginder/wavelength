@@ -317,7 +317,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     };
 
     int parallel = job.parallel;
-    if (parallel < 0) parallel = (int)std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
+    if (parallel < 0) {   // half the cores, up to 4, and fewer when other work (other renders) already keeps the cores busy
+        const int cores = (int)std::max(1u, std::thread::hardware_concurrency());
+        const double load = platform::loadAverage();
+        const int idle = load < 0 ? cores : (int)std::floor(cores - load);
+        parallel = std::clamp(std::min(cores / 2, idle), 1, 4);
+        if (verbose) std::fprintf(stderr, "rendering %d plugin tracks at once (%d cores, load %.1f)\n", parallel, cores, load);
+    }
     const bool isolate = parallel > 0 && !job.sourcePath.empty();
     const fs::path tmp = fs::temp_directory_path() / ("wavelength-render-" + std::to_string(platform::processId()));
     if (isolate) fs::create_directories(tmp, ec);

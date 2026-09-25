@@ -51,6 +51,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- The automatic `parallel` setting takes the system load into account: with other renders
+  already filling the cores, a render starts fewer workers instead of oversubscribing the CPU
+  (ten agents rendering at once drove the load average past 70 on 8 cores).
 - `buses[].lufs` and `buses[].levels` are measured before the bus fader, like a track's, so
   `gain` = target − lufs works for buses too. They used to be measured after it.
 - A plugin library that fails to load names the library and the reason (on Linux the VST3 SDK

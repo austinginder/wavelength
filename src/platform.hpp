@@ -26,6 +26,8 @@ std::vector<std::string> envPathList(const char *var);
 
 std::string selfExecutable();
 int processId();
+// One-minute load average (runnable processes), or -1 where the system doesn't report it.
+double loadAverage();
 
 // A child process running this executable (or another). Its stdout goes to /dev/null or, with
 // captureStdout, to a pipe read by readOutput(); stderr is inherited unless quiet.
