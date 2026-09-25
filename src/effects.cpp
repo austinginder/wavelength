@@ -1051,7 +1051,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
         for (auto &[k, v] : j["automate"].items()) {
             double fb, fv;
             if (j.contains(k) && j[k].is_number() && firstPoint(v, fb, fv) && fb > 0 && std::fabs(fv - j[k].get<double>()) > 1e-9)
-                fx->warnings.push_back(fx->label + ": " + lateCurveWarning("'" + k + "'", fb, fv, j[k].get<double>()));
+                fx->lateCurves.push_back({fb, fx->label + ": " + lateCurveWarning("'" + k + "'", fb, fv, j[k].get<double>())});
         }
     return fx;
 }

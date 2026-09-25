@@ -668,14 +668,17 @@ int cmdRender(const Args &a) {
     json sections = json::array();
     for (size_t m = 0; m < r.sections.size(); ++m) {
         const auto &sec = r.sections[m];
-        json o = {{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)}};
+        json o = {{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)},
+                  {"preMasterLufs", r1(sec.preMasterLufs)}};
+        if (!sec.checks) o["checks"] = false;
         if (m > 0 && sec.lufs > -60 && r.sections[m - 1].lufs > -60) o["change"] = r1(sec.lufs - r.sections[m - 1].lufs);   // dB over the previous section
         sections.push_back(o);
     }
     json dropouts = json::array();
     for (auto &d : r.dropouts)
         dropouts.push_back({{"start", std::round((d.start + r.leadIn) * 100) / 100}, {"end", std::round((d.end + r.leadIn) * 100) / 100},
-                            {"lufs", r1(d.lufs)}, {"musicLufs", r1(d.around)}, {"bars", {std::floor(d.startBar), std::floor(d.endBar)}}});
+                            {"lufs", r1(d.lufs)}, {"musicLufs", r1(d.around)}, {"bars", {std::floor(d.startBar), std::floor(d.endBar)}},
+                            {"intended", d.intended}});
     const bool complete = r.failedTracks.empty();
     std::string incomplete;
     if (!complete) {

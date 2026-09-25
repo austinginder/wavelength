@@ -226,6 +226,16 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 if (!t["clips"].is_array()) throw std::runtime_error("track '" + tr.name + "': \"clips\" must be an array");
                 tr.clips = t["clips"];
             }
+            {   // when the track first makes sound: automation that starts late is only audible if something plays before it
+                for (auto &n : t.value("notes", json::array())) {
+                    double b = 1e18;
+                    if (n.contains("beat") && n["beat"].is_number()) b = n["beat"].get<double>();
+                    else if (n.contains("time") && n["time"].is_number()) b = out.tempo.secToBeat(n["time"].get<double>());
+                    tr.firstSoundBeat = std::min(tr.firstSoundBeat, b);
+                }
+                for (auto &c : t.value("clips", json::array()))
+                    tr.firstSoundBeat = std::min(tr.firstSoundBeat, c.contains("beat") ? c["beat"].get<double>() : 0.0);
+            }
             if (t.contains("params"))
                 for (auto &[k, v] : t["params"].items()) tr.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
             if (t.contains("fx")) {
@@ -257,22 +267,22 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 const json autoParams = au.value("params", json::object());
                 for (auto &[k, v] : autoParams.items()) tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, false)});
                 double fb, fv;   // curves that start late hold their first value from the top of the song
-                if (au.contains("gain") && firstPoint(au["gain"], fb, fv) && fb > 0 && std::fabs(fv) > 1e-9)
+                if (au.contains("gain") && firstPoint(au["gain"], fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv) > 1e-9)
                     tr.warnings.push_back(lateCurveWarning("gain", fb, fv, 0));
                 if (au.contains("rides")) {
                     const auto &r = au["rides"];
                     const bool named = r.is_object() && !r.contains("points") && !r.contains("value");
                     auto check = [&](const std::string &what, const json &c) {
-                        if (firstPoint(c, fb, fv) && fb > 0 && std::fabs(fv) > 1e-9) tr.warnings.push_back(lateCurveWarning(what, fb, fv, 0));
+                        if (firstPoint(c, fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv) > 1e-9) tr.warnings.push_back(lateCurveWarning(what, fb, fv, 0));
                     };
                     if (named) for (auto &[k, v] : r.items()) check("ride '" + k + "'", v);
                     else check("rides", r);
                 }
-                if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && std::fabs(fv - tr.pan) > 1e-9)
+                if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv - tr.pan) > 1e-9)
                     tr.warnings.push_back(lateCurveWarning("pan", fb, fv, tr.pan));
                 for (auto &[k, v] : autoParams.items())
                     for (auto &ps : tr.params)
-                        if (ps.key == k && ps.text.empty() && firstPoint(v, fb, fv) && fb > 0 && std::fabs(fv - ps.value) > 1e-9)
+                        if (ps.key == k && ps.text.empty() && firstPoint(v, fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv - ps.value) > 1e-9)
                             tr.warnings.push_back(lateCurveWarning("parameter '" + k + "'", fb, fv, ps.value));
             }
             // groove: the job's settings with the track's on top
@@ -425,7 +435,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         }
         for (auto &m : j.value("markers", json::array())) {
             const double beat = m.at("beat").get<double>();
-            out.markers.push_back({beat, out.tempo.beatToSec(beat), m.value("name", "")});
+            out.markers.push_back({beat, out.tempo.beatToSec(beat), m.value("name", ""), m.value("checks", true)});
         }
         std::sort(out.markers.begin(), out.markers.end(), [](auto &a, auto &b) { return a.beat < b.beat; });
         const std::string stems = j.contains("stems") ? (j["stems"].is_string() ? j["stems"].get<std::string>() : std::to_string(j["stems"].get<int>())) : "float";

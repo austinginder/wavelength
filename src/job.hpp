@@ -33,6 +33,7 @@ struct Track {
     double gainDb = 0, pan = 0;
     double warmup = -1;                                          // seconds; < 0 = job warmup
     bool mute = false;
+    double firstSoundBeat = 1e18;   // earliest note or clip (beats); late automation before it is inaudible
     bool stem = true;               // write this track's stem file (render --tracks turns it off for helper tracks)
     nlohmann::json fx = nlohmann::json::array();               // effect chain, in order
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)
@@ -61,6 +62,7 @@ struct Bus {
 struct Marker {
     double beat, sec;
     std::string name;
+    bool checks = true;   // "checks": false = this section is meant as it is (a false-ending silence, a soft peak): no arrangement warnings
 };
 
 struct Job {

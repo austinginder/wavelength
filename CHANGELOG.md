@@ -5,6 +5,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Marker `"checks": false` for sections that are meant as they are: their dropouts are reported as
+  `"intended": true` and they get no arrangement warnings (a trailer's false-ending silence, a soft
+  ambient peak).
+- `sections[].preMasterLufs`: each section's loudness before the master gain, rides, chain and
+  loudness target, so a ride the master limiter hands back shows where it went.
 - Per-note `dyn` curves: `[start, end]` or `[[beats, level], ...]` shape the `velocityTo` controller
   (BBC SO's Dynamics) across a note, so a held brass chord crescendos with its timbre changing. The
   album's orchestral builds had to fake crescendos with volume rides.
@@ -109,6 +114,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- The weak-drop check also covers any section after a build-like one (Build, Rise, Pre..., Ramp,
+  Climb, Lead-in, Ignition), whatever it is called, and asks an escalation (Climax, Peak, Finale after
+  another payoff) to rise at least 0.5 dB. Build -> Discovery and Final Act -> Climax went unchecked.
+- A curve that starts late only warns when the track sounds before it (its first note or clip): a
+  melody whose filter curve begins with its first note at bar 21 no longer warns.
 - Every command rejects options it doesn't know, naming the ones it takes. They used to be
   ignored: an agent with newer docs than its binary ran `render --tracks` and silently got the
   whole song.

@@ -30,6 +30,8 @@ struct BusResult {
 struct SectionResult {
     std::string name;
     double start, end, lufs;
+    double preMasterLufs = -120;   // the same window before the master gain, rides and chain: what track and bus rides moved
+    bool checks = true;
 };
 
 struct RenderResult {
@@ -44,7 +46,7 @@ struct RenderResult {
     double loudnessGainDb = 0;
     double leadIn = 0;           // seconds of silence before the audio in the written files   // gain into the master chain that met master.loudness
     std::vector<SectionResult> sections;
-    struct Dropout { double start, end, lufs, around; double startBar, endBar; };   // song seconds, LUFS, bars (4/4)
+    struct Dropout { double start, end, lufs, around; double startBar, endBar; bool intended = false; };   // song seconds, LUFS, bars (4/4)
     std::vector<Dropout> dropouts;   // near-silence inside the song that the music comes back from
     std::vector<std::string> warnings;
     std::vector<std::string> failedTracks;   // tracks whose plugin crashed or hung; the song rendered without them

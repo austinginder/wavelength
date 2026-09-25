@@ -35,11 +35,16 @@ std::string slug(const std::string &s) {
 
 using Chain = std::vector<std::unique_ptr<Effect>>;
 
-bool buildChain(const nlohmann::json &list, const Job &job, const std::string &context, Chain &chain, std::string &err) {
+// `firstSoundBeat`: when the chain's input first sounds (a track's first note); a curve that starts later
+// but only after that sound holds an inaudible value, so its late-start warning is dropped
+bool buildChain(const nlohmann::json &list, const Job &job, const std::string &context, Chain &chain, std::string &err,
+                double firstSoundBeat = -1) {
     for (size_t i = 0; i < list.size(); ++i) {
         if (list[i].is_object() && list[i].value("bypass", false)) continue;
         auto fx = makeEffect(list[i], job, context + " fx[" + std::to_string(i) + "]", err);
         if (!fx) return false;
+        for (auto &[beat, w] : fx->lateCurves) if (beat > firstSoundBeat + 1e-6) fx->warnings.push_back(w);
+        fx->lateCurves.clear();
         chain.push_back(std::move(fx));
     }
     return true;
@@ -133,7 +138,7 @@ int renderTrackWorker(const std::string &jobPath, size_t index, const std::strin
     const double seconds = job.length > 0 ? job.length : end + job.tail;
     const size_t frames = (size_t)std::ceil(seconds * job.sampleRate);
     Chain chain;
-    if (!buildChain(job.tracks[index].fx, job, "track '" + job.tracks[index].name + "'", chain, err)) return fail(err);
+    if (!buildChain(job.tracks[index].fx, job, "track '" + job.tracks[index].name + "'", chain, err, job.tracks[index].firstSoundBeat)) return fail(err);
     std::map<std::string, Audio> sc;   // "<track index>=<raw audio file>" from the parent
     for (auto &arg : sidechains) {
         const size_t eq = arg.find('=');
@@ -181,7 +186,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     std::vector<Chain> trackChains(job.tracks.size()), busChains(job.buses.size());
     Chain masterChain;
     for (size_t i = 0; i < job.tracks.size(); ++i)
-        if (!buildChain(job.tracks[i].fx, job, "track '" + job.tracks[i].name + "'", trackChains[i], err)) return false;
+        if (!buildChain(job.tracks[i].fx, job, "track '" + job.tracks[i].name + "'", trackChains[i], err, job.tracks[i].firstSoundBeat)) return false;
     for (size_t i = 0; i < job.buses.size(); ++i)
         if (!buildChain(job.buses[i].fx, job, "bus '" + job.buses[i].name + "'", busChains[i], err)) return false;
     if (!buildChain(job.masterFx, job, "master", masterChain, err)) return false;
@@ -502,6 +507,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     for (auto &br : busResults) result.buses.push_back(std::move(br));
     buses.clear();
 
+    // per-section loudness before the master: what track and bus faders and rides did, before the master
+    // gain, rides, chain and loudness target move it (a limiter hands most of a ride back)
+    std::vector<double> preMaster;
+    for (size_t m = 0; m < job.markers.size(); ++m) {
+        const double a = job.markers[m].sec, b = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
+        preMaster.push_back(integratedLufs(mix, job.sampleRate, (size_t)(a * sr), (size_t)(b * sr)));
+    }
     // 3. master chain, then optional peak normalisation
     if (job.masterGainDb != 0 || !job.masterGainAutomation.empty()) {
         float g = (float)dsp::dbToLin(job.masterGainDb);
@@ -602,7 +614,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     for (size_t m = 0; m < job.markers.size(); ++m) {
         const double a = job.markers[m].sec, b = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
         result.sections.push_back({job.markers[m].name, a + job.leadIn, b + job.leadIn,   // times in the written file
-                                   integratedLufs(mix, job.sampleRate, (size_t)(a * sr), (size_t)(b * sr))});
+                                   integratedLufs(mix, job.sampleRate, (size_t)(a * sr), (size_t)(b * sr)), preMaster[m], job.markers[m].checks});
     }
     if (result.mix.peakDb > 0.0)
         result.warnings.push_back("mix peaks above 0 dBFS: add a limiter to \"master\", lower track gains, or set \"normalize\"");
@@ -635,7 +647,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 const double s0 = i * hop + 0.25, s1 = j * hop + 0.25;   // window centres
                 const double level = 10 * std::log10(std::max(sum / (double)(j - i), 1e-12));
                 const double b0 = job.tempo.secToBeat(s0) / 4 + 1, b1 = job.tempo.secToBeat(s1) / 4 + 1;
-                result.dropouts.push_back({s0, s1, level, ref, b0, b1});
+                bool intended = false;   // inside (or right before) a section marked "checks": false
+                for (size_t m = 0; m < job.markers.size(); ++m) {
+                    const double ms = job.markers[m].sec, me = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
+                    if (!job.markers[m].checks && s1 >= ms && s0 < me) intended = true;
+                }
+                result.dropouts.push_back({s0, s1, level, ref, b0, b1, intended});
+                if (intended) { i = std::max(j, i + 1); continue; }
                 char buf[400];
                 std::snprintf(buf, sizeof buf, "dropout: %.1f s at %.1f LUFS (bar %.0f-%.0f, %s in the file), %.0f dB under the music before it, "
                               "then it comes back: listeners hear the song stop. Keep the groove going or build into the hit (a half-beat breath is fine)",
@@ -645,26 +663,40 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             i = std::max(j, i + 1);
         }
     }
-    // drops that don't land: a section named like a payoff that is barely louder than the one before it
+    // drops that don't land. A section is checked when it is named like a payoff (Drop, Chorus, Peak, Hook,
+    // Final, Climax, Finale) or follows a section named like a build (Build, Rise, Pre..., Ramp, Climb,
+    // Lead-in); an escalation (Climax, Peak, Finale after another payoff) must at least rise.
+    auto has = [](std::string n, std::initializer_list<const char *> words, bool wholeWord) {
+        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+        for (const char *w : words)
+            for (size_t p = n.find(w); p != std::string::npos; p = n.find(w, p + 1)) {
+                const size_t e = p + std::strlen(w);
+                if (!wholeWord || ((p == 0 || !std::isalpha((unsigned char)n[p - 1])) && (e == n.size() || !std::isalpha((unsigned char)n[e]))))
+                    return true;
+            }
+        return false;
+    };
+    auto buildLike = [&](const std::string &n) { return has(n, {"build", "rise", "riser", "pre", "ramp", "climb", "lead", "into", "up", "rebuild", "ignition"}, true)
+                                                     || has(n, {"build", "rise"}, false); };
+    auto payoff = [&](const std::string &n) {
+        return !buildLike(n) && !has(n, {"end"}, true) && has(n, {"drop", "chorus", "peak", "climax", "finale", "hook", "final"}, false);
+    };
+    auto escalation = [&](const std::string &n) { return has(n, {"climax", "peak", "finale"}, false); };
     for (size_t m = 1; m < result.sections.size(); ++m) {
-        auto payoff = [](std::string n) {
-            std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-            for (const char *w : {"pre", "build", "end", "lead", "into", "rise", "riser", "up"})   // "Hook A pre", "Build end", "lead-in"
-                for (size_t p = n.find(w); p != std::string::npos; p = n.find(w, p + 1))
-                    if ((p == 0 || !std::isalpha((unsigned char)n[p - 1])) && (p + std::strlen(w) == n.size() || !std::isalpha((unsigned char)n[p + std::strlen(w)])))
-                        return false;
-            for (const char *w : {"drop", "chorus", "peak", "climax", "finale", "hook", "final"}) if (n.find(w) != std::string::npos) return true;
-            return false;
-        };
         const auto &a = result.sections[m - 1], &b = result.sections[m];
-        if (!payoff(b.name) || payoff(a.name) || a.lufs < -60 || b.lufs < -60) continue;
+        if (!b.checks || a.lufs < -60 || b.lufs < -60) continue;
         const double jump = b.lufs - a.lufs;
-        if (jump < 2.0) {
-            char buf[300];
-            std::snprintf(buf, sizeof buf, "section '%s' lands only %+.1f dB over '%s': empty the build (kick and bass out, high-pass sweep) "
-                          "rather than turning it down, and stack the downbeat; 3-5 dB reads as a drop", b.name.c_str(), jump, a.name.c_str());
-            result.warnings.push_back(buf);
-        }
+        double need = 0;
+        if (buildLike(a.name) && !buildLike(b.name)) need = 2.0;          // whatever a build leads into must land
+        else if (payoff(b.name) && !payoff(a.name)) need = 2.0;           // a payoff after a non-payoff
+        else if (payoff(a.name) && escalation(b.name)) need = 0.5;        // Final Act -> Climax: at least rise
+        if (need == 0 || jump >= need) continue;
+        char buf[360];
+        std::snprintf(buf, sizeof buf, "section '%s' lands only %+.1f dB over '%s': %s (mark the section \"checks\": false if it is meant this way)",
+                      b.name.c_str(), jump, a.name.c_str(),
+                      need >= 2 ? "empty the build (kick and bass out, high-pass sweep) rather than turning it down, and stack the downbeat; 3-5 dB reads as a drop"
+                                : "an escalation should rise: add a layer, open filters, lift it a little");
+        result.warnings.push_back(buf);
     }
     result.renderSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return true;

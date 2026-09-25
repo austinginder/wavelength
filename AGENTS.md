@@ -119,10 +119,14 @@ defaults fix them (break them on purpose, not by accident):
   usually sit 4-8 dB under it and are ducked lightly (3-5 dB), not buried.
 
 The report checks the first two: a **dropout** warning (the song goes 15 dB quiet for 0.75 s or more,
-then comes back, with bars and file time) and a warning when a section named like a payoff (Drop,
-Chorus, Peak, Hook, Final, Climax) lands under +2 dB over the section before it; `sections[].change`
-gives every section's step. `wavelength analyze out --every 1` prints the whole contour second by
-second, labelled with the sections.
+then comes back, with bars and file time), and a **weak drop** warning when a section lands under
++2 dB over the one before it and either follows a build-like section (Build, Rise, Pre..., Ramp,
+Climb, Lead-in, Ignition) or is named like a payoff (Drop, Chorus, Peak, Hook, Final, Climax, Finale)
+after a non-payoff; an escalation (Climax, Peak, Finale after another payoff) must rise at least
+0.5 dB. `sections[].change` gives every section's step. When a section is meant that way (a trailer's
+false-ending silence, a gentle ambient peak), give its marker `"checks": false`: its dropouts are
+listed as `"intended": true` and it gets no arrangement warnings. `wavelength analyze out --every 1`
+prints the whole contour second by second, labelled with the sections.
 
 ## Mixing (this is where the music comes alive)
 
@@ -231,6 +235,10 @@ job.json` lines the sections up and keeps the lead-in.
   check the decoded file (`ffmpeg -i x.mp3 -af ebur128=peak=true -f null -`).
 - **Rides are a layer.** Put section rides in `automation.rides` (named curves allowed), not into
   `automation.gain`: they add to the written fader curve instead of replacing it.
+- **Rides move contrast, not the final level, when the master limits.** A master limiter or a
+  `loudness` target hands most of a ride back: riding a section down 2 dB may move its final LUFS
+  by 0.3 dB. `sections[].preMasterLufs` shows each section before the master (what the track and bus
+  rides did); `sections[].lufs` is the result after it. Compare the two before riding harder.
 - **Master rides run before the chain.** `master.automation.gain` changes the level going into
   the master compressors and limiter, which then pull part of it back: ride tracks or buses to
   shape the section contour, and keep master rides for fades.
