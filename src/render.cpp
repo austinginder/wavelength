@@ -510,20 +510,33 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         if (!runChain(masterChain, mix, ctx, result.masterFx, warnings, "master", err)) return false;
         for (auto &w : warnings) result.warnings.push_back("master: " + w);
     } else {
-        // a loudness target: find the gain into the master chain that lands the output on it.
-        // Limiters compress, so the output moves less than the input; a few passes converge.
+        // a loudness target: find the gain that lands the output on it. The gain goes in front of the
+        // chain's last limiter (like a limiter's input gain), so EQ and glue compressors before it see
+        // the mix as mixed and keep the section contrast; "loudnessGain": "start" puts it before
+        // everything. Limiters compress, so the output moves less than the input; a few passes converge.
+        size_t split = 0;
+        if (!job.loudnessAtStart)
+            for (size_t k = 0; k < job.masterFx.size(); ++k)
+                if (job.masterFx[k].is_object() && job.masterFx[k].value("type", "") == "limiter") split = k;
+        const nlohmann::json head(job.masterFx.begin(), job.masterFx.begin() + (long)split),
+                             tail(job.masterFx.begin() + (long)split, job.masterFx.end());
+        std::vector<std::string> headLabels, headWarnings;
+        {
+            Chain headChain;
+            if (!buildChain(head, job, "master", headChain, err)) return false;
+            if (!runChain(headChain, mix, ctx, headLabels, headWarnings, "master", err)) return false;
+        }
         const Audio pre = mix;
         double gainDb = 0, reached = -120;
         std::vector<std::string> labels, warnings;
         for (int pass = 0; pass < 8; ++pass) {
             Chain chain;
-            if (pass > 0 && !buildChain(job.masterFx, job, "master", chain, err)) return false;
-            Chain &use = pass == 0 ? masterChain : chain;
+            if (!buildChain(tail, job, "master", chain, err)) return false;
             mix = pre;
             const float g = (float)dsp::dbToLin(gainDb);
             for (size_t f = 0; f < frames; ++f) { mix.left[f] *= g; mix.right[f] *= g; }
-            labels.clear(); warnings.clear();
-            if (!runChain(use, mix, ctx, labels, warnings, "master", err)) return false;
+            labels = headLabels; warnings = headWarnings;
+            if (!runChain(chain, mix, ctx, labels, warnings, "master", err)) return false;
             reached = integratedLufs(mix, job.sampleRate);
             const double miss = job.masterLoudness - reached;
             if (std::fabs(miss) < 0.1 || reached < -69) break;
@@ -540,9 +553,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         }
         if (gainDb > 8) {   // the gain lands before the chain: every compressor threshold now sits that much lower in effect
             char buf[300];
-            std::snprintf(buf, sizeof buf, "master: the loudness target adds %+.1f dB before the master chain, so its compressors and limiter work "
-                          "%.0f dB harder than their settings suggest; raise the track faders (or the compressor thresholds) instead",
-                          gainDb, gainDb);
+            std::snprintf(buf, sizeof buf, "master: the loudness target adds %+.1f dB %s, so %s works %.0f dB harder than its settings "
+                          "suggest; raise the track faders instead", gainDb, split ? "in front of the last limiter" : "before the master chain",
+                          split ? "that limiter" : "every compressor and limiter in it", gainDb);
             result.warnings.push_back(buf);
         }
         if (job.hasNormalize) result.warnings.push_back("master: \"normalize\" after a loudness target changes the loudness again; use one of them");

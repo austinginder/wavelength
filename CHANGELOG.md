@@ -57,6 +57,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   wrecks the track's loudness reading: those samples are muted and the track warns with the time.
 
 ### Changed
+- A master `loudness` target now adds its gain in front of the chain's last built-in `limiter`
+  instead of before the whole chain, so glue compressors and EQ ahead of the limiter keep their
+  settings and the section contrast (three album tracks lost 1-2 dB of contrast to this).
+  `"loudnessGain": "start"` restores the old placement.
 - The limiter's gain-reduction warning says how long it worked (share of the time above 3 dB and
   6 dB), so one hot transient reads differently from sustained crushing, and it also warns when
   more than 10 % of the song sits above 6 dB of reduction.
