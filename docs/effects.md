@@ -83,10 +83,10 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 
 `mix` is a dry/wet crossfade: 0 = dry only, 1 = wet only.
 
-## Plugin effects (CLAP and VST3)
+## Plugin effects (CLAP, VST3 and VST2)
 
 `{"plugin": "<id or name>", "state": "...", "preset": "...", "params": {...}, "automate": {"Param": [[b, v], ...]}, "mix": 1}`
-runs an installed CLAP or VST3 audio effect over the track, bus or master, with the same state, preset,
+runs an installed CLAP, VST3 or VST2 audio effect over the track, bus or master, with the same state, preset,
 parameter and automation support as instruments (`mix` is automatable too). `"sidechain": "Kick"` feeds
 that track's audio (after its effects, before its fader) into the plugin's sidechain input; many plugins
 also need their own sidechain switch set in `params` (e.g. MTurboComp `"Side-chain input (Detector)": 1`).

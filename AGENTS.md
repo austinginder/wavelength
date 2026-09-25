@@ -57,10 +57,15 @@ or compressor off, or pick another preset. A Vital `.vital` file is JSON: its `m
 list shows what `mod_wheel` and the macros drive. When the choice is taste, render the
 candidates playing the same phrase and let the human pick.
 
-## VST3 and sample libraries
+## VST3, VST2 and sample libraries
 
-VST3 plugins work everywhere CLAP plugins do. `wavelength plugins` lists both (`format`
-column); name clashes resolve to CLAP unless you write `vst3:Name`. Sample-based
+VST3 and VST2 plugins work everywhere CLAP plugins do. `wavelength plugins` lists them all
+(`format` column); a name that exists in several formats resolves to CLAP, then VST3, then VST2,
+unless you write `vst3:Name` or `vst2:Name`. VST2 state comes from `.fxp`/`.fxb` files (a DAW's
+saved chunk or a parameter list) as `"state"`, and its factory programs load by name as
+`"preset"`. Plugins marked `(x86_64, Rosetta)` in `plugins` are Intel-only: on Apple silicon they
+render in a worker process under Rosetta, so use them on tracks (not with `--jobs 0` or as a bus or
+master effect). Sample-based
 instruments need a `warmup` of several seconds on their track so samples finish loading.
 
 Many libraries select their instrument through state, not parameters. Look for NKS presets
@@ -317,8 +322,8 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
 
 ## Known limits (v0.1)
 
-- CLAP and VST3 (no Audio Units yet). Built-in effects cover the essentials; installed CLAP
-  and VST3 effects work in any `fx` chain.
+- CLAP, VST3 and VST2 (no Audio Units yet; no VST2 shell plugins). Built-in effects cover the
+  essentials; installed plugin effects work in any `fx` chain (Intel-only ones on tracks only).
 - All tracks render in one process. Some plugin families (the nakst synths) share
   Objective-C class names and print a warning when several load together; if a render
   crashes, split tracks into separate jobs.

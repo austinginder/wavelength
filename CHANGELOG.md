@@ -24,6 +24,15 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- VST2 hosting: `.vst` bundles (macOS), `.dll` (Windows) and `.so` (Linux) are scanned in child
+  processes and play like CLAP and VST3 plugins (MIDI notes, CC, pitch bend, pressure, transport,
+  parameters and automation, `.fxp`/`.fxb` state chunks and parameter lists, factory programs by name,
+  `state save` to `.fxb`). Wavelength declares the VST 2 binary interface itself; Steinberg's
+  withdrawn VST 2 SDK is not used. 29 native VST2 plugins on the dev Mac, including LoudMax.
+- Intel-only plugins on Apple silicon: macOS builds are universal, the catalog records a bundle's
+  architecture, and scans and render workers for x86_64-only plugins run under Rosetta
+  (`params`, `presets`, `state` and `audition` re-run themselves that way). 34 more plugins load on
+  the dev Mac, among them Reaktor 6, Kontakt, Synth1, TyrellN6 and Helm.
 - `duration` in the render report: the written file's length, lead-in included.
 - `lint --split "Organ=4"` (a chord track as voices, top to bottom), `--from`/`--to` bars and
   `--section NAME`, and both chords' notes with each problem.

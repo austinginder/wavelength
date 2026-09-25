@@ -79,13 +79,13 @@ clear the quarantine flag first: `xattr -d com.apple.quarantine wavelength`. `SH
 each release has the checksums.
 
 Wavelength finds plugins in each platform's standard folders, plus `$WAVELENGTH_CLAP_PATH` and
-`$WAVELENGTH_VST3_PATH` (lists separated by `:`, or `;` on Windows):
+`$WAVELENGTH_VST3_PATH` and `$WAVELENGTH_VST2_PATH` (lists separated by `:`, or `;` on Windows):
 
-| | CLAP | VST3 |
-|---|---|---|
-| macOS | `~/Library/Audio/Plug-Ins/CLAP`, `/Library/Audio/Plug-Ins/CLAP` | `~/Library/Audio/Plug-Ins/VST3`, `/Library/Audio/Plug-Ins/VST3` |
-| Linux | `~/.clap`, `/usr/local/lib/clap`, `/usr/lib/clap` | `~/.vst3`, `/usr/local/lib/vst3`, `/usr/lib/vst3` |
-| Windows | `%LOCALAPPDATA%\Programs\Common\CLAP`, `%COMMONPROGRAMFILES%\CLAP` | `%LOCALAPPDATA%\Programs\Common\VST3`, `%COMMONPROGRAMFILES%\VST3` |
+| | CLAP | VST3 | VST2 |
+|---|---|---|---|
+| macOS | `~/Library/Audio/Plug-Ins/CLAP`, `/Library/Audio/Plug-Ins/CLAP` | `~/Library/Audio/Plug-Ins/VST3`, `/Library/Audio/Plug-Ins/VST3` | `~/Library/Audio/Plug-Ins/VST`, `/Library/Audio/Plug-Ins/VST` |
+| Linux | `~/.clap`, `/usr/local/lib/clap`, `/usr/lib/clap` | `~/.vst3`, `/usr/local/lib/vst3`, `/usr/lib/vst3` | `~/.vst`, `/usr/local/lib/vst`, `/usr/lib/vst` |
+| Windows | `%LOCALAPPDATA%\Programs\Common\CLAP`, `%COMMONPROGRAMFILES%\CLAP` | `%LOCALAPPDATA%\Programs\Common\VST3`, `%COMMONPROGRAMFILES%\VST3` | `%PROGRAMFILES%\VSTPlugins`, `%PROGRAMFILES%\Steinberg\VSTPlugins`, `%COMMONPROGRAMFILES%\VST2` |
 
 ### Folders
 
@@ -155,7 +155,7 @@ A minimal job:
 
 | Command | Does |
 |---|---|
-| `plugins [--rescan] [--json]` | Lists CLAP and VST3 plugins and the built-in instruments. It searches the standard plug-in folders (see Install), `$WAVELENGTH_CLAP_PATH` and `$WAVELENGTH_VST3_PATH`, and caches results per bundle. |
+| `plugins [--rescan] [--json]` | Lists CLAP, VST3 and VST2 plugins and the built-in instruments (Intel-only ones marked for Rosetta). It searches the standard plug-in folders (see Install), `$WAVELENGTH_CLAP_PATH`, `$WAVELENGTH_VST3_PATH` and `$WAVELENGTH_VST2_PATH`, and caches results per bundle. |
 | `presets <plugin> [--search T] [--rescan] [--json]` | Lists a plugin's presets to use by name as `"preset"`, with category and notes (e.g. Guitar Rig racks marked free edition or Pro). |
 | `samples [--search T] [--kit NAME] [--json]` | Lists sample libraries for `builtin:sampler` (Bitwig content and `$WAVELENGTH_SAMPLES_PATH`); `--kit` prints a kit's key map. |
 | `audition <plugin> [--jobs N] [--limit N] [--rebuild]` | Renders every preset once in worker processes and indexes how it sounds (octave offset, brightness, band balance, envelope, width), so `presets` can show and search sound tags. |
@@ -181,6 +181,9 @@ render's stem loudness (`<song>/out` by default).
   worker processes, loading plugin libraries, the main-thread event loop.
 - `src/bundle.*` and `src/instance.*` host CLAP plugins, following CLAP's threading rules:
   lifecycle and state on the main thread, `process()` on a dedicated audio thread.
+- `src/vst2_plugin.*` hosts VST2 plugins on Wavelength's own declaration of the VST 2 binary
+  interface (`src/vst2_abi.hpp`; Steinberg's VST 2 SDK is not used): MIDI events, transport,
+  `.fxp`/`.fxb` chunks and parameter lists, programs.
 - `src/vst3_plugin.*` hosts VST3 plugins with the SDK's hosting helpers, including
   IMidiMapping for MIDI controllers.
 - `src/engine.*` opens a plugin (preset, state, parameters, automation) and renders it over
