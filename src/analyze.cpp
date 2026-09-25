@@ -42,8 +42,9 @@ double median(std::vector<double> v) {
     return v[v.size() / 2];
 }
 
-// YIN fundamental of one frame (0 = unvoiced)
-double yin(const float *x, size_t n, double sr, double fmin, double fmax) {
+// YIN fundamental of one frame (0 = unvoiced); cmnd, when given, receives the cumulative mean
+// normalized difference (index = lag in samples) for correctSubharmonic
+double yin(const float *x, size_t n, double sr, double fmin, double fmax, std::vector<double> *cmnd = nullptr) {
     const size_t tauMin = (size_t)(sr / fmax), tauMax = std::min(n / 2, (size_t)(sr / fmin));
     if (tauMax <= tauMin + 2) return 0;
     std::vector<double> d(tauMax + 1, 0);
@@ -56,6 +57,7 @@ double yin(const float *x, size_t n, double sr, double fmin, double fmax) {
     double run = 0;   // cumulative mean normalized difference
     std::vector<double> c(tauMax + 1, 1);
     for (size_t tau = 1; tau <= tauMax; ++tau) { run += d[tau]; c[tau] = run > 0 ? d[tau] * (double)tau / run : 1; }
+    if (cmnd) *cmnd = c;
     for (size_t tau = tauMin; tau < tauMax; ++tau) {
         if (c[tau] < 0.15) {
             while (tau + 1 < tauMax && c[tau + 1] < c[tau]) ++tau;
@@ -66,6 +68,50 @@ double yin(const float *x, size_t n, double sr, double fmin, double fmax) {
         }
     }
     return 0;
+}
+
+// Energy near frequency f in a Hann-windowed frame (Goertzel), the best of f and f +-1 %
+// so a note with vibrato still lands on its harmonics.
+double energyAt(const float *x, size_t n, double sr, double f) {
+    double best = 0;
+    for (double d : {0.99, 1.0, 1.01}) {
+        const double w = 2 * M_PI * f * d / sr, cw = 2 * std::cos(w);
+        double s1 = 0, s2 = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const double hann = 0.5 - 0.5 * std::cos(2 * M_PI * (double)i / (double)(n - 1));
+            const double s0 = x[i] * hann + cw * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        best = std::max(best, s1 * s1 + s2 * s2 - cw * s1 * s2);
+    }
+    return best;
+}
+
+// Lowest normalized difference within 3 % of a lag.
+double dipNear(const std::vector<double> &c, double lag) {
+    double best = 1e9;
+    for (size_t t = (size_t)std::max(1.0, lag * 0.97); t <= (size_t)(lag * 1.03) + 1 && t < c.size(); ++t) best = std::min(best, c[t]);
+    return best;
+}
+
+// YIN can lock onto a multiple of the period when a waveform repeats exactly only every few
+// cycles (a chip oscillator whose edges fall on the sample grid in a 3-cycle pattern read a B5
+// as E4). The fundamental is k * f0 when both hold:
+//  - nearly all the energy sits on every k-th harmonic of f0 (the rest 7 dB or more under it;
+//    a real square wave at f0 puts 9 dB more off them than on them), and
+//  - the signal is nearly as periodic at 1/k of the period as at the period YIN chose. A real
+//    low note whose k-th harmonic dominates (a cello's C2 is mostly its 3rd harmonic) is 14-100x
+//    more periodic at its true period; the chip B5 was only 3.5x.
+double correctSubharmonic(const float *x, size_t n, double sr, double f0, double fmax, const std::vector<double> &c) {
+    const double top = std::min(sr * 0.45, 16000.0), period = sr / f0, atF0 = std::max(dipNear(c, period), 1e-4);
+    for (int k = 5; k >= 2; --k) {
+        if (f0 * k > fmax || dipNear(c, period / k) > 6 * atF0) continue;
+        double onK = 0, offK = 0;
+        for (int h = 1; h <= 12 && h * f0 < top; ++h) (h % k ? offK : onK) += energyAt(x, n, sr, h * f0);
+        if (onK > 0 && offK < 0.2 * onK) return f0 * k;
+    }
+    return f0;
 }
 
 } // namespace
@@ -204,8 +250,9 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
         for (size_t i = 0; i < P; ++i) e += (double)mono[p + i] * mono[p + i];
         if (std::sqrt(e / P) < peak * 0.1) continue;
         ++voicedTried;
-        const double f = yin(&mono[p], P, sr, P == 4096 ? 30 : 50, 4000);
-        if (f > 0) f0s.push_back(f);
+        std::vector<double> cmnd;
+        const double f = yin(&mono[p], P, sr, P == 4096 ? 30 : 50, 4000, &cmnd);
+        if (f > 0) f0s.push_back(correctSubharmonic(&mono[p], P, sr, f, 4000, cmnd));
         if (voicedTried >= 400) break;
     }
     if (!f0s.empty()) {
