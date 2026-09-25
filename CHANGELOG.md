@@ -12,6 +12,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - Release binaries for all five targets, built on one Mac with `scripts/build-release.sh`
   (Docker for Linux, llvm-mingw for Windows), each smoke-tested before packaging.
 
+### Fixed
+- A plugin that outputs garbage samples (not a number, or above +30 dBFS; DUNE 3 once wrote a
+  single +79 dBFS sample into a brass chord) no longer clicks, excites every reverb downstream and
+  wrecks the track's loudness reading: those samples are muted and the track warns with the time.
+
 ### Changed
 - A plugin library that fails to load names the library and the reason (on Linux the VST3 SDK
   only said "dlopen failed").

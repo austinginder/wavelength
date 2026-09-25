@@ -172,9 +172,41 @@ void scheduleControllers(const Track &track, int sampleRate, double seconds, std
     });
 }
 
+namespace {
+// Plugins occasionally emit a lone sample of garbage (DUNE 3 once wrote 9188.0, +79 dBFS, into a brass
+// chord): it clicks, excites every reverb downstream, pumps the limiter and wrecks the track's loudness
+// reading. Mute non-finite samples and anything above +30 dBFS, which no real signal reaches, and say where.
+void muteGarbage(Audio &out, int sampleRate, const std::string &name, std::vector<std::string> &warnings) {
+    constexpr float kMax = 31.6f;   // +30 dBFS
+    size_t count = 0, first = 0;
+    float worst = 0;
+    bool nonFinite = false;
+    for (size_t i = 0; i < out.frames(); ++i)
+        for (float *s : {&out.left[i], &out.right[i]}) {
+            const bool bad = !std::isfinite(*s);
+            if (!bad && std::fabs(*s) <= kMax) continue;
+            if (!count) first = i;
+            ++count;
+            if (bad) nonFinite = true;
+            else worst = std::max(worst, std::fabs(*s));
+            *s = 0;
+        }
+    if (!count) return;
+    const double t = (double)first / sampleRate;
+    char at[32];
+    std::snprintf(at, sizeof at, "%d:%04.1f", (int)(t / 60), std::fmod(t, 60.0));
+    std::string what = std::to_string(count) + (count == 1 ? " sample" : " samples");
+    what += nonFinite ? " that were not numbers (NaN or infinity)" : "";
+    if (worst > 0) what += (nonFinite ? " or" : "") + std::string(" up to ") + std::to_string((int)std::lround(20 * std::log10(worst))) + " dBFS";
+    warnings.push_back(name + " output " + what + ", first at " + at + " (render time, before any lead-in); they were muted");
+}
+} // namespace
+
 bool runPlugin(const Job &job, OpenedPlugin &p, const std::vector<TimedEvent> &events, const Audio *input, Audio &out,
                std::string &err) {
-    return p.plugin->render(job, events, p.initial, p.autos, input, out, p.warnings, err);
+    if (!p.plugin->render(job, events, p.initial, p.autos, input, out, p.warnings, err)) return false;
+    muteGarbage(out, job.sampleRate, p.name, p.warnings);
+    return true;
 }
 
 } // namespace wl
