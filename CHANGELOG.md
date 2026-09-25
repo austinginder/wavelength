@@ -5,6 +5,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Fixed
+- DAWproject import: volume automation on effect and group buses was added on top of the fader
+  twice (bus automation adds to the fader, like a track's).
 - `"stems": "none"` no longer creates an empty `stems/` folder.
 - `lint` compared every pair at every voice's note starts, so a third voice's rhythm split a pair's
   moves and hid real parallels (four parallel octaves in Fugue for the Night Shift's exposition went
@@ -24,6 +26,13 @@ measured before their fader), a render that loses a track exits 1 with `"ok": fa
 command rejects options it doesn't know.
 
 ### Added
+- DAWproject import, more of the song: audio clips become `builtin:audio` tracks (warp markers give
+  the file's tempo so clips follow the song, play start trims, looped clips repeat, fades, "repitch"
+  plays tape-style), automation of the instrument plugin's parameters and of the master volume comes
+  across, and from the Bitwig project Filter, EQ-5, Reverb, Delay-2 and Distortion become built-in
+  effects (read from how 745 projects store them; EQ-5 confirmed the EQ band types, which also fixes
+  one EQ+ type). Effects parked at 0% mix (factory drum kits' pad effects) are skipped.
+- Automation curves take `"scale": "normalized"`: values 0..1 of a plugin parameter's range.
 - MIDI files: `wavelength import song.mid` (and `render song.mid`) makes a job from a Standard MIDI
   File (types 0, 1 and 2): tempo map, time signature, markers, one track per MIDI track and channel,
   sustain pedal folded into note lengths, CC7 / CC10 / CC11 as fader, pan and rides, other CCs,

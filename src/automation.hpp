@@ -113,6 +113,9 @@ public:
             else if (curve == "step") allStep = true;
             else throw std::runtime_error("automation curve must be linear, exp or step");
             if (j.contains("lfo")) e.lfo_ = std::make_shared<Lfo>(Lfo::parse(j["lfo"], tempo));
+            const std::string scale = j.value("scale", "plain");
+            if (scale == "normalized") e.normalized_ = true;
+            else if (scale != "plain") throw std::runtime_error("automation \"scale\" must be plain or normalized");
             if (j.contains("points")) points = &j["points"];
             else if (j.contains("value")) { e.pts_.push_back({0.0, j["value"].get<double>()}); e.step_.push_back(false); return e; }
             else throw std::runtime_error("automation object needs \"points\" or \"value\"");
@@ -139,6 +142,15 @@ public:
     }
 
     bool empty() const { return pts_.empty(); }
+    // "scale": "normalized": values are 0..1 of a plugin parameter's range (as DAWs store automation)
+    bool normalized() const { return normalized_; }
+    Envelope scaled(double lo, double hi) const {   // normalized -> the parameter's own range
+        Envelope e = *this;
+        for (auto &p : e.pts_) p.second = lo + std::clamp(p.second, 0.0, 1.0) * (hi - lo);
+        if (e.lfo_) { auto l = std::make_shared<Lfo>(*e.lfo_); l->depth *= hi - lo; for (auto &d : l->depthPts) d.second *= hi - lo; e.lfo_ = l; }
+        e.normalized_ = false;
+        return e;
+    }
     bool constant() const { return pts_.size() <= 1 && !lfo_; }
 
     double at(double sec) const {
@@ -167,6 +179,7 @@ private:
     std::vector<std::pair<double, double>> pts_;   // (seconds, value)
     std::vector<bool> step_;                        // jump (hold, then step) into this point
     bool exp_ = false;
+    bool normalized_ = false;
     std::shared_ptr<Lfo> lfo_;
 };
 

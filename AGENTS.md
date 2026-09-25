@@ -34,10 +34,12 @@ A DAW's own devices are only names in a DAWproject. For Bitwig exports the impor
 project itself (`<name>.bwproject`, found next to the export or in `~/Documents/Bitwig Studio/Projects/
 <name>/`, or given with `--bitwig`): Drum Machine pads become one track each (plugins with their
 states, Sampler pads as `builtin:sampler`) into a bus named after the drum track, and Chain, EQ+,
-Compressor, Multiband FX-3, Peak Limiter and Tool become built-in effects, with the plugins inside
-them. Other Bitwig devices (Polymer, Filter, Reverb, ...) are listed as left out. Without the Bitwig
-project a Drum Machine becomes `builtin:drums`. Audio tracks, launcher clips and device-parameter
-automation aren't imported. `wavelength import song.bwproject` lists a Bitwig project's tracks,
+EQ-5, Filter, Reverb, Delay-2, Distortion, Compressor, Multiband FX-3, Peak Limiter and Tool become
+built-in effects, with the plugins inside them. Other Bitwig devices (Polymer, Mid-Side Split, ...)
+are listed as left out. Without the Bitwig project a Drum Machine becomes `builtin:drums`. Audio
+clips become `builtin:audio` tracks (warped clips follow the song tempo); automation of volume, pan
+and the instrument plugin's parameters comes across. Automation of plugin effects and of Bitwig's own
+devices, and launcher clips, don't. `wavelength import song.bwproject` lists a Bitwig project's tracks,
 devices, pads and plugin states. Then edit the job like any other and render it; `render
 song.dawproject` does both steps.
 

@@ -135,8 +135,9 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     for (const auto &[key, env] : setup.automation) {
         ParamInfo pi;
         if (!lookup(key, pi)) return false;
-        out.autos.push_back({pi.id, pi.cookie, pi.name, env});
-        out.initial.push_back({pi.id, pi.cookie, std::clamp(env.at(0), std::min(pi.min, pi.max), std::max(pi.min, pi.max))});
+        const Envelope e = env.normalized() ? env.scaled(pi.min, pi.max) : env;
+        out.autos.push_back({pi.id, pi.cookie, pi.name, e});
+        out.initial.push_back({pi.id, pi.cookie, std::clamp(e.at(0), std::min(pi.min, pi.max), std::max(pi.min, pi.max))});
     }
     if (!out.plugin->setParams(out.initial, err)) { err = context + ": " + err; return false; }
     return true;

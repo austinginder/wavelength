@@ -25,6 +25,7 @@ namespace {
 
 double linToDb(double v) { return v > 1e-6 ? 20.0 * std::log10(v) : -120.0; }
 double r3(double v) { return std::round(v * 1000) / 1000; }
+double r6(double v) { return std::round(v * 1e6) / 1e6; }
 
 struct Ctx {
     Zip zip;
@@ -35,7 +36,9 @@ struct Ctx {
     std::map<std::string, std::string> busByChannel;    // channel id -> bus name (effect returns, groups)
     std::map<std::string, std::string> trackByChannel;  // channel id -> track name
     std::map<std::string, std::string> channelOfTrack;  // track id -> channel id
-    std::map<std::string, std::pair<std::string, std::string>> paramTarget;   // parameter id -> (track/bus name, "volume"|"pan")
+    // parameter id -> (track/bus name, "volume" | "pan" | "param:#<plugin id>" (instrument, normalized) |
+    // "plain:#<id>" (instrument, plain units) | "fx" (a parameter of an effect: not imported yet))
+    std::map<std::string, std::pair<std::string, std::string>> paramTarget;
     std::set<std::string> names;
     bitwig::Project bw;            // the Bitwig project behind the export, when found
     bool haveBw = false;
@@ -243,34 +246,94 @@ void bwEffect(Ctx &c, const bitwig::Device &d, const std::string &where, json &f
         if (const double g = bwParam(d, "GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
         return;
     }
-    if (n == "EQ+") {
+    if (n == "EQ+" || n == "EQ-5") {
+        const int nb = n == "EQ+" ? 8 : 5;
+        const double shift = bwParam(d, "GLOBAL_SHIFT", 0), amount = bwParam(d, "GLOBAL_AMOUNT", 1);
         json bands = json::array();
-        bool guessed = false;
-        for (int b = 1; b <= 8; ++b) {
+        bool approx = false;
+        for (int b = 1; b <= nb; ++b) {
             const std::string k = std::to_string(b);
             if (bwParam(d, "ENABLE" + k, 1) == 0) continue;
             const int type = (int)bwParam(d, "TYPE" + k, 13);
             std::string t;
+            double notch = 0;
+            // the band types EQ+ and EQ-5 share (EQ+ adds steeper cuts and shelves)
             switch (type) {
-            case 13: continue;                                  // off
-            case 3: case 5: t = "peak"; break;
-            case 1: case 10: t = "highpass"; guessed = true; break;
-            case 0: case 14: t = "lowpass"; guessed = true; break;
-            case 6: case 15: t = "highshelf"; guessed = true; break;
-            case 16: case 17: t = "lowshelf"; guessed = true; break;
-            default: c.res->notes.push_back(where + ": EQ+ band " + k + " has a filter type Wavelength doesn't know (" + std::to_string(type) + "); left out"); continue;
+            case 3: t = "peak"; break;
+            case 4: t = "peak"; notch = -24; break;
+            case 5: case 16: case 17: t = "lowshelf"; approx |= type != 5; break;
+            case 6: case 15: t = "highshelf"; approx |= type != 6; break;
+            case 1: case 10: t = "highpass"; approx = true; break;
+            case 0: case 14: t = "lowpass"; approx = true; break;
+            case 13: continue;                                    // off
+            default: c.res->notes.push_back(where + ": " + n + " band " + k + " has a filter type Wavelength doesn't know (" + std::to_string(type) + "); left out"); continue;
             }
-            json bj = {{"type", t}, {"freq", r3(bitwig::pitchToHz(bwParam(d, "FREQ" + k, 69)))}, {"q", r3(std::pow(10.0, bwParam(d, "Q" + k, -0.15)))}};
+            json bj = {{"type", t}, {"freq", r3(bitwig::pitchToHz(bwParam(d, "FREQ" + k, 69) + shift))}, {"q", r3(std::pow(10.0, bwParam(d, "Q" + k, -0.15)))}};
             if (t == "peak" || t == "lowshelf" || t == "highshelf") {
-                const double g = bwParam(d, "GAIN" + k, 0);
+                const double g = notch ? notch : bwParam(d, "GAIN" + k, 0) * amount;
                 if (std::fabs(g) < 0.01) continue;
                 bj["gain"] = r3(g);
             }
             bands.push_back(bj);
         }
-        if (guessed) c.res->notes.push_back(where + ": EQ+ cut and shelf slopes are approximated (Wavelength's are 12 dB/octave)");
+        if (approx) c.res->notes.push_back(where + ": " + n + " cut and shelf slopes are approximated (Wavelength's are 12 dB/octave)");
         if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
         if (const double g = bwParam(d, "OUTPUT_GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        return;
+    }
+    if (n == "Filter") {
+        const int type = (int)bwParam(d, "FILTER_TYPE", 0);
+        const double pitch = bwParam(d, "CUTOFF", 135);
+        std::string mode;
+        switch (type) {
+        case 0: case 8: mode = "lowpass"; break;
+        case 1: case 11: mode = "highpass"; break;
+        case 2: mode = "bandpass"; break;
+        default: c.res->notes.push_back(where + ": Filter mode " + std::to_string(type) + " isn't known yet; left out"); return;
+        }
+        if (const double g = bwParam(d, "PRE_GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        const bool open = (mode == "lowpass" && pitch >= 130) || (mode == "highpass" && pitch <= 19);
+        if (!open) {
+            if (type == 8 || type == 11) c.res->notes.push_back(where + ": Filter slope approximated (Wavelength's filter is 12 dB/octave)");
+            fx.push_back({{"type", "filter"}, {"mode", mode}, {"cutoff", r3(bitwig::pitchToHz(pitch))},
+                          {"resonance", r3(0.707 * std::pow(16.0, std::clamp(bwParam(d, "RESONANCE", 0), 0.0, 1.0)))}});
+        }
+        if (const double g = bwParam(d, "POST_GAIN", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        return;
+    }
+    if (n == "Reverb") {
+        const double mix = bwParam(d, "MIX", 0.5);
+        if (mix < 0.005) return;   // dry: factory kits park their effects at 0% for the pad knobs
+        fx.push_back({{"type", "reverb"}, {"decay", r3(std::clamp(std::pow(10.0, bwParam(d, "REVERB_TIME", 0.1)), 0.1, 30.0))},
+                      {"size", r3(std::clamp(0.65 + bwParam(d, "ROOM_SIZE", 0) * 1.1, 0.05, 1.0))},
+                      {"predelay", r3(bwParam(d, "PRE-DELAY", 0.004) * 1000)}, {"width", r3(std::clamp(bwParam(d, "WIDTH", 1), 0.0, 1.5))},
+                      {"mix", r3(mix)}});
+        return;
+    }
+    if (n == "Delay-2") {
+        const double mix = bwParam(d, "MIX", 0.5);
+        if (mix < 0.005) return;
+        json dj = {{"type", "delay"}, {"mix", r3(mix)}};
+        if (bwParam(d, "SYNCL", 1) != 0) dj["time"] = r3(bwParam(d, "LBEATTIME", 2) / 4.0);   // sixteenths
+        else dj["ms"] = r3(bwParam(d, "LTIME", 0.25) * 1000);
+        const double cross = (bwParam(d, "CROSSFEEDL", 0) + bwParam(d, "CROSSFEEDR", 0)) / 2;
+        dj["feedback"] = r3(std::min(0.9, std::max({bwParam(d, "FEEDBACKL", 0.3), bwParam(d, "FEEDBACKR", 0.3), cross})));
+        dj["pingpong"] = cross > 0.2;
+        dj["highpass"] = r3(bitwig::pitchToHz(bwParam(d, "LOCUT", 45)));
+        dj["lowpass"] = r3(bitwig::pitchToHz(bwParam(d, "HICUT", 117)));
+        fx.push_back(dj);
+        c.res->notes.push_back(where + ": Delay-2 is imported as one stereo delay at the left side's time");
+        return;
+    }
+    if (n == "Distortion") {
+        const double mix = bwParam(d, "MIX", 1);
+        if (mix < 0.005) return;
+        fx.push_back({{"type", "saturate"}, {"drive", r3(bwParam(d, "DRIVE", 20))}, {"mix", r3(mix)}});
+        if (const double g = bwParam(d, "LEVEL", 0); std::fabs(g) > 0.01) fx.push_back({{"type", "gain"}, {"db", r3(g)}});
+        json cuts = json::array();
+        if (const double lo = bwParam(d, "EQ_LOW_CUT", 12); lo > 13) cuts.push_back({{"type", "highpass"}, {"freq", r3(bitwig::pitchToHz(lo))}});
+        if (const double hi = bwParam(d, "EQ_HIGH_CUT", 136); hi < 134) cuts.push_back({{"type", "lowpass"}, {"freq", r3(bitwig::pitchToHz(hi))}});
+        if (!cuts.empty()) fx.push_back({{"type", "eq"}, {"bands", cuts}});
         return;
     }
     if (n == "Compressor") {
@@ -412,8 +475,106 @@ void collectNotes(Ctx &c, const xml::Node &n, double offset, double from, double
     }
 }
 
-// Volume/pan automation: Points lanes whose target is a channel's Volume or Pan parameter
-void collectAutomation(Ctx &c, const xml::Node &lanes, std::map<std::string, json> &gainPts, std::map<std::string, json> &panPts, size_t &unmapped) {
+// an audio file from the archive (or an external path) -> a job-relative path ("" on failure)
+std::string audioFile(Ctx &c, const xml::Node &file, const std::string &where) {
+    const std::string path = file.get("path");
+    if (path.empty()) return "";
+    std::string ext = fs::path(path).extension().string();
+    for (auto &ch : ext) ch = (char)std::tolower((unsigned char)ch);
+    if (ext != ".wav") { c.res->notes.push_back(where + ": audio file " + fs::path(path).filename().string() + " isn't WAV (only WAV clips play yet); left out"); return ""; }
+    if (file.get("external") == "true") {
+        std::error_code ec;
+        if (fs::exists(path, ec)) return path;
+        c.res->notes.push_back(where + ": audio file " + path + " is missing; left out");
+        return "";
+    }
+    const std::string rel = "audio/" + fs::path(path).filename().string();
+    if (c.written.count(rel)) return rel;
+    std::vector<uint8_t> data;
+    std::string err;
+    if (!c.zip.read(path, data, err)) { c.res->notes.push_back(where + ": audio file " + path + " is missing from the file"); return ""; }
+    std::error_code ec;
+    fs::create_directories(fs::path(c.outDir) / "audio", ec);
+    std::ofstream o(fs::path(c.outDir) / rel, std::ios::binary);
+    o.write(reinterpret_cast<const char *>(data.data()), (std::streamsize)data.size());
+    c.written.insert(rel);
+    return rel;
+}
+
+// Audio clips of a lane or clip, into song beats (like collectNotes): `offset` = song beat of content
+// time 0, clips cut to [from, to). Warped audio gets the file's tempo from its first and last warp
+// markers (it then follows the song's tempo); unwarped audio plays at its own speed.
+void collectAudio(Ctx &c, const xml::Node &n, double offset, double from, double to, const std::string &where, json &clips) {
+    auto add = [&](const std::string &file, double song0, double song1, double startSec, double fileBpm, bool stretch) {
+        if (song1 - song0 < 1e-6 || file.empty()) return;
+        json cl = {{"file", file}, {"beat", r3(song0)}, {"start", r3(std::max(0.0, startSec))}};
+        if (fileBpm > 0) { cl["bpm"] = r3(fileBpm); cl["beats"] = r3(song1 - song0); if (!stretch) cl["stretch"] = false; }
+        else cl["length"] = r3((song1 - song0) * 60.0 / c.bpm);
+        clips.push_back(cl);
+    };
+    for (auto &chp : n.children) {
+        const xml::Node &ch = *chp;
+        if (ch.tag == "Audio") {   // unwarped: content time is the file's own seconds
+            const xml::Node *f = ch.child("File");
+            if (!f) continue;
+            const double s0 = std::max(from, offset), s1 = to;
+            add(audioFile(c, *f, where), s0, s1, (s0 - offset) * 60.0 / c.bpm, 0, true);
+        } else if (ch.tag == "Warps") {
+            const xml::Node *au = ch.child("Audio");
+            const xml::Node *f = au ? au->child("File") : nullptr;
+            const auto warps = ch.all("Warp");
+            if (!f) continue;
+            const std::string file = audioFile(c, *f, where);
+            const bool stretch = !au || au->get("algorithm") != "repitch";
+            if (warps.size() < 2) { add(file, std::max(from, offset), to, (std::max(from, offset) - offset) * 60.0 / c.bpm, 0, stretch); continue; }
+            const double t0 = warps.front()->num("time"), c0 = warps.front()->num("contentTime");
+            const double t1 = warps.back()->num("time"), c1 = warps.back()->num("contentTime");
+            if (t1 - t0 < 1e-9 || c1 - c0 < 1e-9) continue;
+            if (warps.size() > 2) c.res->notes.push_back(where + ": a clip with " + std::to_string(warps.size()) + " warp markers plays at one tempo (its first to last marker)");
+            const double secPerBeat = (c1 - c0) / (t1 - t0);
+            const double x0 = std::max(from, offset) - offset;
+            add(file, offset + x0, to, c0 + (x0 - t0) * secPerBeat, 60.0 / secPerBeat, stretch);
+        } else if (ch.tag == "Clips") {
+            for (const xml::Node *clip : ch.all("Clip")) {
+                const double t = offset + clip->num("time"), d = clip->num("duration");
+                const double ps = clip->num("playStart", 0);
+                const double cs = std::max(from, t), ce = std::min(to, t + d);
+                if (ce <= cs) continue;
+                const size_t first = clips.size();
+                const bool loops = clip->attr("loopEnd") != nullptr;
+                const double ls = clip->num("loopStart", 0), le = clip->num("loopEnd", 0);
+                if (!loops || le <= ls) collectAudio(c, *clip, t - ps, cs, ce, where, clips);
+                else {
+                    double pos = ps, song = t;
+                    for (int guard = 0; song < t + d - 1e-9 && guard < 10000; ++guard) {
+                        const double segEnd = pos < le ? le : pos + (le - ls);
+                        const double len = segEnd - pos;
+                        collectAudio(c, *clip, song - pos, std::max(cs, song), std::min(ce, song + len), where, clips);
+                        song += len;
+                        pos = ls;
+                    }
+                }
+                if (clips.size() > first) {   // fades at the clip's edges
+                    const double k = clip->get("fadeTimeUnit", "beats") == "seconds" ? 1000.0 : 60000.0 / c.bpm;
+                    if (const double fi = clip->num("fadeInTime", 0); fi > 0) clips[first]["fadeIn"] = r3(fi * k);
+                    if (const double fo = clip->num("fadeOutTime", 0); fo > 0) clips.back()["fadeOut"] = r3(fo * k);
+                }
+            }
+        } else if (ch.tag == "Lanes") collectAudio(c, ch, offset, from, to, where, clips);
+    }
+}
+
+// absolute volume points (dB) -> dB relative to a fader: gain automation adds to the fader
+json relCurve(const json &curve, double fader) {
+    json rel = json::array();
+    for (auto &p : curve) { json q = p; q[1] = r3(p[1].get<double>() - fader); rel.push_back(q); }
+    return rel;
+}
+
+// Automation: Points lanes whose target is a channel's Volume or Pan, or an instrument plugin's parameter.
+// A point's interpolation describes the segment after it ("hold" = step to the next point).
+void collectAutomation(Ctx &c, const xml::Node &lanes, std::map<std::string, json> &gainPts, std::map<std::string, json> &panPts,
+                       std::map<std::string, json> &paramPts, size_t &unmapped, size_t &onEffects) {
     std::vector<const xml::Node *> pts;
     lanes.walk("Points", pts);
     for (const xml::Node *p : pts) {
@@ -421,13 +582,27 @@ void collectAutomation(Ctx &c, const xml::Node &lanes, std::map<std::string, jso
         const std::string param = target ? target->get("parameter") : "";
         auto it = c.paramTarget.find(param);
         if (it == c.paramTarget.end()) { ++unmapped; continue; }
+        const std::string &kind = it->second.second;
+        if (kind == "fx") { ++onEffects; continue; }
         json curve = json::array();
+        bool holdNext = false;
         for (const xml::Node *rp : p->all("RealPoint")) {
             const double v = rp->num("value");
-            curve.push_back({r3(rp->num("time")), it->second.second == "volume" ? r3(linToDb(v)) : r3(v * 2 - 1)});
+            const double y = kind == "volume" ? r3(linToDb(v)) : kind == "pan" ? r3(v * 2 - 1) : r6(v);
+            json pt = {r3(rp->num("time")), y};
+            if (holdNext) pt.push_back("step");
+            curve.push_back(pt);
+            holdNext = rp->get("interpolation", "linear") == "hold";
         }
-        if (curve.empty()) continue;
-        (it->second.second == "volume" ? gainPts : panPts)[it->second.first] = curve;
+        if (curve.empty()) { ++unmapped; continue; }
+        if (kind == "volume") gainPts[it->second.first] = curve;
+        else if (kind == "pan") panPts[it->second.first] = curve;
+        else {
+            const bool norm = kind.rfind("param:", 0) == 0;
+            json cj = {{"points", curve}};
+            if (norm) cj["scale"] = "normalized";
+            paramPts[it->second.first][kind.substr(kind.find(':') + 1)] = cj;
+        }
     }
 }
 
@@ -488,7 +663,12 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
     std::string masterChannel;
     for (auto &r : refs) {
         if (!r.channel) continue;
-        if (r.role == "master") { masterChannel = r.channel->get("id"); r.name = "Master"; continue; }
+        if (r.role == "master") {
+            masterChannel = r.channel->get("id");
+            r.name = "Master";
+            if (const xml::Node *pn = r.channel->child("Volume")) c.paramTarget[pn->get("id")] = {"Master", "volume"};
+            continue;
+        }
         r.name = uniqueName(c, r.track->get("name", "Track"));
         if (r.role == "effect" || r.group) c.busByChannel[r.channel->get("id")] = r.name;
         else c.trackByChannel[r.channel->get("id")] = r.name;
@@ -496,15 +676,43 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
         for (const char *p : {"Volume", "Pan"})
             if (const xml::Node *pn = r.channel->child(p)) c.paramTarget[pn->get("id")] = {r.name, p == std::string("Volume") ? "volume" : "pan"};
     }
+    // plugin parameters that automation can target: the instrument's go to its track
+    for (auto &r : refs) {
+        if (!r.channel) continue;
+        const xml::Node *devs = r.channel->child("Devices");
+        if (!devs) continue;
+        bool instrumentSeen = false;
+        for (auto &dp : devs->children) {
+            const bool instrument = !instrumentSeen && dp->get("deviceRole") == "instrument" && r.role == "regular" && !r.group;
+            if (dp->get("deviceRole") == "instrument") instrumentSeen = true;
+            const xml::Node *ps = dp->child("Parameters");
+            if (!ps) continue;
+            for (auto &pp : ps->children) {
+                const std::string pid = pp->get("parameterID");
+                if (pid.empty()) continue;
+                if (!instrument) { c.paramTarget[pp->get("id")] = {r.name, "fx"}; continue; }
+                c.paramTarget[pp->get("id")] = {r.name, (pp->get("unit", "normalized") == "normalized" ? "param:#" : "plain:#") + pid};
+            }
+        }
+    }
 
     // arrangement notes per track, and volume/pan automation
-    std::map<std::string, json> notesOf, gainPts, panPts;
-    size_t unmappedAuto = 0;
+    std::map<std::string, json> notesOf, clipsOf, gainPts, panPts, paramPts;
+    size_t unmappedAuto = 0, fxAuto = 0;
     if (arrLanes)
         for (const xml::Node *ln : arrLanes->all("Lanes")) {
             const std::string trackId = ln->get("track");
-            json notes = json::array();
+            json notes = json::array(), audio = json::array();
             collectNotes(c, *ln, 0, -1e18, 1e18, notes);
+            {
+                auto ch = c.channelOfTrack.find(trackId);
+                const std::string name = ch != c.channelOfTrack.end() && c.trackByChannel.count(ch->second) ? c.trackByChannel[ch->second] : "";
+                collectAudio(c, *ln, 0, -1e18, 1e18, name.empty() ? "audio" : name, audio);
+                if (!audio.empty()) {
+                    if (!name.empty()) for (auto &a : audio) clipsOf[name].push_back(a);
+                    else res.notes.push_back(std::to_string(audio.size()) + " audio clip(s) on a lane without a track were left out");
+                }
+            }
             if (!notes.empty()) {
                 auto ch = c.channelOfTrack.find(trackId);
                 const std::string name = ch != c.channelOfTrack.end() && c.trackByChannel.count(ch->second) ? c.trackByChannel[ch->second] : "";
@@ -512,8 +720,9 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
                 else res.notes.push_back(std::to_string(notes.size()) + " notes on a lane without an instrument track were left out");
             }
         }
-    collectAutomation(c, *arrangement, gainPts, panPts, unmappedAuto);
-    if (unmappedAuto) res.notes.push_back(std::to_string(unmappedAuto) + " automation lane(s) on device parameters were left out (volume and pan automation are imported)");
+    collectAutomation(c, *arrangement, gainPts, panPts, paramPts, unmappedAuto, fxAuto);
+    if (unmappedAuto) res.notes.push_back(std::to_string(unmappedAuto) + " automation lane(s) on parameters the file doesn't describe were left out (a DAW's own devices)");
+    if (fxAuto) res.notes.push_back(std::to_string(fxAuto) + " automation lane(s) on plugin effects were left out (instrument, volume and pan automation are imported)");
     {
         size_t launcher = 0;
         std::vector<const xml::Node *> slots;
@@ -613,19 +822,39 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
         if (r.role == "master") {
             master["gain"] = r3(linToDb(vol));
             master["fx"] = fx;
+            if (gainPts.count("Master")) master["automation"] = {{"gain", relCurve(gainPts["Master"], master["gain"].get<double>())}};
             continue;
         }
         if (r.role == "effect" || r.group) {
             json b = {{"name", r.name}, {"gain", r3(linToDb(vol))}, {"fx", fx}};
             if (!output.empty()) b["output"] = output;
-            if (gainPts.count(r.name)) b["automation"] = {{"gain", gainPts[r.name]}};
+            if (gainPts.count(r.name)) b["automation"] = {{"gain", relCurve(gainPts[r.name], b["gain"].get<double>())}};
             buses.push_back(b);
             ++res.buses;
             continue;
         }
+        // audio clips: a builtin:audio track with this track's mixer settings (beside the notes, if any)
+        auto mixerOf = [&](json &t) {
+            t["gain"] = vol <= 1e-6 ? -60.0 : r3(linToDb(vol));
+            if (std::fabs(pan) > 1e-3) t["pan"] = r3(pan);
+            if (muted || vol <= 1e-6) t["mute"] = true;
+            if (!fx.empty()) t["fx"] = fx;
+            if (!output.empty()) t["output"] = output;
+            if (!sends.empty()) t["sends"] = sends;
+            json autom = json::object();
+            if (gainPts.count(r.name)) autom["gain"] = relCurve(gainPts[r.name], t["gain"].get<double>());
+            if (panPts.count(r.name)) autom["pan"] = panPts[r.name];
+            if (!autom.empty()) t["automation"] = autom;
+        };
+        if (clipsOf.count(r.name)) {
+            json t = {{"name", notesOf.count(r.name) ? uniqueName(c, r.name + " audio") : r.name}, {"plugin", "builtin:audio"}};
+            mixerOf(t);
+            t["clips"] = clipsOf[r.name];
+            tracks.push_back(t);
+            ++res.tracks;
+        }
         if (!notesOf.count(r.name)) {
-            if (r.track->get("contentType").find("notes") != std::string::npos) res.notes.push_back(r.name + ": no notes in the arrangement; left out");
-            else res.notes.push_back(r.name + ": audio tracks (recorded clips) aren't imported yet; left out");
+            if (!clipsOf.count(r.name)) res.notes.push_back(r.name + ": nothing in the arrangement; left out");
             continue;
         }
         if (!pads.empty()) {
@@ -635,11 +864,7 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
             json b = {{"name", r.name}, {"gain", busGain}, {"fx", fx}};
             if (std::fabs(pan) > 1e-3) b["fx"].push_back({{"type", "pan"}, {"position", r3(pan)}});
             if (!output.empty()) b["output"] = output;
-            if (gainPts.count(r.name)) {
-                json rel = json::array();
-                for (auto &p : gainPts[r.name]) rel.push_back({p[0], r3(p[1].get<double>() - busGain)});
-                b["automation"] = {{"gain", rel}};
-            }
+            if (gainPts.count(r.name)) b["automation"] = {{"gain", relCurve(gainPts[r.name], busGain)}};
             if (!sends.empty()) res.notes.push_back(r.name + ": sends from a Drum Machine track are left out");
             buses.push_back(b);
             ++res.buses;
@@ -687,12 +912,9 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
         if (!output.empty()) t["output"] = output;
         if (!sends.empty()) t["sends"] = sends;
         json autom = json::object();
-        if (gainPts.count(r.name)) {   // absolute volume -> dB relative to the fader
-            json rel = json::array();
-            for (auto &p : gainPts[r.name]) rel.push_back({p[0], r3(p[1].get<double>() - t["gain"].get<double>())});
-            autom["gain"] = rel;
-        }
+        if (gainPts.count(r.name)) autom["gain"] = relCurve(gainPts[r.name], t["gain"].get<double>());
         if (panPts.count(r.name)) autom["pan"] = panPts[r.name];
+        if (paramPts.count(r.name)) autom["params"] = paramPts[r.name];
         if (!autom.empty()) t["automation"] = autom;
         t["notes"] = notesOf[r.name];
         tracks.push_back(t);
