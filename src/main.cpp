@@ -64,11 +64,12 @@ Usage:
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
       (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
-  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--json]
+  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--json]
       Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
       onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
       every stem and every marker section. --start/--end are seconds into the file; with
       --song-time they are song time (a render's lead-in is added from its report.json).
+      --grid lists each onset's beat and its timing offset from the nearest 1/div-beat step.
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -368,7 +369,32 @@ int cmdAnalyze(const Args &a) {
         result["ok"] = true;
     }
     if (!windowNote.empty()) result["note"] = windowNote;
+    // --grid BPM [--div 4]: how far each onset sits from the nearest grid step (song time, constant tempo)
+    json &main = result.contains("mix") ? result["mix"] : result;
+    if (a.has("--grid") && main.contains("onsets")) {
+        const double bpm = std::atof(a.get("--grid").c_str()), div = std::max(1, std::atoi(a.get("--div", "4").c_str()));
+        if (bpm <= 0) return fail(a, "--grid needs the song's tempo in BPM");
+        json list = json::array();
+        double sumAbs = 0;
+        for (auto &o : main["onsets"]) {
+            const double t = o.get<double>() - leadIn, beat = t * bpm / 60.0, step = std::round(beat * div) / div;
+            const double offMs = (beat - step) * 60000.0 / bpm;
+            sumAbs += std::fabs(offMs);
+            list.push_back({{"time", std::round(t * 1000) / 1000}, {"beat", std::round(step * 1000) / 1000}, {"offsetMs", std::round(offMs * 10) / 10}});
+        }
+        result["grid"] = {{"bpm", bpm}, {"div", div}, {"onsets", list},
+                          {"meanAbsOffsetMs", list.empty() ? 0.0 : std::round(sumAbs / list.size() * 10) / 10}};
+    }
     if (a.has("--json")) { emit(result.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    if (result.contains("grid")) {
+        const auto &g = result["grid"];
+        std::fprintf(OUT, "grid %g BPM, 1/%d beat: mean offset %.1f ms (+ = late)\n", g["bpm"].get<double>(), g["div"].get<int>(), g["meanAbsOffsetMs"].get<double>());
+        size_t k = 0;
+        for (auto &o : g["onsets"]) {
+            if (k++ == 64) { std::fprintf(OUT, "  ... (%zu onsets; --json lists all)\n", g["onsets"].size()); break; }
+            std::fprintf(OUT, "  %8.3f s  beat %8.3f  %+6.1f ms\n", o["time"].get<double>(), o["beat"].get<double>(), o["offsetMs"].get<double>());
+        }
+    }
     if (!windowNote.empty()) std::fprintf(OUT, "note: %s\n", windowNote.c_str());
     auto line = [&](const std::string &label, const json &x) {
         const auto &p = x["pitch"], &s = x["spectrum"], &e = x["envelope"];

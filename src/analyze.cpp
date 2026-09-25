@@ -184,7 +184,10 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
             std::vector<double> local(flux.begin() + (long)(i > W ? i - W : 0), flux.begin() + (long)std::min(flux.size(), i + W + 1));
             const double thr = median(local) * 1.5 + mx * 0.05;
             if (flux[i] > thr && (i == 0 || flux[i] >= flux[i - 1]) && flux[i] > flux[i + 1]) {
-                const double t = start + (double)(i * H) / sr;
+                if (i == 0 && start > 0) continue;   // a window cut into a sound: not an onset
+                // flux peaks when the attack reaches the middle of the Hann window: frame start + N/2 (+ H/4 measured on
+                // a click track) is the attack, within one hop (±5 ms)
+                const double t = i == 0 ? start : start + (double)(i * H + N / 2 + H / 4) / sr;
                 if (lastOn < 0 || t - lastOn > 0.05) { r.onsets.push_back(t); lastOn = t; }
             }
         }

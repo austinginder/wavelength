@@ -5,6 +5,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `analyze --grid BPM [--div 4]`: each onset's song-time beat and its offset in ms from the nearest
+  grid step, plus the mean offset, to check a break or a groove against the grid.
 - `tracks[].postFaderPeakDb`, and when the master limiter works hard a warning naming the three
   tracks whose peaks feed it most (with how far their peaks stand above their loudness): album
   agents needed extra renders to find that a spiky kick or clap was limiting the whole song.
@@ -44,6 +46,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   under load (a race in its own threads); the song now comes out complete.
 
 ### Fixed
+- `analyze` onset times were about 25 ms early (the spectral frame's start, not the attack); they
+  are now within one hop (about 5 ms), measured on a click track. A window that cuts into a sound
+  no longer reports an onset at its first frame.
 - `wavelength master` on a mix rendered with a lead-in put every section 1 s off and added a
   second lead-in. It now reads the lead-in from the render's report.json (or `--input-lead-in`),
   lines the markers up, and keeps the lead-in on the output unless `--lead-in` says otherwise.
