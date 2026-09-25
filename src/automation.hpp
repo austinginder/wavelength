@@ -170,6 +170,23 @@ private:
     std::shared_ptr<Lfo> lfo_;
 };
 
+// Gain curves that add up: a track's written fader curve plus any number of "rides" layered on top
+// (dB), so section rides never overwrite the fader automation.
+struct GainCurve {
+    std::vector<Envelope> parts;
+    GainCurve &operator=(Envelope e) { parts.clear(); if (!e.empty()) parts.push_back(std::move(e)); return *this; }
+    void add(Envelope e) { if (!e.empty()) parts.push_back(std::move(e)); }
+    bool empty() const { return parts.empty(); }
+    double at(double sec) const { double v = 0; for (auto &p : parts) v += p.at(sec); return v; }
+};
+
+// "rides": one curve ([[beat, dB], ...] or a curve object) or named curves {"sections": ..., "fills": ...}
+inline void addRides(GainCurve &into, const nlohmann::json &rides, const TempoMap &tempo) {
+    const bool named = rides.is_object() && !rides.contains("points") && !rides.contains("value");
+    if (named) for (auto &[k, v] : rides.items()) into.add(Envelope::parse(v, tempo, false));
+    else into.add(Envelope::parse(rides, tempo, false));
+}
+
 // The earliest point of an automation curve as written ([[beat, value], ...] or {"points": ...}).
 // A curve holds this value before its first point, which surprises when the point is late.
 inline bool firstPoint(const nlohmann::json &j, double &beat, double &value) {

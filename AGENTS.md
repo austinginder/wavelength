@@ -227,6 +227,8 @@ job.json` lines the sections up and keeps the lead-in.
 - **MP3 and AAC overshoot.** Lossy encoding adds 0.4-0.8 dB of true peak: a `-1.3` limiter
   decoded to -0.9 dBTP on four album tracks. For a lossy release use a ceiling near `-2.0` and
   check the decoded file (`ffmpeg -i x.mp3 -af ebur128=peak=true -f null -`).
+- **Rides are a layer.** Put section rides in `automation.rides` (named curves allowed), not into
+  `automation.gain`: they add to the written fader curve instead of replacing it.
 - **Master rides run before the chain.** `master.automation.gain` changes the level going into
   the master compressors and limiter, which then pull part of it back: ride tracks or buses to
   shape the section contour, and keep master rides for fades.

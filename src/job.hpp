@@ -35,7 +35,7 @@ struct Track {
     bool stem = true;               // write this track's stem file (render --tracks turns it off for helper tracks)
     nlohmann::json fx = nlohmann::json::array();               // effect chain, in order
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)
-    Envelope gainAutomation;                                     // fader dB over time (empty = none)
+    GainCurve gainAutomation;                                    // fader dB over time plus rides (empty = none)
     Envelope panAutomation;                                      // pan -1..1 over time (empty = static pan)
     std::vector<std::pair<int, Envelope>> ccAutomation;          // MIDI CC number → value 0..127 over time
     Envelope bendAutomation;                                     // pitch bend in semitones over time
@@ -54,7 +54,7 @@ struct Bus {
     double gainDb = 0;
     nlohmann::json fx = nlohmann::json::array();
     std::string output;             // another bus to feed ("" = master)
-    Envelope gainAutomation;        // dB added to the bus gain over time
+    GainCurve gainAutomation;       // dB added to the bus gain over time (automation.gain + rides)
 };
 
 struct Marker {
@@ -78,7 +78,7 @@ struct Job {
     std::vector<Bus> buses;
     nlohmann::json masterFx = nlohmann::json::array();
     double masterGainDb = 0;
-    Envelope masterGainAutomation;  // dB added to the master gain over time (fades)
+    GainCurve masterGainAutomation; // dB added to the master gain over time (fades, rides)
     bool hasMasterLoudness = false;
     double masterLoudness = -14;    // target integrated LUFS after the master chain (gain into the chain is found)
     std::string loudnessGain = "peak";   // where the target's gain goes: "peak" (before the trailing clip/limiter run), "limiter" (before the last limiter), "start"

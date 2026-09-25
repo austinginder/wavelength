@@ -231,6 +231,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             if (t.contains("automation")) {
                 const auto &au = t["automation"];
                 if (au.contains("gain")) tr.gainAutomation = Envelope::parse(au["gain"], out.tempo, false);
+                if (au.contains("rides")) addRides(tr.gainAutomation, au["rides"], out.tempo);
                 if (au.contains("pan")) tr.panAutomation = Envelope::parse(au["pan"], out.tempo, false);
                 if (au.contains("pitchbend")) tr.bendAutomation = Envelope::parse(au["pitchbend"], out.tempo, false);
                 if (au.contains("pressure")) tr.pressureAutomation = Envelope::parse(au["pressure"], out.tempo, false);
@@ -245,6 +246,15 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 double fb, fv;   // curves that start late hold their first value from the top of the song
                 if (au.contains("gain") && firstPoint(au["gain"], fb, fv) && fb > 0 && std::fabs(fv) > 1e-9)
                     tr.warnings.push_back(lateCurveWarning("gain", fb, fv, 0));
+                if (au.contains("rides")) {
+                    const auto &r = au["rides"];
+                    const bool named = r.is_object() && !r.contains("points") && !r.contains("value");
+                    auto check = [&](const std::string &what, const json &c) {
+                        if (firstPoint(c, fb, fv) && fb > 0 && std::fabs(fv) > 1e-9) tr.warnings.push_back(lateCurveWarning(what, fb, fv, 0));
+                    };
+                    if (named) for (auto &[k, v] : r.items()) check("ride '" + k + "'", v);
+                    else check("rides", r);
+                }
                 if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && std::fabs(fv - tr.pan) > 1e-9)
                     tr.warnings.push_back(lateCurveWarning("pan", fb, fv, tr.pan));
                 for (auto &[k, v] : autoParams.items())
@@ -364,6 +374,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             bus.output = b.value("output", "");
             if (b.contains("automation") && b["automation"].contains("gain"))
                 bus.gainAutomation = Envelope::parse(b["automation"]["gain"], out.tempo, false);
+            if (b.contains("automation") && b["automation"].contains("rides")) addRides(bus.gainAutomation, b["automation"]["rides"], out.tempo);
             out.buses.push_back(std::move(bus));
         }
         if (j.contains("master")) {
@@ -381,6 +392,8 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             }
             if (j["master"].contains("automation") && j["master"]["automation"].contains("gain"))
                 out.masterGainAutomation = Envelope::parse(j["master"]["automation"]["gain"], out.tempo, false);
+            if (j["master"].contains("automation") && j["master"]["automation"].contains("rides"))
+                addRides(out.masterGainAutomation, j["master"]["automation"]["rides"], out.tempo);
         }
         for (auto &m : j.value("markers", json::array())) {
             const double beat = m.at("beat").get<double>();

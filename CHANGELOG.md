@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `automation.rides` on tracks, buses and the master: dB curves (one, or named ones) added on top of
+  `automation.gain`. Album agents replaced their fader curves when they added section rides (a pad
+  came out 9 dB too loud in the drops); rides are now a separate layer.
 - Arrangement checks in the render report: `dropouts` (the song goes 15 dB quiet for 0.75 s or more
   and then comes back, with bars and file time) and a warning when a Drop/Chorus/Peak/Hook/Final
   section lands under +2 dB over the section before it; `sections[].change` gives every step.
