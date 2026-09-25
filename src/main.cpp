@@ -32,6 +32,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -71,12 +72,14 @@ Usage:
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--tracks "A,B"] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a worker whose plugin crashes is started again (job "retries", default 2); a track that
       still fails is left out of the mix and listed in "failedTracks", and the render then
       reports "ok": false and exits 1 (mix.wav and report.json are still written).
+      --tracks renders only the named tracks (and, muted, any track that keys their
+      sidechains), with the song's buses and master, to check a part without the whole song.
   wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
@@ -492,11 +495,52 @@ int cmdRender(const Args &a) {
     if (!in) return fail(a, "cannot read " + path);
     json j;
     try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    // --tracks "Lead,Bass": render only those (plus, muted, the tracks that key their sidechains).
+    // Workers re-read the job by track index, so the subset goes to a file next to the job.
+    std::string subsetPath;
+    std::vector<std::string> only;
+    if (a.has("--tracks")) {
+        std::stringstream ss(a.get("--tracks"));
+        for (std::string n; std::getline(ss, n, ',');) {
+            n.erase(0, n.find_first_not_of(' '));
+            n.erase(n.find_last_not_of(' ') + 1);
+            if (!n.empty()) only.push_back(n);
+        }
+        if (!j.contains("tracks") || !j["tracks"].is_array()) return fail(a, "the job has no tracks");
+        std::set<std::string> want(only.begin(), only.end()), have;
+        for (auto &t : j["tracks"]) have.insert(t.value("name", ""));
+        for (auto &n : only) if (!have.count(n)) return fail(a, "--tracks: no track named '" + n + "'");
+        std::set<std::string> need = want;
+        auto keys = [&](const json &fx) {
+            if (fx.is_array())   // "sidechain" keys from a track's audio, "trigger" (duck, gate) from its notes
+                for (auto &e : fx)
+                    for (const char *k : {"sidechain", "trigger"})
+                        if (e.is_object() && e.contains(k) && e[k].is_string()) need.insert(e[k].get<std::string>());
+        };
+        for (auto &b : j.value("buses", json::array())) keys(b.value("fx", json::array()));
+        if (j.contains("master") && j["master"].is_object()) keys(j["master"].value("fx", json::array()));
+        for (size_t before = 0; before != need.size();) {   // sidechain sources of sources
+            before = need.size();
+            for (auto &t : j["tracks"]) if (need.count(t.value("name", ""))) keys(t.value("fx", json::array()));
+        }
+        json kept = json::array();
+        for (auto &t : j["tracks"]) {
+            const std::string n = t.value("name", "");
+            if (!need.count(n)) continue;
+            json c = t;
+            if (!want.count(n)) c["mute"] = true;   // renders only to key an effect
+            kept.push_back(c);
+        }
+        j["tracks"] = kept;
+        subsetPath = (fs::absolute(path).parent_path() / (".wavelength-tracks-" + std::to_string(platform::processId()) + ".json")).string();
+        std::ofstream(subsetPath) << j.dump();
+    }
+    struct RemoveSubset { std::string p; ~RemoveSubset() { std::error_code ec; if (!p.empty()) fs::remove(p, ec); } } removeSubset{subsetPath};
     Job job;
     std::string err;
     std::string base = fs::absolute(path).parent_path().string();
     if (!parseJob(j, base, job, err)) return fail(a, err);
-    job.sourcePath = fs::absolute(path).string();
+    job.sourcePath = subsetPath.empty() ? fs::absolute(path).string() : subsetPath;
     if (a.has("--jobs")) job.parallel = std::atoi(a.get("--jobs").c_str());
     if (a.has("--stems")) {
         const std::string s = a.get("--stems");
@@ -551,6 +595,7 @@ int cmdRender(const Args &a) {
                             {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"failedTracks", r.failedTracks}};
+    if (!only.empty()) report["onlyTracks"] = only;
     if (!complete) report["error"] = incomplete;
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return complete ? 0 : 1; }

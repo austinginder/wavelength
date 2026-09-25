@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `render --tracks "Lead,Bass"`: render only the named tracks, through the song's buses and
+  master; tracks that key their `duck`, `gate` or sidechain render muted. The report lists them in
+  `onlyTracks`.
 - Per-note `vibrato` on sampler tracks (depth, rate, delay, rise), layered on top of `bend`; guitar
   leads needed dozens of hand-written bend points per note. Per-note `bend` or `vibrato` on a
   plugin track now warns that it only plays on the sampler.

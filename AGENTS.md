@@ -22,6 +22,10 @@ Always pass `--json`. Stdout then carries exactly one JSON document; plugin chat
 to stderr. On failure the document is `{"ok": false, "error": "..."}` and the exit status
 is non-zero. Errors are written to be actionable (they name the track, parameter or file).
 
+Working on one part? `render job.json --tracks "Lead,Bass" --stems none` renders just those
+tracks (plus, muted, whatever keys their `duck`/`gate`/sidechain) through the song's buses and
+master: much faster than the whole song, and the report shows those tracks alone.
+
 ## Choosing sounds
 
 In order of preference:
