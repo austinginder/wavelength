@@ -1,5 +1,6 @@
 // SFZ tour: SFZ's built-in generators only, so it plays anywhere.
-// Keys 24/25 switch the synth between a plucked saw and a held square (keyswitches);
+// Keys 24/25 switch the synth between a plucked saw (through a velocity-tracked low-pass) and a held
+// square with a key-up click (a release trigger), the keyswitches;
 // the drums below it show one-shots, round robins and a choke group (group / off_by).
 
 <global>
@@ -10,8 +11,9 @@ ampeg_release=0.25
 sw_lokey=24 sw_hikey=25 sw_default=24
 lokey=48 hikey=96 pitch_keycenter=60
 
-<region> sw_last=24 sample=*saw volume=-4 ampeg_attack=0.003 ampeg_decay=0.9 ampeg_sustain=15
+<region> sw_last=24 sample=*saw volume=-4 ampeg_attack=0.003 ampeg_decay=0.9 ampeg_sustain=15 cutoff=900 fil_veltrack=2400 resonance=4
 <region> sw_last=25 sample=*square volume=-15 ampeg_attack=0.08 amp_veltrack=40
+<region> sw_last=25 trigger=release sample=*noise loop_mode=one_shot ampeg_decay=0.08 ampeg_sustain=0 volume=-12 rt_decay=3
 
 // ---- drums ----
 <group>

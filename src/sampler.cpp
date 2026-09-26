@@ -1,7 +1,9 @@
 #include "sampler.hpp"
 
 #include "audio_file.hpp"
+#include "dsp.hpp"
 #include "platform.hpp"
+#include "sf2.hpp"
 #include "sfz.hpp"
 #include "zip.hpp"
 
@@ -118,6 +120,14 @@ struct Zone {
     int sw = -1;                             // keyswitch that selects this zone (sw_last), -1 = always
     int seq = 0;                             // round-robin order (seq_position, lorand)
     int group = 0, offBy = 0;                // choke groups
+    int filter = 0;                          // 0 off, 1 low-pass, 2 high-pass, 3 band-pass (SFZ fil_type, SF2 initialFilterFc)
+    double cutoff = 0, resonanceDb = 0;      // Hz at velocity 0 and the key centre, dB
+    double filVelCents = 0, filKeyCents = 0; // cutoff shift at velocity 127, per key from filKeyCenter
+    int filKeyCenter = 60;
+    double delay = 0;                        // seconds before the zone starts (ampeg_delay, SF2 delayVolEnv)
+    bool releaseTrigger = false;             // SFZ trigger=release: plays when the note ends
+    double rtDecay = 0;                      // dB lower per second the note was held (release triggers)
+    std::shared_ptr<const Sf2Zone> sf2;      // SoundFont zones: per-note modulators and the modulation envelope
 };
 
 bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::string &err) {
@@ -176,12 +186,13 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         "xfin_lovel", "xfin_hivel", "xfout_lovel", "xfout_hivel", "amp_veltrack", "ampeg_attack", "ampeg_hold",
         "ampeg_decay", "ampeg_sustain", "ampeg_release", "seq_length", "seq_position", "lorand", "hirand",
         "sw_lokey", "sw_hikey", "sw_last", "sw_default", "group", "off_by", "direction", "note_polyphony",
-        "group_volume", "master_volume", "global_volume",
+        "group_volume", "master_volume", "global_volume", "cutoff", "resonance", "fil_type", "fil_veltrack", "fil_keytrack",
+        "fil_keycenter", "rt_decay", "ampeg_delay", "delay",
         // no effect on the sound
         "lochan", "hichan", "off_mode", "sw_label", "region_label", "group_label", "master_label", "global_label",
         "polyphony", "note_selfmask", "sw_vel", "xf_velcurve"};
     std::map<std::string, int> ignored;
-    int releaseRegions = 0, ccRegions = 0;
+    int ccRegions = 0;
     bool ccMod = false;
     swLow = 128; swHigh = -1; swDefault = -1;
     notePolyOne = false;
@@ -204,7 +215,6 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         }
         if (r.has("note_polyphony") && r.num("note_polyphony", 0) <= 1) notePolyOne = true;
         const std::string trig = r.get("trigger", "attack");
-        if (trig == "release" || trig == "release_key") { ++releaseRegions; continue; }
         if (r.num("end", 0) < 0) continue;   // end=-1: a disabled region
         std::string file = r.get("sample");
         if (file.empty()) continue;
@@ -258,6 +268,19 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         if (r.has("sw_default")) swDefault = r.key("sw_default", -1) + off;
         z.group = (int)r.num("group", 0);
         z.offBy = (int)r.num("off_by", 0);
+        if (r.has("cutoff")) {
+            const std::string ft = r.get("fil_type", "lpf_2p");
+            z.filter = ft.rfind("hpf", 0) == 0 ? 2 : ft.rfind("bpf", 0) == 0 ? 3 : ft.rfind("lpf", 0) == 0 ? 1 : 0;
+            if (!z.filter) ++ignored["fil_type=" + ft];
+            z.cutoff = r.num("cutoff", 0);
+            z.resonanceDb = r.num("resonance", 0);
+            z.filVelCents = r.num("fil_veltrack", 0);
+            z.filKeyCents = r.num("fil_keytrack", 0);
+            z.filKeyCenter = r.key("fil_keycenter", 60);
+        }
+        z.delay = r.num("delay", 0) + r.num("ampeg_delay", 0);
+        z.releaseTrigger = trig == "release" || trig == "release_key";
+        z.rtDecay = r.num("rt_decay", 0);
         zones.push_back(z);
     }
     if (swHigh < 0) {   // sw_last without a declared range: the keyswitches are the sw_last keys
@@ -265,7 +288,6 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
     }
     std::stable_sort(zones.begin(), zones.end(), [](const Zone &a, const Zone &b) { return a.seq < b.seq; });
     if (ccRegions) warnings.push_back("sfz: " + std::to_string(ccRegions) + " region(s) for other controller states left out (e.g. pedal down)");
-    if (releaseRegions) warnings.push_back("sfz: " + std::to_string(releaseRegions) + " release-trigger region(s) left out (key-up noises)");
     if (!ignored.empty() || ccMod) {
         std::string names;
         size_t n = 0;
@@ -276,6 +298,27 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
     }
     if (zones.empty()) { err = "the SFZ has no playable regions"; return false; }
     return true;
+}
+
+// SoundFont zones -> sampler zones ("sf2#<sample index>" files)
+void sf2Zones(const std::vector<Sf2Zone> &in, std::vector<Zone> &zones) {
+    for (const auto &q : in) {
+        Zone z;
+        z.file = "sf2#" + std::to_string(q.sample);
+        z.keyLow = q.keyLow; z.keyHigh = q.keyHigh; z.velLow = q.velLow; z.velHigh = q.velHigh;
+        z.root = q.root; z.tune = q.tune; z.keyTrack = q.keyTrack; z.pan = q.pan;   // level: per voice (attenuation + modulators)
+        z.start = q.start; z.stop = q.stop;
+        if (q.loopMode) {
+            z.loop = q.loopMode == 3 ? Zone::Sustain : Zone::Always;
+            z.loopStart = q.loopStart; z.loopStop = q.loopStop;
+        }
+        z.velTrack = 0;   // velocity reaches the level through the zone's modulators (per voice)
+        z.delay = q.delay; z.attack = q.attack; z.hold = q.hold; z.decay = q.decay; z.sustain = q.sustain; z.release = q.release;
+        z.filter = 1;     // opened or bypassed per voice
+        z.sf2 = std::make_shared<Sf2Zone>(q);
+        z.group = z.offBy = q.exclusiveClass;   // a hi-hat's closed and open zones cut each other
+        zones.push_back(z);
+    }
 }
 
 // *sine, *saw, *square, *triangle, *noise, *silence: SFZ's built-in sources, as a looped table
@@ -457,6 +500,12 @@ struct Voice {
     double amp;
     std::function<double(double)> key;   // sounding key (fractional, incl. glide and bend) at t seconds
     double semisOffset = 0;              // zone tune + transpose
+    double cutoffHz = 0;                 // the zone's filter for this note (0 = off)
+    double resonanceDb = 0;
+    double modEnvCents = 0;              // SoundFont: how far the modulation envelope opens the filter
+    // SoundFont per-note modulators on envelope times (timecents: x 2^(tc/1200)), pan and level
+    double tcAttack = 0, tcHold = 0, tcDecay = 0, tcRelease = 0, tcModAttack = 0, tcModHold = 0, tcModDecay = 0, tcModRelease = 0;
+    double panOffset = 0;
 };
 
 inline float cubic(const std::vector<float> &x, double pos) {
@@ -481,9 +530,50 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
     const double loopLen = loopStop - loopStart;
     const bool canLoop = z.loop != Zone::Off && loopLen > 16 && loopStop <= stop && !z.reverse;
     const double fadeLen = canLoop ? std::min(z.loopFade * loopLen, loopStart) : 0;
+    dsp::Biquad fl, fr;
+    const bool filtered = z.filter && v.cutoffHz > 0;
+    const auto ftype = z.filter == 2 ? dsp::Biquad::HighPass : z.filter == 3 ? dsp::Biquad::BandPass : dsp::Biquad::LowPass;
+    const double fq = 0.7071 * std::pow(10.0, v.resonanceDb / 20);
+    // a SoundFont filter lowers the level by half its resonance (SoundFont 2.01, as FluidSynth does)
+    const double filterGain = filtered && z.sf2 ? 1 / std::sqrt(fq / 0.7071) : 1.0;
+    const double pan = std::clamp(z.pan + v.panOffset, -1.0, 1.0);
+    // SoundFont zones pan at constant power, unity in the centre (a hard-panned stereo pair gets +3 dB a side, as in FluidSynth)
+    const double panL = std::sqrt(2.0) * std::cos((pan + 1) * M_PI / 4), panR = std::sqrt(2.0) * std::sin((pan + 1) * M_PI / 4);
+    auto tc = [](double seconds, double cents) { return cents ? seconds * std::pow(2.0, cents / 1200) : seconds; };
+    if (filtered) {
+        fl.set(ftype, v.cutoffHz, fq, 0, sr);
+        fr = fl;
+    }
     if (z.attack >= 0) attack = z.attack;
     if (z.release >= 0) release = z.release;
-    const double decayFrom = attack + z.hold;
+    double hold = z.hold, decay = z.decay, modHold = 0, modDecay = 0;
+    double modAttack = 0, modRelease = 0;
+    if (z.sf2) {   // SoundFont keynumTo* generators (hold and decay depend on the key) and per-note time modulators
+        const int key = (int)std::lround(v.key(0));
+        hold = tc(Sf2Zone::keyScaled(z.hold, z.sf2->keyToHold, key), v.tcHold);
+        decay = tc(Sf2Zone::keyScaled(z.decay, z.sf2->keyToDecay, key), v.tcDecay);
+        modHold = tc(Sf2Zone::keyScaled(z.sf2->modHold, z.sf2->keyToModHold, key), v.tcModHold);
+        modDecay = tc(Sf2Zone::keyScaled(z.sf2->modDecay, z.sf2->keyToModDecay, key), v.tcModDecay);
+        modAttack = tc(z.sf2->modAttack, v.tcModAttack);
+        modRelease = tc(z.sf2->modRelease, v.tcModRelease);
+        attack = tc(attack, v.tcAttack);
+        release = tc(release, v.tcRelease);
+    }
+    // SoundFont modulation envelope (delay, attack, hold, linear decay to sustain, release) moving the cutoff
+    const Sf2Zone *me = v.modEnvCents != 0 && z.sf2 ? z.sf2.get() : nullptr;
+    double modLevel = 0, modAtOff = -1;
+    auto modEnv = [&](double t) {
+        const double a0 = me->modDelay, a1 = a0 + modAttack, h1 = a1 + modHold, d1 = h1 + modDecay;
+        double m;
+        if (t < a0) m = 0;
+        else if (t < a1) m = (t - a0) / std::max(1e-6, modAttack);
+        else if (t < h1) m = 1;
+        else if (t < d1) m = 1 - (1 - me->modSustain) * (t - h1) / std::max(1e-6, modDecay);
+        else m = me->modSustain;
+        return m;
+    };
+    const double decayFrom = attack + hold;
+    const double susDb = z.sustain > 0 ? std::max(-96.0, 20 * std::log10(z.sustain)) : -96.0;
     const bool stereo = !s.r.empty();
     double pos = from;
     const double chokeFade = 0.004;
@@ -495,14 +585,23 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
         if (idx >= out.frames()) break;
         const double t = i / sr;
         double env = attack > 0 ? std::min(1.0, t / attack) : 1.0;
-        if (z.sustain < 1 && t > decayFrom)   // ampeg_decay: falls toward ampeg_sustain (-60 dB over the decay time)
-            env *= z.decay > 0 ? z.sustain + (1 - z.sustain) * std::exp(-6.9 * (t - decayFrom) / z.decay) : z.sustain;
-        if (env < 1e-4 && z.sustain <= 0 && t > decayFrom) break;
-        if (t > v.noteLen) {
-            if (release <= 0) break;
-            const double r = 1.0 - (t - v.noteLen) / release;
-            if (r <= 0) break;
-            env *= r * r;
+        if (z.sf2) {   // SoundFont volume envelope: decay and release fall linearly in dB, 96 dB over their times
+            const double td = std::min(t, v.noteLen);   // decay stops at note-off, release starts from there
+            double db = 0;
+            if (td > decayFrom) db = decay > 0 ? std::max(susDb, -96 * (td - decayFrom) / decay) : susDb;
+            if (t > v.noteLen) db -= release > 0 ? 96 * (t - v.noteLen) / release : 96;
+            if (db <= -96) break;
+            env *= std::pow(10.0, db / 20);
+        } else {
+            if (z.sustain < 1 && t > decayFrom)   // ampeg_decay: falls toward ampeg_sustain (-60 dB over the decay time)
+                env *= decay > 0 ? z.sustain + (1 - z.sustain) * std::exp(-6.9 * (t - decayFrom) / decay) : z.sustain;
+            if (env < 1e-4 && z.sustain <= 0 && t > decayFrom) break;
+            if (t > v.noteLen) {
+                if (release <= 0) break;
+                const double r = 1.0 - (t - v.noteLen) / release;
+                if (r <= 0) break;
+                env *= r * r;
+            }
         }
         if (t > v.cutAt) {
             const double c = 1.0 - (t - v.cutAt) / chokeFade;
@@ -521,8 +620,21 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
             l = l * (1 - w) + cubic(s.l, alt) * w;
             r = r * (1 - w) + (stereo ? cubic(s.r, alt) : cubic(s.l, alt)) * w;
         }
-        const double g = v.amp * env;
-        const double pl = z.pan > 0 ? 1 - z.pan : 1, pr = z.pan < 0 ? 1 + z.pan : 1;
+        if (filtered) {
+            if (me && i % 16 == 0) {
+                if (t <= v.noteLen) modLevel = modEnv(t);
+                else {
+                    if (modAtOff < 0) modAtOff = modEnv(v.noteLen);
+                    modLevel = modRelease > 0 ? std::max(0.0, modAtOff * (1 - (t - v.noteLen) / modRelease)) : 0;
+                }
+                const double hz = v.cutoffHz * std::pow(2.0, v.modEnvCents * modLevel / 1200);
+                fl.set(ftype, hz, fq, 0, sr);
+                fr.b0 = fl.b0; fr.b1 = fl.b1; fr.b2 = fl.b2; fr.a1 = fl.a1; fr.a2 = fl.a2;
+            }
+            l = (float)fl.process(l); r = (float)fr.process(r);
+        }
+        const double g = v.amp * env * filterGain;
+        const double pl = z.sf2 ? panL : pan > 0 ? 1 - pan : 1, pr = z.sf2 ? panR : pan < 0 ? 1 + pan : 1;
         out.left[idx] += (float)(l * g * pl);
         out.right[idx] += (float)(r * g * pr);
         pos += ratio;
@@ -533,8 +645,25 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
 
 std::string resolveSampleFile(const std::string &name, const std::string &baseDir) { return resolveIn(name, baseDir); }
 
+bool findSampleEntry(const std::string &kind, const std::string &query, const std::string &baseDir, std::string &path, std::string &err) {
+    path = resolveIn(query, baseDir);
+    return !path.empty() || findEntry(kind, query, path, err);
+}
+
+std::string soundFontDir() { return (platform::dataDir() / "soundfonts").string(); }
+
+std::string defaultSoundFont() {
+    if (const char *env = std::getenv("WAVELENGTH_SOUNDFONT")) { std::error_code ec; if (fs::exists(env, ec)) return env; }
+    const SampleLibraryEntry *best = nullptr;
+    for (auto &e : sampleLibrary())
+        if (e.kind == "soundfont" && e.category == "General MIDI" && (!best || e.count > best->count)) best = &e;
+    return best ? best->path : "";
+}
+
 std::vector<std::string> sampleRoots() {
     std::vector<std::string> roots = platform::envPathList("WAVELENGTH_SAMPLES_PATH");
+    std::error_code sec;
+    if (fs::is_directory(soundFontDir(), sec)) roots.push_back(soundFontDir());   // `samples --install-soundfont` puts them here
     // Bitwig Studio's installed sound content, newest package format first
 #if defined(__APPLE__)
     const fs::path bitwig = fs::path(home()) / "Library/Application Support/Bitwig/Bitwig Studio/installed-packages";
@@ -580,6 +709,12 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                         for (size_t q = 0; (q = xml.find("<sample ", q)) != std::string::npos; ++q) ++e.count;
                     }
                     lib.push_back(e);
+                } else if (ext == ".sf2" || ext == ".sf3") {
+                    SoundFont sf;
+                    std::string e2;
+                    if (!sf.open(p.string(), e2)) continue;
+                    const bool gm = std::count_if(sf.presets().begin(), sf.presets().end(), [](const Sf2Preset &q) { return q.bank == 0; }) >= 128;
+                    lib.push_back({"soundfont", p.stem().string(), p.string(), gm ? "General MIDI" : "", sf.presets().size()});
                 } else if (ext == ".sfz") {
                     std::vector<uint8_t> x;
                     if (!readFile(p.string(), x)) continue;
@@ -682,7 +817,8 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
-                                                "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz"};
+                                                "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz",
+                                                "soundfont", "program", "bank", "preset"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
@@ -693,7 +829,28 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     bool notePolyOne = false;
     const bool sfzAsMultisample = cfg.contains("multisample") && cfg["multisample"].is_string() &&
                                   lower(fs::path(cfg["multisample"].get<std::string>()).extension().string()) == ".sfz";
-    if (cfg.contains("sfz") || sfzAsMultisample) {
+    std::shared_ptr<SoundFont> soundfont;
+    bool isSf2 = false;
+    if (cfg.contains("soundfont")) {
+        isSf2 = true;
+        const std::string q = cfg["soundfont"].get<std::string>();
+        std::string path = resolveIn(q, job.baseDir);
+        if (path.empty() && !findEntry("soundfont", q, path, err)) return false;
+        soundfont = std::make_shared<SoundFont>();
+        if (!soundfont->open(path, err)) return false;
+        const Sf2Preset *pr = nullptr;
+        if (cfg.contains("preset")) {
+            pr = soundfont->findByName(cfg["preset"].get<std::string>());
+            if (!pr) { err = fs::path(path).filename().string() + ": no single preset named '" + cfg["preset"].get<std::string>() + "' (wavelength samples --soundfont <name> lists them)"; return false; }
+        } else {
+            pr = soundfont->find(cfg.value("bank", 0), cfg.value("program", 0));
+            if (!pr) { err = fs::path(path).filename().string() + ": no preset for bank " + std::to_string(cfg.value("bank", 0)) + " program " + std::to_string(cfg.value("program", 0)); return false; }
+        }
+        std::vector<Sf2Zone> sz;
+        if (!soundfont->zones(*pr, sz, err)) return false;
+        sf2Zones(sz, zones);
+        source = path;
+    } else if (cfg.contains("sfz") || sfzAsMultisample) {
         isSfz = true;
         const std::string q = cfg.contains("sfz") ? cfg["sfz"].get<std::string>() : cfg["multisample"].get<std::string>();
         std::string path = resolveIn(q, job.baseDir);
@@ -783,7 +940,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     }
 
     const double sr = job.sampleRate;
-    const bool allOneShot = isSfz && std::all_of(zones.begin(), zones.end(), [](const Zone &z) { return z.oneShot; });
+    const bool allOneShot = isSfz && std::all_of(zones.begin(), zones.end(), [](const Zone &z) { return z.oneShot || z.releaseTrigger; });
     const bool oneShot = cfg.value("oneShot", isKit || allOneShot);
     const double attack = cfg.value("attack", isKit ? 0.0 : 0.002);
     const double release = cfg.value("release", isKit ? 0.05 : 0.25);
@@ -794,7 +951,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     std::vector<std::set<int>> chokes;
     if (cfg.contains("choke")) for (auto &g : cfg["choke"]) chokes.push_back(g.get<std::set<int>>());
     else if (isKit) chokes.push_back({42, 44, 46});   // closed and pedal hats cut the open hat
-    else if (isSfz) {   // SFZ group / off_by: a note in group G cuts what plays in regions with off_by=G
+    else if (isSfz || isSf2) {   // SFZ group / off_by, SF2 exclusiveClass: a note in group G cuts what plays in regions with off_by=G
         std::map<int, std::set<int>> groups;
         for (auto &z : zones)
             if (z.offBy)
@@ -806,7 +963,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                         }
         for (auto &[g, keys] : groups) chokes.push_back(keys);
     }
-    const bool chokesCut = oneShot || (isSfz && !chokes.empty());
+    const bool chokesCut = oneShot || ((isSfz || isSf2) && !chokes.empty());
 
     std::map<std::string, std::shared_ptr<SampleData>> cache;
     auto load = [&](const std::string &file, std::shared_ptr<SampleData> &outData) -> bool {
@@ -814,6 +971,12 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (it != cache.end()) { outData = it->second; return true; }
         std::vector<uint8_t> bytes;
         std::string e2;
+        if (soundfont && file.rfind("sf2#", 0) == 0) {
+            auto d = std::make_shared<SampleData>();
+            if (!soundfont->sampleData(std::atoi(file.c_str() + 4), *d, err)) return false;
+            cache[file] = outData = d;
+            return true;
+        }
         if (isSfz && !file.empty() && file[0] == '*') {
             auto d = std::make_shared<SampleData>();
             if (!generatorSample(file, *d, err)) return false;
@@ -865,7 +1028,8 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         return n.bend.back().second;
     };
 
-    std::map<int, size_t> rr;   // round-robin position per key
+    const bool hasRelease = std::any_of(zones.begin(), zones.end(), [](const Zone &z) { return z.releaseTrigger; });
+    std::map<int, size_t> rr;   // round-robin position per key (release triggers from 1000)
     std::map<int, int> missed;  // key -> notes with no zone
     // SFZ keyswitches: a note in the switch range picks the regions with that sw_last and makes no sound
     int curSw = swDefault >= 0 ? swDefault : (swHigh >= 0 ? swLow : -1);
@@ -877,13 +1041,13 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         auto velOk = [&](const Zone &z) { return vel127 >= z.velLow && vel127 <= z.velHigh; };
         auto selOk = [&](const Zone &z) { return select >= z.selLow && select <= z.selHigh && (z.sw < 0 || z.sw == curSw); };
         std::vector<const Zone *> hit;
-        for (auto &z : zones) if (n.key >= z.keyLow && n.key <= z.keyHigh && velOk(z) && selOk(z)) hit.push_back(&z);
-        if (hit.empty() && !isKit && !isSfz) {
+        for (auto &z : zones) if (!z.releaseTrigger && n.key >= z.keyLow && n.key <= z.keyHigh && velOk(z) && selOk(z)) hit.push_back(&z);
+        if (hit.empty() && !isKit && !isSfz && !isSf2) {
             // no zone covers this key: stretch the zones with the nearest root (velocity first, then any)
             for (int pass = 0; pass < 2 && hit.empty(); ++pass) {
                 int best = 1000;
-                for (auto &z : zones) if ((pass || velOk(z)) && selOk(z)) best = std::min(best, std::abs(z.root - n.key));
-                for (auto &z : zones) if ((pass || velOk(z)) && selOk(z) && std::abs(z.root - n.key) == best) hit.push_back(&z);
+                for (auto &z : zones) if (!z.releaseTrigger && (pass || velOk(z)) && selOk(z)) best = std::min(best, std::abs(z.root - n.key));
+                for (auto &z : zones) if (!z.releaseTrigger && (pass || velOk(z)) && selOk(z) && std::abs(z.root - n.key) == best) hit.push_back(&z);
             }
         }
         if (hit.empty()) { missed[n.key] += (int)ph.notes.size(); continue; }
@@ -916,20 +1080,60 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         double tempoSemis = 0;
         if (loopBpm > 0) tempoSemis = 12 * std::log2(job.tempo.bpmAtBeat(job.tempo.secToBeat(n.start)) / loopBpm);
         const double velDb = velSens * 24 * std::log10(std::max(n.velocity, 0.01));   // scaled per zone by amp_veltrack
-        for (auto *z : play1) {
+        // a voice for zone z from `from` seconds (the note start, or its end for a release trigger)
+        auto voice = [&](const Zone *z, double from, double noteLen, double extraDb) -> bool {
             Voice v;
             v.zone = z;
             if (!load(z->file, v.data)) return false;
             double w = 1;
             if (z->velLowFade > 0 && vel127 < z->velLow + z->velLowFade) w *= (vel127 - z->velLow + 1.0) / (z->velLowFade + 1.0);
             if (z->velHighFade > 0 && vel127 > z->velHigh - z->velHighFade) w *= (z->velHigh - vel127 + 1.0) / (z->velHighFade + 1.0);
-            v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velDb * z->velTrack) / 20);
+            v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velDb * z->velTrack + extraDb) / 20);
             v.key = keyAt;
             v.semisOffset = z->tune + transpose + tempoSemis;
-            v.startFrame = (size_t)std::llround(n.start * sr);
-            v.noteLen = oneShot || z->oneShot ? INFINITY : ph.end - n.start;
-            v.cutAt = cutAt;
+            v.startFrame = (size_t)std::llround((from + z->delay) * sr);
+            v.noteLen = noteLen - z->delay;
+            v.cutAt = cutAt - (from - n.start) - z->delay;
+            if (z->sf2) {   // SoundFont: modulators for this key and velocity
+                const Sf2Zone &q = *z->sf2;
+                const double vel = vel127 / 127.0;
+                const double cb = std::clamp(q.attenuationCb + q.modulate(Sf2Zone::kAttenuation, n.key, vel), 0.0, 1440.0);   // never a boost
+                v.amp *= std::pow(10.0, -cb / 200);
+                const double cents = q.fcCents + q.modulate(Sf2Zone::kFilterFc, n.key, vel);
+                v.modEnvCents = q.modEnvToFc + q.modulate(Sf2Zone::kModEnvToFc, n.key, vel);
+                v.resonanceDb = std::clamp((q.qCb + q.modulate(Sf2Zone::kFilterQ, n.key, vel)) / 10, 0.0, 96.0);
+                // the filter runs when it closes, or resonates (FluidSynth always filters; open and flat it passes everything)
+                if (cents < 13500 || cents + v.modEnvCents < 13500 || v.resonanceDb > 0) v.cutoffHz = 8.176 * std::pow(2.0, std::min(cents, 13500.0) / 1200);
+                else v.modEnvCents = 0;
+                v.panOffset = q.modulate(Sf2Zone::kPan, n.key, vel) / 500;
+                v.semisOffset += q.modulate(Sf2Zone::kCoarseTune, n.key, vel) + q.modulate(Sf2Zone::kFineTune, n.key, vel) / 100;
+                v.tcAttack = q.modulate(Sf2Zone::kAttackVol, n.key, vel);
+                v.tcHold = q.modulate(Sf2Zone::kHoldVol, n.key, vel);
+                v.tcDecay = q.modulate(Sf2Zone::kDecayVol, n.key, vel);
+                v.tcRelease = q.modulate(Sf2Zone::kReleaseVol, n.key, vel);
+                v.tcModAttack = q.modulate(Sf2Zone::kAttackMod, n.key, vel);
+                v.tcModHold = q.modulate(Sf2Zone::kHoldMod, n.key, vel);
+                v.tcModDecay = q.modulate(Sf2Zone::kDecayMod, n.key, vel);
+                v.tcModRelease = q.modulate(Sf2Zone::kReleaseMod, n.key, vel);
+            } else if (z->filter) {
+                v.cutoffHz = z->cutoff * std::pow(2.0, (z->filVelCents * vel127 / 127.0 + z->filKeyCents * (n.key - z->filKeyCenter)) / 1200);
+                v.resonanceDb = z->resonanceDb;
+            }
+            if (v.noteLen <= 0 && !std::isinf(noteLen)) return true;
             play(v, out, sr, attack, release);
+            return true;
+        };
+        for (auto *z : play1)
+            if (!voice(z, n.start, oneShot || z->oneShot ? INFINITY : ph.end - n.start, 0)) return false;
+        if (hasRelease) {   // SFZ release triggers: key-up sounds when the note ends, quieter the longer it was held
+            const double end = ph.end, held = ph.end - n.start;
+            std::vector<const Zone *> rel;
+            for (auto &z : zones) if (z.releaseTrigger && n.key >= z.keyLow && n.key <= z.keyHigh && velOk(z) && selOk(z)) rel.push_back(&z);
+            std::vector<const Zone *> relOne, relRobin;
+            for (auto *z : rel) (z->roundRobin ? relRobin : relOne).push_back(z);
+            if (!relRobin.empty()) relOne.push_back(relRobin[rr[1000 + n.key]++ % relRobin.size()]);
+            for (auto *z : relOne)
+                if (!voice(z, end, INFINITY, -z->rtDecay * held)) return false;
         }
     }
     size_t silent = 0;

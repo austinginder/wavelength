@@ -5,6 +5,16 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- SoundFonts in `builtin:sampler`: `"soundfont": "<name or path>"` with `"program"`/`"bank"` or `"preset"`,
+  `.sf2` and `.sf3` (Ogg Vorbis samples). Zones, loops, the volume envelope, the resonant filter with
+  its modulation envelope, exclusive classes and the velocity and key modulators, checked against
+  FluidSynth 2.6 (levels within 0.5 dB). `wavelength samples --soundfont <name>` lists presets;
+  `samples --install-soundfont` downloads MuseScore General (MIT) into the settings folder.
+- MIDI and MusicXML imports fall back on the General MIDI SoundFont: programs without a close Bitwig
+  instrument (acoustic guitars, saxophones, ethnic, percussive and effects programs) and every drum
+  part (the GM kits, so congas, cowbells and the rest sound) play it instead of stand-ins.
+- SFZ filters (`cutoff`, `resonance`, `fil_type`, velocity and key tracking), release triggers
+  (`trigger=release`, `rt_decay`) and `delay`/`ampeg_delay`.
 - Samples and audio clips in AIFF/AIFC, FLAC, MP3 and Ogg Vorbis, not only WAV: `builtin:sampler`
   kits, single samples and multisamples, `builtin:audio` clips, `analyze`, `master` input and
   DAWproject audio clips. Files are told apart by their contents; MP3s lose their encoder delay

@@ -36,7 +36,7 @@ https://wavelength.run
 - **Set parameters** by value or by the plugin's own display text (`"Cutoff": "800 Hz"`), and
   automate them with breakpoints, steps and LFOs.
 - **Play samples without a plugin:** `builtin:sampler` plays Bitwig `.multisample`
-  instruments (pianos, organs, guitars, basses, orchestral), SFZ instruments, drum-machine kit folders mapped
+  instruments (pianos, organs, guitars, basses, orchestral), SFZ instruments, SoundFonts (`.sf2`/`.sf3`, matched against FluidSynth), drum-machine kit folders mapped
   to General MIDI (Legend 707/808/909, …), loops and single samples (WAV, AIFF, FLAC, MP3, Ogg Vorbis). It supports glide, per-note
   pitch bend, slices and reverse.
 - **Play expressively:** swing and humanize (`groove`), strummed chords, tempo ramps, MIDI CC,
@@ -157,7 +157,7 @@ A minimal job:
 |---|---|
 | `plugins [--rescan] [--json]` | Lists CLAP, VST3 and VST2 plugins and the built-in instruments (Intel-only ones marked for Rosetta). It searches the standard plug-in folders (see Install), `$WAVELENGTH_CLAP_PATH`, `$WAVELENGTH_VST3_PATH` and `$WAVELENGTH_VST2_PATH`, and caches results per bundle. |
 | `presets <plugin> [--search T] [--rescan] [--json]` | Lists a plugin's presets to use by name as `"preset"`, with category and notes (e.g. Guitar Rig racks marked free edition or Pro). |
-| `samples [--search T] [--kit NAME] [--json]` | Lists sample libraries for `builtin:sampler` (Bitwig content and `$WAVELENGTH_SAMPLES_PATH`); `--kit` prints a kit's key map. |
+| `samples [--search T] [--kit NAME] [--soundfont NAME] [--install-soundfont] [--json]` | Lists sample libraries for `builtin:sampler` (Bitwig content, SoundFonts, SFZ and `$WAVELENGTH_SAMPLES_PATH`); `--kit` prints a kit's key map, `--soundfont` a SoundFont's presets. `--install-soundfont` downloads MuseScore General (MIT, 40 MB, with curl) into the settings folder: the General MIDI sounds MIDI and MusicXML imports fall back on. |
 | `audition <plugin> [--jobs N] [--limit N] [--rebuild]` | Renders every preset once in worker processes and indexes how it sounds (octave offset, brightness, band balance, envelope, width), so `presets` can show and search sound tags. |
 | `analyze <file.wav \| render-dir> [--start S] [--end S] [--peaks] [--json]` | Measures pitch, brightness, band balance, stereo width, onsets and envelope of a WAV, or of a render's mix, stems (bus stems too) and sections. `--peaks` lists the strongest spectral peaks as Hz, note and level, and the spacing they share (a comb's tuning). |
 | `params <plugin> [--preset N] [--state F] [--all] [--set "Name=v"]… [--map "Name"] [--json]` | Shows parameters with ranges, current values and display text, optionally after loading a preset or state. `--set "Rate=0.5"` prints the display text of a plain value (or the value display text or a note name reads as), `--map "Rate"` a value -> display table across the range. |
@@ -214,7 +214,7 @@ render's stem loudness (`<song>/out` by default).
 2. Auditions inside each instrument's range, and an envelope-depth measure for rhythmic patches.
 3. DAWproject import: automation of plugin effects and of Bitwig's own devices, launcher clips, more
    Bitwig devices (Mid-Side Split, Polymer, Phase-4).
-4. A General MIDI SoundFont fallback; SFZ filters and release triggers.
+4. SoundFont and SFZ LFOs (vibrato, tremolo) and pitch envelopes.
 5. A local service with a web UI and live playback through the speakers; Audio Unit hosting.
 
 ## License

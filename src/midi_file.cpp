@@ -79,11 +79,13 @@ std::vector<std::string> gmSounds(int program) {
     return {"Select 3 FX", "Pad Hefollows"};
 }
 
-// the installed multisample for a program ("" = none)
-std::string gmMultisample(int program) {
+// the installed multisample for a program ("" = none); `firstOnly`: only its best match, no stand-ins
+std::string gmMultisample(int program, bool firstOnly = false) {
     const auto &lib = sampleLibrary();
     auto lower = [](std::string s) { for (auto &c : s) c = (char)std::tolower((unsigned char)c); return s; };
-    for (const std::string &want : gmSounds(program)) {
+    const std::vector<std::string> wants = gmSounds(program);
+    for (size_t wi = 0; wi < (firstOnly ? std::min<size_t>(1, wants.size()) : wants.size()); ++wi) {
+        const std::string &want = wants[wi];
         const std::string w = lower(want);
         const SampleLibraryEntry *best = nullptr;
         for (auto &e : lib) {
@@ -175,7 +177,35 @@ bool parseTrack(const uint8_t *p, size_t n, std::vector<Ev> &out, int &order, st
 } // namespace
 
 std::string gmProgramName(int program) { return kGmNames[std::clamp(program, 0, 127)]; }
-std::string gmProgramSound(int program) { return gmMultisample(std::clamp(program, 0, 127)); }
+json gmSound(int program, bool drums, std::string &note) {
+    program = std::clamp(program, 0, 127);
+    note.clear();
+    // the General MIDI SoundFont, by library name when the library finds it (portable jobs), else by path
+    std::string sf = defaultSoundFont();
+    if (!sf.empty()) {
+        std::string found, e;
+        const std::string stem = fs::path(sf).stem().string();
+        if (findSampleEntry("soundfont", stem, "", found, e) && found == sf) sf = stem;
+    }
+    if (drums) {
+        if (!sf.empty()) return {{"plugin", "builtin:sampler"}, {"sampler", {{"soundfont", sf}, {"bank", 128}, {"program", program}}}};
+        return {{"plugin", "builtin:drums"}};
+    }
+    // programs whose first-choice multisample is the real instrument (not a stand-in such as a marimba for
+    // steel drums or an organ patch for saxophones): harpsichord, bells, accordion, harp, saxes, ethnic,
+    // percussive and effects programs play the SoundFont instead
+    auto close = [](int p) {
+        return !(p == 6 || (p >= 8 && p <= 10) || p == 24 || p == 25 || p == 14 || p == 15 || (p >= 20 && p <= 23) || p == 46 || (p >= 64 && p <= 67) ||
+                 (p >= 75 && p <= 79) || p >= 96);
+    };
+    std::string ms = close(program) ? gmMultisample(program, true) : "";   // a close multisample (Bitwig's pianos, strings) beats the SoundFont
+    if (!ms.empty()) return {{"plugin", "builtin:sampler"}, {"sampler", {{"multisample", ms}}}};
+    if (!sf.empty()) return {{"plugin", "builtin:sampler"}, {"sampler", {{"soundfont", sf}, {"program", program}}}};
+    ms = gmMultisample(program);
+    if (!ms.empty()) return {{"plugin", "builtin:sampler"}, {"sampler", {{"multisample", ms}}}};
+    note = std::string("no sound for ") + kGmNames[program] + " in the sample library (run `wavelength samples --install-soundfont` for a General MIDI set); builtin:drums stands in";
+    return {{"plugin", "builtin:drums"}};
+}
 
 bool importMidiFile(const std::string &path, const std::string &outDir, const std::string &instrument, MidiImport &res, std::string &err) {
     std::vector<uint8_t> d;
@@ -331,7 +361,6 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
     // tracks
     json out = json::array();
     std::set<std::string> used;
-    std::map<std::string, std::string> soundOf;   // program -> multisample path (looked up once)
     for (auto &p : parts) {
         if (p.notes.empty()) continue;
         std::sort(p.notes.begin(), p.notes.end(), [](const json &a, const json &b) {   // by start, then as played
@@ -348,19 +377,13 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
         used.insert(unique);
         json t = {{"name", unique}};
         bool sampler = false;
-        if (drums) t["plugin"] = "builtin:drums";
-        else if (!instrument.empty()) t["plugin"] = instrument;
-        else {
-            const std::string key = std::to_string(program);
-            if (!soundOf.count(key)) soundOf[key] = gmMultisample(program);
-            if (!soundOf[key].empty()) {
-                t["plugin"] = "builtin:sampler";
-                t["sampler"] = {{"multisample", soundOf[key]}};
-                sampler = true;
-            } else {
-                t["plugin"] = "builtin:drums";
-                res.notes.push_back(unique + ": no sound for " + kGmNames[program] + " in the sample library; set \"plugin\" (builtin:drums stands in)");
-            }
+        if (!instrument.empty() && !drums) t["plugin"] = instrument;
+        else {   // General MIDI: a close multisample, else the GM SoundFont (drums: its kit), else builtin:drums
+            std::string why;
+            const json snd = gmSound(program, drums, why);
+            t["plugin"] = snd["plugin"];
+            if (snd.contains("sampler")) { t["sampler"] = snd["sampler"]; sampler = true; }
+            if (!why.empty()) res.notes.push_back(unique + ": " + why);
         }
         if (p.program >= 0) t["midiProgram"] = p.program;   // kept for export
         t["midiChannel"] = p.channel;   // kept for export
@@ -538,7 +561,8 @@ bool exportMidiFile(const Job &job, const json &raw, const std::string &path, st
         const json rt = ti < rawTracks.size() ? rawTracks[ti] : json::object();
         if (t.notes.empty()) { notes.push_back(t.name + ": no notes (audio clips) ; left out"); continue; }
         const int kept = rt.contains("midiChannel") && rt["midiChannel"].is_number_integer() ? std::clamp(rt["midiChannel"].get<int>(), 0, 15) : -1;
-        const bool drums = kept >= 0 ? kept == 9 : (t.plugin == "builtin:drums" || (rt.contains("sampler") && rt["sampler"].is_object() && rt["sampler"].contains("kit")));
+        const bool drums = kept >= 0 ? kept == 9 : (t.plugin == "builtin:drums" || (rt.contains("sampler") && rt["sampler"].is_object() &&
+                                                    (rt["sampler"].contains("kit") || rt["sampler"].value("bank", 0) == 128)));
         int ch = kept >= 0 ? kept : drums ? 9 : nextChannel;
         if (kept < 0 && !drums) { ++nextChannel; if (nextChannel == 9) ++nextChannel; if (nextChannel > 15) { nextChannel = 0; notes.push_back("more than 15 melodic tracks: channels repeat (each track stays on its own MIDI track)"); } }
         std::vector<OutEv> ev;

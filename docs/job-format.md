@@ -166,6 +166,7 @@ Studio package folders; paths work too (relative to the job).
 |---|---|---|
 | `multisample` | | Name or path of a `.multisample` (or a folder with `multisample.xml`). Key and velocity zones, velocity crossfades, round robins, sustain loops and key tracking come from the file. Keys outside every zone stretch the nearest sample. |
 | `sfz` | | Name or path of an `.sfz` file (a `multisample` ending in `.sfz` works too). See [SFZ](#sfz) below. |
+| `soundfont` + `program` / `bank` / `preset` | bank 0 | A SoundFont (`.sf2`, or `.sf3` with Ogg Vorbis samples) by name or path, and one of its presets: General MIDI `program` 0-127 in `bank` (128 = drum kits, `program` picks the kit), or `"preset": "Violin"` by name. `wavelength samples --soundfont <name>` lists its presets; `wavelength samples --install-soundfont` downloads MuseScore General (MIT, 40 MB), the General MIDI set imports fall back on. See [SoundFonts](#soundfonts) below. |
 | `kit` | | A folder of one-shot samples mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
 | `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths), or `{"file": ..., "gain": dB, "pan": -1..1, "tune": semitones}`, or just the settings for the kit's own sample on that key. |
 | `sample` + `root` | 60 | One sample played chromatically, `root` = the key it sounds at its own pitch. |
@@ -207,10 +208,25 @@ and `#include`. What plays:
 - Controllers stay at their `set_ccN` values (0 when unset): regions gated by `locc`/`hicc` play only
   if that holds (a piano's pedal-down resonance regions are left out), and `*cc*` modulation is ignored.
 - Generators `*sine`, `*saw`, `*square`, `*triangle`, `*noise`, `*silence` (one cycle at `pitch_keycenter`, looped).
+- Filters: `cutoff`, `resonance`, `fil_type` (low-, high- and band-pass), `fil_veltrack`, `fil_keytrack`,
+  `fil_keycenter`. Release triggers (`trigger=release`: key-up sounds when the note ends, `rt_decay` dB
+  quieter per second held), `delay` / `ampeg_delay`.
 
-Not played: release triggers (`trigger=release`), filters (`cutoff`, `fil_type`), LFOs and pitch
-envelopes, `<curve>` and `<effect>`. The render warns once, naming the opcodes it skipped.
-`examples/sfz-tour.json` plays `examples/sfz/tour.sfz`, built from generators only.
+Not played: filter and pitch envelopes, LFOs, `<curve>` and `<effect>`. The render warns once, naming
+the opcodes it skipped. `examples/sfz-tour.json` plays `examples/sfz/tour.sfz`, built from generators only.
+
+#### SoundFonts
+
+`"sampler": {"soundfont": "MuseScore_General", "program": 40}` plays a preset of a SoundFont the way
+FluidSynth does: its zones (key and velocity ranges, stereo pairs), tuning, loops, the volume
+envelope (decay and release falling in dB, key-scaled hold and decay), the low-pass filter with its
+resonance and the modulation envelope that opens it, exclusive classes (a closed hat cuts the open
+one) and the modulators that follow velocity and key (level, filter, envelope times, pan, tuning).
+Controller modulators are read at their resting positions (volume 100, expression 127, pedals up).
+Checked against FluidSynth 2.6 on MuseScore General: levels within 0.5 dB, brightness within 2%.
+Not played: LFOs (vibrato, tremolo), reverb and chorus sends. SoundFonts are found in the sample roots
+and in Wavelength's settings folder under `soundfonts/` (where `--install-soundfont` puts them);
+`$WAVELENGTH_SOUNDFONT` names the one MIDI and MusicXML imports use.
 
 ## Buses, master, markers
 

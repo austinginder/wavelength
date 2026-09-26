@@ -16,6 +16,7 @@
 #include "clips.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
+#include "sf2.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
 #include "instance.hpp"
@@ -187,7 +188,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -334,6 +335,53 @@ int cmdPresets(const Args &a) {
 // ---- samples ---------------------------------------------------------------------------
 int cmdSamples(const Args &a) {
     std::string err;
+    if (a.has("--install-soundfont")) {   // MuseScore General (MIT, 40 MB): the General MIDI fallback for imports
+        const std::string curl = platform::findProgram("curl");
+        if (curl.empty()) return fail(a, "--install-soundfont needs curl on the PATH");
+        const fs::path dir = soundFontDir();
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const std::string base = "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/";
+        for (const std::string name : {"MuseScore_General_License.md", "MuseScore_General.sf3"}) {
+            const fs::path to = dir / name, part = dir / (name + ".part");
+            if (fs::exists(to, ec) && !a.has("--force")) continue;
+            std::fprintf(stderr, "downloading %s%s\n", base.c_str(), name.c_str());
+            platform::Process p;
+            if (!platform::spawn({curl, "-fsSL", "-o", part.string(), base + name}, p, false, false)) return fail(a, "cannot start curl");
+            std::string crash;
+            while (!platform::finished(p, crash)) platform::pumpEvents(50);
+            SoundFont check;
+            if (!fs::exists(part, ec) || fs::file_size(part, ec) == 0 || (name.size() > 4 && name.substr(name.size() - 4) == ".sf3" && !check.open(part.string(), err))) {
+                fs::remove(part, ec);
+                return fail(a, "download of " + name + " failed" + (err.empty() ? "" : ": " + err));
+            }
+            fs::rename(part, to, ec);
+        }
+        const std::string path = (dir / "MuseScore_General.sf3").string();
+        if (a.has("--json")) emit(json{{"ok", true}, {"soundfont", path}}.dump(2));
+        else std::fprintf(OUT, "%s\nMIDI and MusicXML imports now fall back on it; use it in a job as \"sampler\": {\"soundfont\": \"MuseScore_General\", \"program\": 0}.\n", path.c_str());
+        return 0;
+    }
+    if (a.has("--soundfont")) {   // a SoundFont's presets
+        std::string path;
+        if (!findSampleEntry("soundfont", a.get("--soundfont"), fs::current_path().string(), path, err)) return fail(a, err);
+        SoundFont sf;
+        if (!sf.open(path, err)) return fail(a, err);
+        std::string q = a.get("--search");
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+        json list = json::array();
+        for (auto &p : sf.presets()) {
+            std::string n = p.name;
+            std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+            if (!q.empty() && n.find(q) == std::string::npos) continue;
+            if (a.has("--json")) list.push_back({{"bank", p.bank}, {"program", p.program}, {"name", p.name}});
+            else std::fprintf(OUT, "%3d:%-3d  %s\n", p.bank, p.program, p.name.c_str());
+        }
+        if (a.has("--json")) emit(json{{"ok", true}, {"soundfont", path}, {"presets", list}}.dump(2, ' ', false, json::error_handler_t::replace));
+        else std::fprintf(OUT, "\n%s\nUse as \"sampler\": {\"soundfont\": \"%s\", \"program\": N} (\"bank\": 128 for drum kits) or \"preset\": \"<name>\".\n",
+                          path.c_str(), fs::path(path).stem().string().c_str());
+        return 0;
+    }
     if (a.has("--kit")) {
         std::vector<std::pair<int, std::string>> map;
         std::vector<std::string> unmapped;
@@ -365,10 +413,10 @@ int cmdSamples(const Args &a) {
         ++shown;
         if (a.has("--json")) list.push_back({{"kind", e.kind}, {"name", e.name}, {"category", e.category}, {"count", e.count}, {"path", e.path}});
         else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
-                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : "zones");
+                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : "zones");
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2, ' ', false, json::error_handler_t::replace));
-    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"}, {\"sfz\": \"<name>\"} or {\"kit\": \"<name>\"}.\n",
+    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"}, {\"sfz\": \"<name>\"}, {\"soundfont\": \"<name>\", \"program\": N} or {\"kit\": \"<name>\"}.\n",
                       shown, lib.size());
     return 0;
 }
@@ -1494,7 +1542,7 @@ int run(int argc, char **argv) {
             {"plugins", {"--rescan", "--json", "--block", "--unblock", "--reason"}},
             {"params", {"--preset", "--state", "--format", "--all", "--map", "--steps", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
-            {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
+            {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
             {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument"}},

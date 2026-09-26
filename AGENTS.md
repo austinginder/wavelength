@@ -56,9 +56,10 @@ song.dawproject` does both steps.
 ## Starting from a MIDI file
 
 `wavelength import part.mid --out songs/x --json` makes a job from a Standard MIDI File (from
-a DAW, music21, another agent; from a notation program, prefer its MusicXML: see below). Channel 10 becomes `builtin:drums`; every other part gets
-a General MIDI-family sound from the sample library (piano, strings, brass, ...) so the job renders
-at once: then swap in real plugins and presets track by track (`"plugin"`, `"preset"`), keeping the
+a DAW, music21, another agent; from a notation program, prefer its MusicXML: see below). Every part gets a General MIDI sound so the job
+renders at once: a close Bitwig instrument when one is installed (pianos, strings, brass), else the
+General MIDI SoundFont (`wavelength samples --install-soundfont` once: all 128 programs and the GM drum
+kits, which also play channel 10), else `builtin:drums` for the drums. Then then swap in real plugins and presets track by track (`"plugin"`, `"preset"`), keeping the
 notes. `--instrument "Surge XT"` puts one plugin on every melodic part instead (controllers and
 pitch bend then reach it as automation). `wavelength export job.json --out song.mid` goes the other
 way: hand a part to a person to open in Bitwig, Cubase or a notation program.
@@ -216,7 +217,8 @@ in the job (details in `docs/effects.md`):
 - **Real samples:** `builtin:sampler` plays Bitwig's sound content and any folder of
   WAV, AIFF, FLAC, MP3 or Ogg Vorbis samples:
   `{"multisample": "Grand Piano"}`, SFZ instruments (`{"sfz": "path/to/Instrument.sfz"}`: most free
-  sample libraries; read the render's `sfz:` warning for what it skipped), organs, guitars, basses, and drum machine kits such as
+  sample libraries; read the render's `sfz:` warning for what it skipped), SoundFont presets
+  (`{"soundfont": "MuseScore_General", "program": 40}`, `"bank": 128` for GM drum kits), organs, guitars, basses, and drum machine kits such as
   `{"kit": "Legend 707"}` / `"Legend 808"` / `"Legend 909"`. Find them with
   `wavelength samples --search <text>`; check a kit's key map with `--kit <name>`.
 - **Space:** create buses with a `reverb` (and a `delay`, e.g. `"time": 0.75` beats) at

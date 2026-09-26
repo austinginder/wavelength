@@ -17,6 +17,10 @@ the Windows build compiles it in.
 | [stb_vorbis](https://github.com/nothings/stb) | 2c980bb (1.22) | public domain (Unlicense) or MIT | Ogg Vorbis samples |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
+`wavelength samples --install-soundfont` downloads [MuseScore General](https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/)
+(MIT; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, adapted by S. Christian Collins) with its
+licence file into the settings folder. It is not part of Wavelength's source or binaries.
+
 MP3 deliveries use [LAME](https://lame.sourceforge.io) (LGPL) when it is installed: Wavelength loads
 the system's `libmp3lame` at run time and neither includes nor distributes it (or runs `ffmpeg`
 when there is no LAME).

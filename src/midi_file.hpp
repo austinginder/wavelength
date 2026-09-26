@@ -28,9 +28,12 @@ struct MidiImport {
 // `instrument`: a plugin spec for every melodic track ("" = General MIDI sounds from the sample library)
 bool importMidiFile(const std::string &path, const std::string &outDir, const std::string &instrument, MidiImport &out, std::string &err);
 
-// General MIDI program 0-127: its name, and the installed multisample that plays it ("" = none)
+// General MIDI program 0-127: its name, and the sound a part with it gets: {"plugin", "sampler"}. A close
+// Bitwig multisample, else the General MIDI SoundFont (`samples --install-soundfont`), else a looser
+// multisample; drums get the SoundFont's kit (bank 128, `program` = kit) or builtin:drums. `note`
+// explains a stand-in ("" when there is none).
 std::string gmProgramName(int program);
-std::string gmProgramSound(int program);
+nlohmann::json gmSound(int program, bool drums, std::string &note);
 
 // `raw` is the job JSON `job` was parsed from (programs and drum kits are read from it)
 bool exportMidiFile(const Job &job, const nlohmann::json &raw, const std::string &path, std::vector<std::string> &notes, std::string &err);

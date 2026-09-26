@@ -454,7 +454,6 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
     // tracks
     json tracks = json::array();
     std::set<std::string> used;
-    std::map<int, std::string> soundOf;
     int nextChannel = 0;
     for (auto &p : parts) {
         // dynamics timeline in playing order: level marks and hairpins
@@ -518,15 +517,13 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
         used.insert(unique);
         json tj = {{"name", unique}};
         const int program = p.program >= 0 ? p.program : programFromName(name + " " + p.instrumentName);
-        if (p.percussion) tj["plugin"] = "builtin:drums";
-        else if (!instrument.empty()) tj["plugin"] = instrument;
+        if (!instrument.empty() && !p.percussion) tj["plugin"] = instrument;
         else {
-            if (!soundOf.count(program)) soundOf[program] = gmProgramSound(program);
-            if (!soundOf[program].empty()) { tj["plugin"] = "builtin:sampler"; tj["sampler"] = {{"multisample", soundOf[program]}}; }
-            else {
-                tj["plugin"] = "builtin:drums";
-                res.notes.push_back(unique + ": no sound for " + gmProgramName(program) + " in the sample library; set \"plugin\" (builtin:drums stands in)");
-            }
+            std::string why;
+            const json snd = gmSound(p.percussion ? 0 : program, p.percussion, why);
+            tj["plugin"] = snd["plugin"];
+            if (snd.contains("sampler")) tj["sampler"] = snd["sampler"];
+            if (!why.empty()) res.notes.push_back(unique + ": " + why);
         }
         if (!p.percussion) tj["midiProgram"] = program;
         int channel = p.channel;

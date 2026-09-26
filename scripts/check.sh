@@ -79,6 +79,28 @@ sys.exit(0 if order == [1, 2, 1, 2, 3, 4, 3, 5, 6, 7, 8, 9, 10, 6, 7, 8] and d =
 else
   echo "ok   musicxml: repeat order, transposition, dynamics, ties"
 fi
+# SoundFont: a generated one-sample SF2 plays in tune, loops past its 45 ms of audio, tracks the key, and
+# decays to its sustain (-20 dB) faster at low velocity (a velocity modulator on the decay time)
+mkdir -p out/check/sf2
+python3 scripts/make-test-sf2.py out/check/sf2/test.sf2
+cat > out/check/sf2/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 1, "stems": "float",
+ "tracks": [{"name": "Hi", "plugin": "builtin:sampler", "sampler": {"soundfont": "test.sf2", "program": 0}, "notes": [{"beat": 0, "dur": 3, "key": 69, "vel": 1.0}]},
+            {"name": "Lo", "plugin": "builtin:sampler", "sampler": {"soundfont": "test.sf2", "program": 0}, "notes": [{"beat": 0, "dur": 3, "key": 81, "vel": 0.3}]}]}
+JOB
+if ! "./$build/wavelength" render out/check/sf2/job.json --out "out/check/sf2/$build" --json > /dev/null 2>&1 || ! python3 -c '
+import json, subprocess, sys
+w = sys.argv[1]
+def an(f, s, e): return json.loads(subprocess.run([w, "analyze", f, "--start", str(s), "--end", str(e), "--json"], capture_output=True, text=True).stdout)
+d = sys.argv[2]
+hi0, hi2 = an(d + "/stems/01-hi.wav", 0.1, 0.3), an(d + "/stems/01-hi.wav", 2.0, 2.5)
+lo2 = an(d + "/stems/02-lo.wav", 2.0, 2.5)
+ok = hi0["pitch"]["note"] == "A4" and hi2["pitch"]["note"] == "A4" and lo2["pitch"]["note"] == "A5" and hi2["rmsDb"] > -60 and hi0["rmsDb"] - hi2["rmsDb"] > 5
+sys.exit(0 if ok else 1)' "./$build/wavelength" "out/check/sf2/$build"; then
+  echo "FAIL soundfont: pitch, loop, key tracking or envelope"; fail=1
+else
+  echo "ok   soundfont: generated SF2 in tune, looped, key-tracked, decaying"
+fi
 # deliveries: FLAC (24 and 16 bit) and a 24-bit WAV decode back to mix.wav's loudness and true peak
 dl="out/check/deliver/$build"
 if ! "./$build/wavelength" render examples/mastering.json --deliver flac,flac:16,wav:24 --out "$dl" --json 2>/dev/null | python3 -c '
