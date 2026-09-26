@@ -168,6 +168,15 @@ target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   target_compile_options(wavelength PRIVATE -Wno-psabi)   # GCC 10 ABI notes on arm64, not problems
 endif()
+# macOS: sign with a stable identity so privacy permissions survive rebuilds (e.g. Documents folder
+# access for `wavelength serve` as a login item): an ad-hoc signature changes with every build and
+# macOS asks again. -DWAVELENGTH_SIGN_IDENTITY="Apple Development: ..." on a local build tree.
+set(WAVELENGTH_SIGN_IDENTITY "" CACHE STRING "codesign identity for the built binary on macOS (empty = the linker's ad-hoc signature)")
+if(APPLE AND WAVELENGTH_SIGN_IDENTITY)
+  add_custom_command(TARGET wavelength POST_BUILD
+    COMMAND codesign --force --identifier run.wavelength.cli --sign "${WAVELENGTH_SIGN_IDENTITY}" $<TARGET_FILE:wavelength>
+    COMMENT "Signing wavelength (${WAVELENGTH_SIGN_IDENTITY})" VERBATIM)
+endif()
 if(APPLE)
   target_link_libraries(wavelength PRIVATE "-framework CoreFoundation" "-framework CoreGraphics")
 elseif(WIN32)
