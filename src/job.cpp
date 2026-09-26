@@ -647,6 +647,16 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         else if (stems == "16") out.stemBits = 16;
         else if (stems == "none") out.stemBits = 0;
         else throw std::runtime_error("\"stems\" must be \"float\", \"24\", \"16\" or \"none\"");
+        if (j.contains("deliver")) {   // "mp3", ["mp3:256", "flac"], [{"format": "flac", "bits": 16, "file": "song.flac"}]
+            const json list = j["deliver"].is_array() ? j["deliver"] : json::array({j["deliver"]});
+            for (const auto &d : list) {
+                DeliverySpec spec;
+                std::string derr;
+                if (!(d.is_string() || d.is_object()) || !parseDeliverySpec(d.is_string() ? d.get<std::string>() : d.dump(), spec, derr))
+                    throw std::runtime_error(derr.empty() ? "\"deliver\" entries are strings (\"mp3\", \"flac:16\") or objects" : derr);
+                out.deliver.push_back(spec);
+            }
+        }
         // outputs must name declared buses, and bus-to-bus routing must not loop
         auto busIndex = [&](const std::string &name) {
             for (size_t i = 0; i < out.buses.size(); ++i) if (out.buses[i].name == name) return (int)i;

@@ -1,6 +1,7 @@
 #pragma once
 // A render job: the JSON document agents write. See docs/job-format.md.
 #include "automation.hpp"
+#include "encode.hpp"
 #include "tempo.hpp"
 
 #include <nlohmann/json.hpp>
@@ -112,6 +113,7 @@ struct Job {
     bool levelFixed = false;        // render --level-from: reuse another render's master gains instead of targeting
     double fixedLoudnessGainDb = 0, fixedNormalizeGainDb = 0;   // where the target's gain goes: "peak" (before the trailing clip/limiter run), "limiter" (before the last limiter), "start"
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
+    std::vector<DeliverySpec> deliver;   // files written next to mix.wav (MP3, FLAC, 16/24-bit WAV)
     std::vector<Marker> markers;  // sections for per-section loudness in the report
     std::vector<KeyMark> keys;    // declared keys by bar, for `lint --harmony` (the render ignores them)
     RenderWindow window;

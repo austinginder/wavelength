@@ -438,6 +438,45 @@ void *loadLibrarySymbol(const std::string &path, const char *symbol, std::string
     return sym;
 }
 
+void *openSharedLibrary(const std::vector<std::string> &names, std::string &loaded) {
+    for (const auto &n : names) {
+#ifdef _WIN32
+        HMODULE lib = LoadLibraryW(widen(n).c_str());
+#else
+        void *lib = dlopen(n.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+        if (lib) { loaded = n; return reinterpret_cast<void *>(lib); }
+    }
+    return nullptr;
+}
+
+void *sharedSymbol(void *library, const char *symbol) {
+#ifdef _WIN32
+    return reinterpret_cast<void *>(GetProcAddress(reinterpret_cast<HMODULE>(library), symbol));
+#else
+    return dlsym(library, symbol);
+#endif
+}
+
+std::string findProgram(const std::string &name) {
+    const char *path = std::getenv("PATH");
+    if (!path) return "";
+#ifdef _WIN32
+    const std::string file = name + ".exe";
+#else
+    const std::string &file = name;
+#endif
+    std::stringstream ss(path);
+    std::string dir;
+    while (std::getline(ss, dir, pathListSeparator())) {
+        if (dir.empty()) continue;
+        std::error_code ec;
+        const std::filesystem::path p = std::filesystem::path(dir) / file;
+        if (std::filesystem::is_regular_file(p, ec)) return p.string();
+    }
+    return "";
+}
+
 std::string libraryLoadError(const std::string &path) {
 #if defined(__APPLE__) || defined(_WIN32)
     (void)path;

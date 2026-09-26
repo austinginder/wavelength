@@ -379,10 +379,14 @@ section. Don't master a mix that already went through a limiter. For a release, 
 `master` reads a mix's own lead-in from the render's report.json, so `master out/mix.wav --chain
 job.json` lines the sections up and keeps the lead-in.
 
+- **Deliver from the render, not with ffmpeg.** `"deliver": ["mp3", "flac"]` in the job (or
+  `render --deliver mp3`, `master --deliver mp3`) writes `mix.mp3` / `mix.flac` next to `mix.wav`,
+  decodes them again and reports each one's `truePeakDb` and `overshootDb` in `mix.deliveries`.
+  Give a `file` to write straight to its destination (`{"format": "mp3", "file": "/Users/me/Downloads/song.mp3"}`).
 - **MP3 and AAC overshoot.** Lossy encoding adds 0.4-1.0 dB of true peak: a `-1.3` limiter
   decoded to -0.9 dBTP on four album tracks, a `-2.0` one to -1.1 on a dense orchestral mix. For
-  a lossy release use a ceiling near `-2.0` (`-2.3` to `-2.7` for dense or breakbeat mixes) and
-  check the decoded file (`ffmpeg -i x.mp3 -af ebur128=peak=true -f null -`).
+  a lossy release use a ceiling near `-2.0` (`-2.3` to `-2.7` for dense or breakbeat mixes). The
+  render warns when a delivered MP3 decodes above -1 dBTP and says how far to lower the ceiling.
 - **Rides are a layer.** Put section rides in `automation.rides` (named curves allowed), not into
   `automation.gain`: they add to the written fader curve instead of replacing it.
 - **Rides move contrast, not the final level, when the master limits.** A master limiter or a

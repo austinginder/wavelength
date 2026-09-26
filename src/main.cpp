@@ -97,7 +97,7 @@ Usage:
       prints the plugin's display text for a plain value (or the value it reads for display
       text, "Name=800 Hz", or a note name); --map "Name" tabulates value -> display across the
       range (21 rows, or --steps N). Neither changes anything.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a worker whose plugin crashes is started again (job "retries", default 2); a track that
@@ -112,11 +112,15 @@ Usage:
       --from 41 --to 45 renders only bars 41-44 (after --preroll bars, default 2, rendered and cut:
       reverbs and held notes are already going); the files hold just those bars, and the report's
       "window" says where they sit in the song. Quick previews of a section, alone or with --tracks.
-  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--input-lead-in S] [--out DIR] [--json]
+      --deliver mp3,flac (mp3:256, flac:16, wav:16, wav:24; none) replaces the job's "deliver": files
+      written next to mix.wav, decoded again and measured (report mix.deliveries). MP3 needs LAME
+      (libmp3lame, or $WAVELENGTH_LAME; "none" = use ffmpeg) or ffmpeg. --tracks and --from renders skip it.
+  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--input-lead-in S] [--out DIR] [--deliver mp3,flac] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
       loudness before and after. A mix with a lead-in (read from the render's report.json, or
       --input-lead-in) is lined up with the markers and keeps its lead-in unless --lead-in.
+      --deliver (or the job's "deliver") writes MP3/FLAC/WAV files of the result, as for render.
   wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
       Load an optional starting state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
@@ -639,6 +643,19 @@ int cmdParams(const Args &a) {
     return 0;
 }
 
+json deliveriesJson(const std::vector<Delivery> &ds) {
+    auto r1 = [](double v) { return std::round(v * 10) / 10; };
+    json out = json::array();
+    for (auto &d : ds) {
+        json o = {{"format", d.spec.format}, {"file", d.file}, {"encoder", d.encoder}, {"lufs", r1(d.lufs)},
+                  {"truePeakDb", r1(d.truePeakDb)}, {"overshootDb", r1(d.overshootDb)}};
+        if (d.spec.format == "mp3") o["bitrate"] = d.spec.bitrate;
+        else o["bits"] = d.spec.bits;
+        out.push_back(o);
+    }
+    return out;
+}
+
 // ---- master ----------------------------------------------------------------------------
 // A finished mix through a master chain, without re-rendering the song: the file plays on a
 // builtin:audio track and the chain runs as the job's master (loudness target included).
@@ -661,15 +678,21 @@ int cmdMaster(const Args &a) {
             cf >> chain;
         }
     } catch (const std::exception &e) { return fail(a, std::string("chain is not valid JSON: ") + e.what()); }
-    json master, markers = json::array(), tempo = 120;
+    json master, markers = json::array(), tempo = 120, deliver = json::array();
     if (chain.is_array()) master = {{"fx", chain}};
     else if (chain.is_object() && (chain.contains("tracks") || chain.contains("master"))) {   // a song's job (or its master part): master, markers, tempo
         master = chain.value("master", json::object());
         markers = chain.value("markers", json::array());
         if (chain.contains("tempo")) tempo = chain["tempo"];
+        if (chain.contains("deliver")) deliver = chain["deliver"];
     } else if (chain.is_object()) master = chain;
     else return fail(a, "the chain must be an effect list, a master object ({\"fx\": [...], \"loudness\": -14}) or a job");
     if (a.has("--loudness")) master["loudness"] = std::atof(a.get("--loudness").c_str());
+    if (a.has("--deliver")) {
+        deliver = json::array();
+        std::stringstream list(a.get("--deliver"));
+        for (std::string item; std::getline(list, item, ',');) if (!item.empty() && item != "none") deliver.push_back(item);
+    }
     if (!master.is_object() || ((!master.contains("fx") || master["fx"].empty()) && !master.contains("loudness"))) {
         std::string keys;
         if (chain.is_object()) for (auto &[k, v] : chain.items()) keys += (keys.empty() ? "" : ", ") + k;
@@ -692,7 +715,7 @@ int cmdMaster(const Args &a) {
     json clip = {{"file", input}, {"beat", 0}};
     if (inputLeadIn > 0) { clip["start"] = inputLeadIn; clip["fadeIn"] = 0; }
     const json jobJson = {{"sampleRate", sr}, {"tempo", tempo}, {"tail", 0}, {"length", seconds}, {"stems", "none"}, {"leadIn", leadIn},
-                          {"markers", markers}, {"master", master},
+                          {"markers", markers}, {"master", master}, {"deliver", deliver},
                           {"tracks", json::array({{{"name", "Mix"}, {"plugin", "builtin:audio"}, {"clips", json::array({clip})}}})}};
     const std::string base = inlineChain ? fs::current_path().string() : fs::absolute(chainArg).parent_path().string();
     Job job;
@@ -713,13 +736,14 @@ int cmdMaster(const Args &a) {
     json report = {{"ok", true}, {"inputLeadIn", inputLeadIn}, {"leadIn", leadIn},
                    {"input", {{"file", input}, {"lufs", r1(integratedLufs(in, sr))}, {"lra", r1(loudnessRange(in, sr))}, {"truePeakDb", r1(truePeakDb(in))}}},
                    {"output", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)},
-                               {"loudnessGainDb", r1(r.loudnessGainDb)}, {"levels", levelsJson(r.mix)}}},
+                               {"loudnessGainDb", r1(r.loudnessGainDb)}, {"levels", levelsJson(r.mix)}, {"deliveries", deliveriesJson(r.deliveries)}}},
                    {"masterFx", r.masterFx}, {"sections", sections}, {"warnings", r.warnings},
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100}};
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
     std::fprintf(OUT, "input   %6.1f LUFS  %5.1f dBTP  %s\n", report["input"]["lufs"].get<double>(), report["input"]["truePeakDb"].get<double>(), input.c_str());
     std::fprintf(OUT, "output  %6.1f LUFS  %5.1f dBTP  %s\n", r.mixLufs, r.truePeakDb, r.mixFile.c_str());
+    for (auto &d : r.deliveries) std::fprintf(OUT, "        %6.1f LUFS  %5.1f dBTP  %s\n", d.lufs, d.truePeakDb, d.file.c_str());
     for (auto &sec : sections)
         std::fprintf(OUT, "  %-20s %6.1f -> %6.1f LUFS\n", sec["name"].get<std::string>().c_str(), sec["inputLufs"].get<double>(), sec["lufs"].get<double>());
     for (auto &w : r.warnings) std::fprintf(OUT, "warning: %s\n", w.c_str());
@@ -924,6 +948,16 @@ int cmdRender(const Args &a) {
         job.fixedLoudnessGainDb = rep["mix"].value("loudnessGainDb", 0.0);
         job.fixedNormalizeGainDb = rep["mix"].value("normalizeGainDb", 0.0);
     }
+    if (a.has("--deliver")) {   // "mp3,flac:16" replaces the job's own; "none" turns it off
+        job.deliver.clear();
+        std::stringstream list(a.get("--deliver"));
+        for (std::string item; std::getline(list, item, ',');) {
+            if (item.empty() || item == "none") continue;
+            DeliverySpec spec;
+            if (!parseDeliverySpec(item, spec, err)) return fail(a, "--deliver: " + err);
+            job.deliver.push_back(spec);
+        }
+    } else if (!only.empty() || job.window.on) job.deliver.clear();   // a partial render is not a delivery
     if (a.has("--stems")) {
         const std::string s = a.get("--stems");
         job.stemBits = s == "none" ? 0 : s == "16" ? 16 : s == "24" ? 24 : s == "float" || s == "32" ? 32 : -1;
@@ -995,6 +1029,7 @@ int cmdRender(const Args &a) {
                             {"masterFx", r.masterFx}, {"masterAutomation", r.masterAutomation}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"dropouts", dropouts}, {"failedTracks", r.failedTracks}};
+    if (!r.deliveries.empty()) report["mix"]["deliveries"] = deliveriesJson(r.deliveries);
     if (!only.empty()) report["onlyTracks"] = only;
     if (job.window.on) {   // the files hold bars from..to only; songStart = where that is in the song (seconds)
         const double bpb = job.tsigNum * 4.0 / job.tsigDen;
@@ -1014,6 +1049,9 @@ int cmdRender(const Args &a) {
         std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", ("bus: " + b.name).c_str(), "", b.levels.peakDb, b.lufs, b.file.c_str());
     std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  LRA %.1f LU  true peak %.1f dBTP  %s\n", "MIX", "", r.mix.peakDb, r.mixLufs,
                  r.mixLra, r.truePeakDb, r.mixFile.c_str());
+    for (auto &d : r.deliveries)
+        std::fprintf(OUT, "%-24s %-20s %6.1f LUFS  true peak %.1f dBTP (%+.1f)  %s\n", ("  " + d.spec.format).c_str(), "", d.lufs, d.truePeakDb,
+                     d.overshootDb, d.file.c_str());
     for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
     for (auto &w : r.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
     std::fprintf(OUT, "%.2f s of audio rendered in %.2f s\n", r.seconds, r.renderSeconds);
@@ -1429,8 +1467,8 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument"}},
-            {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
+            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument"}},
+            {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},
             {"export", {"--out", "--json"}},

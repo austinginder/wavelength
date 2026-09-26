@@ -58,6 +58,13 @@ bool readOutput(Process &p, std::string &out, int timeoutSec);
 // A plugin library's exported symbol; the library stays loaded for the life of the process.
 void *loadLibrarySymbol(const std::string &path, const char *symbol, std::string &err);
 
+// A plain shared library (.dylib, .so, .dll: not a plugin bundle) by path or loader name, and one of
+// its symbols. The first name that loads wins; the library stays loaded. nullptr when none loads.
+void *openSharedLibrary(const std::vector<std::string> &names, std::string &loaded);
+void *sharedSymbol(void *library, const char *symbol);
+// A program on $PATH ("ffmpeg" finds ffmpeg.exe on Windows); "" when there is none.
+std::string findProgram(const std::string &name);
+
 // Why a library won't load, from the system loader ("" when it loads). The VST3 SDK's Linux
 // loader only says "dlopen failed".
 std::string libraryLoadError(const std::string &path);

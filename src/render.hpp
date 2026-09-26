@@ -60,6 +60,7 @@ struct RenderResult {
     std::vector<Dropout> dropouts;   // near-silence inside the song that the music comes back from
     std::vector<std::string> warnings;
     std::vector<std::string> failedTracks;   // tracks whose plugin crashed or hung; the song rendered without them
+    std::vector<Delivery> deliveries;        // job "deliver": MP3/FLAC/WAV files, measured after decoding
 };
 
 // Worker entry point: render track `index` of the job file (instrument + effects) into

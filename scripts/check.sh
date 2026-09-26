@@ -64,6 +64,18 @@ sys.exit(0 if ok else 1)'; then
 else
   echo "ok   window render: clips-tour bars 3-4"
 fi
+# deliveries: FLAC (24 and 16 bit) and a 24-bit WAV decode back to mix.wav's loudness and true peak
+dl="out/check/deliver/$build"
+if ! "./$build/wavelength" render examples/mastering.json --deliver flac,flac:16,wav:24 --out "$dl" --json 2>/dev/null | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+m, d = r["mix"], r["mix"].get("deliveries", [])
+ok = len(d) == 3 and all(abs(x["lufs"] - m["lufs"]) <= 0.1 and abs(x["truePeakDb"] - m["truePeakDb"]) <= 0.1 for x in d)
+sys.exit(0 if ok else 1)' || { command -v flac > /dev/null && ! flac -s -t "$dl/mix.flac" "$dl/mix-16bit.flac"; }; then
+  echo "FAIL deliver: flac/wav deliveries"; fail=1
+else
+  echo "ok   deliver: flac 24/16 and wav 24 decode back to the mix"
+fi
 # serve: the web UI answers, carries its token, refuses changes without it
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
 "./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &

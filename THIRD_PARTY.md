@@ -17,6 +17,10 @@ the Windows build compiles it in.
 | [stb_vorbis](https://github.com/nothings/stb) | 2c980bb (1.22) | public domain (Unlicense) or MIT | Ogg Vorbis samples |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
+MP3 deliveries use [LAME](https://lame.sourceforge.io) (LGPL) when it is installed: Wavelength loads
+the system's `libmp3lame` at run time and neither includes nor distributes it (or runs `ffmpeg`
+when there is no LAME).
+
 Linux builds link libstdc++ and libgcc statically (GCC Runtime Library Exception: no notice
 needed). The Windows `.exe` is linked statically with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw):
 LLVM's libc++ and libunwind (Apache-2.0 with LLVM exception) and the MinGW-w64 runtime and

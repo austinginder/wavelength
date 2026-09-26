@@ -16,6 +16,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   keyswitches, choke groups, `note_polyphony`, controller-gated regions at their `set_cc` values and
   the `*sine`/`*saw`/`*square`/`*triangle`/`*noise` generators. Opcodes it can't play are named in one
   warning. `examples/sfz-tour.json` plays a generator-only SFZ.
+- Delivery files from the render: job `"deliver": ["mp3", "flac"]` (or `render --deliver`,
+  `master --deliver`) writes `mix.mp3` (320 kbps CBR, `mp3:256`), `mix.flac` (24-bit, `flac:16`) or
+  16/24-bit WAVs next to `mix.wav`, or to a `file` of your choice, with the same lead-in. Each is
+  decoded again and measured: the report's `mix.deliveries` has its LUFS, true peak and overshoot
+  over `mix.wav`, and an MP3 that decodes above -1 dBTP warns with how far to lower the ceiling.
+  FLAC is encoded by Wavelength itself (verified bit-exact, MD5 signed); MP3 uses LAME loaded at run
+  time (`$WAVELENGTH_LAME`, Homebrew and system paths) or ffmpeg, with the LAME tag for gapless decoding.
 - `wavelength serve [SONGS_DIR]`: a local web UI for reviewing songs with a human, built into the
   binary (localhost only, a per-launch token on changes). The arrangement with sections, a chord lane
   and harmony problems from the harmony check, lanes that open into piano rolls, loudness, stems,

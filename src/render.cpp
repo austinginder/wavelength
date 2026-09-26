@@ -293,6 +293,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     // never leave a previous render's files next to this one's: a failed render must not look finished
     fs::remove(fs::path(outDir) / "report.json", ec);
     fs::remove(fs::path(outDir) / "mix.wav", ec);
+    for (auto &d : job.deliver) fs::remove(deliveryPath(d, outDir), ec);
     for (auto &e : fs::directory_iterator(fs::path(outDir) / "stems", ec))
         if (e.path().extension() == ".wav") fs::remove(e.path(), ec);
     {
@@ -784,6 +785,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     if (!writeWav(result.mixFile, mix, job.sampleRate, err, 32, leadFrames, trimFrames)) return false;
     result.mix = measure(mix);
     result.truePeakDb = truePeakDb(mix);
+    if (!job.deliver.empty() &&
+        !writeDeliveries(job.deliver, mix, job.sampleRate, leadFrames, trimFrames, outDir, result.mixFile, result.truePeakDb, result.deliveries, result.warnings, err))
+        return false;
     result.mixLufs = integratedLufs(mix, job.sampleRate);
     result.mixLra = loudnessRange(mix, job.sampleRate);
     for (size_t m = 0; m < job.markers.size(); ++m) {
