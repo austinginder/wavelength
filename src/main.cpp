@@ -841,8 +841,12 @@ int cmdRender(const Args &a) {
         json o = {{"name", sec.name}, {"start", std::round(sec.start * 100) / 100}, {"end", std::round(sec.end * 100) / 100}, {"lufs", r1(sec.lufs)},
                   {"preMasterLufs", r1(sec.preMasterLufs)}};
         if (!sec.checks) o["checks"] = false;
-        if (m > 0 && sec.tailBefore > -60 && sec.head > -60)   // the boundary as heard: last 2 bars before it, first 4 after it
+        if (m > 0 && sec.tailBefore > -60 && sec.head > -60) {   // the boundary as heard: last 2 bars before it, first 4 after it
             o["transition"] = {{"lastBarsBefore", r1(sec.tailBefore)}, {"firstBars", r1(sec.head)}, {"jump", r1(sec.head - sec.tailBefore)}};
+            if (sec.skippedSilence)   // the bars before the boundary were a near-silence: measured against the music before it
+                o["transition"]["skippedSilence"] = {{"bars", {(int)std::floor(sec.silenceFrom / 4) + 1, (int)std::floor(sec.at / 4)}}, {"lufs", r1(sec.silenceLufs)},
+                                                     {"lastBarsFrom", (int)std::floor(sec.tailFrom / 4) + 1}};
+        }
         if (m > 0 && sec.lufs > -60 && r.sections[m - 1].lufs > -60) o["change"] = r1(sec.lufs - r.sections[m - 1].lufs);   // dB over the previous section
         sections.push_back(o);
     }

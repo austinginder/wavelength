@@ -33,6 +33,10 @@ struct SectionResult {
     double preMasterLufs = -120;   // the same window before the master gain, rides and chain: what track and bus rides moved
     bool checks = true;
     double tailBefore = -120, head = -120;   // the previous section's last 2 bars and this one's first 4 (4/4): the transition
+    // when the bars right before the boundary are a near-silence (a one-bar power cut), tailBefore is the last 2
+    // bars of music before it instead; silenceLufs and the beats [silenceFrom, at) describe what was skipped
+    bool skippedSilence = false;
+    double silenceLufs = -120, silenceFrom = 0, tailFrom = 0, at = 0;
 };
 
 struct RenderResult {

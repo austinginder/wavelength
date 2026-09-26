@@ -709,12 +709,32 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         auto win = [&](double b0, double b1) {
             return integratedLufs(mix, job.sampleRate, (size_t)(job.tempo.beatToSec(b0) * sr), (size_t)(job.tempo.beatToSec(b1) * sr));
         };
-        result.sections[m].tailBefore = win(std::max(prevStart, at - 8), at);
-        result.sections[m].head = win(at, std::min(next, at + 16));
+        auto &s = result.sections[m];
+        const double t0 = std::max(prevStart, at - 8);
+        s.at = at;
+        s.tailFrom = t0;
+        s.tailBefore = win(t0, at);
+        s.head = win(at, std::min(next, at + 16));
+        // a near-silence right before the boundary (a power cut, a held breath): more than 15 dB under the 4 bars
+        // before it, or under -40 LUFS. Compare the section with the last 2 bars of music before the silence.
+        const double ref = t0 > 0 ? win(std::max(0.0, t0 - 16), t0) : -120;
+        auto quiet = [&](double l) { return l < -40 || (ref > -60 && l < ref - 15); };
+        if (quiet(s.tailBefore) && ref > -60) {
+            for (double x = t0; x >= 8 && x > t0 - 128; x -= 4) {
+                const double l = win(x - 8, x);
+                if (quiet(l)) continue;
+                s.skippedSilence = true;
+                s.silenceLufs = s.tailBefore;
+                s.silenceFrom = x;
+                s.tailFrom = x - 8;
+                s.tailBefore = l;
+                break;
+            }
+        }
     }
     for (size_t m = 1; m < result.sections.size(); ++m) {
         const auto &a = result.sections[m - 1], &b = result.sections[m];
-        if (!b.checks || a.lufs < -60 || b.lufs < -60) continue;
+        if (!b.checks || (a.lufs < -60 && !b.skippedSilence) || b.lufs < -60) continue;
         double jump = b.lufs - a.lufs;
         double need = 0;
         if (buildLike(a.name) && !buildLike(b.name)) need = 2.0;          // whatever a build leads into must land
@@ -723,9 +743,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         // a drop is heard at its boundary: compare the build's last 2 bars with the drop's first 4
         if (need >= 2.0 && b.tailBefore > -60 && b.head > -60) jump = b.head - b.tailBefore;
         if (need == 0 || jump >= need) continue;
-        char buf[360];
+        char buf[480], against[160] = "";
+        if (need >= 2 && b.skippedSilence)
+            std::snprintf(against, sizeof against, " (its first 4 bars against the last 2 bars of music before the near-silence at bars %.0f-%.0f)",
+                          std::floor(b.silenceFrom / 4) + 1, std::floor(b.at / 4));
+        else if (need >= 2) std::snprintf(against, sizeof against, " (its first 4 bars against the last 2 before them)");
         std::snprintf(buf, sizeof buf, "section '%s' lands only %+.1f dB over '%s'%s: %s (mark the section \"checks\": false if it is meant this way)",
-                      b.name.c_str(), jump, a.name.c_str(), need >= 2 ? " (its first 4 bars against the last 2 before them)" : "",
+                      b.name.c_str(), jump, b.skippedSilence && need >= 2 ? "the music before it" : a.name.c_str(), against,
                       need >= 2 ? "empty the build (kick and bass out, high-pass sweep) rather than turning it down, and stack the downbeat; 3-5 dB reads as a drop"
                                 : "an escalation should rise: add a layer, open filters, lift it a little");
         result.warnings.push_back(buf);

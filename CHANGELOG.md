@@ -78,6 +78,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   averages read Hammerklang's Final as +3.3 dB while its drop landed +1.5.
 
 ### Fixed
+- The drop check across an intended near-silence: when the bars before a boundary are more than
+  15 dB under the music before them (or under -40 LUFS), `sections[].transition` and the weak-drop
+  warning compare with the last 2 bars of music before the silence and say so (`skippedSilence`).
+  Lights Out's drop after a one-bar power cut read +20 dB; it now reads +2.9 dB.
 - DAWproject import: volume automation on effect and group buses was added on top of the fader
   twice (bus automation adds to the fader, like a track's).
 - `"stems": "none"` no longer creates an empty `stems/` folder.
