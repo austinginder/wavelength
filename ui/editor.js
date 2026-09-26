@@ -47,7 +47,7 @@
 					<h4>Selection <span class="r"><button class="ed-btn" id="ed-clear" style="height:22px;font-size:11px">Clear</button></span></h4>
 					<div class="ed-ref none" id="ed-ref">Drag across the ruler to pick bars, click a track name, click or drag over notes.</div>
 					<div class="ed-actions">
-						<button class="ed-btn" id="ed-preview" disabled title="Render the selected bars through the mix and loop them (P)" style="background:var(--accent-2);border-color:var(--accent-2);color:#fff">▶ Preview these bars</button>
+						<button class="ed-btn amber" id="ed-preview" disabled title="Render the selected bars through the mix and loop them (P)">▶ Preview these bars</button>
 						<button class="ed-btn" id="ed-sloop" disabled>Loop these bars</button>
 						<button class="ed-btn" id="ed-solo" disabled>Solo track</button>
 						<button class="ed-btn" id="ed-copy" disabled>Copy reference</button>
@@ -56,7 +56,7 @@
 				<section>
 					<h4>Comment for the agent</h4>
 					<textarea id="ed-text" placeholder="What should change here? (Cmd+Enter to save)"></textarea>
-					<div class="ed-actions"><button class="ed-btn" id="ed-save" style="background:var(--accent);border-color:var(--accent);color:#fff">Save comment</button></div>
+					<div class="ed-actions"><button class="ed-btn primary" id="ed-save">Save comment</button></div>
 					<div class="ed-hint">Saved to review.json in the song folder with the bars, tracks, notes and time you selected.</div>
 				</section>
 				<h4 style="padding:12px 14px 0;margin:0">Comments <span class="r" id="ed-count"></span></h4>
@@ -198,7 +198,7 @@
 		const g = canvas.getContext('2d'), css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
 		g.setTransform(dpr, 0, 0, dpr, 0, 0);
 		g.fillStyle = v('--panel'); g.fillRect(0, 0, w, h);
-		if (!d) { g.fillStyle = v('--muted'); g.font = '13px Inter, sans-serif'; g.fillText('No job.json yet.', 20, 40); return; }
+		if (!d) { g.fillStyle = v('--muted'); g.font = '13px "Instrument Sans", sans-serif'; g.fillText('No job.json yet.', 20, 40); return; }
 		const sy = scroller.scrollTop, bpb = d.bpb;
 		const b0 = Math.max(0, beatAt(HEAD)), b1 = beatAt(w);
 		const accent = v('--accent'), muted = v('--muted'), line = v('--line'), text = v('--text');
@@ -230,7 +230,7 @@
 					g.fillStyle = col;
 					g.fillRect(x, y, nw, kg.row);
 					if (chosen) { g.globalAlpha = 1; g.strokeStyle = text; g.lineWidth = 1.5; g.strokeRect(x - 1, y - 1, nw + 2, kg.row + 2); }
-					if (kg.open && nw > 26 && kg.row >= 8) { g.globalAlpha = .9; g.fillStyle = '#000'; g.font = '9px Inter, sans-serif'; g.fillText(keyName(k), x + 2, y + kg.row - 1.5); }
+					if (kg.open && nw > 26 && kg.row >= 8) { g.globalAlpha = .9; g.fillStyle = '#000'; g.font = '9px "Instrument Sans", sans-serif'; g.fillText(keyName(k), x + 2, y + kg.row - 1.5); }
 				}
 				g.globalAlpha = 1;
 				g.fillStyle = line; g.fillRect(HEAD, top + lh - 1, w - HEAD, 1);
@@ -254,7 +254,7 @@
 		g.save(); g.beginPath(); g.rect(HEAD, 0, w - HEAD, TOPH); g.clip();
 		g.fillStyle = v('--panel-2'); g.fillRect(HEAD, 0, w - HEAD, TOPH);
 		const barPx = bpb * E.zoom, every = [1, 2, 4, 8, 16, 32].find(n => n * barPx >= 34) || 64;
-		g.font = '11px "IBM Plex Mono", monospace'; g.textBaseline = 'middle';
+		g.font = '11px "JetBrains Mono", monospace'; g.textBaseline = 'middle';
 		for (let bar = Math.floor(b0 / bpb); bar * bpb <= b1; bar++) {
 			const x = X(bar * bpb);
 			g.fillStyle = line; g.fillRect(x, bar % every === 0 ? 4 : 14, 1, RULER - (bar % every === 0 ? 4 : 14));
@@ -266,7 +266,7 @@
 			if (x1 < HEAD || x0 > w) return;
 			g.fillStyle = i % 2 ? alpha(accent, 0.1) : alpha(accent, 0.18);
 			g.fillRect(x0, RULER, x1 - x0, SECT);
-			g.fillStyle = text; g.font = '600 11px Inter, sans-serif';
+			g.fillStyle = text; g.font = '600 11px "Instrument Sans", sans-serif';
 			g.save(); g.beginPath(); g.rect(x0, RULER, x1 - x0, SECT); g.clip(); g.fillText(m.name, Math.max(x0, HEAD) + 5, RULER + SECT / 2 + 1); g.restore();
 		});
 		// chords from lint --harmony
@@ -274,12 +274,12 @@
 		const bad = new Set(), rub = new Set();
 		(E.harmony?.problems || []).forEach(p => { for (let b = p.bars[0]; b <= p.bars[1]; b++) bad.add(b); });
 		(E.harmony?.rubs || []).forEach(r => r.bars.forEach(b => rub.add(b)));
-		g.font = '11px "IBM Plex Mono", monospace';
+		g.font = '11px "JetBrains Mono", monospace';
 		for (const row of hb) {
 			const x0 = X((row.bar - 1) * bpb), x1 = X(row.bar * bpb), y = RULER + SECT;
 			if (x1 < HEAD || x0 > w) continue;
 			if (bad.has(row.bar) || row.outside) { g.fillStyle = alpha('#e5484d', .3); g.fillRect(x0, y, x1 - x0, CHORD); }
-			else if (rub.has(row.bar)) { g.fillStyle = alpha('#f0b64a', .32); g.fillRect(x0, y, x1 - x0, CHORD); }
+			else if (rub.has(row.bar)) { g.fillStyle = alpha('#f2b33d', .32); g.fillRect(x0, y, x1 - x0, CHORD); }
 			const label = row.halves ? row.halves.join(' ') : row.chord;
 			if (g.measureText(label).width < x1 - x0 - 4) { g.fillStyle = text; g.fillText(label, x0 + 3, y + CHORD / 2 + 1); }
 			g.fillStyle = line; g.fillRect(x0, y + 4, 1, CHORD - 8);
@@ -301,7 +301,7 @@
 			if (x >= HEAD) { g.fillStyle = v('--play'); g.fillRect(x - 1, 0, 2, h); }
 		}
 		if (E.loop && E.sel.b0 != null) {
-			g.fillStyle = accent; g.font = '600 10px Inter, sans-serif'; g.textBaseline = 'alphabetic';
+			g.fillStyle = accent; g.font = '600 10px "Instrument Sans", sans-serif'; g.textBaseline = 'alphabetic';
 			const x = Math.max(HEAD + 4, X(E.sel.b0) + 4); g.fillText('LOOP', x, TOPH - 5);
 		}
 
@@ -316,27 +316,27 @@
 				const selT = E.sel.tracks.has(i), solo = state.soloIdx === i;
 				if (selT) { g.fillStyle = alpha(accent, 0.12); g.fillRect(0, top, HEAD, lh); }
 				g.fillStyle = hue(i); g.fillRect(0, top + 4, 3, lh - 8);
-				g.fillStyle = muted; g.font = '11px Inter, sans-serif'; g.fillText(E.expanded.has(i) ? '▾' : '▸', 9, top + 16);
-				g.fillStyle = selT ? accent : text; g.font = '600 12.5px Inter, sans-serif';
+				g.fillStyle = muted; g.font = '11px "Instrument Sans", sans-serif'; g.fillText(E.expanded.has(i) ? '▾' : '▸', 9, top + 16);
+				g.fillStyle = selT ? accent : text; g.font = '600 12.5px "Instrument Sans", sans-serif';
 				clipText(g, (t.mute ? '(m) ' : '') + t.name, 22, top + 16, HEAD - 64);
-				g.fillStyle = muted; g.font = '10.5px Inter, sans-serif';
+				g.fillStyle = muted; g.font = '10.5px "Instrument Sans", sans-serif';
 				clipText(g, soundName(t), 22, top + 31, HEAD - 104);
 				if (t.lufs != null) {   // stem loudness, right-aligned left of the solo button
-					g.font = '10.5px "IBM Plex Mono", monospace'; g.textAlign = 'right';
+					g.font = '10.5px "JetBrains Mono", monospace'; g.textAlign = 'right';
 					g.fillText(t.lufs <= -100 ? 'silent' : t.lufs.toFixed(1), HEAD - 38, top + 31); g.textAlign = 'left';
 				}
 				// solo button: filled = solo in the mix, outlined D = dry stem, amber dots = rendering
 				const bx = HEAD - 32, by = top + 11, pend = state.pending?.i === i, dry = solo && state.soloKind === 'dry';
-				g.fillStyle = pend ? alpha('#f0b64a', .25) : solo && !dry ? accent : v('--panel-2');
-				g.strokeStyle = pend ? '#f0b64a' : solo ? accent : line; g.lineWidth = 1;
+				g.fillStyle = pend ? alpha('#f2b33d', .25) : solo && !dry ? v('--button') : v('--panel-2');
+				g.strokeStyle = pend ? '#f2b33d' : solo && !dry ? v('--button') : solo ? accent : line; g.lineWidth = 1;
 				roundRect(g, bx, by, 24, 20, 5); g.fill(); g.stroke();
-				g.fillStyle = pend ? '#f0b64a' : solo && !dry ? '#fff' : solo ? accent : text; g.font = '600 10.5px Inter, sans-serif';
+				g.fillStyle = pend ? '#f2b33d' : solo && !dry ? '#fff' : solo ? accent : text; g.font = '600 10.5px "Instrument Sans", sans-serif';
 				g.textAlign = 'center';
 				g.fillText(pend ? '•'.repeat(1 + Math.floor(performance.now() / 350) % 3) : dry ? 'D' : 'S', bx + 12, by + 14);
 				g.textAlign = 'left';
 				if (E.expanded.has(i)) {   // note names down the side of an open lane
 					const kg = keyGeom(t, top, lh);
-					g.font = '9.5px "IBM Plex Mono", monospace'; g.fillStyle = muted;
+					g.font = '9.5px "JetBrains Mono", monospace'; g.fillStyle = muted;
 					for (let k = kg.lo; k <= kg.hi; k++) {
 						const y = kg.y(k) + kg.row;
 						if (y > top + 40 && (k % 12 === 0 || (kg.row >= 9 && [4, 7].includes(k % 12)))) g.fillText(keyName(k), HEAD - 34, y);
@@ -349,10 +349,10 @@
 		g.restore();
 		// corner: key(s) of the song
 		g.fillStyle = v('--panel-2'); g.fillRect(0, 0, HEAD, TOPH);
-		g.fillStyle = muted; g.font = '10.5px Inter, sans-serif';
+		g.fillStyle = muted; g.font = '10.5px "Instrument Sans", sans-serif';
 		g.fillText('BAR', 12, 16); g.fillText('SECTION', 12, RULER + 14); g.fillText('CHORD', 12, RULER + SECT + 16);
 		const keys = E.harmony?.keys || [];
-		g.fillStyle = text; g.font = '600 11px Inter, sans-serif';
+		g.fillStyle = text; g.font = '600 11px "Instrument Sans", sans-serif';
 		if (keys.length) clipText(g, keys.map(k => k.key).join(' → '), 70, RULER + SECT + 16, HEAD - 78);
 		g.fillStyle = line; g.fillRect(HEAD - 1, 0, 1, h); g.fillRect(0, TOPH - 1, HEAD, 1);
 		// drag rectangle
@@ -604,7 +604,7 @@
 		if (!dlg) return;
 		const h = E.harmony;
 		const probs = h ? h.problems.length : 0, rubs = h ? h.rubs.reduce((n, r) => n + r.count, 0) : 0;
-		$d('#ed-legend').innerHTML = h ? `<span><i style="background:color-mix(in srgb,#e5484d 45%,transparent)"></i>${probs} harmony problem${probs === 1 ? '' : 's'}</span><span><i style="background:color-mix(in srgb,#f0b64a 45%,transparent)"></i>${rubs} rub${rubs === 1 ? '' : 's'}</span>` : '';
+		$d('#ed-legend').innerHTML = h ? `<span><i style="background:color-mix(in srgb,#e5484d 45%,transparent)"></i>${probs} harmony problem${probs === 1 ? '' : 's'}</span><span><i style="background:color-mix(in srgb,#f2b33d 45%,transparent)"></i>${rubs} rub${rubs === 1 ? '' : 's'}</span>` : '';
 	}
 
 	/* ---------- zoom, keys, audio ---------- */

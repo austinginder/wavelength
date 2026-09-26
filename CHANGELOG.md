@@ -198,6 +198,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   `--section NAME`, and both chords' notes with each problem.
 
 ### Changed
+- `wavelength serve` wears the Wavelength brand: the square-wave mark, Anybody, Instrument Sans and
+  JetBrains Mono (built into the binary, no outside requests), the site's navy, cobalt and amber in
+  dark and light, and track lanes in the song player's palette on wavelength.run.
 - `builtin:sampler` `start` with `reverse` now trims the file's beginning (the region is cut in the
   file's time, then reversed, like `builtin:audio`); before, it skipped into the reversed sample.
 - `render --tracks` stems keep the full render's numbers and names (`05-lead.wav`, not `01-lead.wav`),

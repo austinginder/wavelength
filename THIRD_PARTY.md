@@ -269,6 +269,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Fonts in the web UI
+
+`wavelength serve` carries three fonts in `ui/fonts/` (built into the binary): Anybody (Etcetera Type
+Co), Instrument Sans (Instrument) and JetBrains Mono (JetBrains), each under the SIL Open Font
+License 1.1, whose full text ships beside them (`Anybody-OFL.txt`, `InstrumentSans-OFL.txt`,
+`JetBrainsMono-OFL.txt`).
+
 ## Formats read, not code used
 
 Wavelength reads preset and state files of third-party plugins (Serum 2, Odin2, u-he, Synplant,

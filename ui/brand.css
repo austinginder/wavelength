@@ -1,0 +1,65 @@
+/* The Wavelength brand (wavelength.run/brand): Anybody for display, Instrument Sans for text,
+   JetBrains Mono for numbers and code, on navy paper with cobalt and amber. Fonts ship inside the
+   binary (ui/fonts, SIL OFL 1.1): the page makes no outside requests. */
+@font-face {
+	font-family: "Anybody"; font-style: normal; font-weight: 300 900; font-stretch: 50% 150%; font-display: swap;
+	src: url("fonts/anybody-latin-ext.woff2") format("woff2");
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+	font-family: "Anybody"; font-style: normal; font-weight: 300 900; font-stretch: 50% 150%; font-display: swap;
+	src: url("fonts/anybody-latin.woff2") format("woff2");
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+	font-family: "Instrument Sans"; font-style: normal; font-weight: 400 700; font-display: swap;
+	src: url("fonts/instrument-sans-latin-ext.woff2") format("woff2");
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+	font-family: "Instrument Sans"; font-style: normal; font-weight: 400 700; font-display: swap;
+	src: url("fonts/instrument-sans-latin.woff2") format("woff2");
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+	font-family: "JetBrains Mono"; font-style: normal; font-weight: 400 500; font-display: swap;
+	src: url("fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+	unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+	font-family: "JetBrains Mono"; font-style: normal; font-weight: 400 500; font-display: swap;
+	src: url("fonts/jetbrains-mono-latin.woff2") format("woff2");
+	unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* The site's tokens (theme style.css), in the names this page uses. Light first; dark (the primary
+   look) follows the system unless data-theme says otherwise. */
+:root {
+	--display: "Anybody", "Instrument Sans", system-ui, sans-serif;
+	--body: "Instrument Sans", system-ui, -apple-system, sans-serif;
+	--mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+	--bg: #eceef3; --panel: #f7f8fb; --panel-2: #e2e5ec; --line: #c9cdd8; --text: #1a1c2b; --muted: #5b6173;
+	--accent: #2f4be0; --accent-2: #a86d00; --amber: #e39a0b; --ok: #1f8a5b; --warn: #a86d00;
+	--button: #2f4be0; --button-hover: #2239b8; --on-button: #fff;
+	--grid: rgba(26, 28, 43, .07); --lane: rgba(47, 75, 224, .035); --section: rgba(47, 75, 224, .06); --play: #2f4be0;
+	--lane-sat: 62%; --lane-light: 44%;
+	color-scheme: light;
+}
+:root[data-theme="dark"] {
+	--bg: #151826; --panel: #1a1e2f; --panel-2: #1f2334; --line: #2f3448; --text: #e4e7f0; --muted: #9aa1b6;
+	--accent: #93a4ff; --accent-2: #f2b33d; --amber: #f2b33d; --ok: #6fd3a8; --warn: #f2b33d;
+	--button: #4058ee; --button-hover: #5068ff; --on-button: #fff;
+	--grid: rgba(147, 164, 255, .08); --lane: rgba(147, 164, 255, .03); --section: rgba(147, 164, 255, .055); --play: #93a4ff;
+	--lane-sat: 72%; --lane-light: 66%;
+	color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--bg: #151826; --panel: #1a1e2f; --panel-2: #1f2334; --line: #2f3448; --text: #e4e7f0; --muted: #9aa1b6;
+		--accent: #93a4ff; --accent-2: #f2b33d; --amber: #f2b33d; --ok: #6fd3a8; --warn: #f2b33d;
+		--button: #4058ee; --button-hover: #5068ff; --on-button: #fff;
+		--grid: rgba(147, 164, 255, .08); --lane: rgba(147, 164, 255, .03); --section: rgba(147, 164, 255, .055); --play: #93a4ff;
+		--lane-sat: 72%; --lane-light: 66%;
+		color-scheme: dark;
+	}
+}

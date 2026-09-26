@@ -5,41 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--wavelength-->
 <title>Wavelength</title>
+<link rel="stylesheet" href="ui/brand.css">
 <link rel="stylesheet" href="ui/editor.css">
 <style>
-:root {
-	--bg: #f4f3ef; --panel: #ffffff; --panel-2: #f8f7f4; --line: #e3e0d8; --text: #1d1c1a; --muted: #6f6b63;
-	--accent: #e0457b; --accent-2: #2f9bd6; --ok: #2e9e6a; --warn: #c98a12; --grid: rgba(0,0,0,.06); --lane: rgba(0,0,0,.025);
-	--section: rgba(224,69,123,.07); --play: #e0457b;
-}
-@media (prefers-color-scheme: dark) {
-	:root:not([data-theme="light"]) {
-		--bg: #0e0d12; --panel: #16151c; --panel-2: #1c1b24; --line: #2a2833; --text: #ecebf2; --muted: #8d8a9b;
-		--accent: #ff5c93; --accent-2: #4fc3f7; --ok: #4cd190; --warn: #f0b64a; --grid: rgba(255,255,255,.05); --lane: rgba(255,255,255,.02);
-		--section: rgba(255,92,147,.07); --play: #ff5c93;
-	}
-}
-:root[data-theme="dark"] {
-	--bg: #0e0d12; --panel: #16151c; --panel-2: #1c1b24; --line: #2a2833; --text: #ecebf2; --muted: #8d8a9b;
-	--accent: #ff5c93; --accent-2: #4fc3f7; --ok: #4cd190; --warn: #f0b64a; --grid: rgba(255,255,255,.05); --lane: rgba(255,255,255,.02);
-	--section: rgba(255,92,147,.07); --play: #ff5c93;
-}
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; }
-.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--body); -webkit-font-smoothing: antialiased; }
+.mono { font-family: var(--mono); }
 button { font: inherit; color: inherit; }
 .app { display: grid; grid-template-columns: 230px minmax(0, 1fr) 380px; min-height: 100vh; }
 aside.songs { border-right: 1px solid var(--line); padding: 16px 10px; position: sticky; top: 0; height: 100vh; overflow: auto; }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .02em; padding: 0 8px 14px; }
-.brand svg { color: var(--accent); }
-.conn { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+/* the lockup: the mark at 1.35 x the name's cap height, one step from the name (the site's header) */
+.brand { display: flex; align-items: center; gap: .28em; font: 700 1.2rem/1 var(--display); font-variation-settings: "wdth" 120; letter-spacing: -.01em; padding: 2px 8px 18px; }
+.brand svg { color: var(--accent); height: .95em; width: auto; flex: none; }
+.conn { margin-left: auto; align-self: center; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .conn.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
-.song { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+.song { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
 .song:hover { background: var(--panel-2); }
-.song.sel { background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.song.sel { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
 .song .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.song .t { color: var(--muted); font-size: 12px; }
+.song .t { color: var(--muted); font: 11px var(--mono); }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: transparent; }
 .dot.live { background: var(--accent); animation: pulse 1.4s infinite; }
 .dot.done { background: var(--ok); opacity: .7; }
@@ -47,20 +32,21 @@ aside.songs { border-right: 1px solid var(--line); padding: 16px 10px; position:
 .follow { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; padding: 12px 8px 0; }
 main { padding: 20px 22px 40px; min-width: 0; }
 .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-h1 { margin: 0; font-size: 26px; letter-spacing: -.01em; }
+h1 { margin: 0; font: 800 30px/1.05 var(--display); font-variation-settings: "wdth" 112; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .status { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .status.rendering { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .status.writing { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 40%, transparent); }
 .status.done { color: var(--ok); }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 16px; }
-.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
-.chip b { display: block; font-size: 16px; font-weight: 600; }
-.chip span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-.card h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
-.card h2 .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px 6px; }
+.chip b { display: block; font: 700 19px/1.15 var(--display); font-variation-settings: "wdth" 105; }
+.chip span { color: var(--muted); font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+.card h2 { margin: 0; font: 700 16px/1.2 var(--display); font-variation-settings: "wdth" 110; color: var(--text); padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+.card h2 .r { margin-left: auto; font: 400 11.5px var(--mono); color: var(--muted); }
 .transport { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.play { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; cursor: pointer; display: grid; place-items: center; }
+.play { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--button); color: var(--on-button); cursor: pointer; display: grid; place-items: center; }
+.play:hover:not(:disabled) { background: var(--button-hover); }
 .play:disabled { opacity: .35; cursor: default; }
 select { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; max-width: 260px; }
 .solo { font-size: 12px; color: var(--accent); }
@@ -73,33 +59,33 @@ canvas#tl { display: block; width: 100%; cursor: crosshair; }
 .bar .track, .bar .fill { display: block; }
 .bar .track { height: 10px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
 .bar .fill { height: 100%; border-radius: 3px; }
-.bar .v { text-align: right; color: var(--muted); }
+.bar .v { text-align: right; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
 .side { border-left: 1px solid var(--line); display: flex; flex-direction: column; height: 100vh; position: sticky; top: 0; }
-.side h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 14px 14px 10px; display: flex; }
-.side h2 .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.side h2 { margin: 0; font: 700 16px/1.2 var(--display); font-variation-settings: "wdth" 110; color: var(--text); padding: 16px 14px 10px; display: flex; align-items: baseline; }
+.side h2 .r { margin-left: auto; font: 400 11px var(--mono); color: var(--muted); }
 .feed { flex: 1; overflow: auto; padding: 0 14px 10px; min-height: 0; }
 .it { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .it .k { font-size: 11px; color: var(--muted); display: flex; gap: 6px; }
 .it .k .tool { color: var(--accent-2); font-weight: 600; }
-.it pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font: 11.5px/1.4 "IBM Plex Mono", monospace; color: var(--muted); max-height: 90px; overflow: hidden; }
+.it pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font: 11.5px/1.4 var(--mono); color: var(--muted); max-height: 90px; overflow: hidden; }
 .it.text p { margin: 3px 0 0; white-space: pre-wrap; }
-.files { height: 30vh; overflow: auto; border-top: 1px solid var(--line); padding: 0 14px 10px; font: 12px/1.6 "IBM Plex Mono", monospace; }
+.files { height: 30vh; overflow: auto; border-top: 1px solid var(--line); padding: 0 14px 10px; font: 12px/1.6 var(--mono); }
 .fe { display: flex; gap: 8px; white-space: nowrap; }
 .fe .p { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .fe .a { color: var(--ok); } .fe .c { color: var(--accent-2); } .fe .x { color: var(--accent); }
 .fe .w { color: var(--muted); }
 .empty { color: var(--muted); padding: 14px; font-size: 13px; }
-.docs pre { margin: 0; padding: 14px; white-space: pre-wrap; font: 12.5px/1.5 "IBM Plex Mono", monospace; max-height: 360px; overflow: auto; }
+.docs pre { margin: 0; padding: 14px; white-space: pre-wrap; font: 12.5px/1.5 var(--mono); max-height: 360px; overflow: auto; }
 .warns { padding: 8px 14px; font-size: 12px; color: var(--warn); border-top: 1px solid var(--line); }
 @media (max-width: 1200px) { .app { grid-template-columns: 200px minmax(0, 1fr); } .side { grid-column: 1 / -1; height: auto; position: static; border-left: 0; border-top: 1px solid var(--line); } .feed { max-height: 60vh; } }
-@media (max-width: 760px) { .app { grid-template-columns: 1fr; } aside.songs { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; } main { padding: 16px; } .grid2 { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .card h2 .ed-open + .r { display: none; } .app { grid-template-columns: 1fr; } aside.songs { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; } main { padding: 16px; } .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <div class="app">
 	<aside class="songs">
 		<div class="brand">
-			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M2 12h2l2-6 3 12 3-9 2 6 2-3h6"/></svg>
+			<svg viewBox="0 3 24 18" role="img" aria-label="Wavelength"><path d="M0 12 H2 V4.25 H6 V19.75 H10 V10 H14 V19.75 H18 V4.25 H22 V12 H24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="miter" stroke-linecap="butt"/></svg>
 			Wavelength <span class="conn" id="conn" title="event stream"></span>
 		</div>
 		<div id="songs"></div>
@@ -459,7 +445,13 @@ function toggleSolo(i, kind = 'mix') {
 
 /* ---------- timeline ---------- */
 const LABEL = 170, ROW = 30, TOP = 26;
-const hue = i => `hsl(${(i * 137.5 + 330) % 360} 70% 60%)`;
+// lane colours: the site's song-player palette (golden-angle hues from cobalt), toned for the theme
+let laneTone = null;
+const hue = i => {
+	if (!laneTone) { const s = getComputedStyle(document.documentElement); laneTone = [s.getPropertyValue('--lane-sat').trim() || '70%', s.getPropertyValue('--lane-light').trim() || '60%']; }
+	return `hsl(${(i * 137.5 + 220) % 360} ${laneTone[0]} ${laneTone[1]})`;
+};
+const FONT = '"Instrument Sans", system-ui, sans-serif', MONO = '"JetBrains Mono", ui-monospace, monospace';
 let tl = null;
 function prepareTimeline() {
 	const job = state.song.job;
@@ -489,7 +481,7 @@ function drawTimeline() {
 	const g = c.getContext('2d');
 	g.setTransform(dpr, 0, 0, dpr, 0, 0);
 	g.clearRect(0, 0, w, h);
-	g.font = '12px Inter, sans-serif';
+	g.font = '12px ' + FONT;
 	if (!tl) { g.fillStyle = v('--muted'); g.fillText('No job.json yet. The agent is still planning.', 14, 60); return; }
 	const label = w < 600 ? 100 : LABEL, span = w - label - 10, X = t => label + (t / tl.end) * span;
 	const rep = state.song.report;
@@ -511,10 +503,10 @@ function drawTimeline() {
 		const flashing = now - (state.flash[i] || 0) < 1500;
 		const col = hue(i);
 		g.fillStyle = state.soloIdx === i ? v('--accent') : flashing ? col : v('--text');
-		g.font = (state.soloIdx === i ? '600 ' : '') + '12px Inter, sans-serif';
+		g.font = (state.soloIdx === i ? '600 ' : '500 ') + '12px ' + FONT;
 		g.save(); g.beginPath(); g.rect(0, y, label - 8, ROW); g.clip();
 		g.fillText((t.mute ? '(m) ' : '') + t.name, 12, y + 13);
-		g.fillStyle = v('--muted'); g.font = '10.5px Inter, sans-serif';
+		g.fillStyle = v('--muted'); g.font = '10.5px ' + FONT;
 		g.fillText(t.preset ? String(t.preset).split('/').pop().replace(/\.(vstpreset|clap-preset|state|fxb|fxp|vital|json)$/i, '').replace(/--.*$/, '') : t.plugin, 12, y + 25);
 		g.restore();
 		if (stemFor(i)) { g.fillStyle = flashing ? v('--accent') : v('--ok'); g.beginPath(); g.arc(5, y + ROW / 2, 2.5, 0, 7); g.fill(); }
@@ -572,6 +564,10 @@ document.addEventListener('keydown', e => { if ((e.key === 'e' || e.key === 'E')
 })();
 addEventListener('resize', () => tl && drawTimeline());
 setInterval(() => { renderSongList(); renderStatus(); }, 5000);
+// canvases pick up the brand fonts once they load, and the lane tones when the system theme flips
+const repaint = () => { laneTone = null; if (state.song) drawTimeline(); window.WLEditor?.redraw?.(); };
+document.fonts?.ready.then(repaint);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', repaint);
 
 const initial = new URLSearchParams(location.search).get('song');
 if (initial) { $('#follow').checked = false; selectSong(initial); }
