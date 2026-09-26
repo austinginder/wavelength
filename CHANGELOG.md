@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `render --level-from out/report.json`: the master keeps that render's loudness-target and normalize
+  gains instead of targeting again, so `render --tracks "Lead"` plays and measures a part at the
+  level it has in the full mix (before, a loudness target pushed a lone track up to the target).
 - `wavelength lint --harmony`: a harmony check on the notes. It finds the key of every stretch of
   bars (the job's new `"keys"` list, `--key`, or detection over 8-bar windows that tells a real key
   change from a passing chord), prints a chord chart (`--chords`) and reports one- or two-bar chords

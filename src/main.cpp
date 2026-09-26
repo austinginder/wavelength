@@ -88,7 +88,7 @@ Usage:
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--tracks "A,B"] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a worker whose plugin crashes is started again (job "retries", default 2); a track that
@@ -96,6 +96,9 @@ Usage:
       reports "ok": false and exits 1 (mix.wav and report.json are still written).
       --tracks renders only the named tracks (and, muted, any track that keys their
       sidechains), with the song's buses and master, to check a part without the whole song.
+      --level-from out/report.json keeps the master at that render's gains (its loudness-target
+      and normalize gain) instead of targeting again: a --tracks render then plays each part at
+      the level it has in the full mix.
   wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--input-lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
@@ -786,6 +789,15 @@ int cmdRender(const Args &a) {
     if (!parseJob(j, base, job, err)) return fail(a, err);
     job.sourcePath = subsetPath.empty() ? fs::absolute(path).string() : subsetPath;
     if (a.has("--jobs")) job.parallel = std::atoi(a.get("--jobs").c_str());
+    if (a.has("--level-from")) {   // play at the level of an earlier render (a full mix): its master gains, not a new target
+        std::ifstream rin(a.get("--level-from"));
+        json rep;
+        try { rin >> rep; } catch (...) { return fail(a, "--level-from: cannot read report " + a.get("--level-from")); }
+        if (!rep.contains("mix") || !rep["mix"].is_object()) return fail(a, "--level-from: " + a.get("--level-from") + " is not a render report");
+        job.levelFixed = true;
+        job.fixedLoudnessGainDb = rep["mix"].value("loudnessGainDb", 0.0);
+        job.fixedNormalizeGainDb = rep["mix"].value("normalizeGainDb", 0.0);
+    }
     if (a.has("--stems")) {
         const std::string s = a.get("--stems");
         job.stemBits = s == "none" ? 0 : s == "16" ? 16 : s == "24" ? 24 : s == "float" || s == "32" ? 32 : -1;
@@ -1207,7 +1219,7 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--jobs", "--tracks", "--json", "--verbose", "--bitwig", "--instrument"}},
+            {"render", {"--out", "--stems", "--jobs", "--tracks", "--level-from", "--json", "--verbose", "--bitwig", "--instrument"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},

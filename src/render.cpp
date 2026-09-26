@@ -568,6 +568,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         const Audio pre = mix;
         double gainDb = 0, reached = -120;
         std::vector<std::string> labels, warnings;
+        if (job.levelFixed) gainDb = job.fixedLoudnessGainDb;   // --level-from: the full mix's gain, no targeting
         for (int pass = 0; pass < 8; ++pass) {
             Chain chain;
             if (!buildChain(tail, job, "master", chain, err)) return false;
@@ -577,6 +578,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             labels = headLabels; warnings = headWarnings;
             if (!runChain(chain, mix, ctx, labels, warnings, "master", err)) return false;
             reached = integratedLufs(mix, job.sampleRate);
+            if (job.levelFixed) break;
             const double miss = job.masterLoudness - reached;
             if (std::fabs(miss) < 0.1 || reached < -69) break;
             gainDb = std::clamp(gainDb + miss, -40.0, 30.0);
@@ -584,7 +586,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         result.masterFx = labels;
         for (auto &w : warnings) result.warnings.push_back("master: " + w);
         result.loudnessGainDb = gainDb;
-        if (std::fabs(job.masterLoudness - reached) >= 0.3) {
+        if (!job.levelFixed && std::fabs(job.masterLoudness - reached) >= 0.3) {
             char buf[200];
             std::snprintf(buf, sizeof buf, "master: loudness target %.1f LUFS not reached (%.1f LUFS with %+.1f dB into the chain); the limiter or chain caps it",
                           job.masterLoudness, reached, gainDb);
@@ -618,7 +620,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     }
     const Levels before = measure(mix);
     if (job.hasNormalize && !before.silent) {
-        const double gainDb = job.normalizeDb - before.peakDb;
+        const double gainDb = job.levelFixed ? job.fixedNormalizeGainDb : job.normalizeDb - before.peakDb;
         const float g = (float)dsp::dbToLin(gainDb);
         for (size_t f = 0; f < frames; ++f) { mix.left[f] *= g; mix.right[f] *= g; }
         result.normalizeGainDb = gainDb;

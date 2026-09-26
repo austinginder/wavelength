@@ -92,7 +92,9 @@ struct Job {
     GainCurve masterGainAutomation; // dB added to the master gain over time (fades, rides)
     bool hasMasterLoudness = false;
     double masterLoudness = -14;    // target integrated LUFS after the master chain (gain into the chain is found)
-    std::string loudnessGain = "peak";   // where the target's gain goes: "peak" (before the trailing clip/limiter run), "limiter" (before the last limiter), "start"
+    std::string loudnessGain = "peak";
+    bool levelFixed = false;        // render --level-from: reuse another render's master gains instead of targeting
+    double fixedLoudnessGainDb = 0, fixedNormalizeGainDb = 0;   // where the target's gain goes: "peak" (before the trailing clip/limiter run), "limiter" (before the last limiter), "start"
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<Marker> markers;  // sections for per-section loudness in the report
     std::vector<KeyMark> keys;    // declared keys by bar, for `lint --harmony` (the render ignores them)
