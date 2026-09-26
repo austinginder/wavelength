@@ -71,7 +71,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |
 | `notes` | `[]` | See below. |
 | `fx` | `[]` | Effect chain (built-in or CLAP plugins), see `effects.md`. Every effect also takes `bypass`, `match` (level match), `matchMs` and `intended` (no distortion warnings). |
-| `sends` | `{}` | Bus name → send level in dB (post-fader), or an automation curve of dB (`[[beat, dB], ...]`) for throws. |
+| `sends` | `{}` | Bus name → send level in dB (post-fader), an automation curve of dB (`[[beat, dB], ...]` or a curve object), or throws: `{"base": -40, "throws": [[beat, length in beats, dB], ...], "ramp": 5}` sits at `base` and opens to each throw's level for its length (switch curve, 5 ms ramps; overlapping throws take the louder). |
 | `articulations` | none | Articulation name → keyswitch key (`{"long": 0, "spiccato": 1, "tremolo": 3}`). Notes pick one with `"art"`; the keyswitch note is sent 30 ms before the first note of every change. |
 | `range` | none | `[lowest, highest]` playable keys (`["G3", "C#7"]`): notes outside it get a warning in the report (sample libraries are silent there). |
 | `velocityTo` | none | Drive a controller from note velocities, one point per onset, ramping between them: `{"param": "Dynamics", "min": 0.1, "max": 1}` or `{"cc": 1, "min": 10, "max": 127}`. For libraries whose long notes take loudness from a controller instead of velocity. Explicit automation of the same target wins. |

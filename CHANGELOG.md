@@ -38,6 +38,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- Send throws: `"sends": {"Echo": {"base": -40, "throws": [[beat, lengthBeats, dB], ...]}}` becomes a
+  switch curve that opens the send for each throw (overlaps take the louder, `"ramp"` in ms). Sends also
+  take curve objects (`{"points": ..., "curve": "switch"}`), not only point lists.
 - Job-level `"chords"` (`[[beat, "C#m"], ...]` or `{"bar", "chord"}` entries) and curves that follow
   them: `{"follow": "root" | "third" | "fifth" | "seventh", "octave": 4}` (or `"from": "A2"`,
   `"transpose"`, `"as": "note" | "hz" | "midi"`) becomes a switch curve through the chord tones for any

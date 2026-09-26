@@ -84,7 +84,9 @@ square, saw (falling), ramp (rising), random (sample and hold); `phase` 0-1; `de
 units (octaves for cutoff), or a curve `[[beat, depth], ...]` to fade the LFO in and out.
 
 Also automatable: bus and master `automation.gain` (whole-mix fades, bus throws), send levels
-(`"sends": {"Echo": [[0, -40], [31.5, -40, "step"], [31.5, -6], [32, -40, "step"]]}`), track `pan`,
+(`"sends": {"Echo": [[0, -40], [31.5, -6, "switch"], [32, -40, "switch"]]}`, or the throw shorthand
+`"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], [63.5, 0.5, -4]]}}`: beat, length in beats,
+dB), track `pan`,
 and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 
 ## Built-in effects

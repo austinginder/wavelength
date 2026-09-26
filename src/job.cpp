@@ -256,6 +256,42 @@ json followCurve(const json &spec, const std::vector<std::pair<double, ChordTone
     return out;
 }
 
+// Send throws: {"base": -40, "throws": [[beat, lengthBeats, dB], ...], "ramp": 5} -> a switch curve that
+// sits at `base` and opens to each throw's level for its length (overlapping throws: the louder one).
+json throwCurve(const json &spec, const std::string &where) {
+    const double base = spec.value("base", -120.0);
+    const auto &list = spec["throws"];
+    if (!list.is_array()) throw std::runtime_error(where + ": \"throws\" is a list of [beat, length in beats, dB]");
+    for (auto &[k, v] : spec.items())
+        if (k != "base" && k != "throws" && k != "ramp") throw std::runtime_error(where + ": unknown throw setting '" + k + "' (base, throws, ramp)");
+    struct T { double b0, b1, db; };
+    std::vector<T> ts;
+    std::vector<double> edges;
+    for (const auto &t : list) {
+        if (!t.is_array() || t.size() != 3 || !t[0].is_number() || !t[1].is_number() || !t[2].is_number() || t[1].get<double>() <= 0)
+            throw std::runtime_error(where + ": each throw is [beat, length in beats (> 0), dB]");
+        ts.push_back({t[0].get<double>(), t[0].get<double>() + t[1].get<double>(), t[2].get<double>()});
+        edges.push_back(ts.back().b0);
+        edges.push_back(ts.back().b1);
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    json pts = json::array({json::array({0.0, base})});
+    double last = base;
+    for (double e : edges) {
+        double v = base;
+        bool open = false;
+        for (auto &t : ts) if (t.b0 <= e && e < t.b1) { v = open ? std::max(v, t.db) : t.db; open = true; }
+        if (v == last) continue;
+        if (e <= 0) pts[0][1] = v;
+        else pts.push_back({e, v});
+        last = v;
+    }
+    json out = {{"curve", "switch"}, {"points", pts}};
+    if (spec.contains("ramp")) out["ramp"] = spec["ramp"];
+    return out;
+}
+
 } // namespace
 
 json userJobDefaults(std::string *path) {
@@ -356,7 +392,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             }
             const json sends = t.value("sends", json::object());   // named: items() must not outlive its object
             for (auto &[bus, db] : sends.items()) {
-                if (db.is_array()) {   // automated send: [[beat, dB], ...]
+                if (db.is_object() && db.contains("throws")) {   // {"base": -40, "throws": [[beat, beats, dB], ...]}
+                    tr.sendAutomation.push_back({bus, Envelope::parse(throwCurve(db, "track '" + tr.name + "' send '" + bus + "'"), out.tempo, false)});
+                    tr.sends.push_back({bus, 0.0});
+                } else if (db.is_array() || db.is_object()) {   // automated send: [[beat, dB], ...] or a curve object
                     tr.sendAutomation.push_back({bus, Envelope::parse(db, out.tempo, false)});
                     tr.sends.push_back({bus, 0.0});
                 } else tr.sends.push_back({bus, db.get<double>()});

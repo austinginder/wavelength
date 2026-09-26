@@ -225,6 +225,8 @@ in the job (details in `docs/effects.md`):
   parameters too: `"automate": {"Frequency (Filter 1)": [[0, "C#4"], [32, "A3", "switch"]]}` or
   `[[0, "0.45 Hz"], [64, "0.96 Hz"]]`; no hand-computed normalized values (Melda frequencies are log
   0..1). `wavelength params <plugin> --set "Name=0.55"` shows what a plain value means.
+- **Delay and reverb throws:** `"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], ...]}}`
+  (beat, length in beats, dB) opens the send for single words or notes; no hand-built step curves.
 - **Tuned effects follow the chords.** Give the job a `"chords": [[0, "C#m"], [80, "A"], ...]`
   timeline and automate a combs, resonator or filter frequency with `{"follow": "root", "octave": 4}`
   (`"third"`, `"fifth"`, `"seventh"`, `"from": "A2"`, `"as": "midi"` for semitone pitch parameters):
