@@ -214,6 +214,9 @@ in the job (details in `docs/effects.md`):
   `bitcrush`, `tapestop` and `repeat` (beat-repeat stutters on a bus or the master) are built
   in. Use `"step"` points for hard switches, not two close points (a stray ramp can quietly
   lower a whole section).
+- **Plugin effect `mix`:** in `automate`, lowercase `"mix"` is the host dry/wet and `"Mix"` the
+  plugin's own parameter (case-sensitive only there). `"intended": true` on an effect keeps meant
+  distortion (clip, crushed compression) out of the warnings.
 - **Level-neutral effects:** `"match": true` on any effect (distortion with automated drive,
   resonators, comb or flanger freezes, plugins) keeps its output at the input's loudness over
   time, so it changes the tone and not the balance. No trim curves by hand.
@@ -376,7 +379,8 @@ job.json` lines the sections up and keeps the lead-in.
   instrument and effect, with a warning saying where.
 - `tracks[].renderSeconds`, where the render time goes (plugin load and warmup included).
 - `tracks[].latencyCompensatedMs`, processing delay the track's plugins reported; it is already
-  removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected.
+  removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected
+  (kHs Reverser's wet output lags by one chunk).
 - `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
 - `tracks[].postFaderPeakDb`, the track's peak after its fader and pan, as it leaves the track
   (before any bus it feeds: a track into a limited bus can read hotter than what reaches the mix). When the master limiter

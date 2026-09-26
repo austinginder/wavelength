@@ -126,6 +126,19 @@ also need their own sidechain switch set in `params` (e.g. MTurboComp `"Side-cha
 A warning says when the plugin has no sidechain input. An effect whose output is
 only a level-scaled copy of its input gets a warning (unlicensed or demo mode, bypass, an ignored preset).
 
+**`mix` vs the plugin's own `Mix`.** Plugin parameter names otherwise match case-insensitively, but in
+`automate` the lowercase key `"mix"` is always the host's dry/wet crossfade, and any other spelling
+(`"Mix"`, `"MIX"`) is the plugin's parameter. Many plugins have their own `Mix`: both work, and the two
+multiply (host `mix` 0.5 over a plugin `Mix` of 50% leaves 75% dry). A render warns when `"mix"` is
+automated on a plugin that has its own `Mix`, and an unknown `"Mix"` on a plugin without one points at
+the lowercase key.
+
+**Latency.** A plugin's reported processing delay is removed (`tracks[].latencyCompensatedMs`), so its
+output stays aligned. A plugin that doesn't report its delay isn't corrected: kHs Reverser's wet output
+lags by one chunk (its delay time), and look-ahead plugins that report 0 arrive late by their look-ahead.
+With the host `mix` at 0 the dry path stays aligned; shift the notes (or the curves) earlier by the lag
+when the wet timing matters.
+
 ## Built-in instruments
 
 - `builtin:drums`, synthesized kit on the General MIDI map: 35/36 kick, 37 rim, 38/40 snare,

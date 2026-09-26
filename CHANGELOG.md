@@ -5,6 +5,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- A warning when a plugin effect's `automate` has `"mix"` (the host dry/wet) and the plugin has its own
+  `Mix` parameter, and a hint on an unknown `"Mix"` that the host key is lowercase. `effects.md` explains
+  the case-sensitive `mix` key and that plugins which don't report latency (kHs Reverser) aren't
+  compensated.
 - `"intended": true` on an effect silences its "working too hard" warnings (`clip` shaping, `compressor`
   and `limiter` gain reduction) when the distortion is meant; Rust Protocol's destroyed arp clip warned
   on every render.

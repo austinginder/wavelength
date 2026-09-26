@@ -629,6 +629,7 @@ struct PluginFx : Effect {
     PluginSetup setup;
     Envelope mix;
     std::string key;   // "sidechain": a track's audio into the plugin's sidechain input
+    bool hostMixAutomated = false;
     PluginFx(const json &j, const Job &job, std::string &err) {
         setup.spec = j.value("plugin", "");
         label = setup.spec;
@@ -641,7 +642,10 @@ struct PluginFx : Effect {
         const json params = j.value("params", json::object());
         for (auto &[k, v] : params.items()) setup.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
         if (j.contains("automate"))
-            for (auto &[k, v] : j["automate"].items()) if (k != "mix") setup.automation.push_back({k, Envelope::parse(v, job.tempo, false)});
+            for (auto &[k, v] : j["automate"].items()) {
+                if (k == "mix") hostMixAutomated = true;   // lowercase "mix" is always the host dry/wet
+                else setup.automation.push_back({k, Envelope::parse(v, job.tempo, false)});
+            }
         setup.warmup = j.value("warmup", -1.0);
         setup.preset = j.value("preset", "");
         mix = param(j, "mix", 1, job.tempo);
@@ -651,8 +655,20 @@ struct PluginFx : Effect {
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         setup.verbose = c.verbose;
         OpenedPlugin p;
-        if (!openPlugin(setup, "effect " + setup.spec, p, err)) return false;
+        if (!openPlugin(setup, "effect " + setup.spec, p, err)) {
+            for (auto &[k, _] : setup.automation)
+                if (k != "mix" && k.size() == 3 && std::tolower((unsigned char)k[0]) == 'm' && std::tolower((unsigned char)k[1]) == 'i' &&
+                    std::tolower((unsigned char)k[2]) == 'x' && err.find("no parameter '" + k + "'") != std::string::npos)
+                    err += "; the host dry/wet is automated as lowercase \"mix\" (case-sensitive there)";
+            return false;
+        }
         label = p.name;
+        if (hostMixAutomated) {   // "mix" vs the plugin's own "Mix": the key is case-sensitive here, easy to mix up
+            ParamInfo pi;
+            if (p.plugin->findParam("mix", pi))
+                warnings.push_back(p.name + ": automate \"mix\" (lowercase) moves the host dry/wet, not the plugin's own '" + pi.name +
+                                   "' parameter; write \"" + (pi.name == "mix" ? "#" + std::to_string(pi.id) : pi.name) + "\" to automate that one");
+        }
         Audio wet;
         wet.resize(a.frames());
         if (!key.empty()) {
