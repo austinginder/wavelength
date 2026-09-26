@@ -203,7 +203,8 @@ elseif(WIN32)
   target_sources(wavelength PRIVATE src/wavelength.rc)
   target_link_options(wavelength PRIVATE -static)
   target_link_libraries(wavelength PRIVATE ws2_32 crypt32)   # sockets for `wavelength serve`
-  target_compile_definitions(wavelength PRIVATE UNICODE _UNICODE)
+  # Windows 10 API level: cpp-httplib (wavelength serve) refuses anything older
+  target_compile_definitions(wavelength PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0A00)
 elseif(UNIX)
   # runs on any distribution with glibc as new as the build machine's, without a matching libstdc++
   target_link_options(wavelength PRIVATE -static-libstdc++ -static-libgcc)

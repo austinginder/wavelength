@@ -687,7 +687,7 @@ int Server::run() {
 #elif defined(_WIN32)
         std::system(("start \"\" \"" + url + "\"").c_str());
 #else
-        std::system(("xdg-open '" + url + "' >/dev/null 2>&1 &").c_str());
+        if (std::system(("xdg-open '" + url + "' >/dev/null 2>&1 &").c_str()) != 0) std::fprintf(stderr, "open %s in a browser\n", url.c_str());
 #endif
     }
     const bool ok = http_.listen(opt_.host, opt_.port);

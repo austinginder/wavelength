@@ -404,7 +404,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     std::vector<bool> trackDone(job.tracks.size(), false);
     auto mixTrack = [&](size_t i, Audio &audio, TrackResult &tr) -> bool {
         const Track &track = job.tracks[i];
-        char prefix[8];
+        char prefix[16];
         std::snprintf(prefix, sizeof prefix, "%02d-", track.stemNumber > 0 ? track.stemNumber : (int)i + 1);
         if (job.stemBits && track.stem) {
             tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
