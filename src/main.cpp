@@ -11,6 +11,7 @@
 //   wavelength lint <job.json> --harmony [--key K] [--ignore "A,B"] [--chords] [--max-bars N] [--json]
 //   wavelength version
 #include "analyze.hpp"
+#include "clips.hpp"
 #include "harmony.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
@@ -125,6 +126,10 @@ Usage:
   wavelength export <job.json> [--out song.mid] [--json]
       Write the job's parts as a MIDI file (type 1): tempo map, time signature, markers, and a
       track per job track with its notes, CC, pitch bend and pressure automation.
+  wavelength timeline <job.json> [--every BARS] [--json]
+      Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
+      included), in song seconds and in file time (after the lead-in), with the tempo there,
+      the last sound and the render's end: plan a length or find bar 57 without rendering.
   wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--split "Organ=4"]
                   [--from BAR] [--to BAR] [--section NAME] [--crossings] [--json]
       Voice-leading check between melodic tracks (one voice each: its top note, its lowest for
@@ -1042,6 +1047,65 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
     return 0;
 }
 
+// ---- timeline: bars and markers -> song time, from the tempo map ------------------------------
+int cmdTimeline(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength timeline <job.json> [--every BARS] [--json]");
+    const std::string path = a.positional[1];
+    std::ifstream in(path);
+    if (!in) return fail(a, "cannot read " + path);
+    json j;
+    try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    Job job;
+    std::string err;
+    if (!parseJob(j, fs::absolute(path).parent_path().string(), job, err)) return fail(a, err);
+    const int every = std::max(1, std::atoi(a.get("--every", "8").c_str()));
+    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+    double end = 0;   // the render's length: the last note or clip plus the tail, or "length"
+    for (const auto &t : job.tracks) for (const auto &n : t.notes) end = std::max(end, n.start + n.length);
+    for (const auto &t : job.tracks) if (!t.clips.empty()) end = std::max(end, clipsEndSeconds(job, t));
+    const double lastSound = end, songEnd = job.length > 0 ? job.length : end + job.tail;
+    auto mmss = [](double s) {
+        char buf[24];
+        std::snprintf(buf, sizeof buf, "%d:%05.2f", (int)(s / 60), std::fmod(s, 60.0));
+        return std::string(buf);
+    };
+    auto row = [&](double beat, const std::string &kind, const std::string &name) {
+        const double sec = job.tempo.beatToSec(beat), bar = std::floor(beat / bpb + 1e-9);
+        return json{{"kind", kind}, {"name", name}, {"bar", (int)bar + 1}, {"beatInBar", std::round((beat - bar * bpb + 1) * 1000) / 1000},
+                    {"beat", std::round(beat * 1000) / 1000}, {"seconds", std::round(sec * 1000) / 1000},
+                    {"fileSeconds", std::round((sec + job.leadIn) * 1000) / 1000}, {"time", mmss(sec)},
+                    {"bpm", std::round(job.tempo.bpmAtBeat(beat) * 100) / 100}};
+    };
+    std::vector<json> rows;
+    const double lastBeat = job.tempo.secToBeat(songEnd);
+    for (double b = 0; b <= lastBeat + 1e-9; b += every * bpb) rows.push_back(row(b, "bar", ""));
+    for (const auto &m : job.markers) rows.push_back(row(m.beat, "marker", m.name));
+    {
+        json r = row(job.tempo.secToBeat(lastSound), "last sound", "");
+        rows.push_back(r);
+        r = row(lastBeat, "end", "");
+        r["seconds"] = std::round(songEnd * 1000) / 1000;   // exact, not through the beat round trip
+        rows.push_back(r);
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const json &x, const json &y) { return x["beat"].get<double>() < y["beat"].get<double>(); });
+    if (a.has("--json")) {
+        json out = {{"ok", true}, {"leadIn", job.leadIn}, {"beatsPerBar", bpb}, {"seconds", std::round(songEnd * 1000) / 1000},
+                    {"duration", std::round((songEnd + job.leadIn) * 1000) / 1000}, {"rows", rows}};
+        emit(out.dump(2, ' ', false, json::error_handler_t::replace));
+        return 0;
+    }
+    std::fprintf(OUT, "%-10s %-24s %6s %8s %9s  %10s %7s\n", "", "", "bar|beat", "beat", "song time", "file time", "bpm");
+    for (auto &r : rows) {
+        const std::string label = r["kind"] == "marker" ? r["name"].get<std::string>() : r["kind"] == "bar" ? "" : r["kind"].get<std::string>();
+        char bar[24];
+        std::snprintf(bar, sizeof bar, "%d|%g", r["bar"].get<int>(), r["beatInBar"].get<double>());
+        std::fprintf(OUT, "%-10s %-24.24s %6s %8g %9s  %10s %7g\n", r["kind"] == "marker" ? "marker" : "", label.c_str(), bar,
+                     r["beat"].get<double>(), r["time"].get<std::string>().c_str(), mmss(r["fileSeconds"].get<double>()).c_str(), r["bpm"].get<double>());
+    }
+    std::fprintf(OUT, "song %s (%s with the %.1f s lead-in)\n", mmss(songEnd).c_str(), mmss(songEnd + job.leadIn).c_str(), job.leadIn);
+    return 0;
+}
+
 // ---- lint: voice leading between melodic tracks --------------------------------------------
 // Each track is one voice (its highest sounding note; "--low" names tracks read by their lowest,
 // for basses). At every onset where two voices both move, a perfect fifth or octave (or unison)
@@ -1335,6 +1399,7 @@ int run(int argc, char **argv) {
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},
             {"export", {"--out", "--json"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
+            {"timeline", {"--every", "--json"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
         if (it != known.end())
@@ -1342,7 +1407,7 @@ int run(int argc, char **argv) {
                 if (!it->second.count(k)) {
                     std::string list;
                     for (auto &o : it->second) list += (list.empty() ? "" : " ") + o;
-                    return fail(a, "unknown option " + k + " for `" + cmd + "` (it takes: " + list + (cmd == "state" ? " --set" : "") + ")");
+                    return fail(a, "unknown option " + k + " for `" + cmd + "` (it takes: " + list + (cmd == "state" || cmd == "params" ? " --set" : "") + ")");
                 }
     }
     // after the unknown-option check, so a stray `--typo` at the end is named as unknown, not as missing a value
@@ -1360,6 +1425,7 @@ int run(int argc, char **argv) {
         if (cmd == "master") return cmdMaster(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "lint") return cmdLint(a);
+        if (cmd == "timeline") return cmdTimeline(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {
         return fail(a, e.what());

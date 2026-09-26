@@ -281,8 +281,9 @@ flanger really sits (MComb set to `"C#4"` measures C#5 spacing). A chord or comb
 confidence 0; the peaks still name its notes. Works on a render folder too (mix, every stem, bus stems).
 
 **When the human names a moment** ("at 1:29 the melody fades"):
-1. Find the bar: `sections[].start` in the report is in seconds of the written file (after any
-   `leadIn`); count bars from there with the tempo map.
+1. Find the bar: `wavelength timeline job.json --every 1` lists every bar's song time and file
+   time (after any `leadIn`) from the tempo map; `sections[].start` in the report is file time too.
+   Plan a song's length the same way before the first render.
 2. Render just that stretch: a copy of the job keeping only the notes in those bars, `stems`
    `"16"`. Keep every track an effect is keyed from (a `duck` trigger, a `sidechain`), or the
    render fails.
