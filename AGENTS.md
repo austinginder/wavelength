@@ -208,7 +208,7 @@ in the job (details in `docs/effects.md`):
 - **Movement:** automate filters (`"automate": {"cutoff": ...}`) through builds and intros.
   LFOs work on any automatable value (`"lfo": {"cutoff": {"rate": "1/8", "depth": 1}}`), and
   `tremolo`, `gate` (trance gate / gated reverb), `rotary` (Leslie organ), `autowah`, `vibrato`,
-  `bitcrush` and `tapestop` are built in. Use `"step"` points for hard switches, not two
+  `bitcrush`, `tapestop` and `repeat` (beat-repeat stutters on a bus or the master) are built in. Use `"step"` points for hard switches, not two
   close points (a stray ramp can quietly lower a whole section).
 - **Level-neutral effects:** `"match": true` on any effect (distortion with automated drive,
   resonators, comb or flanger freezes, plugins) keeps its output at the input's loudness over

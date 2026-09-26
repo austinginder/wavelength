@@ -982,6 +982,60 @@ struct TapeStop : Effect {
     }
 };
 
+// -------------------------------------------------------------------------------- repeat
+// Beat repeat / stutter: at each rising edge of "on" the incoming audio is captured and its first
+// "size" beats loop for as long as "on" stays up. A change of "size" while on restarts the loop at the
+// new size (1/4 -> 1/8 -> 1/16 -> 1/32 rolls). On a bus it repeats reverb and delay tails too.
+struct Repeat : Effect {
+    Envelope size, on, mix;
+    double fadeMs;
+    Repeat(const json &j, const Job &job) {
+        label = "repeat";
+        size = param(j, "size", 0.25, job.tempo);
+        on = param(j, "on", 0, job.tempo);
+        mix = param(j, "mix", 1, job.tempo);
+        fadeMs = std::clamp(j.value("fade", 2.0), 0.1, 20.0);
+        checkKeys(j, {"size", "on", "mix", "fade"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        const size_t n = a.frames();
+        const std::vector<float> inL = a.left, inR = a.right;
+        const size_t fadeN = std::max<size_t>(1, (size_t)(fadeMs * 0.001 * sr));
+        bool active = false;
+        size_t cap = 0, seg = 0, slice = 1;
+        double curSize = -1, w = 0;   // w: loop weight, ramps over fadeN at the on/off edges
+        size_t repeats = 0;
+        auto sliceFrames = [&](size_t at, double beats) {
+            const double b = c.job.tempo.secToBeat(at / sr);
+            return std::max<size_t>(2 * fadeN + 1, (size_t)std::llround((c.job.tempo.beatToSec(b + beats) - at / sr) * sr));
+        };
+        for (size_t i = 0; i < n; ++i) {
+            const double t = i / sr;
+            const bool o = on.at(t) >= 0.5;
+            if (o) {
+                const double sz = std::clamp(size.at(t), 1.0 / 128, 64.0);
+                if (!active) { active = true; cap = seg = i; curSize = sz; slice = sliceFrames(i, sz); ++repeats; }
+                else if (std::fabs(sz - curSize) > 1e-9) { seg = i; curSize = sz; slice = sliceFrames(i, sz); }
+            } else active = false;
+            w = active ? std::min(1.0, w + 1.0 / fadeN) : std::max(0.0, w - 1.0 / fadeN);
+            if (w <= 0) continue;
+            // position in the loop: the captured audio from `cap`, repeated every `slice` frames since `seg`
+            const size_t since = i - seg, pos = since % slice, src = cap + pos;
+            double env = 1;
+            if (since >= slice && pos < fadeN) env = (double)pos / fadeN;     // each repeat fades in (not the first pass)
+            if (slice - pos <= fadeN) env = std::min(env, (double)(slice - pos) / fadeN);   // and out before the next
+            const double l = src < n ? inL[src] * env : 0, r = src < n ? inR[src] * env : 0;
+            const double m = mix.constant() ? mix.at(0) : mix.at(t);
+            const double wl = inL[i] * (1 - w) + l * w, wr = inR[i] * (1 - w) + r * w;
+            a.left[i] = blend(inL[i], wl, m);
+            a.right[i] = blend(inR[i], wr, m);
+        }
+        if (!repeats && !on.constant()) warnings.push_back("repeat: \"on\" never reaches 0.5, so nothing repeats");
+        return true;
+    }
+};
+
 // ---------------------------------------------------------------------------- multiband
 // Splits the signal into 2-4 bands with Linkwitz-Riley (4th order) crossovers, runs each band
 // through its own effect chain, and sums them. Lower bands pass through the all-pass of every
@@ -1160,7 +1214,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "multiband"};
+            "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -1190,6 +1244,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
             else if (t == "vibrato") fx = std::make_unique<Vibrato>(j, job);
             else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
+            else if (t == "repeat") fx = std::make_unique<Repeat>(j, job);
             else if (t == "multiband") fx = std::make_unique<Multiband>(j, job, err);
             else {
                 std::string list;

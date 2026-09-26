@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `repeat` effect (beat repeat / stutter): captures the incoming audio when `on` rises and loops its
+  first `size` beats (automatable, 1/4 -> 1/32 rolls restart at each size). On a bus or the master the
+  reverb and delay tails stutter too; Rewind Signal wrote its stutters as note retriggers per track.
 - `delay` `"loopFx"`: an effect chain (built-in or plugin) inside the feedback loop, run on every echo:
   barber-pole spirals with a frequency shifter, shimmer, dub echoes that darken as they repeat.
   Endless Stair relied on MFreqShifter's own feedback for this.
