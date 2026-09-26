@@ -1,0 +1,312 @@
+{
+ "tempo": 120,
+ "tail": 3,
+ "stems": "none",
+ "markers": [
+  {
+   "beat": 0,
+   "name": "Groove"
+  },
+  {
+   "beat": 8,
+   "name": "Freeze"
+  }
+ ],
+ "buses": [
+  {
+   "name": "Hall",
+   "fx": [
+    {
+     "type": "reverb",
+     "decay": 2.4,
+     "size": 0.8,
+     "mix": 1,
+     "automate": {
+      "decay": [
+       [
+        0,
+        1.5
+       ],
+       [
+        8,
+        4
+       ]
+      ],
+      "freeze": [
+       [
+        0,
+        0
+       ],
+       [
+        7.5,
+        0,
+        "step"
+       ],
+       [
+        7.5,
+        1
+       ],
+       [
+        12,
+        1,
+        "step"
+       ],
+       [
+        12,
+        0
+       ]
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "master": {
+  "fx": [
+   {
+    "type": "limiter",
+    "ceiling": -1
+   }
+  ]
+ },
+ "tracks": [
+  {
+   "name": "Kit",
+   "plugin": "builtin:drums",
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 0.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 1,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 1.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 2,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 2.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 3,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 3.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 4,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 4.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 5,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 5.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 6,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 6.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 7,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 7.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 8,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 8.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 9,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 9.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 10,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 10.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 11,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 11.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 12,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 12.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 13,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 13.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 14,
+     "dur": 0.5,
+     "key": 36,
+     "vel": 0.9
+    },
+    {
+     "beat": 14.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    },
+    {
+     "beat": 15,
+     "dur": 0.5,
+     "key": 38,
+     "vel": 0.9
+    },
+    {
+     "beat": 15.5,
+     "dur": 0.25,
+     "key": 42,
+     "vel": 0.6
+    }
+   ],
+   "sends": {
+    "Hall": -10
+   },
+   "fx": [
+    {
+     "type": "clip",
+     "ceiling": -6,
+     "kneeDb": 6,
+     "drive": 0,
+     "automate": {
+      "drive": [
+       [
+        0,
+        0
+       ],
+       [
+        8,
+        12
+       ]
+      ]
+     },
+     "match": true
+    }
+   ]
+  },
+  {
+   "name": "Impacts",
+   "plugin": "builtin:fx",
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 2,
+     "key": 48,
+     "vel": 0.7
+    }
+   ],
+   "gain": -6,
+   "sends": {
+    "Hall": -6
+   }
+  }
+ ]
+}

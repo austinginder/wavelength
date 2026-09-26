@@ -153,18 +153,19 @@ struct Delay : Effect {
 // 8-line feedback delay network: input diffusion, slowly modulated lines, per-line damping,
 // Hadamard mixing, T60-accurate decay.
 struct Reverb : Effect {
-    double decay, size, predelayMs, damping, width, hp;
-    Envelope mix;
+    double size, predelayMs, damping, width, hp;
+    Envelope mix, decay, freeze;
     Reverb(const json &j, const Job &job) {
         label = "reverb";
-        decay = std::max(0.1, j.value("decay", 2.5));
+        decay = param(j, "decay", 2.5, job.tempo);
+        freeze = param(j, "freeze", 0, job.tempo);
         size = std::clamp(j.value("size", 0.7), 0.0, 1.0);
         predelayMs = std::max(0.0, j.value("predelay", 15.0));
         damping = std::clamp(j.value("damping", 0.5), 0.0, 1.0);
         width = std::clamp(j.value("width", 1.0), 0.0, 1.5);
         hp = j.value("highpass", 150.0);
         mix = param(j, "mix", 0.3, job.tempo);
-        checkKeys(j, {"decay", "size", "predelay", "damping", "width", "highpass", "mix"}, *this);
+        checkKeys(j, {"decay", "freeze", "size", "predelay", "damping", "width", "highpass", "mix"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
@@ -174,12 +175,19 @@ struct Reverb : Effect {
         dsp::DelayLine lines[8], diff[4], pre;
         double len[8], gain[8];
         dsp::OnePoleLP damp[8];
+        auto setGains = [&](double rt60) {
+            for (int k = 0; k < 8; ++k) gain[k] = std::pow(10.0, -3.0 * (len[k] / sr) / std::max(0.1, rt60));
+        };
         for (int k = 0; k < 8; ++k) {
             len[k] = baseMs[k] * scale * sr / 1000.0;
             lines[k].resize((size_t)(len[k] + 64));
-            gain[k] = std::pow(10.0, -3.0 * (len[k] / sr) / decay);
             damp[k].set(18000.0 * (1.0 - damping) + 1500.0 * damping, sr);
         }
+        setGains(decay.at(0));
+        const bool decayMoves = !decay.constant(), freezes = !(freeze.constant() && freeze.at(0) <= 0);
+        // freeze: 0..1, smoothed over ~20 ms; 1 = lossless loop (no decay, no damping), input muted
+        const double fzCoef = std::exp(-1.0 / (0.02 * sr));
+        double fz = std::clamp(freeze.at(0), 0.0, 1.0);
         for (int k = 0; k < 4; ++k) diff[k].resize((size_t)(diffMs[k] * sr / 1000.0) + 4);
         const double preLen = std::max(1.0, predelayMs * sr / 1000.0);
         pre.resize((size_t)preLen + 4);
@@ -188,8 +196,14 @@ struct Reverb : Effect {
         double phase = 0;
         const double lfoInc = 2 * dsp::kPi * 0.35 / sr, modDepth = 0.0012 * sr;
         for (size_t i = 0; i < a.frames(); ++i) {
+            if (decayMoves && i % 32 == 0) setGains(decay.at(i / sr));
+            if (freezes) {
+                const double target = std::clamp(freeze.at(i / sr), 0.0, 1.0);
+                fz = target + (fz - target) * fzCoef;
+                if (std::fabs(fz - target) < 1e-4) fz = target;   // land exactly: frozen = integer, unmodulated delays
+            }
             // input: mono, high-passed, pre-delayed, diffused by four allpasses
-            pre.push(inHp.process((a.left[i] + a.right[i]) * 0.5));
+            pre.push(inHp.process((a.left[i] + a.right[i]) * 0.5) * (1.0 - fz));
             double x = pre.tap(preLen);
             for (int k = 0; k < 4; ++k) {
                 const double dl = diffMs[k] * sr / 1000.0, delayed = diff[k].tap(dl);
@@ -201,10 +215,13 @@ struct Reverb : Effect {
             phase += lfoInc;
             double y[8];
             for (int k = 0; k < 8; ++k) {
-                double d = len[k];
-                if (k == 1) d += modDepth * std::sin(phase);
-                if (k == 6) d += modDepth * std::sin(phase * 1.37 + 1.0);
-                y[k] = damp[k].process(lines[k].tap(d)) * gain[k];
+                // frozen, the lines run unmodulated at whole-sample lengths: no interpolation loss, so the
+                // sound holds instead of fading
+                double d = fz > 0 ? len[k] + (std::round(len[k]) - len[k]) * fz : len[k];
+                if (k == 1) d += modDepth * std::sin(phase) * (1.0 - fz);
+                if (k == 6) d += modDepth * std::sin(phase * 1.37 + 1.0) * (1.0 - fz);
+                const double raw = lines[k].tap(d);
+                y[k] = fz > 0 ? (damp[k].process(raw) * gain[k]) * (1.0 - fz) + raw * fz : damp[k].process(raw) * gain[k];
             }
             // Hadamard 8x8 (fast Walsh–Hadamard), normalised
             double h[8];

@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Built-in `reverb`: `decay` is automatable, and `freeze` (automatable 0-1) holds the tail with no
+  decay and the input muted, so a reverb freeze no longer needs a plugin (Echo Chamber used kHs Reverb
+  at 30 s). A 30 s freeze holds within 0.1 dB.
 - `"match": true` on any effect, built-in or plugin (not only `saturate`): the output follows the
   input's loudness over time (`matchMs`, 300 ms), or one gain for the whole track with `"static"`.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
