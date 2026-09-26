@@ -204,7 +204,8 @@ int cmdPlugins(const Args &a) {
     all.push_back(builtin("builtin:drums", "Drums (built-in)", "GM kit: 36 kick, 38 snare, 37 rim, 42/46 hats, 49 crash, 51 ride, 41/45/48 toms", {"instrument", "drum"}));
     all.push_back(builtin("builtin:sampler", "Sampler (built-in)", "Bitwig .multisample instruments, WAV drum kits and single samples (see `wavelength samples`)", {"instrument", "sampler"}));
     all.push_back(builtin("builtin:audio", "Audio clips (built-in)", "WAV files placed in beats, tempo-fitted with pitch-preserving stretch, transposed, reversed, trimmed", {"instrument", "audio"}));
-    all.push_back(builtin("builtin:fx", "FX (built-in)", "48 impact, 50 riser (note length), 52 reverse swell (ends with the note), 53 sub drop", {"instrument"}));
+    all.push_back(builtin("builtin:fx", "FX (built-in)", "48 impact, 50 riser (note length), 52 reverse swell (ends with the note), 53 sub drop, 55/57 Shepard rise/fall (note length)", {"instrument"}));
+    all.push_back(builtin("builtin:shepard", "Shepard-Risset glissando (built-in)", "Endless rising or falling glissando for each note's length: rate, direction, centre, width", {"instrument"}));
     if (a.has("--json")) {
         json list = json::array();
         for (auto &p : all)
@@ -955,7 +956,7 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
 // short drum hit: a pitched snare roll is a riser, not a chord).
 std::string unpitchedReason(const Track &t, const std::string &baseDir) {
     if (!t.harmony) return "\"harmony\": false";
-    if (t.plugin == "builtin:drums" || t.plugin == "builtin:fx" || t.plugin == "builtin:audio") return t.plugin;
+    if (t.plugin == "builtin:drums" || t.plugin == "builtin:fx" || t.plugin == "builtin:audio" || t.plugin == "builtin:shepard") return t.plugin;
     if (!t.sampler.is_object()) return "";
     if (t.sampler.contains("kit") || t.sampler.contains("map")) return "drum kit";
     if (t.sampler.contains("multisample") || !t.sampler.contains("sample") || !t.sampler["sample"].is_string()) return "";

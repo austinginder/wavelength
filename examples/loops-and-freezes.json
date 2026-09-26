@@ -400,6 +400,35 @@
    "sends": {
     "Hall": -6
    }
+  },
+  {
+   "name": "Stair",
+   "plugin": "builtin:shepard",
+   "gain": -8,
+   "sends": {
+    "Hall": -12
+   },
+   "shepard": {
+    "rate": [
+     [
+      0,
+      0.1
+     ],
+     [
+      14,
+      0.5
+     ]
+    ],
+    "centre": "A5"
+   },
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 14,
+     "key": 60,
+     "vel": 0.7
+    }
+   ]
   }
  ]
 }

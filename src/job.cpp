@@ -240,6 +240,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 if (fs::path(tr.stateFile).is_relative()) tr.stateFile = (fs::path(baseDir) / tr.stateFile).string();
             }
             if (t.contains("sampler")) tr.sampler = t["sampler"];
+            if (t.contains("shepard")) tr.shepard = t["shepard"];
             if (t.contains("clips")) {
                 if (!t["clips"].is_array()) throw std::runtime_error("track '" + tr.name + "': \"clips\" must be an array");
                 tr.clips = t["clips"];

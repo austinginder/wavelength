@@ -77,7 +77,30 @@ A job is one JSON object. Unknown fields are ignored.
 | `velocityTo` | none | Drive a controller from note velocities, one point per onset, ramping between them: `{"param": "Dynamics", "min": 0.1, "max": 1}` or `{"cc": 1, "min": 10, "max": 127}`. For libraries whose long notes take loudness from a controller instead of velocity. Explicit automation of the same target wins. |
 | `automation` | none | `gain` (dB), `rides` (dB added on top of `gain`: one curve, or named curves `{"sections": curve, "fills": curve}` that all add up, so section rides never overwrite the written fader curve), `pan` (-1..1), `params` (`{"Name": curve}` or `{"#id": curve}`, plain values; a curve object with `"scale": "normalized"` gives 0..1 of the parameter's range, as DAWs store automation), `cc` (`{"1": curve, "64": curve}`, MIDI CC values 0-127), `pitchbend` (semitones, see `bendRange`), `pressure` (0-127). CC, pitch bend and pressure reach CLAP plugins as MIDI (or note expressions) and VST3 plugins through the parameters they map those controllers to (a warning names any they don't map). Curves are described in `effects.md` (points, steps, LFOs). |
 
-`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`, or `builtin:audio`.
+`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`, `builtin:audio`,
+or `builtin:shepard`.
+
+### builtin:shepard
+
+An endless riser (or faller): octave-spaced partials glide together under a bell curve over
+log-frequency, so each fades in at one end and out at the other and the sum climbs without arriving.
+Each note plays it for its length (the key doesn't matter; velocity sets the level). The stair's
+position runs from the start of the song, so back-to-back notes carry on where it is.
+
+```json
+{"name": "Stair", "plugin": "builtin:shepard", "shepard": {"rate": [[0, 0.1], [32, 0.6]], "direction": "up", "centre": "A5"},
+ "notes": [{"beat": 0, "dur": 32, "key": 60, "vel": 0.8}]}
+```
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `rate` | 0.1 | Octaves per second, a number or a curve `[[beat, rate], ...]` (an accelerating build: 0.1 -> 0.6). |
+| `direction` | `"up"` | `"up"` or `"down"`. |
+| `centre` | 880 | Where the bell peaks: Hz or a note name (`"A5"`). Lower is darker. |
+| `width` | 1.35 | The bell's width (sigma, octaves): wider = more partials heard at once. |
+| `partials` | 8 | Octaves spanned (3-12). |
+| `harmonic` | 0.18 | Level of each partial's octave harmonic, for body. |
+| `attack`, `release` | 0.05, 0.05 | Seconds of fade at the note's start and after its end. |
 
 ### builtin:audio
 

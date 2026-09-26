@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `builtin:shepard`: a Shepard-Risset glissando for each note's length, rising or falling forever, with
+  `rate` (octaves per second, a number or a curve), `direction`, `centre`, `width`, `partials`. Also
+  `builtin:fx` keys 55 (rise) and 57 (fall). Endless Stair generated these as WAVs in Python.
 - `repeat` effect (beat repeat / stutter): captures the incoming audio when `on` rises and loops its
   first `size` beats (automatable, 1/4 -> 1/32 rolls restart at each size). On a bus or the master the
   reverb and delay tails stutter too; Rewind Signal wrote its stutters as note retriggers per track.

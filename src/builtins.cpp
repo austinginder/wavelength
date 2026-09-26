@@ -138,6 +138,82 @@ void subDrop(Voice v, double vel) {
     }
 }
 
+// ---- Shepard-Risset glissando ------------------------------------------------------------
+// Partials an octave apart glide together; a bell curve over log-frequency fades each one in at one
+// end and out at the other, so the sum rises (or falls) forever and never arrives.
+struct ShepardSettings {
+    Envelope rate;              // octaves per second (positive)
+    double dir = 1;             // +1 up, -1 down
+    double centre = 880;        // Hz, the loudest point of the bell
+    double width = 1.35;        // bell sigma in octaves
+    int partials = 8;           // octaves spanned
+    double harmonic = 0.18;     // level of each partial's 2nd harmonic (an octave up: keeps the illusion)
+    double attack = 0.05, release = 0.05;
+};
+
+bool shepardSettings(const nlohmann::json &cfg, const Job &job, ShepardSettings &s, std::vector<std::string> &warnings, std::string &err) {
+    if (!cfg.is_null() && !cfg.is_object()) { err = "\"shepard\" must be an object"; return false; }
+    const nlohmann::json j = cfg.is_object() ? cfg : nlohmann::json::object();
+    for (auto &[k, v] : j.items())
+        if (k != "rate" && k != "direction" && k != "centre" && k != "center" && k != "width" && k != "partials" && k != "harmonic" &&
+            k != "attack" && k != "release")
+            warnings.push_back("shepard: unknown setting '" + k + "' ignored");
+    const nlohmann::json r = j.contains("rate") ? j["rate"] : nlohmann::json(0.1);
+    s.rate = r.is_number() ? Envelope::parse({{"value", r.get<double>()}}, job.tempo, false) : Envelope::parse(r, job.tempo, false);
+    const std::string d = j.value("direction", "up");
+    if (d == "up") s.dir = 1;
+    else if (d == "down") s.dir = -1;
+    else { err = "shepard: direction must be \"up\" or \"down\""; return false; }
+    const nlohmann::json c = j.contains("centre") ? j["centre"] : j.contains("center") ? j["center"] : nlohmann::json(880.0);
+    s.centre = c.is_number() ? c.get<double>() : 440.0 * std::pow(2.0, (parseKey(c) - 69) / 12.0);
+    if (s.centre < 20 || s.centre > 12000) { err = "shepard: centre must be 20-12000 Hz (or a note name)"; return false; }
+    s.width = std::clamp(j.value("width", 1.35), 0.3, 4.0);
+    s.partials = std::clamp(j.value("partials", 8), 3, 12);
+    s.harmonic = std::clamp(j.value("harmonic", 0.18), 0.0, 1.0);
+    s.attack = std::max(0.0, j.value("attack", 0.05));
+    s.release = std::max(0.0, j.value("release", 0.05));
+    return true;
+}
+
+// one note of glissando into out, from `start` for `dur` seconds (plus the release). The stair's position
+// is the rate integrated from the song's start, so consecutive notes carry on where it is.
+void shepard(Audio &out, double sr, size_t start, double dur, double vel, const ShepardSettings &s) {
+    const size_t n = (size_t)((dur + s.release) * sr);
+    const double lo = s.centre * std::pow(2.0, -s.partials / 2.0), mid = s.partials / 2.0;
+    double pos = 0;   // octave offset of the lowest partial at `start`, 0..1
+    for (size_t i = 0; i < start; i += 64) pos += s.dir * s.rate.at(i / sr) * std::min<size_t>(64, start - i) / sr;
+    pos -= std::floor(pos);
+    std::vector<double> ph(s.partials, 0.0), ph2(s.partials, 0.0);
+    double norm = 0;
+    for (int k = 0; k < s.partials; ++k) { const double o = k + 0.5 - mid; norm += std::exp(-(o * o) / (s.width * s.width)); }
+    const double gain = 0.12 * vel / std::sqrt(std::max(1e-9, norm * (1 + s.harmonic * s.harmonic) / 2));
+    double rate = s.dir * s.rate.at(start / sr);
+    for (size_t i = 0; i < n; ++i) {
+        const size_t idx = start + i;
+        if (idx >= out.frames()) break;
+        const double t = i / sr;
+        if (i % 64 == 0) rate = s.dir * s.rate.at(idx / sr);
+        pos += rate / sr;
+        pos -= std::floor(pos);
+        double v = 0;
+        for (int k = 0; k < s.partials; ++k) {
+            const double o = k + pos, f = lo * std::pow(2.0, o), d = (o - mid) / s.width;
+            const double amp = std::exp(-0.5 * d * d);
+            ph[(size_t)k] += TAU * f / sr;
+            ph2[(size_t)k] += TAU * 2 * f / sr;
+            if (ph[(size_t)k] > TAU) ph[(size_t)k] -= TAU;
+            if (ph2[(size_t)k] > TAU) ph2[(size_t)k] -= TAU;
+            if (f * 2 < sr * 0.45) v += amp * (std::sin(ph[(size_t)k]) + s.harmonic * std::sin(ph2[(size_t)k]));
+            else if (f < sr * 0.45) v += amp * std::sin(ph[(size_t)k]);
+        }
+        double env = s.attack > 0 ? std::min(1.0, t / s.attack) : 1.0;
+        if (t > dur) env *= s.release > 0 ? std::max(0.0, 1.0 - (t - dur) / s.release) : 0.0;
+        const float x = (float)(v * gain * env);
+        out.left[idx] += x;
+        out.right[idx] += x;
+    }
+}
+
 } // namespace
 
 bool isBuiltin(const std::string &plugin) { return plugin.rfind("builtin:", 0) == 0; }
@@ -147,8 +223,24 @@ bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track
     const std::string kind = plugin.substr(8);
     if (kind == "sampler") return renderSampler(job, track, out, warnings, err);
     if (kind == "audio") return renderClips(job, track, out, warnings, err);
-    if (kind != "drums" && kind != "fx") { err = "unknown built-in instrument '" + plugin + "' (use builtin:drums, builtin:fx, builtin:sampler or builtin:audio)"; return false; }
     const double sr = job.sampleRate;
+    if (kind == "shepard") {
+        ShepardSettings st;
+        if (!shepardSettings(track.shepard, job, st, warnings, err)) { err = "track '" + track.name + "': " + err; return false; }
+        for (const auto &n : track.notes) shepard(out, sr, (size_t)std::llround(n.start * sr), n.length, n.velocity, st);
+        return true;
+    }
+    if (kind != "drums" && kind != "fx") {
+        err = "unknown built-in instrument '" + plugin + "' (use builtin:drums, builtin:fx, builtin:sampler, builtin:audio or builtin:shepard)";
+        return false;
+    }
+    ShepardSettings rise, fall;
+    {
+        std::string e2;
+        std::vector<std::string> w2;
+        shepardSettings(nlohmann::json{{"rate", 0.15}}, job, rise, w2, e2);
+        shepardSettings(nlohmann::json{{"rate", 0.15}, {"direction", "down"}}, job, fall, w2, e2);
+    }
     dsp::Noise nz(12345), nzl(777), nzr(4242);
     std::map<int, int> unmapped;
     for (const auto &n : track.notes) {
@@ -174,6 +266,8 @@ bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track
             case 50: riser(v, vel, n.length, nzl, nzr); break;
             case 52: reverseSwell(v, vel, n.length, nzl, nzr); break;
             case 53: subDrop(v, vel); break;
+            case 55: shepard(out, sr, v.start, n.length, vel, rise); break;
+            case 57: shepard(out, sr, v.start, n.length, vel, fall); break;
             default: unmapped[n.key]++;
             }
         }

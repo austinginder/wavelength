@@ -128,4 +128,7 @@ only a level-scaled copy of its input gets a warning (unlicensed or demo mode, b
 - `builtin:drums`, synthesized kit on the General MIDI map: 35/36 kick, 37 rim, 38/40 snare,
   42/44 closed hat, 46 open hat, 49/57 crash, 51 ride, 41/43 low tom, 45/47 mid tom, 48/50 high tom.
 - `builtin:fx`, 48 (C3) impact, 50 (D3) riser lasting the note's length, 52 (E3) reverse swell
-  ending when the note ends, 53 (F3) sub drop.
+  ending when the note ends, 53 (F3) sub drop, 55 (G3) Shepard rise and 57 (A3) Shepard fall lasting
+  the note's length (the `builtin:shepard` defaults at 0.15 octaves per second).
+- `builtin:shepard`, a Shepard-Risset glissando for each note's length: it rises (or falls) forever and
+  never arrives. See `job-format.md`.
