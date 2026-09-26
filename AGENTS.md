@@ -234,7 +234,7 @@ in the job (details in `docs/effects.md`):
 - **Delay and reverb throws:** `"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], ...]}}`
   (beat, length in beats, dB) opens the send for single words or notes; no hand-built step curves.
 - **Tuned effects follow the chords.** Give the job a `"chords": [[0, "C#m"], [80, "A"], ...]`
-  timeline and automate a combs, resonator or filter frequency with `{"follow": "root", "octave": 4}`
+  timeline and automate a comb, resonator or filter frequency with `{"follow": "root", "octave": 4}`
   (`"third"`, `"fifth"`, `"seventh"`, `"from": "A2"`, `"as": "midi"` for semitone pitch parameters):
   one line instead of a hand-built step curve per chord change. Without `chords` it follows the
   chords lint reads from the notes.
