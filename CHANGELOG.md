@@ -38,6 +38,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- `analyze --peaks [--top N]`: the strongest spectral peaks of a window (16k-point spectrum, 2.9 Hz
+  resolution) as Hz, note and cents and level, and the spacing most of them are multiples of, as a
+  note: verifies where a comb, resonator or flanger sits. `analyze <render dir>` also measures bus stems,
+  and its windowed mix and stems carry the spectrum.
 - Bus stems: `"stem": true` on a bus writes `stems/bus-<name>.wav` (after its effects, before its fader,
   the point its report `lufs` measures) and the report gives its `file`. `scripts/stage-gains.py` learns
   `"bus:<Name>"` targets and writes bus gains under the same key.

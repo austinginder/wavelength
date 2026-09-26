@@ -76,7 +76,7 @@ Usage:
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
       (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
-  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--every S] [--json]
+  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--every S] [--peaks [--top N]] [--json]
       Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
       onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
       every stem and every marker section. --start/--end are seconds into the file; with
@@ -84,7 +84,9 @@ Usage:
       --grid lists each onset's beat and its timing offset from the nearest 1/div-beat step.
       --every S prints the loudness of every S-second window (file time, or song time from the
       first beat with --song-time), labelled with the render's sections: the song's contour at a
-      glance, dropouts and drops included.
+      glance, dropouts and drops included. --peaks lists the strongest spectral peaks of the
+      window (Hz, note and cents, level; 12 or --top N) and their spacing: where a comb,
+      resonator or flanger sits. A render folder also analyzes bus stems.
   wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
       Hidden and read-only parameters are omitted unless --all is given.
@@ -153,7 +155,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -377,6 +379,7 @@ int cmdAnalyze(const Args &a) {
             if (rep.contains("mix") && named(rep["mix"])) mine = true;
             if (rep.contains("output") && named(rep["output"])) mine = true;
             for (auto &t : rep.value("tracks", json::array())) if (named(t)) mine = true;
+            for (auto &b : rep.value("buses", json::array())) if (named(b)) mine = true;
             if (mine) { leadIn = rep.value("leadIn", 0.0); ownReport = rep; break; }
         }
     }
@@ -387,12 +390,19 @@ int cmdAnalyze(const Args &a) {
         std::snprintf(buf, sizeof buf, "--start/--end are file times and this render begins with %.1f s of lead-in; add --song-time to measure song time", leadIn);
         windowNote = buf;
     }
+    const bool peaks = a.has("--peaks");
+    const size_t top = (size_t)std::clamp(std::atoi(a.get("--top", "12").c_str()), 1, 100);
     auto one = [&](const std::string &path, double s, double e, bool onsets, json &out) {
         Audio audio;
         int sr = 0;
         if (!readWav(path, audio, sr, err)) return false;
         out = analysisToJson(analyzeAudio(audio, sr, s, e), onsets);
         out["file"] = path;
+        if (peaks) {   // --peaks: where the partials sit (combs, resonators, flangers, chords)
+            double binHz = 0;
+            const auto p = spectralPeaks(audio, sr, s, e, top, binHz);
+            out["spectrum"]["peaks"] = peaksToJson(p, binHz);
+        }
         return true;
     };
     json result;
@@ -410,6 +420,13 @@ int cmdAnalyze(const Args &a) {
                 if (f.empty() || !fs::exists(f, ec)) continue;
                 json s;
                 if (one(f, start, end, false, s)) { s["track"] = t.value("name", ""); result["stems"].push_back(s); }
+            }
+        if (report.is_object() && report.contains("buses"))   // bus stems ("stem": true on the bus)
+            for (auto &b : report["buses"]) {
+                const std::string f = b.value("file", "");
+                if (f.empty() || !fs::exists(f, ec)) continue;
+                json s;
+                if (one(f, start, end, false, s)) { s["bus"] = b.value("name", ""); result["stems"].push_back(s); }
             }
         if (report.is_object() && report.contains("sections"))
             for (auto &sec : report["sections"]) {
@@ -494,11 +511,30 @@ int cmdAnalyze(const Args &a) {
                      p["confidence"].get<double>() * 100, s["centroidHz"].get<int>(), x["stereo"]["width"].get<double>(),
                      e["attackMs"].get<int>(), e["sustainDb"].get<double>(), x["onsetCount"].get<size_t>());
     };
+    auto peakLines = [&](const json &x) {
+        if (!x.contains("spectrum") || !x["spectrum"].contains("peaks")) return;
+        const auto &p = x["spectrum"]["peaks"];
+        char spacing[120] = "";
+        if (p.contains("spacingHz"))
+            std::snprintf(spacing, sizeof spacing, ", %d of them multiples of %.1f Hz (%s %+d c)", p["onSpacing"].get<int>(), p["spacingHz"].get<double>(),
+                          p["spacingNote"].get<std::string>().c_str(), p["spacingCents"].get<int>());
+        std::fprintf(OUT, "    peaks (%.1f Hz resolution)%s\n", p["resolutionHz"].get<double>(), spacing);
+        for (auto &k : p["peaks"])
+            std::fprintf(OUT, "      %8.1f Hz  %-4s %+3d c  %6.1f dB\n", k["hz"].get<double>(), k["note"].get<std::string>().c_str(),
+                         k["cents"].get<int>(), k["levelDb"].get<double>());
+    };
     if (result.contains("mix")) {
         line("mix", result["mix"]);
-        for (auto &s : result["stems"]) line(s["track"].get<std::string>(), s);
+        peakLines(result["mix"]);
+        for (auto &s : result["stems"]) {
+            line(s.contains("bus") ? "bus " + s["bus"].get<std::string>() : s["track"].get<std::string>(), s);
+            peakLines(s);
+        }
         for (auto &s : result["sections"]) line("section " + s["section"].get<std::string>(), s);
-    } else line(fs::path(target).filename().string(), result);
+    } else {
+        line(fs::path(target).filename().string(), result);
+        peakLines(result);
+    }
     return 0;
 }
 
@@ -1237,7 +1273,7 @@ int run(int argc, char **argv) {
             {"params", {"--preset", "--state", "--format", "--all", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
-            {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--json"}},
+            {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
             {"render", {"--out", "--stems", "--jobs", "--tracks", "--level-from", "--json", "--verbose", "--bitwig", "--instrument"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},

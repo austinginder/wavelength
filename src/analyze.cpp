@@ -284,6 +284,109 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
     return r;
 }
 
+std::vector<SpectralPeak> spectralPeaks(const Audio &a, int sampleRate, double start, double end, size_t count, double &binHz) {
+    const double sr = sampleRate;
+    const size_t s0 = std::min(a.frames(), (size_t)std::max(0.0, start * sr));
+    const size_t s1 = end > 0 ? std::min(a.frames(), (size_t)(end * sr)) : a.frames();
+    std::vector<SpectralPeak> out;
+    binHz = 0;
+    if (s1 <= s0 + 64) return out;
+    size_t N = 16384;
+    while (N > 1024 && N > s1 - s0) N /= 2;
+    const size_t H = N / 4;
+    std::vector<double> win(N), power(N / 2 + 1, 0);
+    double wsum = 0;
+    for (size_t i = 0; i < N; ++i) { win[i] = 0.5 - 0.5 * std::cos(2 * dsp::kPi * (double)i / (double)(N - 1)); wsum += win[i]; }
+    std::vector<std::complex<double>> buf(N);
+    size_t frames = 0;
+    for (size_t p = s0; p < s1; p += H) {
+        for (size_t i = 0; i < N; ++i) {
+            const size_t k = p + i;
+            buf[i] = k < s1 ? 0.5 * ((double)a.left[k] + a.right[k]) * win[i] : 0.0;
+        }
+        fft(buf);
+        for (size_t k = 0; k <= N / 2; ++k) power[k] += std::norm(buf[k]);
+        ++frames;
+        if (p + N >= s1) break;
+    }
+    binHz = sr / (double)N;
+    // amplitude spectrum scaled so a sine of amplitude A reads A at its bin
+    std::vector<double> db(N / 2 + 1);
+    for (size_t k = 0; k <= N / 2; ++k) db[k] = 10 * std::log10(power[k] / (double)frames + 1e-30) + 20 * std::log10(2.0 / wsum);
+    const size_t k0 = std::max<size_t>(3, (size_t)(20.0 / binHz)), k1 = std::min(N / 2 - 3, (size_t)(20000.0 / binHz));
+    const size_t span = std::max<size_t>(8, (size_t)(60.0 / binHz));   // the floor around a peak: +-60 Hz
+    for (size_t k = k0; k <= k1; ++k) {
+        if (db[k] < db[k - 1] || db[k] <= db[k + 1] || db[k] < db[k - 2] || db[k] < db[k + 2]) continue;
+        std::vector<double> around;
+        for (size_t x = k > span ? k - span : 1; x <= std::min(N / 2, k + span); ++x) if (x + 2 < k || x > k + 2) around.push_back(db[x]);
+        if (db[k] < median(around) + 6) continue;   // a partial, not a ripple in noise
+        const double y0 = db[k - 1], y1 = db[k], y2 = db[k + 1], d = y0 - 2 * y1 + y2;
+        const double off = d < 0 ? 0.5 * (y0 - y2) / d : 0;   // parabolic interpolation
+        const double hz = ((double)k + off) * binHz;
+        const double lvl = y1 - 0.25 * (y0 - y2) * off;
+        const double m = 69 + 12 * std::log2(hz / 440.0);
+        out.push_back({hz, lvl, (int)std::lround(m), (m - std::lround(m)) * 100});
+    }
+    std::sort(out.begin(), out.end(), [](auto &x, auto &y) { return x.levelDb > y.levelDb; });
+    // one peak per quarter tone: a strong partial's shoulders are not partials
+    std::vector<SpectralPeak> kept;
+    for (auto &p : out) {
+        if (p.levelDb < out.front().levelDb - 60) break;   // dither and quantization, not the sound
+        bool near = false;
+        for (auto &q : kept) near |= std::fabs(12 * std::log2(p.hz / q.hz)) < 0.25 || std::fabs(p.hz - q.hz) < 3 * binHz;
+        if (!near) kept.push_back(p);
+        if (kept.size() >= count) break;
+    }
+    return kept;
+}
+
+nlohmann::json peaksToJson(const std::vector<SpectralPeak> &peaks, double binHz) {
+    nlohmann::json list = nlohmann::json::array();
+    for (auto &p : peaks)
+        list.push_back({{"hz", std::round(p.hz * 10) / 10}, {"note", keyName(p.key)}, {"cents", std::lround(p.cents)},
+                        {"levelDb", std::round(p.levelDb * 10) / 10}, {"relativeDb", std::round((p.levelDb - peaks.front().levelDb) * 10) / 10}});
+    nlohmann::json j = {{"resolutionHz", std::round(binHz * 100) / 100}, {"peaks", list}};
+    // spacing: the highest frequency the peaks are whole multiples of (a comb's or resonator's tuning, a
+    // harmonic series' fundamental). Candidates: each peak and each gap, divided by 1-8.
+    if (peaks.size() >= 4) {
+        std::vector<double> f;
+        for (auto &p : peaks) f.push_back(p.hz);
+        std::sort(f.begin(), f.end());
+        std::vector<double> cands;
+        for (size_t i = 0; i < f.size(); ++i) {
+            for (int d = 1; d <= 8; ++d) cands.push_back(f[i] / d);
+            if (i) cands.push_back(f[i] - f[i - 1]);
+        }
+        double best = 0;
+        size_t bestHits = 0;
+        for (double c : cands) {
+            if (c < 20) continue;
+            size_t hits = 0;
+            for (double x : f) {
+                const double k = std::round(x / c);
+                if (k >= 1 && std::fabs(x - k * c) <= std::max(0.012 * x, 2 * binHz)) ++hits;
+            }
+            if (hits > bestHits || (hits == bestHits && c > best)) { bestHits = hits; best = c; }
+        }
+        {   // least squares over the peaks on the series: sum(x k) / sum(k k)
+            double xk = 0, kk = 0;
+            for (double x : f) {
+                const double k = std::round(x / best);
+                if (k >= 1 && std::fabs(x - k * best) <= std::max(0.012 * x, 2 * binHz)) { xk += x * k; kk += k * k; }
+            }
+            if (kk > 0) best = xk / kk;
+        }
+        if (bestHits * 4 >= f.size() * 3) {   // three quarters of the peaks sit on the series
+            const double m = 69 + 12 * std::log2(best / 440.0);
+            j["spacingHz"] = std::round(best * 10) / 10;
+            j["spacingNote"] = keyName((int)std::lround(m));
+            j["spacingCents"] = std::lround((m - std::lround(m)) * 100);
+            j["onSpacing"] = bestHits;
+        }
+    }
+    return j;
+}
+
 nlohmann::json analysisToJson(const Analysis &x, bool withOnsets) {
     auto r1 = [](double v) { return std::round(v * 10) / 10; };
     nlohmann::json j = {

@@ -32,6 +32,13 @@ struct Analysis {
 // Analyze [start, end) seconds of `a` (end <= 0: to the end).
 Analysis analyzeAudio(const Audio &a, int sampleRate, double start = 0, double end = 0);
 nlohmann::json analysisToJson(const Analysis &x, bool withOnsets = true);
+
+// The strongest spectral peaks of [start, end) (end <= 0: to the end), from a power-averaged 16k-point
+// spectrum (2.9 Hz bins at 48 kHz; shorter windows use shorter frames): where a comb, resonator or
+// flanger sits. Sorted by level; `levelDb` is a sine's peak level (0 dBFS = a full-scale sine).
+struct SpectralPeak { double hz, levelDb; int key; double cents; };
+std::vector<SpectralPeak> spectralPeaks(const Audio &a, int sampleRate, double start, double end, size_t count, double &binHz);
+nlohmann::json peaksToJson(const std::vector<SpectralPeak> &peaks, double binHz);
 std::string keyName(int key);
 
 } // namespace wl

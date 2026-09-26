@@ -273,6 +273,12 @@ a wrong low note); attack/decay describe the whole window, so for a melodic part
 window around one note. Audition tags come from a single C4: instruments that can't play C4
 (basses, piccolo, tuned percussion) read `silent` there.
 
+**Checking tuned effects: `--peaks`.** `wavelength analyze out/stems/05-noise.wav --start 20 --end 24
+--peaks` lists the strongest spectral peaks of the window (Hz, note and cents, level) and, when most of
+them are whole multiples of one frequency, that spacing as a note: where a comb, resonator or frozen
+flanger really sits (MComb set to `"C#4"` measures C#5 spacing). A chord or combed noise reads pitch
+confidence 0; the peaks still name its notes. Works on a render folder too (mix, every stem, bus stems).
+
 **When the human names a moment** ("at 1:29 the melody fades"):
 1. Find the bar: `sections[].start` in the report is in seconds of the written file (after any
    `leadIn`); count bars from there with the tempo map.
