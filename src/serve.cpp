@@ -467,7 +467,10 @@ bool Server::allowed(const httplib::Request &req) const {
     if (loopback) {
         std::string host = req.get_header_value("Host");
         host = host.substr(0, host.rfind(':') == std::string::npos || host.back() == ']' ? host.size() : host.rfind(':'));
-        if (host != "127.0.0.1" && host != "localhost" && host != "[::1]") return false;
+        // names under .localhost always mean this machine (RFC 6761; nobody can register one), so a local
+        // reverse proxy such as https://wavelength-ui.localhost is fine; other names could be DNS rebinding
+        const bool dotLocalhost = host.size() > 10 && host.compare(host.size() - 10, 10, ".localhost") == 0;
+        if (host != "127.0.0.1" && host != "localhost" && host != "[::1]" && !dotLocalhost) return false;
     }
     if (req.method != "GET" && req.method != "HEAD" && req.get_header_value("X-Wavelength-Token") != token_) return false;
     return true;
