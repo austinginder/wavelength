@@ -192,7 +192,9 @@ in the job (details in `docs/effects.md`):
   `builtin:shepard` is an endless riser with its own rate curve (a build that never arrives).
 - **Audio on the timeline:** `builtin:audio` places WAV clips in beats: breaks fitted to the song
   tempo with their pitch kept (`"bpm": 133`), vocal chops transposed with `pitch`, and reverse
-  swells that end exactly on a downbeat (`"endAt": 64, "reverse": true`).
+  swells that end exactly on a downbeat (`"endAt": 64, "reverse": true`). A clip's `file` can be
+  the song itself: `{"render": [64, 65], "tail": 3, "fx": [reverb]}` with `"reverse": true, "endAt": 64`
+  swells into the drop from the drop's own first beat, in the same render.
 - **Real samples:** `builtin:sampler` plays Bitwig's sound content and any WAV folders:
   `{"multisample": "Grand Piano"}`, organs, guitars, basses, and drum machine kits such as
   `{"kit": "Legend 707"}` / `"Legend 808"` / `"Legend 909"`. Find them with

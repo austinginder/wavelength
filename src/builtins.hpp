@@ -10,13 +10,15 @@
 #include "job.hpp"
 #include "wav.hpp"
 
+#include <map>
 #include <string>
 #include <vector>
 
 namespace wl {
 
 bool isBuiltin(const std::string &plugin);
+// `rendered`: builtin:audio "render" clips' captured audio, by clip index (see clips.hpp)
 bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track, Audio &out,
-                   std::vector<std::string> &warnings, std::string &err);
+                   std::vector<std::string> &warnings, std::string &err, const std::map<size_t, Audio> *rendered = nullptr);
 
 } // namespace wl

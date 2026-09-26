@@ -62,14 +62,15 @@ bool runChain(Chain &chain, Audio &a, const FxContext &ctx, std::vector<std::str
 }
 
 // Instrument stage: a CLAP plugin or a built-in synth.
-bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackResult &tr, bool verbose, std::string &err) {
+bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackResult &tr, bool verbose, std::string &err,
+                      const std::map<size_t, Audio> *rendered = nullptr) {
     tr.notes = track.notes.size();
     for (auto &w : track.warnings) tr.warnings.push_back(w);
     if (isBuiltin(track.plugin)) {
         tr.plugin = tr.pluginName = track.plugin;
         if (!track.stateFile.empty() || !track.preset.empty() || !track.params.empty() || !track.paramAutomation.empty())
             tr.warnings.push_back("built-in instruments ignore state, params and parameter automation");
-        if (!renderBuiltin(track.plugin, job, track, audio, tr.warnings, err)) return false;
+        if (!renderBuiltin(track.plugin, job, track, audio, tr.warnings, err, rendered)) return false;
         muteGarbage(audio, job.sampleRate, track.plugin, tr.warnings);
         return true;
     }
@@ -101,9 +102,9 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
 
 // Instrument + effect chain for track `i` (what a worker process renders).
 bool renderTrackAudio(const Job &job, size_t i, Chain &chain, const FxContext &ctx, Audio &audio, TrackResult &tr, bool verbose,
-                      std::string &err) {
+                      std::string &err, const std::map<size_t, Audio> *rendered = nullptr) {
     const Track &track = job.tracks[i];
-    if (!renderInstrument(job, track, audio, tr, verbose, err)) return false;
+    if (!renderInstrument(job, track, audio, tr, verbose, err, rendered)) return false;
     if (!runChain(chain, audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err)) return false;
     for (auto &fx : chain) tr.latencySamples += fx->latencySamples;
     return true;
@@ -239,6 +240,46 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         std::set<size_t> ignore;
         for (auto &b : job.buses) if (!keysOf(b.fx, "bus '" + b.name + "'", ignore)) return false;
         if (!keysOf(job.masterFx, "master", ignore)) return false;
+    }
+    // builtin:audio "render" clips: the song's own tracks over a beat range, captured after their faders
+    // while they mix (before any bus). A track that renders others this way is never a source itself,
+    // so it can't recurse; its sources render first (like sidechain sources).
+    struct Capture { size_t track, clip, f0, f1; std::set<size_t> from; Audio audio; };
+    std::vector<Capture> captures;
+    {
+        std::vector<std::vector<ClipRender>> reqs(job.tracks.size());
+        std::set<size_t> renders;
+        for (size_t i = 0; i < job.tracks.size(); ++i)
+            if (job.tracks[i].plugin == "builtin:audio") {
+                if (!clipRenders(job.tracks[i], reqs[i], err)) return false;
+                if (!reqs[i].empty()) renders.insert(i);
+            }
+        for (size_t i = 0; i < job.tracks.size(); ++i)
+            for (const auto &r : reqs[i]) {
+                Capture c;
+                c.track = i;
+                c.clip = r.clip;
+                c.f0 = std::min(frames, (size_t)std::llround(job.tempo.beatToSec(r.fromBeat) * sr));
+                c.f1 = std::min(frames, (size_t)std::llround(job.tempo.beatToSec(r.toBeat) * sr));
+                const std::string where = "track '" + job.tracks[i].name + "' clip " + std::to_string(r.clip + 1);
+                if (r.tracks.empty()) {
+                    for (size_t j = 0; j < job.tracks.size(); ++j) if (!renders.count(j)) c.from.insert(j);
+                } else
+                    for (const auto &name : r.tracks) {
+                        auto it = byName.find(name);
+                        if (it == byName.end()) { err = where + ": no track named '" + name + "' to render"; return false; }
+                        if (renders.count(it->second)) {
+                            err = where + ": track '" + name + "' plays rendered audio itself, so it can't be rendered into another clip";
+                            return false;
+                        }
+                        c.from.insert(it->second);
+                    }
+                for (size_t j : c.from) deps[i].insert(j);
+                c.audio.resize(c.f1 - c.f0);
+                captures.push_back(std::move(c));
+            }
+    }
+    {
         // no track may (indirectly) key itself
         std::vector<int> mark(job.tracks.size(), 0);
         std::function<bool(size_t)> acyclic = [&](size_t i) {
@@ -250,7 +291,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             return true;
         };
         for (size_t i = 0; i < job.tracks.size(); ++i)
-            if (!acyclic(i)) { err = "track '" + job.tracks[i].name + "': sidechain sources form a loop"; return false; }
+            if (!acyclic(i)) { err = "track '" + job.tracks[i].name + "': sidechain (or rendered-clip) sources form a loop"; return false; }
     }
     FxContext ctx{job, verbose, [&](const std::string &name) -> const Audio * {
         auto it = byName.find(name);
@@ -301,6 +342,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                         for (auto &[n, e] : track.sendAutomation) if (n == busName) env = &e;
                         sends.push_back({&buses[b], dsp::dbToLin(db), env});
                     }
+            std::vector<Capture *> caps;   // render clips that take this track
+            for (auto &c : captures) if (c.from.count(i) && c.f1 > c.f0) caps.push_back(&c);
+            const size_t capFade = (size_t)(0.005 * sr);   // 5 ms edges, so the cut doesn't click
             Audio *dest = &mix;   // "output": a group bus instead of the master
             for (size_t b = 0; b < job.buses.size(); ++b) if (job.buses[b].name == track.output) dest = &buses[b];
             double g = dsp::dbToLin(track.gainDb);
@@ -319,6 +363,12 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 postPeak = std::max({postPeak, std::fabs(l), std::fabs(r)});
                 if (!post.left.empty()) { post.left[f] = l; post.right[f] = r; }
                 for (auto &s : sends) { s.bus->left[f] += (float)(l * s.amt); s.bus->right[f] += (float)(r * s.amt); }
+                for (auto *c : caps)
+                    if (f >= c->f0 && f < c->f1) {
+                        const double w = std::min({1.0, (double)(f - c->f0) / capFade, (double)(c->f1 - f) / capFade});
+                        c->audio.left[f - c->f0] += (float)(l * w);
+                        c->audio.right[f - c->f0] += (float)(r * w);
+                    }
             }
             tr.postPeakDb = dsp::linToDb(postPeak);
             for (size_t m = 0; m < job.markers.size(); ++m) {
@@ -412,7 +462,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             audio.resize(frames);
             const auto tt = std::chrono::steady_clock::now();
             if (verbose) std::fprintf(stderr, "rendering %s (%s)...\n", track.name.c_str(), track.plugin.c_str());
-            if (!renderTrackAudio(job, i, trackChains[i], ctx, audio, tr, verbose, err) || !finish(i, audio)) { failed = true; break; }
+            std::map<size_t, Audio> rendered;   // this track's render clips, by clip index
+            for (auto &c : captures) if (c.track == i) rendered[c.clip] = std::move(c.audio);
+            if (!renderTrackAudio(job, i, trackChains[i], ctx, audio, tr, verbose, err, &rendered) || !finish(i, audio)) { failed = true; break; }
             tr.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - tt).count();
         }
         if (failed) break;

@@ -429,6 +429,37 @@
      "vel": 0.7
     }
    ]
+  },
+  {
+   "name": "Swell",
+   "plugin": "builtin:audio",
+   "gain": -4,
+   "clips": [
+    {
+     "file": {
+      "render": [
+       8,
+       9
+      ],
+      "tracks": [
+       "Kit",
+       "Impacts"
+      ],
+      "tail": 2.5,
+      "fx": [
+       {
+        "type": "reverb",
+        "decay": 3,
+        "size": 0.9,
+        "mix": 0.6
+       }
+      ]
+     },
+     "reverse": true,
+     "endAt": 8,
+     "fadeIn": 300
+    }
+   ]
   }
  ]
 }

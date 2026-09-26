@@ -1,6 +1,7 @@
 #include "clips.hpp"
 
 #include "dsp.hpp"
+#include "effects.hpp"
 #include "sampler.hpp"
 
 #include <signalsmith-stretch/signalsmith-stretch.h>
@@ -56,17 +57,60 @@ Audio resample(const Audio &in, double ratio) {
     return out;
 }
 
-bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err) {
+bool renderSpec(const json &f, ClipRender &r, double &tail, std::string &err) {
+    static const std::set<std::string> known = {"render", "tracks", "tail", "fx"};
+    for (auto &[k, v] : f.items())
+        if (!known.count(k)) { err = "clip: unknown \"file\" setting '" + k + "' (a rendered file takes render, tracks, tail, fx)"; return false; }
+    const json &rg = f.contains("render") ? f["render"] : json();
+    if (!rg.is_array() || rg.size() != 2 || !rg[0].is_number() || !rg[1].is_number() || rg[1].get<double>() <= rg[0].get<double>()) {
+        err = "clip: \"file\": {\"render\": [fromBeat, toBeat]} needs two beats, the second after the first";
+        return false;
+    }
+    r.fromBeat = rg[0].get<double>();
+    r.toBeat = rg[1].get<double>();
+    r.tracks.clear();
+    if (f.contains("tracks")) {
+        if (!f["tracks"].is_array()) { err = "clip: \"tracks\" must be a list of track names"; return false; }
+        for (auto &t : f["tracks"]) r.tracks.push_back(t.get<std::string>());
+    }
+    tail = std::clamp(f.value("tail", 0.0), 0.0, 60.0);
+    return true;
+}
+
+bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err, const Audio *rendered = nullptr) {
     static const std::set<std::string> known = {"file", "beat", "endAt", "bpm", "speed", "pitch", "stretch", "start", "length",
                                                 "beats", "reverse", "gain", "fadeIn", "fadeOut"};
     for (auto &[k, v] : c.items())
         if (!known.count(k)) { err = "clip: unknown setting '" + k + "'"; return false; }
-    const std::string file = c.value("file", "");
-    const std::string path = resolveSampleFile(file, job.baseDir);
-    if (path.empty()) { err = "clip: cannot find audio file '" + file + "'"; return false; }
     Audio src;
     int sr = 0;
-    if (!loadFile(path, src, sr, err)) return false;
+    std::string file;
+    if (c.contains("file") && c["file"].is_object()) {
+        // the song's own audio, captured from the render graph, plus the tail, through the clip's own fx
+        const json &f = c["file"];
+        ClipRender r;
+        double tail = 0;
+        if (!renderSpec(f, r, tail, err)) return false;
+        file = "render [" + std::to_string(r.fromBeat) + ", " + std::to_string(r.toBeat) + "]";
+        sr = job.sampleRate;
+        const size_t n = (size_t)std::llround((job.tempo.beatToSec(r.toBeat) - job.tempo.beatToSec(r.fromBeat) + tail) * sr);
+        if (rendered) src = *rendered;
+        src.left.resize(n, 0.f);   // the tail (or, while sizing the song, silence of the right length)
+        src.right.resize(n, 0.f);
+        if (rendered && f.contains("fx")) {
+            const FxContext ctx{job, false, nullptr};
+            for (size_t i = 0; i < f["fx"].size(); ++i) {
+                if (f["fx"][i].is_object() && f["fx"][i].value("bypass", false)) continue;
+                auto fx = makeEffect(f["fx"][i], job, "clip render fx[" + std::to_string(i) + "]", err);
+                if (!fx || !fx->process(src, ctx, err)) return false;
+            }
+        }
+    } else {
+        file = c.value("file", "");
+        const std::string path = resolveSampleFile(file, job.baseDir);
+        if (path.empty()) { err = "clip: cannot find audio file '" + file + "'"; return false; }
+        if (!loadFile(path, src, sr, err)) return false;
+    }
     // trim in the file's own time: start / length in seconds, or beats at the clip's own bpm
     const double srcBpm = c.value("bpm", 0.0);
     const double start = std::max(0.0, c.value("start", 0.0));
@@ -104,6 +148,19 @@ bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err) {
 
 } // namespace
 
+bool clipRenders(const Track &track, std::vector<ClipRender> &out, std::string &err) {
+    for (size_t i = 0; i < track.clips.size(); ++i) {
+        const json &c = track.clips[i];
+        if (!c.is_object() || !c.contains("file") || !c["file"].is_object()) continue;
+        ClipRender r;
+        double tail;
+        if (!renderSpec(c["file"], r, tail, err)) { err = "track '" + track.name + "' clip " + std::to_string(i + 1) + ": " + err; return false; }
+        r.clip = i;
+        out.push_back(r);
+    }
+    return true;
+}
+
 double clipsEndSeconds(const Job &job, const Track &track) {
     double end = 0;
     std::string err;
@@ -114,12 +171,23 @@ double clipsEndSeconds(const Job &job, const Track &track) {
     return end;
 }
 
-bool renderClips(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
+bool renderClips(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err,
+                 const std::map<size_t, Audio> *rendered) {
     if (track.clips.empty()) { warnings.push_back("builtin:audio track has no \"clips\""); return true; }
     const double sr = job.sampleRate;
     for (size_t ci = 0; ci < track.clips.size(); ++ci) {
         Clip clip;
-        if (!parseClip(job, track.clips[ci], clip, err)) { err = "track '" + track.name + "' clip " + std::to_string(ci + 1) + ": " + err; return false; }
+        const Audio *captured = nullptr;
+        if (track.clips[ci].is_object() && track.clips[ci].contains("file") && track.clips[ci]["file"].is_object()) {
+            if (rendered && rendered->count(ci)) captured = &rendered->at(ci);
+            if (!captured) {
+                err = "track '" + track.name + "' clip " + std::to_string(ci + 1) + ": a \"render\" clip only plays inside a song render";
+                return false;
+            }
+            if (measure(*captured).silent)
+                warnings.push_back("clip " + std::to_string(ci + 1) + ": the rendered beats captured silence (are the tracks playing there, and not muted?)");
+        }
+        if (!parseClip(job, track.clips[ci], clip, err, captured)) { err = "track '" + track.name + "' clip " + std::to_string(ci + 1) + ": " + err; return false; }
         Audio body;
         const size_t outN = clip.outFrames();
         if (!clip.stretch) {   // tape-style: speed and pitch move together

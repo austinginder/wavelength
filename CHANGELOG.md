@@ -5,6 +5,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `builtin:audio` clips can play the song's own audio: `"file": {"render": [fromBeat, toBeat], "tracks":
+  [...], "tail": 3, "fx": [...]}` captures those beats of the tracks (after their faders) inside the same
+  render, runs the clip's own fx over them with a tail, then plays the result like a WAV (`reverse`,
+  `endAt`, trims). A reverse swell of the drop no longer needs a pre-render: Rewind Signal's two-pass
+  `--prerender` becomes one render. The source tracks render first; a track that plays rendered clips
+  can't be a source, so it can't recurse.
 - `builtin:sampler` `length`: play at most that much of every sample after `start`, in the file's own
   time, and with `reverse` the trimmed region plays backwards, so a reversed swell's length is set in the
   job (Rewind Signal trimmed its files with ffmpeg).

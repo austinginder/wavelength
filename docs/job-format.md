@@ -115,7 +115,7 @@ Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `file` | required | A WAV: absolute, relative to the job, or relative to a sample root (Bitwig content, `$WAVELENGTH_SAMPLES_PATH`). |
+| `file` | required | A WAV: absolute, relative to the job, or relative to a sample root (Bitwig content, `$WAVELENGTH_SAMPLES_PATH`); or `{"render": ...}`, the song's own audio (below). |
 | `beat` / `endAt` | one of them | Where the clip starts, or the beat where it ends (reverse swells, pickups). |
 | `bpm` | none | The file's own tempo: the clip is sped up or slowed to the song's tempo at its anchor. |
 | `speed` | 1 | An explicit speed factor instead of `bpm`. |
@@ -124,6 +124,27 @@ Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
 | `start`, `length` | 0, whole file | Trim, in seconds of the file; or `beats` (with `bpm`) instead of `length`. |
 | `reverse` | false | Play the trimmed audio backwards. |
 | `gain`, `fadeIn`, `fadeOut` | 0 dB, 2 ms, 5 ms | Level and edge fades (ms). |
+
+**The song's own audio as a clip.** `file` can be `{"render": [fromBeat, toBeat], "tracks": [...], "tail": 3, "fx": [...]}`:
+those beats of the song, rendered inside the same render, become the clip's audio. A reverse swell of the
+drop with no pre-render:
+
+```json
+{"name": "Drop Swell", "plugin": "builtin:audio", "clips": [
+  {"file": {"render": [256, 257], "tracks": ["Kick", "Bass", "Chords"], "tail": 3.5,
+            "fx": [{"type": "reverb", "decay": 3.2, "size": 0.9, "mix": 0.55}]},
+   "reverse": true, "endAt": 256, "fadeIn": 400}]}
+```
+
+- What is captured: each listed track (default: every track except ones that play rendered clips
+  themselves) after its effects, fader, automation and pan, as it enters the mix; not buses, sends or
+  the master. Muted tracks add nothing. The range is cut with 5 ms fades.
+- Then `tail` seconds of silence (0-60, default 0) are added and the clip's own `fx` run over it (a
+  reverb there rings into the tail), and the result is the "file": `start`, `length`, `reverse`, `pitch`,
+  `endAt` and the rest apply to it as to a WAV.
+- Ordering: the listed tracks render first (the audio track waits for them, as for a sidechain
+  source). A track that plays rendered clips can't be a source for another one, so it can't recurse.
+  The clip may play before its range (a swell ending on the drop it was made from).
 
 ### builtin:sampler
 

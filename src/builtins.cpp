@@ -219,10 +219,10 @@ void shepard(Audio &out, double sr, size_t start, double dur, double vel, const 
 bool isBuiltin(const std::string &plugin) { return plugin.rfind("builtin:", 0) == 0; }
 
 bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track, Audio &out,
-                   std::vector<std::string> &warnings, std::string &err) {
+                   std::vector<std::string> &warnings, std::string &err, const std::map<size_t, Audio> *rendered) {
     const std::string kind = plugin.substr(8);
     if (kind == "sampler") return renderSampler(job, track, out, warnings, err);
-    if (kind == "audio") return renderClips(job, track, out, warnings, err);
+    if (kind == "audio") return renderClips(job, track, out, warnings, err, rendered);
     const double sr = job.sampleRate;
     if (kind == "shepard") {
         ShepardSettings st;
