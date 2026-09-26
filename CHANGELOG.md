@@ -4,6 +4,19 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- `builtin:synth`: a virtual-analog polysynth, so melodic parts render with no plugin installed (CI, a
+  fresh machine, an agent's cloud container). Band-limited saw and pulse, triangle, sine with FM, noise,
+  unison with detune and stereo spread, a sub, a resonant 12/24 dB low/high/band-pass filter with key
+  tracking, drive and its own envelope, up to 4 LFOs (pitch, cutoff, amp, pulse width, pan) with delay
+  and fade, a pitch envelope, mono legato with glide, per-note `bend`/`vibrato` and `automation.pitchbend`.
+  27 named patches (`"preset": "BA Acid"`, listed by `wavelength presets builtin:synth`), each about
+  -18 LUFS on a typical phrase and at the written pitch; a track's `synth` object changes any part of
+  its patch, and `params`/`automation.params` set or move `cutoff`, `resonance`, `drive`, `detune`,
+  `pw`, `fm`, `lfo` and more by name (`wavelength params builtin:synth`; cutoff curves sweep
+  exponentially). Renders are deterministic. `examples/synth-tour.json` is a song made only of
+  built-in instruments.
+
 ## [0.3.0] - 2026-09-26
 
 Highlights: VST2 hosting (Intel-only plugins under Rosetta); DAWproject import and export (songs open

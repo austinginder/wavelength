@@ -53,7 +53,18 @@ def automation_tour(d):
     return bad
 
 
-EXPECT = {"arrangement-tour": arrangement_tour, "automation-tour": automation_tour}
+def synth_tour(d):
+    """examples/synth-tour.json: every melodic part on builtin:synth, no plugins installed needed."""
+    bad = []
+    if d.get("warnings"):
+        bad.append("warnings: " + " | ".join(w[:60] for w in d["warnings"]))
+    for t in d["tracks"]:
+        if t["plugin"] == "builtin:synth" and not -30 < t["lufs"] < -8:
+            bad.append(f"{t['name']} at {t['lufs']} LUFS: a patch level is off")
+    return bad
+
+
+EXPECT = {"arrangement-tour": arrangement_tour, "automation-tour": automation_tour, "synth-tour": synth_tour}
 
 d = json.load(sys.stdin)
 name = sys.argv[1]

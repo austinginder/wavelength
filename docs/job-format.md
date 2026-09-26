@@ -78,8 +78,45 @@ A job is one JSON object. Unknown fields are ignored.
 | `velocityTo` | none | Drive a controller from note velocities, one point per onset, ramping between them: `{"param": "Dynamics", "min": 0.1, "max": 1}` or `{"cc": 1, "min": 10, "max": 127}`. For libraries whose long notes take loudness from a controller instead of velocity. Explicit automation of the same target wins. |
 | `automation` | none | `gain` (dB), `rides` (dB added on top of `gain`: one curve, or named curves `{"sections": curve, "fills": curve}` that all add up, so section rides never overwrite the written fader curve), `pan` (-1..1), `params` (`{"Name": curve}` or `{"#id": curve}`, plain values; a curve object with `"scale": "normalized"` gives 0..1 of the parameter's range, as DAWs store automation; point values may be the plugin's display text, `[[0, "800 Hz"], [16, "2.4 kHz"]]`, or note names, `"C#4"` = its frequency, each read by the plugin once before the render; `"scale": "display"` reads plain numbers as display values too), `cc` (`{"1": curve, "64": curve}`, MIDI CC values 0-127), `pitchbend` (semitones, see `bendRange`), `pressure` (0-127). CC, pitch bend and pressure reach CLAP plugins as MIDI (or note expressions) and VST3 plugins through the parameters they map those controllers to (a warning names any they don't map). Curves are described in `effects.md` (points, steps, LFOs). |
 
-`plugin` may also be `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`, `builtin:audio`,
-or `builtin:shepard`.
+`plugin` may also be `builtin:synth`, `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`,
+`builtin:audio`, or `builtin:shepard`.
+
+### builtin:synth
+
+A virtual-analog polysynth inside Wavelength: melodic parts render with no plugin installed (a CI
+runner, a fresh laptop, an agent's cloud container). Pick a patch with `preset`, change any part of it
+with a `synth` object (merged over the preset: objects merge key by key, `osc` and `lfo` lists
+replace), and set or automate its parameters by name with `params` and `automation.params`. Renders
+are deterministic: the same job gives the same samples.
+
+```json
+{"name": "Acid", "plugin": "builtin:synth", "preset": "BA Acid", "params": {"resonance": 0.65},
+ "automation": {"params": {"cutoff": [[32, 250], [48, 1600]]}},
+ "notes": [{"beat": 32, "dur": 0.2, "key": "A2", "vel": 1}]}
+```
+
+`wavelength presets builtin:synth` lists the patches (Init, `BA` bass, `LD` lead, `PD` pad, `PL`
+pluck, `KY` keys, `BR` brass, `FX`); each plays about -18 LUFS on a typical phrase at velocity 0.8
+and sounds at the written pitch. `wavelength params builtin:synth` lists the parameters:
+`cutoff` (Hz, sweeps exponentially), `resonance`, `drive`, `env`, `keytrack`, `detune`, `spread`, `pw`,
+`fm`, `lfo`, `sub`, `noise`, `glide`, `level`. Values may be text: `"800 Hz"`, `"2.4 kHz"`, a note name.
+
+The `synth` object:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `osc` | `[{"wave": "saw"}]` | Up to 6 oscillators: `wave` (`saw`, `square`/`pulse`, `triangle`, `sine`, `noise`), `level` 1, `octave`, `semi`, `cents`, `pw` 0.5 (pulse width), `decay` (seconds of its own fade: a tine or click on top of a sustained sound), and on a sine `fm`: `{"ratio": 2, "index": 1.5, "decay": 0.4, "sustain": 0}` (a sine modulator at `ratio` times the pitch; `index` sets brightness and falls to `sustain` of itself over `decay` seconds). Saw and pulse are band-limited. |
+| `unison` | 1 | Copies of every oscillator: a count, or `{"voices": 7, "detune": 30, "spread": 0.8}` (cents from lowest to highest copy, stereo width). Copies start at random (seeded) phases, so supersaws sound full. |
+| `sub`, `noise` | 0, 0 | A square an octave below the note, and white noise. Above about 0.2 the sub takes over the pitch: the part sounds (and `analyze` reads it) an octave lower. |
+| `filter` | lowpass 8000 | `type` (`lowpass`, `highpass`, `bandpass`, `off`), `slope` 12 or 24, `cutoff` (Hz or text), `resonance` 0-1, `keytrack` 0-1 (from C4), `env` (octaves the filter envelope adds), `velocity` (octaves darker at velocity 0), `drive` 0-1 (saturation into the filter). |
+| `amp`, `filterEnv` | 3 ms / 0.3 s / 1 / 0.15 s; 0 / 0.3 s / 0 / 0.3 s | ADSR: `attack`, `decay`, `sustain` 0-1, `release` (seconds); `amp` also takes `velocity` 0-1 (how much velocity changes the level, 0.6). A sound that decays to a sustain of 0 ends there. |
+| `pitchEnv` | none | `{"amount": 36, "decay": 0.06}`: semitones added at the attack, falling away (zaps, kick-like thumps). |
+| `lfo` | none | One LFO or a list of up to 4: `rate` (Hz or a note value, `"1/8"`), `depth`, `shape` (as automation LFOs), `to` (`pitch` in semitones, `cutoff` in octaves, `amp` 0-1, `pw`, `pan`), `delay` and `fade` (seconds after each attack: delayed vibrato). |
+| `mono`, `legato`, `glide` | false, true, 0 | `mono`: one voice. A note that starts while another is held slides to it without a new attack (`legato`), gliding over `glide` seconds; back-to-back notes attack again. |
+| `level` | 0 | dB. |
+
+Per-note `bend` and `vibrato` play on builtin:synth tracks as on the sampler, and `automation.pitchbend`
+(semitones) bends every voice. MIDI CC and pressure automation do nothing here: automate parameters by name.
 
 ### builtin:shepard
 

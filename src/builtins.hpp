@@ -1,6 +1,7 @@
 #pragma once
 // Built-in instruments, used as `"plugin": "builtin:drums"` or `"plugin": "builtin:fx"`.
 //
+//  builtin:synth  virtual-analog polysynth with named patches; see synth.hpp
 //  builtin:drums  synthesized kit on the General MIDI map: 35/36 kick, 37 rim, 38/40 snare,
 //                 42/44 closed hat, 46 open hat, 49/57 crash, 51 ride, 41/43 low tom,
 //                 45/47 mid tom, 48/50 high tom

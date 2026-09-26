@@ -35,6 +35,10 @@ https://wavelength.run
   - Vital `.vital`, `.vstpreset`, Bitwig `.clap-preset`
 - **Set parameters** by value or by the plugin's own display text (`"Cutoff": "800 Hz"`), and
   automate them with breakpoints, steps and LFOs.
+- **Play synths without a plugin:** `builtin:synth` is a virtual-analog polysynth (band-limited
+  saw and pulse, unison, FM, sub and noise, a resonant 12/24 dB filter with its own envelope, LFOs,
+  glide) with 27 named patches for basses, leads, pads, plucks, keys and brass, so a song renders on a
+  machine with no plugins at all. Deterministic: the same job renders the same samples.
 - **Play samples without a plugin:** `builtin:sampler` plays Bitwig `.multisample`
   instruments (pianos, organs, guitars, basses, orchestral), SFZ instruments, SoundFonts (`.sf2`/`.sf3`, matched against FluidSynth), drum-machine kit folders mapped
   to General MIDI (Legend 707/808/909, …), loops and single samples (WAV, AIFF, FLAC, MP3, Ogg Vorbis). It supports glide, per-note

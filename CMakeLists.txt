@@ -133,6 +133,7 @@ add_executable(wavelength
   src/bundle.cpp
   src/builtins.cpp
   src/sampler.cpp
+  src/synth.cpp
   src/effects.cpp
   src/engine.cpp
   src/loudness.cpp

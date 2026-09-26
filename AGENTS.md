@@ -97,7 +97,14 @@ In order of preference:
    Values are the plugin's plain values (most are 0..1; check `min`/`max` and the
    `display` text from `wavelength params`). Names match case-insensitively; use
    `"Module/Name"` or `"#id"` when a name is ambiguous.
-3. **Save what you built** so it is reusable and can be wired into a DAW project:
+3. **No plugins installed** (a fresh machine, CI, a cloud container): `builtin:synth` plays every
+   melodic part with no plugin. `wavelength presets builtin:synth` lists its patches (basses,
+   leads, pads, plucks, keys, brass, FX) with the same role prefixes; they all measure about
+   -18 LUFS on a typical phrase and sound at the written pitch. Shape a patch with a `synth`
+   object and move `cutoff`, `resonance`, `detune`... with `automation.params` (names from
+   `wavelength params builtin:synth`; details in `docs/job-format.md`). With `builtin:drums`,
+   `builtin:fx` and `samples --install-soundfont` (General MIDI), a whole song renders anywhere.
+4. **Save what you built** so it is reusable and can be wired into a DAW project:
    `wavelength state save <plugin> --state base.vital --set "Filter 1 Cutoff=0.4" --out lead.clap-preset`.
 
 Default patches are usually plain and quiet; don't judge an instrument by its init patch.
@@ -214,6 +221,8 @@ in the job (details in `docs/effects.md`):
   kicks, sub bass) read low in LUFS, so a LUFS target alone overshoots their peaks.
 - **Drums and FX:** `builtin:drums` (General MIDI kit) and `builtin:fx` (impact, riser,
   reverse swell, sub drop, Shepard rise and fall) are always available. Big moments need them.
+  `builtin:synth` patches `FX Zap` and `FX Noise Sweep` (automate `cutoff`) add laser hits and
+  filtered-noise risers.
   `builtin:shepard` is an endless riser with its own rate curve (a build that never arrives).
 - **Audio on the timeline:** `builtin:audio` places audio clips (WAV, AIFF, FLAC, MP3, Ogg Vorbis) in beats: breaks fitted to the song
   tempo with their pitch kept (`"bpm": 133`), vocal chops transposed with `pitch`, and reverse

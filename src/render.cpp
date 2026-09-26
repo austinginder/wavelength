@@ -148,7 +148,9 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     for (auto &w : track.warnings) tr.warnings.push_back(w);
     if (isBuiltin(track.plugin)) {
         tr.plugin = tr.pluginName = track.plugin;
-        if (!track.stateFile.empty() || !track.preset.empty() || !track.params.empty() || !track.paramAutomation.empty())
+        if (track.plugin == "builtin:synth") {   // presets, params and their automation are the synth's own
+            if (!track.stateFile.empty()) tr.warnings.push_back("builtin:synth ignores \"state\"; set the patch with \"preset\" and \"synth\"");
+        } else if (!track.stateFile.empty() || !track.preset.empty() || !track.params.empty() || !track.paramAutomation.empty())
             tr.warnings.push_back("built-in instruments ignore state, params and parameter automation");
         if (!renderBuiltin(track.plugin, job, track, audio, tr.warnings, err, rendered)) return false;
         muteGarbage(audio, job.sampleRate, track.plugin, tr.warnings);

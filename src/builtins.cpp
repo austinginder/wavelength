@@ -3,6 +3,7 @@
 #include "dsp.hpp"
 #include "clips.hpp"
 #include "sampler.hpp"
+#include "synth.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -222,6 +223,7 @@ bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track
                    std::vector<std::string> &warnings, std::string &err, const std::map<size_t, Audio> *rendered) {
     const std::string kind = plugin.substr(8);
     if (kind == "sampler") return renderSampler(job, track, out, warnings, err);
+    if (kind == "synth") return renderSynth(job, track, out, warnings, err);
     if (kind == "audio") return renderClips(job, track, out, warnings, err, rendered);
     const double sr = job.sampleRate;
     if (kind == "shepard") {
@@ -231,7 +233,7 @@ bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track
         return true;
     }
     if (kind != "drums" && kind != "fx") {
-        err = "unknown built-in instrument '" + plugin + "' (use builtin:drums, builtin:fx, builtin:sampler, builtin:audio or builtin:shepard)";
+        err = "unknown built-in instrument '" + plugin + "' (use builtin:synth, builtin:drums, builtin:fx, builtin:sampler, builtin:audio or builtin:shepard)";
         return false;
     }
     ShepardSettings rise, fall;

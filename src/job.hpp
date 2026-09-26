@@ -49,6 +49,7 @@ struct Track {
     std::vector<std::pair<std::string, Envelope>> paramAutomation;   // plugin parameter curves
     nlohmann::json sampler;                                      // builtin:sampler settings
     nlohmann::json shepard;                                      // builtin:shepard settings
+    nlohmann::json synth;                                        // builtin:synth patch settings (merged over "preset")
     nlohmann::json clips = nlohmann::json::array();              // builtin:audio clips
     std::string output;                                          // bus to feed instead of the master ("" = master)
     std::vector<std::pair<std::string, Envelope>> sendAutomation;   // bus name → send dB over time

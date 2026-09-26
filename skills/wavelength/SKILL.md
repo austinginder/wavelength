@@ -58,7 +58,11 @@ Never guess plugin or preset names. List them:
 "$WAVELENGTH" presets <plugin> --search <text>      # factory presets by name
 "$WAVELENGTH" audition <plugin>                     # once per plugin: tags like "octave -1", dark, pluck
 "$WAVELENGTH" samples --search <text>               # sample libraries, SFZ, SoundFonts, drum kits (builtin:sampler)
+"$WAVELENGTH" presets builtin:synth                 # the built-in synth's patches: always there, no plugin needed
 ```
+
+On a machine with few or no plugins (a cloud container, CI), build the song from `builtin:synth`
+patches, `builtin:drums` and `builtin:fx`; `samples --install-soundfont` adds General MIDI sounds.
 
 Prefer factory presets by name. Transpose presets tagged `octave -1`. **Check every melodic
 preset over the range you will write for it** before committing (AGENTS.md explains how):

@@ -2,6 +2,7 @@
 #include "harmony.hpp"
 
 #include "platform.hpp"
+#include "synth.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -389,6 +390,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             }
             if (t.contains("sampler")) tr.sampler = t["sampler"];
             if (t.contains("shepard")) tr.shepard = t["shepard"];
+            if (t.contains("synth")) tr.synth = t["synth"];
             if (t.contains("clips")) {
                 if (!t["clips"].is_array()) throw std::runtime_error("track '" + tr.name + "': \"clips\" must be an array");
                 tr.clips = t["clips"];
@@ -435,7 +437,8 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                     tr.ccAutomation.push_back({num, Envelope::parse(v, out.tempo, false)});
                 }
                 const json autoParams = au.value("params", json::object());
-                for (auto &[k, v] : autoParams.items()) tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, false, true)});
+                for (auto &[k, v] : autoParams.items())   // builtin:synth frequencies sweep exponentially, like the built-in effects
+                    tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, tr.plugin == "builtin:synth" && isSynthExpParam(k), true)});
                 double fb, fv;   // curves that start late hold their first value from the top of the song
                 lateGainWarnings(au, tr.firstSoundBeat, tr.warnings);
                 if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv - tr.pan) > 1e-9)
@@ -542,9 +545,9 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                     }
                     std::sort(note.dyn.begin(), note.dyn.end());
                 }
-                if (!note.bend.empty() && tr.plugin != "builtin:sampler" && !bendWarned) {
+                if (!note.bend.empty() && tr.plugin != "builtin:sampler" && tr.plugin != "builtin:synth" && !bendWarned) {
                     bendWarned = true;
-                    tr.warnings.push_back("per-note \"bend\" and \"vibrato\" only play on builtin:sampler tracks; use automation.pitchbend for plugins");
+                    tr.warnings.push_back("per-note \"bend\" and \"vibrato\" only play on builtin:sampler and builtin:synth tracks; use automation.pitchbend for plugins");
                 }
                 if (hVel > 0) v = (v > 1.0 ? v / 127.0 : v) * (1 + gauss(rng) * hVel);
                 note.velocity = std::clamp(v > 1.0 ? v / 127.0 : v, 0.0, 1.0);

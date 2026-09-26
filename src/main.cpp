@@ -28,6 +28,7 @@
 #include "presets.hpp"
 #include "preset_files.hpp"
 #include "sampler.hpp"
+#include "synth.hpp"
 #include "bitwig.hpp"
 #include "dawproject.hpp"
 #include "midi_file.hpp"
@@ -241,6 +242,7 @@ int cmdPlugins(const Args &a) {
         p.format = "builtin"; p.features = std::move(features);
         return p;
     };
+    all.push_back(builtin("builtin:synth", "Synth (built-in)", "Virtual-analog polysynth: named patches for bass, leads, pads, plucks, keys, brass (`wavelength presets builtin:synth`); needs no plugin", {"instrument", "synthesizer"}));
     all.push_back(builtin("builtin:drums", "Drums (built-in)", "GM kit: 36 kick, 38 snare, 37 rim, 42/46 hats, 49 crash, 51 ride, 41/45/48 toms", {"instrument", "drum"}));
     all.push_back(builtin("builtin:sampler", "Sampler (built-in)", "Bitwig .multisample instruments, WAV drum kits and single samples (see `wavelength samples`)", {"instrument", "sampler"}));
     all.push_back(builtin("builtin:audio", "Audio clips (built-in)", "WAV files placed in beats, tempo-fitted with pitch-preserving stretch, transposed, reversed, trimmed", {"instrument", "audio"}));
@@ -295,6 +297,24 @@ std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec
 // ---- presets ---------------------------------------------------------------------------
 int cmdPresets(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength presets <plugin> [--search TEXT]");
+    if (a.positional[1] == "builtin:synth") {   // the synth's own patches
+        std::string q = a.get("--search");
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+        json list = json::array();
+        const auto patches = synthPatches();
+        size_t shown = 0;
+        for (const auto &p : patches) {
+            std::string hay = p.category + " " + p.name + " " + p.description;
+            std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
+            if (!q.empty() && hay.find(q) == std::string::npos) continue;
+            ++shown;
+            if (a.has("--json")) list.push_back({{"name", p.name}, {"category", p.category}, {"description", p.description}});
+            else std::fprintf(OUT, "%-8s %-20s %s\n", p.category.c_str(), p.name.c_str(), p.description.c_str());
+        }
+        if (a.has("--json")) emit(json{{"ok", true}, {"plugin", "builtin:synth"}, {"presets", list}}.dump(2));
+        else std::fprintf(OUT, "\n%zu of %zu patches. Use them as \"preset\": \"<name>\"; a \"synth\" object on the track changes any part of the patch.\n", shown, patches.size());
+        return 0;
+    }
     PluginInfo info;
     std::string err;
     if (!resolvePlugin(a.positional[1], info, err)) return fail(a, err);
@@ -626,6 +646,18 @@ int cmdAnalyze(const Args &a) {
 // ---- params ----------------------------------------------------------------------------
 int cmdParams(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength params <plugin>");
+    if (a.positional[1] == "builtin:synth") {   // names for "params" and "automation.params"
+        json list = json::array();
+        for (const auto &p : synthParams()) {
+            if (a.has("--json"))
+                list.push_back({{"name", p.name}, {"unit", p.unit}, {"min", p.min}, {"max", p.max}, {"default", p.def}, {"description", p.description},
+                                {"curve", p.exp ? "exp" : "linear"}});
+            else std::fprintf(OUT, "%-10s %8g .. %-8g %-6s %s\n", p.name.c_str(), p.min, p.max, p.unit.c_str(), p.description.c_str());
+        }
+        if (a.has("--json")) emit(json{{"ok", true}, {"plugin", "builtin:synth"}, {"format", "builtin"}, {"params", list}}.dump(2));
+        else std::fprintf(OUT, "\nSet them with \"params\" (numbers or text like \"800 Hz\") and move them with automation.params; the patch itself is the track's \"synth\" object (docs/job-format.md).\n");
+        return 0;
+    }
     PluginInfo info;
     std::string err;
     auto inst = openForInspection(a, a.positional[1], info, err);
