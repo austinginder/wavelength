@@ -3,6 +3,7 @@
 #include "automation.hpp"
 #include "dsp.hpp"
 #include "engine.hpp"
+#include "loudness.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -26,7 +27,7 @@ inline float blend(float dry, double wet, double mix) { return (float)(dry * (1.
 
 void checkKeys(const json &j, std::initializer_list<const char *> allowed, Effect &fx) {
     for (auto &[k, _] : j.items()) {
-        if (k == "type" || k == "automate" || k == "lfo" || k == "bypass") continue;
+        if (k == "type" || k == "automate" || k == "lfo" || k == "bypass" || k == "match" || k == "matchMs") continue;
         bool ok = false;
         for (auto *a : allowed) ok |= k == a;
         if (!ok) fx.warnings.push_back(fx.label + ": unknown setting '" + k + "' ignored");
@@ -375,57 +376,18 @@ struct Limiter : Effect {
 // ------------------------------------------------------------------------------ saturate
 struct Saturate : Effect {
     Envelope drive, mix;
-    enum { None, Static, Follow } match = None;
-    double matchMs = 300;
     Saturate(const json &j, const Job &job) {
         label = "saturate";
         drive = param(j, "drive", 6, job.tempo);
         mix = param(j, "mix", 1, job.tempo);
-        if (j.contains("match")) {
-            const json &m = j["match"];
-            if (m.is_boolean()) match = m.get<bool>() ? Follow : None;
-            else if (m.is_string() && m == "static") match = Static;
-            else if (m.is_string() && m == "follow") match = Follow;
-            else warnings.push_back("saturate: match must be true, false, \"follow\" or \"static\"; ignored");
-        }
-        matchMs = std::clamp(j.value("matchMs", 300.0), 20.0, 5000.0);
-        checkKeys(j, {"drive", "mix", "match", "matchMs"}, *this);
+        checkKeys(j, {"drive", "mix"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
-        const size_t n = a.frames();
-        double inPow = 0, outPow = 0;
-        std::vector<float> pin, pout;                      // per-sample power before/after, for "follow"
-        if (match == Follow) { pin.resize(n); pout.resize(n); }
-        for (size_t i = 0; i < n; ++i) {
+        for (size_t i = 0; i < a.frames(); ++i) {
             const double t = i / sr, k = dbToLin(drive.at(t)), norm = 1.0 / std::tanh(k), m = mix.at(t);
-            const double pi = (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
             a.left[i] = blend(a.left[i], std::tanh(a.left[i] * k) * norm, m);
             a.right[i] = blend(a.right[i], std::tanh(a.right[i] * k) * norm, m);
-            const double po = (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
-            inPow += pi; outPow += po;
-            if (match == Follow) { pin[i] = (float)pi; pout[i] = (float)po; }
-        }
-        // tanh drive raises quiet parts by up to the drive: "match" brings the result back to the input's level
-        if (match == Static && outPow > 1e-12 && inPow > 1e-12) {
-            const float g = (float)std::sqrt(inPow / outPow);
-            for (size_t i = 0; i < n; ++i) { a.left[i] *= g; a.right[i] *= g; }
-        } else if (match == Follow && n) {
-            // follow the level over time: input and output power envelopes, smoothed forward and backward
-            // (zero phase, ~matchMs wide) so automated drive is tracked without pumping on transients
-            const double coef = std::exp(-1.0 / (matchMs * 0.0005 * sr));   // two passes of half the window
-            auto smooth = [&](std::vector<float> &v) {
-                double e = v[0];
-                for (size_t i = 0; i < n; ++i) { e = v[i] + (e - v[i]) * coef; v[i] = (float)e; }
-                e = v[n - 1];
-                for (size_t i = n; i-- > 0;) { e = v[i] + (e - v[i]) * coef; v[i] = (float)e; }
-            };
-            smooth(pin); smooth(pout);
-            const double floor = 1e-10, gMax = dbToLin(12), gMin = dbToLin(-40);
-            for (size_t i = 0; i < n; ++i) {
-                const float g = (float)std::clamp(std::sqrt((pin[i] + floor) / (pout[i] + floor)), gMin, gMax);
-                a.left[i] *= g; a.right[i] *= g;
-            }
         }
         return true;
     }
@@ -1022,6 +984,78 @@ struct Multiband : Effect {
     }
 };
 
+// ---------------------------------------------------------------------------- level match
+// "match" on any effect: run it, then bring its output back to the input's loudness. "follow" (true)
+// tracks the level over time: input and output K-weighted power envelopes, smoothed forward and backward (zero
+// phase, ~matchMs wide), set the gain, so automated drive, a resonator's boost or a comb freeze change
+// the tone and not the balance, without pumping on transients. Where the input is near silence (45 dB
+// under its loud parts) the gain holds, so tails an effect adds (resonator ring, a delay's last repeats)
+// are not pulled down. "static": one gain for the whole timeline (overall K-weighted power).
+struct Matched : Effect {
+    std::unique_ptr<Effect> inner;
+    bool follow;
+    double ms;
+    Matched(std::unique_ptr<Effect> fx, bool followLevel, double matchMs) : inner(std::move(fx)), follow(followLevel), ms(matchMs) {
+        label = inner->label;
+        warnings = std::move(inner->warnings);
+        lateCurves = std::move(inner->lateCurves);
+        inner->warnings.clear();
+        inner->lateCurves.clear();
+    }
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
+        const size_t n = a.frames();
+        std::vector<float> pin = kWeightedPower(a, c.job.sampleRate);   // loudness, not raw power: a resonance
+        if (!inner->process(a, c, err)) return false;                     // moves energy up where ears weigh it more
+        label = inner->label;
+        latencySamples = inner->latencySamples;
+        for (auto &w : inner->warnings) warnings.push_back(w);
+        inner->warnings.clear();
+        if (!n) return true;
+        std::vector<float> pout = kWeightedPower(a, c.job.sampleRate);
+        if (!follow) {
+            double inPow = 0, outPow = 0;
+            for (size_t i = 0; i < n; ++i) { inPow += pin[i]; outPow += pout[i]; }
+            if (outPow > 1e-12 && inPow > 1e-12) {
+                const float g = (float)std::sqrt(inPow / outPow);
+                for (size_t i = 0; i < n; ++i) { a.left[i] *= g; a.right[i] *= g; }
+            }
+            return true;
+        }
+        const double sr = c.job.sampleRate;
+        const double coef = std::exp(-1.0 / (ms * 0.0005 * sr));   // two passes of half the window
+        auto smooth = [&](std::vector<float> &v) {
+            double e = v[0];
+            for (size_t i = 0; i < n; ++i) { e = v[i] + (e - v[i]) * coef; v[i] = (float)e; }
+            e = v[n - 1];
+            for (size_t i = n; i-- > 0;) { e = v[i] + (e - v[i]) * coef; v[i] = (float)e; }
+        };
+        smooth(pin); smooth(pout);
+        // the input's loud level: 95th percentile of the smoothed power (sampled)
+        std::vector<float> sample;
+        for (size_t i = 0; i < n; i += 64) sample.push_back(pin[i]);
+        std::nth_element(sample.begin(), sample.begin() + (long)(sample.size() * 95 / 100), sample.end());
+        const double loud = sample[sample.size() * 95 / 100];
+        const double gate = std::max(1e-10, loud * dbToLin(-90));   // power: 45 dB under the loud parts
+        const double floor = 1e-10, gMax = dbToLin(12), gMin = dbToLin(-40);
+        // gain where the input sounds; held (forward, and backward before the first sound) where it doesn't
+        std::vector<float> gain(n, -1.f);
+        long first = -1;
+        for (size_t i = 0; i < n; ++i)
+            if (pin[i] >= gate) {
+                gain[i] = (float)std::clamp(std::sqrt((pin[i] + floor) / (pout[i] + floor)), gMin, gMax);
+                if (first < 0) first = (long)i;
+            }
+        if (first < 0) return true;   // silent input: nothing to match
+        float held = gain[(size_t)first];
+        for (size_t i = 0; i < n; ++i) {
+            if (gain[i] < 0) gain[i] = held;
+            else held = gain[i];
+            a.left[i] *= gain[i]; a.right[i] *= gain[i];
+        }
+        return true;
+    }
+};
+
 } // namespace
 
 double truePeakDb(const Audio &a) {
@@ -1085,6 +1119,18 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             if (j.contains(k) && j[k].is_number() && firstPoint(v, fb, fv) && fb > 0 && std::fabs(fv - j[k].get<double>()) > 1e-9)
                 fx->lateCurves.push_back({fb, fx->label + ": " + lateCurveWarning("'" + k + "'", fb, fv, j[k].get<double>())});
         }
+    if (j.contains("match")) {   // level match, for any effect
+        const json &m = j["match"];
+        int mode = -1;   // 0 off, 1 follow, 2 static
+        if (m.is_boolean()) mode = m.get<bool>() ? 1 : 0;
+        else if (m.is_string() && m == "follow") mode = 1;
+        else if (m.is_string() && m == "static") mode = 2;
+        if (mode < 0) fx->warnings.push_back(fx->label + ": match must be true, false, \"follow\" or \"static\"; ignored");
+        else if (mode > 0) {
+            const double ms = std::clamp(j.contains("matchMs") && j["matchMs"].is_number() ? j["matchMs"].get<double>() : 300.0, 20.0, 5000.0);
+            fx = std::make_unique<Matched>(std::move(fx), mode == 1, ms);
+        }
+    }
     return fx;
 }
 

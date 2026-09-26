@@ -71,7 +71,7 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `compressor` | `threshold` −18 dB, `ratio` 3, `attack` 10 ms, `release` 150 ms, `knee` 6 dB, `makeup` 0 dB, `mix` 1, stereo-linked; `sidechain` (track name) detects on that track's audio instead: real kick-keyed pumping |
 | `limiter` | `ceiling` −1 dB, `release` 80 ms, `lookahead` 5 ms, `truePeak` true (4x oversampled detection, so the ceiling holds for inter-sample peaks too; the report gives the mix's `truePeakDb`) |
 | `clip` | `ceiling` -1 dB, `kneeDb` (where shaping starts, in dB under the ceiling: 2-3 is a gentle transient shaver) or `knee` 0.5 (the same as a fraction of the ceiling's amplitude: 0.5 starts 6 dB under it, which already distorts a loud mix; 0.2-0.3 is typical), `drive` 0 dB *(automatable)*. A soft clipper that never exceeds the ceiling: put it before the master `limiter` (or on a kick or clap) to shave the first milliseconds of transients instead of limiting the whole mix. Warns when it shapes so much that it's distortion. |
-| `saturate` | `drive` 6 dB *(automatable)*, `mix` 1 *(automatable)*, tanh. Quiet material comes out up to `drive` louder; `"match": true` (or `"follow"`) holds the output at the input's level over time: input and output RMS envelopes smoothed over `matchMs` (300 ms, zero phase) set the gain, so an automated `drive` changes the tone and not the balance, without pumping on transients. `"match": "static"` is the old behaviour: one gain for the whole track (overall RMS), so heavily driven bars still come out louder. |
+| `saturate` | `drive` 6 dB *(automatable)*, `mix` 1 *(automatable)*, tanh. Quiet material comes out up to `drive` louder: add `"match": true` (see Level match) so an automated `drive` changes the tone and not the balance. |
 | `chorus` | `rate` 0.3 Hz, `depth` 4 ms, `delay` 14 ms, `mix` 0.35 *(automatable)* |
 | `width` | `amount` 1 (0 = mono, >1 wider) *(automatable)* |
 | `duck` | `trigger` (track name), `keys` (optional list, e.g. `[36]` = kicks only), `depth` 8 dB *(automatable)*, `attack` 8 ms, `hold` 20 ms, `release` 180 ms, sidechain-style pumping keyed from another track's notes |
@@ -86,6 +86,19 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `multiband` | `crossovers` [250, 2500] Hz (1-3, rising: 2-4 bands, Linkwitz-Riley 4th order, sums back flat), `bands`: one object per band with `fx` (any effect chain: compressor, saturate, eq, plugins), `gain` dB, `solo`, `mute`; `mix` 1. A multiband compressor: `{"type": "multiband", "crossovers": [257, 2840], "bands": [{"fx": [{"type": "compressor", "threshold": -20, "ratio": 2}]}, {}, {}]}` |
 
 `mix` is a dry/wet crossfade: 0 = dry only, 1 = wet only.
+
+### Level match (`"match"`, any effect)
+
+`"match": true` on any effect, built-in or plugin, holds its output at the input's loudness over time:
+K-weighted input and output power, smoothed over `matchMs` (300 ms, zero phase), set a gain after the
+effect (limited to +12 / -40 dB). Driven `saturate`, `clip` or `bitcrush`, a resonator that adds 12-16 dB
+(kHs Resonator), a comb or flanger freeze whose level depends on where it froze: each changes the tone and
+not the balance, without pumping on transients. Where the input is near silence (45 dB under its loud
+parts) the gain holds, so a ring or tail the effect adds is not pulled down; raise `matchMs` (1000-3000)
+for effects whose tails outlast the notes. `"match": "static"` uses one gain for the whole timeline
+(the overall loudness), so heavily driven bars still come out louder. Match suits inline effects; a
+reverb or delay at `"mix": 1` on a bus is a return, set its level with the bus `gain` instead.
+`{"plugin": "kHs Resonator", "params": {"Intensity": 0.8}, "match": true}`
 
 ## Plugin effects (CLAP, VST3 and VST2)
 

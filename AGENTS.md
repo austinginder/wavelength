@@ -208,6 +208,9 @@ in the job (details in `docs/effects.md`):
   `tremolo`, `gate` (trance gate / gated reverb), `rotary` (Leslie organ), `autowah`, `vibrato`,
   `bitcrush` and `tapestop` are built in. Use `"step"` points for hard switches, not two
   close points (a stray ramp can quietly lower a whole section).
+- **Level-neutral effects:** `"match": true` on any effect (distortion with automated drive,
+  resonators, comb or flanger freezes, plugins) keeps its output at the input's loudness over
+  time, so it changes the tone and not the balance. No trim curves by hand.
 - **Groups:** `"output": "Drums"` sends tracks to a group bus (shared glue, one filter sweep
   for the whole band); buses can feed other buses; `master.automation.gain` fades the song.
 - **Feel and expression:** `groove` (swing, lay-back, humanize) instead of hand-shifted notes;

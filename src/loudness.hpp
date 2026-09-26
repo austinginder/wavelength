@@ -16,4 +16,7 @@ double loudnessRange(const Audio &a, int sampleRate, size_t from = 0, size_t to 
 // for silence): a loudness-over-time curve for spotting dropouts and contours.
 std::vector<double> loudnessTimeline(const Audio &a, int sampleRate, double windowSec, double hopSec, size_t from = 0, size_t to = (size_t)-1);
 
+// K-weighted power per frame, summed over channels (what loudness integrates), for level matching.
+std::vector<float> kWeightedPower(const Audio &a, int sampleRate);
+
 } // namespace wl

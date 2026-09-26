@@ -27,6 +27,18 @@ void kWeighting(double sr, dsp::Biquad &shelf, dsp::Biquad &hp) {
 }
 } // namespace
 
+std::vector<float> kWeightedPower(const Audio &a, int sampleRate) {
+    const size_t n = a.frames();
+    std::vector<float> out(n, 0.f);
+    for (int ch = 0; ch < 2; ++ch) {
+        dsp::Biquad s, h;
+        kWeighting(sampleRate, s, h);
+        const auto &x = ch ? a.right : a.left;
+        for (size_t i = 0; i < n; ++i) { const double y = h.process(s.process(x[i])); out[i] += (float)(y * y); }
+    }
+    return out;
+}
+
 namespace {
 // Prefix sums of the K-weighted power (summed over channels) of frames [from, to).
 std::vector<double> weightedPower(const Audio &a, int sampleRate, size_t from, size_t n) {

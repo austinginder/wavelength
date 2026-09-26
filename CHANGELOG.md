@@ -5,6 +5,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `"match": true` on any effect, built-in or plugin (not only `saturate`): the output follows the
+  input's loudness over time (`matchMs`, 300 ms), or one gain for the whole track with `"static"`.
+  Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
+  to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
+  is near silence, so rings and tails the effect adds are kept.
 - Track `"harmony": false` leaves unpitched material out of `wavelength lint` (harmony and voice
   leading). Lint also skips, on its own, `builtin:sampler` tracks playing one sample with no pitch
   (noise, or a drum hit under 0.4 s), and lists every skipped track with the reason: a pitched snare
@@ -70,6 +75,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `saturate` `"match": true` now follows the level over time (input vs output RMS over `matchMs`, 300 ms)
   instead of one gain for the whole track, so automated `drive` no longer makes the driven bars louder
   (Rust Protocol's arp: 18 dB louder driven, now within 0.2 dB). `"match": "static"` keeps the old behaviour.
+  Level match measures K-weighted power (loudness), not raw RMS.
 - Every track warning is also listed in the top-level `warnings`, prefixed with the track's name.
   Furnace Liturgy's agent read only the top-level list and missed a late gain curve that held the
   lead organ 9 dB down through the first drop.
