@@ -142,9 +142,12 @@ Usage:
       MIDI track and channel (notes, sustain pedal, volume/pan/expression, other CCs, pitch
       bend). Channel 10 plays builtin:drums; other channels a General MIDI-family sound from
       the sample library, or PLUGIN for all of them. `render song.mid` imports and renders.
-  wavelength export <job.json> [--out song.mid] [--json]
+  wavelength export <job.json> [--out song.mid | song.dawproject] [--json]
       Write the job's parts as a MIDI file (type 1): tempo map, time signature, markers, and a
-      track per job track with its notes, CC, pitch bend and pressure automation.
+      track per job track with its notes, CC, pitch bend and pressure automation. To a .dawproject
+      (Bitwig, Studio One, Cubase): the tracks with their plugins and plugin states as the job sets
+      them up, notes, faders, pans, sends, buses, the master, tempo map, markers, fader and pan
+      curves, built-in eq/compressor/limiter as the standard devices; lists what has no counterpart.
   wavelength timeline <job.json> [--every BARS] [--json]
       Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
       included), in song seconds and in file time (after the lead-in), with the tempo there,
@@ -898,7 +901,7 @@ int cmdImport(const Args &a) {
 }
 
 int cmdExport(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength export <job.json> [--out song.mid]");
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength export <job.json> [--out song.mid | song.dawproject]");
     const std::string src = a.positional[1];
     std::ifstream in(src);
     if (!in) return fail(a, "cannot read " + src);
@@ -908,7 +911,19 @@ int cmdExport(const Args &a) {
     std::string err;
     if (!parseJob(j, fs::path(src).parent_path().string(), job, err)) return fail(a, err);
     std::string out = a.get("--out", (fs::path(src).parent_path() / (fs::path(src).stem().string() + ".mid")).string());
-    if (fs::path(out).extension() != ".mid" && fs::path(out).extension() != ".midi") return fail(a, "export writes MIDI files: give --out a .mid name");
+    if (fs::path(out).extension() == ".dawproject") {
+        DawprojectExport d;
+        if (!exportDawproject(job, j, src, out, d, err)) return fail(a, err);
+        if (a.has("--json")) {
+            emit(json{{"ok", true}, {"file", out}, {"tracks", d.tracks}, {"buses", d.buses}, {"plugins", d.plugins}, {"notes", d.noteCount},
+                      {"left out", d.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+            return 0;
+        }
+        std::fprintf(OUT, "exported %zu tracks, %zu buses, %zu plugin states, %zu notes -> %s\n", d.tracks, d.buses, d.plugins, d.noteCount, out.c_str());
+        for (auto &x : d.notes) std::fprintf(OUT, "  ! %s\n", x.c_str());
+        return 0;
+    }
+    if (fs::path(out).extension() != ".mid" && fs::path(out).extension() != ".midi") return fail(a, "export writes MIDI (.mid) or DAWproject (.dawproject) files: give --out one of those names");
     std::vector<std::string> notes;
     if (!exportMidiFile(job, j, out, notes, err)) return fail(a, err);
     size_t n = 0, tracks = 0;
@@ -1491,6 +1506,7 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
+    if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
                                  std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));

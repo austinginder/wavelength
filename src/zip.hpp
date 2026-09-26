@@ -1,6 +1,6 @@
 #pragma once
 // Minimal zip reader (stored or deflated entries, no zip64): Bitwig .multisample instruments and
-// DAWproject files are zips.
+// DAWproject files are zips. ZipWriter writes deflated entries (DAWproject export).
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -16,7 +16,20 @@ inline uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 inline uint32_t u32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 std::string lower(std::string s);
 bool inflateRaw(const std::vector<uint8_t> &in, std::vector<uint8_t> &out);
+bool deflateRaw(const std::vector<uint8_t> &in, std::vector<uint8_t> &out);
+uint32_t crc32(const std::vector<uint8_t> &data);
 }
+
+// Entries are collected in memory, then written as one archive (no zip64: under 4 GB).
+class ZipWriter {
+public:
+    void add(const std::string &name, std::vector<uint8_t> data) { files_.push_back({name, std::move(data)}); }
+    void add(const std::string &name, const std::string &text) { add(name, std::vector<uint8_t>(text.begin(), text.end())); }
+    bool write(const std::string &path, std::string &err) const;
+private:
+    struct File { std::string name; std::vector<uint8_t> data; };
+    std::vector<File> files_;
+};
 
 class Zip {
 public:

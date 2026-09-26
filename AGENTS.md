@@ -56,13 +56,17 @@ song.dawproject` does both steps.
 ## Starting from a MIDI file
 
 `wavelength import part.mid --out songs/x --json` makes a job from a Standard MIDI File (from
-a DAW, music21, another agent; from a notation program, prefer its MusicXML: see below). Every part gets a General MIDI sound so the job
-renders at once: a close Bitwig instrument when one is installed (pianos, strings, brass), else the
-General MIDI SoundFont (`wavelength samples --install-soundfont` once: all 128 programs and the GM drum
-kits, which also play channel 10), else `builtin:drums` for the drums. Then then swap in real plugins and presets track by track (`"plugin"`, `"preset"`), keeping the
+a DAW, music21, another agent; from a notation program, prefer its MusicXML: see below). Every part
+gets a General MIDI sound so the job renders at once: a close Bitwig instrument when one is installed
+(pianos, strings, brass), else the General MIDI SoundFont (`wavelength samples --install-soundfont`
+once: all 128 programs and the GM drum kits, which also play channel 10), else `builtin:drums` for the
+drums. Then swap in real plugins and presets track by track (`"plugin"`, `"preset"`), keeping the
 notes. `--instrument "Surge XT"` puts one plugin on every melodic part instead (controllers and
 pitch bend then reach it as automation). `wavelength export job.json --out song.mid` goes the other
-way: hand a part to a person to open in Bitwig, Cubase or a notation program.
+way: hand a part to a person to open in Bitwig, Cubase or a notation program. To hand over a whole
+song, `wavelength export job.json --out song.dawproject`: a person opens it in Bitwig with the same
+plugins and sounds, the mixer and the arrangement, and finishes it there (read the export's list of
+what has no DAW counterpart: built-in instruments and most built-in effects).
 
 ## Starting from a score
 

@@ -38,6 +38,10 @@ bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err);
 bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,
                       std::string &stateFormat, std::string &err, std::vector<std::string> *warnings = nullptr);
 
+// The setup of a plugin effect from its entry in an "fx" chain ({"plugin", "state", "preset", "params",
+// "automate", "warmup"}), as renders open it. Defined in effects.cpp.
+PluginSetup pluginEffectSetup(const nlohmann::json &fx, const Job &job);
+
 // Resolve, create, load state, resolve and apply parameters. `context` prefixes errors.
 bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlugin &out, std::string &err);
 

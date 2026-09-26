@@ -104,6 +104,23 @@ sys.exit(0 if ok else 1)' "./$build/wavelength" "out/check/sf2/$build"; then
 else
   echo "ok   soundfont: generated SF2 in tune, looped, key-tracked, decaying"
 fi
+# DAWproject export: hello.json (four CLAP synths) exports with every plugin state, imports back with the same
+# plugins, notes and faders, and each track renders as it did
+dp="out/check/dawproject/$build"
+mkdir -p "$dp"
+if ! "./$build/wavelength" export examples/hello.json --out "$dp/hello.dawproject" --json > /dev/null 2>&1 ||
+   ! "./$build/wavelength" import "$dp/hello.dawproject" --out "$dp/in" --bitwig none --json > /dev/null 2>&1 ||
+   ! python3 -c '
+import json, sys
+a, b = json.load(open("examples/hello.json")), json.load(open(sys.argv[1] + "/in/job.json"))
+ok = [t["name"] for t in a["tracks"]] == [t["name"] for t in b["tracks"]]
+for x, y in zip(a["tracks"], b["tracks"]):
+    ok = ok and len(x["notes"]) == len(y["notes"]) and abs(x.get("gain", 0) - y.get("gain", 0)) < 0.01 and y.get("state", "").endswith(".clap-preset")
+sys.exit(0 if ok else 1)' "$dp"; then
+  echo "FAIL dawproject: export/import round trip"; fail=1
+else
+  echo "ok   dawproject: hello exports with its plugin states and imports back"
+fi
 # deliveries: FLAC (24 and 16 bit) and a 24-bit WAV decode back to mix.wav's loudness and true peak
 dl="out/check/deliver/$build"
 if ! "./$build/wavelength" render examples/mastering.json --deliver flac,flac:16,wav:24 --out "$dl" --json 2>/dev/null | python3 -c '

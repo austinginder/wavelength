@@ -5,6 +5,14 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `wavelength export job.json --out song.dawproject`: the song as a DAWproject Bitwig Studio (and Studio
+  One, Cubase) opens with its plugins loaded. Each plugin instrument and plugin effect is opened in a
+  worker process as the render sets it up (preset, state file, params) and its state saved into the
+  project; notes, faders, pans, mutes, sends, buses (effect tracks), the master, tempo map, time
+  signature, markers, fader and pan curves, plain audio clips, and built-in `eq`/`compressor`/`limiter`
+  as the standard Equalizer/Compressor/Limiter devices. Validates against the DAWproject schema;
+  `import` reads it back. What has no DAW counterpart (built-in instruments and other built-in effects,
+  the loudness target, plugin parameter automation) is listed.
 - SoundFonts in `builtin:sampler`: `"soundfont": "<name or path>"` with `"program"`/`"bank"` or `"preset"`,
   `.sf2` and `.sf3` (Ogg Vorbis samples). Zones, loops, the volume envelope, the resonant filter with
   its modulation envelope, exclusive classes and the velocity and key modulators, checked against

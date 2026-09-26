@@ -664,6 +664,29 @@ struct Duck : Effect {
 };
 
 // ------------------------------------------------------------------------- CLAP plugin
+} // namespace
+
+PluginSetup pluginEffectSetup(const json &j, const Job &job) {
+    PluginSetup setup;
+    setup.spec = j.value("plugin", "");
+    if (j.contains("state") && !j["state"].is_null()) {
+        const auto &s = j["state"];
+        setup.stateFile = s.is_string() ? s.get<std::string>() : s.at("file").get<std::string>();
+        setup.stateFormat = s.is_object() ? s.value("format", "auto") : "auto";
+        if (fs::path(setup.stateFile).is_relative()) setup.stateFile = (fs::path(job.baseDir) / setup.stateFile).string();
+    }
+    const json params = j.value("params", json::object());
+    for (auto &[k, v] : params.items()) setup.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
+    if (j.contains("automate"))
+        for (auto &[k, v] : j["automate"].items())
+            if (k != "mix") setup.automation.push_back({k, Envelope::parse(v, job.tempo, false, true)});   // lowercase "mix" is the host dry/wet
+    setup.warmup = j.value("warmup", -1.0);
+    setup.preset = j.value("preset", "");
+    return setup;
+}
+
+namespace {
+
 struct PluginFx : Effect {
     PluginSetup setup;
     Envelope mix;
@@ -671,23 +694,9 @@ struct PluginFx : Effect {
     std::string key;   // "sidechain": a track's audio into the plugin's sidechain input
     bool hostMixAutomated = false;
     PluginFx(const json &j, const Job &job, std::string &err) {
-        setup.spec = j.value("plugin", "");
+        setup = pluginEffectSetup(j, job);
         label = setup.spec;
-        if (j.contains("state") && !j["state"].is_null()) {
-            const auto &s = j["state"];
-            setup.stateFile = s.is_string() ? s.get<std::string>() : s.at("file").get<std::string>();
-            setup.stateFormat = s.is_object() ? s.value("format", "auto") : "auto";
-            if (fs::path(setup.stateFile).is_relative()) setup.stateFile = (fs::path(job.baseDir) / setup.stateFile).string();
-        }
-        const json params = j.value("params", json::object());
-        for (auto &[k, v] : params.items()) setup.params.push_back(v.is_string() ? ParamSetting{k, 0, v.get<std::string>()} : ParamSetting{k, v.get<double>(), ""});
-        if (j.contains("automate"))
-            for (auto &[k, v] : j["automate"].items()) {
-                if (k == "mix") hostMixAutomated = true;   // lowercase "mix" is always the host dry/wet
-                else setup.automation.push_back({k, Envelope::parse(v, job.tempo, false, true)});
-            }
-        setup.warmup = j.value("warmup", -1.0);
-        setup.preset = j.value("preset", "");
+        hostMixAutomated = j.contains("automate") && j["automate"].contains("mix");
         mix = param(j, "mix", 1, job.tempo);
         mixAutomated = (j.contains("automate") && j["automate"].contains("mix")) || (j.contains("lfo") && j["lfo"].contains("mix"));
         key = j.value("sidechain", "");

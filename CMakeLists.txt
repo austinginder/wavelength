@@ -159,6 +159,7 @@ add_executable(wavelength
   src/zip.cpp
   src/xml.cpp
   src/dawproject.cpp
+  src/dawproject_export.cpp
   src/bitwig.cpp
   src/midi_file.cpp
   src/musicxml.cpp
