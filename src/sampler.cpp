@@ -1,12 +1,14 @@
 #include "sampler.hpp"
-#include "audio_file.hpp"
 
+#include "audio_file.hpp"
 #include "platform.hpp"
+#include "sfz.hpp"
 #include "zip.hpp"
 
 #include <zlib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -108,6 +110,14 @@ struct Zone {
     double pan = 0;                          // kit map entries only
     double startSec = 0;                     // extra start offset (sampler "start"), seconds
     double lengthSec = 0;                    // sampler "length": play at most this much from the start (0 = to the end)
+    // SFZ regions
+    bool loopFromFile = false;               // loop on the file's own loop points (WAV smpl) when it has them
+    bool oneShot = false;                    // plays to the end whatever the note length
+    double velTrack = 1;                     // amp_veltrack / 100
+    double attack = -1, hold = 0, decay = 0, sustain = 1, release = -1;   // ampeg_*; < 0 = the sampler's
+    int sw = -1;                             // keyswitch that selects this zone (sw_last), -1 = always
+    int seq = 0;                             // round-robin order (seq_position, lorand)
+    int group = 0, offBy = 0;                // choke groups
 };
 
 bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::string &err) {
@@ -153,6 +163,144 @@ bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::str
         }
     }
     if (zones.empty()) { err = "multisample.xml has no samples"; return false; }
+    return true;
+}
+
+// ---- SFZ ----------------------------------------------------------------------------------
+// regions -> zones. Opcodes the sampler can't play are named once in a warning.
+bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swHigh, int &swDefault, bool &notePolyOne,
+              std::vector<std::string> &warnings, std::string &err) {
+    static const std::set<std::string> handled = {
+        "sample", "lokey", "hikey", "pitch_keycenter", "pitch_keytrack", "lovel", "hivel", "tune", "transpose",
+        "volume", "amplitude", "pan", "offset", "end", "loop_mode", "loop_start", "loop_end", "trigger",
+        "xfin_lovel", "xfin_hivel", "xfout_lovel", "xfout_hivel", "amp_veltrack", "ampeg_attack", "ampeg_hold",
+        "ampeg_decay", "ampeg_sustain", "ampeg_release", "seq_length", "seq_position", "lorand", "hirand",
+        "sw_lokey", "sw_hikey", "sw_last", "sw_default", "group", "off_by", "direction", "note_polyphony",
+        "group_volume", "master_volume", "global_volume",
+        // no effect on the sound
+        "lochan", "hichan", "off_mode", "sw_label", "region_label", "group_label", "master_label", "global_label",
+        "polyphony", "note_selfmask", "sw_vel", "xf_velcurve"};
+    std::map<std::string, int> ignored;
+    int releaseRegions = 0, ccRegions = 0;
+    bool ccMod = false;
+    swLow = 128; swHigh = -1; swDefault = -1;
+    notePolyOne = false;
+    auto ccValue = [&](int n) { auto it = sfz.cc.find(n); return it == sfz.cc.end() ? 0.0 : it->second; };
+    for (const auto &r : sfz.regions) {
+        // regions for other controller states (sustain pedal down, a mic position off) or played by a controller
+        bool ccOut = false;
+        for (auto &[k, v] : r.op) {
+            if (k.rfind("locc", 0) == 0 && ccValue(std::atoi(k.c_str() + 4)) < std::atof(v.c_str())) ccOut = true;
+            if (k.rfind("hicc", 0) == 0 && ccValue(std::atoi(k.c_str() + 4)) > std::atof(v.c_str())) ccOut = true;
+            if (k.rfind("on_locc", 0) == 0 || k.rfind("on_hicc", 0) == 0 || k.rfind("start_locc", 0) == 0 || k.rfind("start_hicc", 0) == 0) ccOut = true;
+        }
+        if (ccOut) { ++ccRegions; continue; }
+        for (auto &[k, v] : r.op) {
+            if (handled.count(k) || k.rfind("amp_velcurve_", 0) == 0 || k.find("label") != std::string::npos ||
+                k.rfind("locc", 0) == 0 || k.rfind("hicc", 0) == 0 || k.rfind("set_", 0) == 0) continue;
+            const size_t cc = k.find("cc");   // amplitude_oncc7, ampeg_releasecc64, pan_curvecc10: controller modulation
+            if (cc != std::string::npos && cc + 2 < k.size() && std::isdigit((unsigned char)k[cc + 2])) ccMod = true;
+            else ++ignored[k];
+        }
+        if (r.has("note_polyphony") && r.num("note_polyphony", 0) <= 1) notePolyOne = true;
+        const std::string trig = r.get("trigger", "attack");
+        if (trig == "release" || trig == "release_key") { ++releaseRegions; continue; }
+        if (r.num("end", 0) < 0) continue;   // end=-1: a disabled region
+        std::string file = r.get("sample");
+        if (file.empty()) continue;
+        std::replace(file.begin(), file.end(), '\\', '/');
+        Zone z;
+        z.file = file[0] == '*' ? file : (fs::path(sfz.dir) / file).lexically_normal().string();
+        const int off = sfz.noteOffset;
+        z.keyLow = std::clamp(r.key("lokey", 0) + off, 0, 127);
+        z.keyHigh = std::clamp(r.key("hikey", 127) + off, 0, 127);
+        z.root = r.key("pitch_keycenter", 60) + off;
+        if (file[0] == '*') z.file = lower(file) + "#" + std::to_string(z.root);   // a table per root key
+        z.keyTrack = r.num("pitch_keytrack", 100) / 100;
+        z.tune = r.num("tune", 0) / 100 + r.num("transpose", 0);
+        z.gainDb = r.num("volume", 0) + r.num("group_volume", 0) + r.num("master_volume", 0) + r.num("global_volume", 0) +
+                   (r.has("amplitude") ? 20 * std::log10(std::max(1e-4, r.num("amplitude", 100) / 100)) : 0);
+        z.pan = std::clamp(r.num("pan", 0) / 100, -1.0, 1.0);
+        z.velLow = (int)r.num("lovel", 0); z.velHigh = (int)r.num("hivel", 127);
+        if (r.has("xfin_hivel")) {   // crossfade in: silent at xfin_lovel, full at xfin_hivel
+            z.velLow = std::max(z.velLow, (int)r.num("xfin_lovel", 0));
+            z.velLowFade = std::max(0, (int)r.num("xfin_hivel", 0) - z.velLow);
+        }
+        if (r.has("xfout_lovel")) {
+            z.velHigh = std::min(z.velHigh, (int)r.num("xfout_hivel", 127));
+            z.velHighFade = std::max(0, z.velHigh - (int)r.num("xfout_lovel", 127));
+        }
+        z.start = r.num("offset", 0);
+        if (r.has("end")) z.stop = r.num("end", 0) + 1;
+        z.reverse = r.get("direction") == "reverse";
+        const std::string mode = r.get("loop_mode");
+        const bool hasPoints = r.has("loop_end");
+        if (mode == "one_shot") z.oneShot = true;
+        if (file[0] == '*') { z.loop = Zone::Always; z.loopFromFile = true; }   // a generator is one cycle: it always loops
+        else if (mode == "loop_continuous" || mode == "loop_sustain" || (mode.empty() && hasPoints)) {
+            z.loop = mode == "loop_sustain" ? Zone::Sustain : Zone::Always;
+            if (hasPoints) { z.loopStart = r.num("loop_start", 0); z.loopStop = r.num("loop_end", 0) + 1; }
+            else z.loopFromFile = true;
+        } else if (mode.empty()) {   // SFZ: loops that the file defines play unless told otherwise
+            z.loop = Zone::Always;
+            z.loopFromFile = true;
+        }
+        z.velTrack = r.num("amp_veltrack", 100) / 100;
+        if (r.has("ampeg_attack")) z.attack = r.num("ampeg_attack", 0);
+        if (r.has("ampeg_release")) z.release = r.num("ampeg_release", 0);
+        z.hold = r.num("ampeg_hold", 0);
+        z.decay = r.num("ampeg_decay", 0);
+        z.sustain = std::clamp(r.num("ampeg_sustain", 100) / 100, 0.0, 1.0);
+        if (r.num("seq_length", 1) > 1) { z.roundRobin = true; z.seq = (int)r.num("seq_position", 1); }
+        else if (r.has("lorand") || r.has("hirand")) { z.roundRobin = true; z.seq = (int)std::lround(r.num("lorand", 0) * 1000); }
+        if (r.has("sw_last")) z.sw = r.key("sw_last", -1) + off;
+        if (r.has("sw_lokey")) { swLow = std::min(swLow, r.key("sw_lokey", 0) + off); swHigh = std::max(swHigh, r.key("sw_hikey", 127) + off); }
+        if (r.has("sw_default")) swDefault = r.key("sw_default", -1) + off;
+        z.group = (int)r.num("group", 0);
+        z.offBy = (int)r.num("off_by", 0);
+        zones.push_back(z);
+    }
+    if (swHigh < 0) {   // sw_last without a declared range: the keyswitches are the sw_last keys
+        for (auto &z : zones) if (z.sw >= 0) { swLow = std::min(swLow, z.sw); swHigh = std::max(swHigh, z.sw); }
+    }
+    std::stable_sort(zones.begin(), zones.end(), [](const Zone &a, const Zone &b) { return a.seq < b.seq; });
+    if (ccRegions) warnings.push_back("sfz: " + std::to_string(ccRegions) + " region(s) for other controller states left out (e.g. pedal down)");
+    if (releaseRegions) warnings.push_back("sfz: " + std::to_string(releaseRegions) + " release-trigger region(s) left out (key-up noises)");
+    if (!ignored.empty() || ccMod) {
+        std::string names;
+        size_t n = 0;
+        for (auto &[k, c] : ignored) if (n++ < 12) names += (names.empty() ? "" : ", ") + k;
+        if (ignored.size() > 12) names += ", ...";
+        if (ccMod) names += std::string(names.empty() ? "" : "; ") + "controller modulation (*cc* opcodes)";
+        warnings.push_back("sfz: opcodes the sampler doesn't play: " + names);
+    }
+    if (zones.empty()) { err = "the SFZ has no playable regions"; return false; }
+    return true;
+}
+
+// *sine, *saw, *square, *triangle, *noise, *silence: SFZ's built-in sources, as a looped table
+bool generatorSample(const std::string &spec, SampleData &d, std::string &err) {   // "*sine#60"
+    const size_t hash = spec.find('#');
+    const std::string name = spec.substr(0, hash), g = lower(name.substr(1));
+    const int root = hash == std::string::npos ? 60 : std::atoi(spec.c_str() + hash + 1);
+    const size_t n = 2048;
+    d.l.assign(g == "noise" ? 96000 : n, 0.f);
+    d.r.clear();
+    d.rate = g == "noise" ? 48000 : n * 440.0 * std::pow(2.0, (root - 69) / 12.0);   // one cycle at the root key
+    uint32_t rng = 12345;
+    for (size_t i = 0; i < d.l.size(); ++i) {
+        const double ph = (double)i / n;
+        float v = 0;
+        if (g == "sine") v = (float)std::sin(2 * M_PI * ph);
+        else if (g == "saw") v = (float)(2 * ph - 1);
+        else if (g == "square") v = ph < 0.5 ? 1.f : -1.f;
+        else if (g == "triangle" || g == "tri") v = (float)(ph < 0.5 ? 4 * ph - 1 : 3 - 4 * ph);
+        else if (g == "noise") { rng = rng * 1664525u + 1013904223u; v = (float)((rng >> 8) / 8388608.0 - 1.0); }
+        else if (g != "silence") { err = "unknown SFZ generator '" + name + "'"; return false; }
+        d.l[i] = v * 0.5f;
+    }
+    d.loopStart = 0;
+    d.loopEnd = (double)d.l.size();
     return true;
 }
 
@@ -328,9 +476,14 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
     const double fileStop = z.stop > 0 ? std::min<double>(z.stop, (double)s.frames()) : (double)s.frames();
     const double from = std::min(fileStop, z.start + z.startSec * s.rate);
     const double stop = z.lengthSec > 0 ? std::min(fileStop, from + z.lengthSec * s.rate) : fileStop;
-    const double loopLen = z.loopStop - z.loopStart;
-    const bool canLoop = z.loop != Zone::Off && loopLen > 16 && z.loopStop <= stop && !z.reverse;
-    const double fadeLen = canLoop ? std::min(z.loopFade * loopLen, z.loopStart) : 0;
+    double loopStart = z.loopStart, loopStop = z.loopStop;
+    if (z.loopFromFile && s.loopEnd > s.loopStart && s.loopStart >= 0) { loopStart = s.loopStart; loopStop = s.loopEnd; }
+    const double loopLen = loopStop - loopStart;
+    const bool canLoop = z.loop != Zone::Off && loopLen > 16 && loopStop <= stop && !z.reverse;
+    const double fadeLen = canLoop ? std::min(z.loopFade * loopLen, loopStart) : 0;
+    if (z.attack >= 0) attack = z.attack;
+    if (z.release >= 0) release = z.release;
+    const double decayFrom = attack + z.hold;
     const bool stereo = !s.r.empty();
     double pos = from;
     const double chokeFade = 0.004;
@@ -342,6 +495,9 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
         if (idx >= out.frames()) break;
         const double t = i / sr;
         double env = attack > 0 ? std::min(1.0, t / attack) : 1.0;
+        if (z.sustain < 1 && t > decayFrom)   // ampeg_decay: falls toward ampeg_sustain (-60 dB over the decay time)
+            env *= z.decay > 0 ? z.sustain + (1 - z.sustain) * std::exp(-6.9 * (t - decayFrom) / z.decay) : z.sustain;
+        if (env < 1e-4 && z.sustain <= 0 && t > decayFrom) break;
         if (t > v.noteLen) {
             if (release <= 0) break;
             const double r = 1.0 - (t - v.noteLen) / release;
@@ -354,13 +510,13 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
             env *= c;
         }
         const bool looping = canLoop && (z.loop == Zone::Always || t <= v.noteLen);
-        if (looping) while (pos >= z.loopStop) pos -= loopLen;
+        if (looping) while (pos >= loopStop) pos -= loopLen;
         if (pos >= stop) break;
         const double rp = z.reverse ? stop - 1 - (pos - from) : pos;
         if (rp < 0) break;
         float l = cubic(s.l, rp), r = stereo ? cubic(s.r, rp) : l;
-        if (looping && fadeLen > 0 && pos >= z.loopStop - fadeLen) {
-            const float w = (float)((pos - (z.loopStop - fadeLen)) / fadeLen);
+        if (looping && fadeLen > 0 && pos >= loopStop - fadeLen) {
+            const float w = (float)((pos - (loopStop - fadeLen)) / fadeLen);
             const double alt = pos - loopLen;
             l = l * (1 - w) + cubic(s.l, alt) * w;
             r = r * (1 - w) + (stereo ? cubic(s.r, alt) : cubic(s.l, alt)) * w;
@@ -423,6 +579,13 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                         e.category = multisampleCategory(xml);
                         for (size_t q = 0; (q = xml.find("<sample ", q)) != std::string::npos; ++q) ++e.count;
                     }
+                    lib.push_back(e);
+                } else if (ext == ".sfz") {
+                    std::vector<uint8_t> x;
+                    if (!readFile(p.string(), x)) continue;
+                    const std::string text(x.begin(), x.end());
+                    SampleLibraryEntry e{"sfz", p.stem().string(), p.string(), p.parent_path().filename().string(), 0};
+                    for (size_t q = 0; (q = text.find("<region>", q)) != std::string::npos; ++q) ++e.count;
                     lib.push_back(e);
                 } else if (isAudioFileName(p.string())) {
                     dirWavs[p.parent_path().string()].push_back(p.string());
@@ -516,17 +679,30 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
 
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
     const json &cfg = track.sampler;
-    if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, kit or sample)"; return false; }
+    if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
-                                                "retrigger", "bpm", "reverse", "start", "length", "slices", "variants"};
+                                                "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
     std::unique_ptr<Zip> zip;
     std::string source;
-    bool isKit = false;
-    if (cfg.contains("multisample")) {
+    bool isKit = false, isSfz = false;
+    int swLow = 128, swHigh = -1, swDefault = -1;
+    bool notePolyOne = false;
+    const bool sfzAsMultisample = cfg.contains("multisample") && cfg["multisample"].is_string() &&
+                                  lower(fs::path(cfg["multisample"].get<std::string>()).extension().string()) == ".sfz";
+    if (cfg.contains("sfz") || sfzAsMultisample) {
+        isSfz = true;
+        const std::string q = cfg.contains("sfz") ? cfg["sfz"].get<std::string>() : cfg["multisample"].get<std::string>();
+        std::string path = resolveIn(q, job.baseDir);
+        if (path.empty() && !findEntry("sfz", q, path, err)) return false;
+        SfzFile sfz;
+        if (!parseSfz(path, sfz, err)) return false;
+        if (!sfzZones(sfz, zones, swLow, swHigh, swDefault, notePolyOne, warnings, err)) { err = fs::path(path).filename().string() + ": " + err; return false; }
+        source = sfz.dir;
+    } else if (cfg.contains("multisample")) {
         const std::string q = cfg["multisample"].get<std::string>();
         std::string path = resolveIn(q, job.baseDir);
         if (path.empty() && !findEntry("multisample", q, path, err)) return false;
@@ -602,12 +778,13 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             }
         } else zones.push_back(z);
     } else {
-        err = "track '" + track.name + "': the sampler needs \"multisample\", \"kit\"/\"map\" or \"sample\"";
+        err = "track '" + track.name + "': the sampler needs \"multisample\", \"sfz\", \"kit\"/\"map\" or \"sample\"";
         return false;
     }
 
     const double sr = job.sampleRate;
-    const bool oneShot = cfg.value("oneShot", isKit);
+    const bool allOneShot = isSfz && std::all_of(zones.begin(), zones.end(), [](const Zone &z) { return z.oneShot; });
+    const bool oneShot = cfg.value("oneShot", isKit || allOneShot);
     const double attack = cfg.value("attack", isKit ? 0.0 : 0.002);
     const double release = cfg.value("release", isKit ? 0.05 : 0.25);
     const int select = std::clamp(cfg.value("select", 0), 0, 127);
@@ -617,6 +794,19 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     std::vector<std::set<int>> chokes;
     if (cfg.contains("choke")) for (auto &g : cfg["choke"]) chokes.push_back(g.get<std::set<int>>());
     else if (isKit) chokes.push_back({42, 44, 46});   // closed and pedal hats cut the open hat
+    else if (isSfz) {   // SFZ group / off_by: a note in group G cuts what plays in regions with off_by=G
+        std::map<int, std::set<int>> groups;
+        for (auto &z : zones)
+            if (z.offBy)
+                for (auto &y : zones)
+                    if (y.group == z.offBy)
+                        for (int k = y.keyLow; k <= y.keyHigh; ++k) {
+                            groups[z.offBy].insert(k);
+                            for (int j = z.keyLow; j <= z.keyHigh; ++j) groups[z.offBy].insert(j);
+                        }
+        for (auto &[g, keys] : groups) chokes.push_back(keys);
+    }
+    const bool chokesCut = oneShot || (isSfz && !chokes.empty());
 
     std::map<std::string, std::shared_ptr<SampleData>> cache;
     auto load = [&](const std::string &file, std::shared_ptr<SampleData> &outData) -> bool {
@@ -624,6 +814,12 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (it != cache.end()) { outData = it->second; return true; }
         std::vector<uint8_t> bytes;
         std::string e2;
+        if (isSfz && !file.empty() && file[0] == '*') {
+            auto d = std::make_shared<SampleData>();
+            if (!generatorSample(file, *d, err)) return false;
+            cache[file] = outData = d;
+            return true;
+        }
         if (zip) { if (!zip->read(file, bytes, e2)) { err = e2; return false; } }
         else {
             const std::string p = fs::path(file).is_absolute() ? file : (fs::path(source) / file).string();
@@ -637,7 +833,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
 
     const bool mono = cfg.value("mono", false);
     const double glide = std::max(0.0, cfg.value("glide", 0.0));
-    const bool retriggerCut = cfg.value("retrigger", std::string("overlap")) == "cut";
+    const bool retriggerCut = cfg.value("retrigger", std::string(notePolyOne ? "cut" : "overlap")) == "cut";   // SFZ note_polyphony=1
     const double loopBpm = cfg.value("bpm", 0.0);   // the sample's own tempo: resampled to the song tempo
     const bool reverseAll = cfg.value("reverse", false);
     const double startSec = std::max(0.0, cfg.value("start", 0.0));   // skip into every sample (seconds)
@@ -671,15 +867,18 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
 
     std::map<int, size_t> rr;   // round-robin position per key
     std::map<int, int> missed;  // key -> notes with no zone
+    // SFZ keyswitches: a note in the switch range picks the regions with that sw_last and makes no sound
+    int curSw = swDefault >= 0 ? swDefault : (swHigh >= 0 ? swLow : -1);
     for (size_t pi = 0; pi < phrases.size(); ++pi) {
         const auto &ph = phrases[pi];
         const Note &n = *ph.notes.front();
+        if (swHigh >= 0 && n.key >= swLow && n.key <= swHigh) { curSw = n.key; continue; }
         const int vel127 = std::clamp((int)std::lround(n.velocity * 127), 1, 127);
         auto velOk = [&](const Zone &z) { return vel127 >= z.velLow && vel127 <= z.velHigh; };
-        auto selOk = [&](const Zone &z) { return select >= z.selLow && select <= z.selHigh; };
+        auto selOk = [&](const Zone &z) { return select >= z.selLow && select <= z.selHigh && (z.sw < 0 || z.sw == curSw); };
         std::vector<const Zone *> hit;
         for (auto &z : zones) if (n.key >= z.keyLow && n.key <= z.keyHigh && velOk(z) && selOk(z)) hit.push_back(&z);
-        if (hit.empty() && !isKit) {
+        if (hit.empty() && !isKit && !isSfz) {
             // no zone covers this key: stretch the zones with the nearest root (velocity first, then any)
             for (int pass = 0; pass < 2 && hit.empty(); ++pass) {
                 int best = 1000;
@@ -697,7 +896,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (mono && pi + 1 < phrases.size()) cutBy(*phrases[pi + 1].notes.front());
         for (const auto &m : track.notes) {
             if (retriggerCut && m.key == n.key) cutBy(m);
-            if (oneShot)
+            if (chokesCut)
                 for (auto &grp : chokes)
                     if (grp.count(n.key) && grp.count(m.key) && (m.key != n.key || grp.size() == 1)) cutBy(m);
         }
@@ -716,7 +915,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         };
         double tempoSemis = 0;
         if (loopBpm > 0) tempoSemis = 12 * std::log2(job.tempo.bpmAtBeat(job.tempo.secToBeat(n.start)) / loopBpm);
-        const double velDb = velSens * 24 * std::log10(std::max(n.velocity, 0.01));
+        const double velDb = velSens * 24 * std::log10(std::max(n.velocity, 0.01));   // scaled per zone by amp_veltrack
         for (auto *z : play1) {
             Voice v;
             v.zone = z;
@@ -724,11 +923,11 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             double w = 1;
             if (z->velLowFade > 0 && vel127 < z->velLow + z->velLowFade) w *= (vel127 - z->velLow + 1.0) / (z->velLowFade + 1.0);
             if (z->velHighFade > 0 && vel127 > z->velHigh - z->velHighFade) w *= (z->velHigh - vel127 + 1.0) / (z->velHighFade + 1.0);
-            v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velDb) / 20);
+            v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velDb * z->velTrack) / 20);
             v.key = keyAt;
             v.semisOffset = z->tune + transpose + tempoSemis;
             v.startFrame = (size_t)std::llround(n.start * sr);
-            v.noteLen = oneShot ? INFINITY : ph.end - n.start;
+            v.noteLen = oneShot || z->oneShot ? INFINITY : ph.end - n.start;
             v.cutAt = cutAt;
             play(v, out, sr, attack, release);
         }

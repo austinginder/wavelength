@@ -58,6 +58,9 @@ bool decodeWav(const uint8_t *d, size_t size, DecodedAudio &s, std::string &err)
             if (format == 0xFFFE && avail >= 26) format = le16(body + 24);   // WAVE_FORMAT_EXTENSIBLE sub-format
         } else if (!std::memcmp(d + p, "data", 4)) {
             data = body; dataLen = avail;
+        } else if (!std::memcmp(d + p, "smpl", 4) && avail >= 36 + 24 && le32(body + 28) > 0) {
+            s.loopStart = le32(body + 36 + 8);          // first loop: cue id, type, start, end (inclusive), ...
+            s.loopEnd = (double)le32(body + 36 + 12) + 1;
         }
         p += 8 + (size_t)len + (len & 1);
     }

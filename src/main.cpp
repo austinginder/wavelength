@@ -354,10 +354,10 @@ int cmdSamples(const Args &a) {
         ++shown;
         if (a.has("--json")) list.push_back({{"kind", e.kind}, {"name", e.name}, {"category", e.category}, {"count", e.count}, {"path", e.path}});
         else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
-                          e.kind == "kit" ? "wavs" : "zones");
+                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : "zones");
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2, ' ', false, json::error_handler_t::replace));
-    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"} or {\"kit\": \"<name>\"}.\n",
+    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"multisample\": \"<name>\"}, {\"sfz\": \"<name>\"} or {\"kit\": \"<name>\"}.\n",
                       shown, lib.size());
     return 0;
 }

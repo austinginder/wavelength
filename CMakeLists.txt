@@ -163,6 +163,7 @@ add_executable(wavelength
   src/midi_file.cpp
   src/wav.cpp
   src/audio_file.cpp
+  src/sfz.cpp
   src/audio_codecs.cpp)
 # the single-file decoders compile inside audio_codecs.cpp; their own warnings are not ours
 set_source_files_properties(src/audio_codecs.cpp PROPERTIES COMPILE_OPTIONS "-w")

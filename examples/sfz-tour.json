@@ -1,0 +1,44 @@
+{
+ "sampleRate": 48000,
+ "tempo": 118,
+ "tail": 2,
+ "master": {"fx": [{"type": "limiter", "ceiling": -1.5}]},
+ "buses": [{"name": "Room", "fx": [{"type": "reverb", "decay": 1.4, "size": 0.5, "mix": 1}]}],
+ "tracks": [
+  {
+   "name": "Synth",
+   "plugin": "builtin:sampler",
+   "sampler": {"sfz": "sfz/tour.sfz"},
+   "gain": 0,
+   "sends": {"Room": -12},
+   "notes": [
+    {"beat": 0, "dur": 0.5, "key": 60, "vel": 0.9}, {"beat": 0.5, "dur": 0.5, "key": 63, "vel": 0.7},
+    {"beat": 1, "dur": 0.5, "key": 67, "vel": 0.8}, {"beat": 1.5, "dur": 0.5, "key": 70, "vel": 0.7},
+    {"beat": 2, "dur": 0.5, "key": 72, "vel": 0.9}, {"beat": 2.5, "dur": 0.5, "key": 70, "vel": 0.7},
+    {"beat": 3, "dur": 1, "key": 67, "vel": 0.8},
+    {"beat": 3.9, "dur": 0.05, "key": 25, "vel": 1},
+    {"beat": 4, "dur": 3.5, "key": 60, "vel": 0.6}, {"beat": 4, "dur": 3.5, "key": 63, "vel": 0.6},
+    {"beat": 4, "dur": 3.5, "key": 67, "vel": 0.6},
+    {"beat": 7.9, "dur": 0.05, "key": 24, "vel": 1},
+    {"beat": 8, "dur": 0.5, "key": 72, "vel": 0.9}, {"beat": 8.5, "dur": 0.5, "key": 67, "vel": 0.8},
+    {"beat": 9, "dur": 1, "key": 60, "vel": 0.9}
+   ]
+  },
+  {
+   "name": "Drums",
+   "plugin": "builtin:sampler",
+   "sampler": {"sfz": "sfz/tour.sfz"},
+   "gain": 3,
+   "notes": [
+    {"beat": 0, "dur": 0.25, "key": 36}, {"beat": 1, "dur": 0.25, "key": 38}, {"beat": 2, "dur": 0.25, "key": 36},
+    {"beat": 3, "dur": 0.25, "key": 38}, {"beat": 4, "dur": 0.25, "key": 36}, {"beat": 5, "dur": 0.25, "key": 38},
+    {"beat": 6, "dur": 0.25, "key": 36}, {"beat": 7, "dur": 0.25, "key": 38}, {"beat": 8, "dur": 0.25, "key": 36},
+    {"beat": 9, "dur": 0.25, "key": 38},
+    {"beat": 0.5, "dur": 0.25, "key": 42}, {"beat": 1.5, "dur": 0.25, "key": 46}, {"beat": 1.75, "dur": 0.25, "key": 42},
+    {"beat": 2.5, "dur": 0.25, "key": 42}, {"beat": 3.5, "dur": 0.25, "key": 46},
+    {"beat": 4.5, "dur": 0.25, "key": 42}, {"beat": 5.5, "dur": 0.25, "key": 46}, {"beat": 5.75, "dur": 0.25, "key": 42},
+    {"beat": 6.5, "dur": 0.25, "key": 42}, {"beat": 7.5, "dur": 0.25, "key": 46}, {"beat": 8.5, "dur": 0.25, "key": 42}
+   ]
+  }
+ ]
+}

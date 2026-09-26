@@ -203,7 +203,8 @@ in the job (details in `docs/effects.md`):
   swells into the drop from the drop's own first beat, in the same render.
 - **Real samples:** `builtin:sampler` plays Bitwig's sound content and any folder of
   WAV, AIFF, FLAC, MP3 or Ogg Vorbis samples:
-  `{"multisample": "Grand Piano"}`, organs, guitars, basses, and drum machine kits such as
+  `{"multisample": "Grand Piano"}`, SFZ instruments (`{"sfz": "path/to/Instrument.sfz"}`: most free
+  sample libraries; read the render's `sfz:` warning for what it skipped), organs, guitars, basses, and drum machine kits such as
   `{"kit": "Legend 707"}` / `"Legend 808"` / `"Legend 909"`. Find them with
   `wavelength samples --search <text>`; check a kit's key map with `--kit <name>`.
 - **Space:** create buses with a `reverb` (and a `delay`, e.g. `"time": 0.75` beats) at

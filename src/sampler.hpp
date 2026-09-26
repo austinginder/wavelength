@@ -5,6 +5,9 @@
 //               Sampler uses for its piano, organ, guitar, bass and keys libraries) or a folder
 //               holding multisample.xml. Key and velocity zones, velocity crossfades, round
 //               robins, select ranges, sustain loops with crossfade, key tracking, reverse.
+//  sfz          an SFZ instrument (sfz.hpp): regions with key/velocity ranges, crossfades, round
+//               robins, keyswitches, loops (the file's own too), amp envelope, choke groups,
+//               and the *sine/*saw/*square/*triangle/*noise generators.
 //  kit          a folder of one-shot samples (any format audio_file.hpp reads), mapped to General MIDI keys from the file names
 //               (kick 36, snare 38, clap 39, closed hat 42, open hat 46, crash 49, ...), or an
 //               explicit {"key": "file"} map.
@@ -22,9 +25,9 @@ namespace wl {
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 
 struct SampleLibraryEntry {
-    std::string kind;       // "multisample" or "kit"
+    std::string kind;       // "multisample", "sfz", "kit" or "loops"
     std::string name, path, category;
-    size_t count = 0;       // zones (multisample) or sample files (kit)
+    size_t count = 0;       // zones (multisample), regions (sfz) or sample files (kit)
 };
 
 // Every multisample and kit folder under the sample roots (cached per process).

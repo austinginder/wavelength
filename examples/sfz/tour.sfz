@@ -1,0 +1,30 @@
+// SFZ tour: SFZ's built-in generators only, so it plays anywhere.
+// Keys 24/25 switch the synth between a plucked saw and a held square (keyswitches);
+// the drums below it show one-shots, round robins and a choke group (group / off_by).
+
+<global>
+ampeg_release=0.25
+
+// ---- synth, keyswitched ----
+<group>
+sw_lokey=24 sw_hikey=25 sw_default=24
+lokey=48 hikey=96 pitch_keycenter=60
+
+<region> sw_last=24 sample=*saw volume=-4 ampeg_attack=0.003 ampeg_decay=0.9 ampeg_sustain=15
+<region> sw_last=25 sample=*square volume=-15 ampeg_attack=0.08 amp_veltrack=40
+
+// ---- drums ----
+<group>
+loop_mode=one_shot
+pitch_keytrack=0
+
+// kick: a low sine with a fast decay
+<region> key=36 pitch_keycenter=36 sample=*sine ampeg_decay=0.25 ampeg_sustain=0 volume=4
+
+// snare: two takes that alternate
+<region> key=38 sample=*noise seq_length=2 seq_position=1 ampeg_decay=0.18 ampeg_sustain=0 volume=-6
+<region> key=38 sample=*noise seq_length=2 seq_position=2 ampeg_decay=0.12 ampeg_sustain=0 volume=-8
+
+// hats: the closed hat (group 1) cuts the open hat (off_by=1)
+<region> key=42 sample=*noise group=1 ampeg_decay=0.04 ampeg_sustain=0 volume=-14
+<region> key=46 sample=*noise group=2 off_by=1 ampeg_decay=0.6 ampeg_sustain=0 volume=-14

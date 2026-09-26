@@ -149,7 +149,8 @@ drop with no pre-render:
 ### builtin:sampler
 
 Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the open zip + XML
-format of Bitwig's Sampler: pianos, organs, guitars, basses, keys, orchestral), folders of
+format of Bitwig's Sampler: pianos, organs, guitars, basses, keys, orchestral), SFZ instruments
+(the open text format most free and many commercial sample libraries ship in), folders of
 drum samples, or a single sample. Samples can be WAV, AIFF/AIFC, FLAC, MP3 (encoder delay
 removed) or Ogg Vorbis. List what is installed with `wavelength samples [--search text]`.
 Names are searched in `$WAVELENGTH_SAMPLES_PATH` (colon-separated folders) and the Bitwig
@@ -163,6 +164,7 @@ Studio package folders; paths work too (relative to the job).
 | Setting | Default | Meaning |
 |---|---|---|
 | `multisample` | | Name or path of a `.multisample` (or a folder with `multisample.xml`). Key and velocity zones, velocity crossfades, round robins, sustain loops and key tracking come from the file. Keys outside every zone stretch the nearest sample. |
+| `sfz` | | Name or path of an `.sfz` file (a `multisample` ending in `.sfz` works too). See [SFZ](#sfz) below. |
 | `kit` | | A folder of one-shot samples mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
 | `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths), or `{"file": ..., "gain": dB, "pan": -1..1, "tune": semitones}`, or just the settings for the kit's own sample on that key. |
 | `sample` + `root` | 60 | One sample played chromatically, `root` = the key it sounds at its own pitch. |
@@ -180,6 +182,34 @@ Studio package folders; paths work too (relative to the job).
 | `transpose` | 0 | Semitones. |
 | `velocity` | 1 | Velocity sensitivity 0-1 (1 = about 7 dB quieter at half velocity). |
 | `gain` | 0 | dB. |
+
+#### SFZ
+
+`"sampler": {"sfz": "Splendid Grand Piano"}` (a name from `wavelength samples --search`, or a path)
+reads the file's `<control>`, `<global>`, `<master>`, `<group>` and `<region>` headers, `#define`
+and `#include`. What plays:
+
+- Mapping: `sample` (relative to the file and `default_path`), `lokey`/`hikey`/`key` (numbers or
+  note names, `c4` = 60), `pitch_keycenter`, `pitch_keytrack`, `lovel`/`hivel`, `note_offset`,
+  `octave_offset`. Keys outside every region stay silent (unlike a multisample).
+- Level and pitch: `volume`, `group_volume`/`master_volume`/`global_volume`, `amplitude`, `pan`,
+  `tune` (cents), `transpose`, `amp_veltrack`, velocity crossfades `xfin_lovel`/`xfin_hivel`/`xfout_lovel`/`xfout_hivel`.
+- Envelope: `ampeg_attack`, `ampeg_hold`, `ampeg_decay`, `ampeg_sustain`, `ampeg_release`
+  (these replace the sampler's `attack`/`release` for that region).
+- Playback: `offset`, `end`, `direction=reverse`, `loop_mode` (`no_loop`, `one_shot`, `loop_continuous`,
+  `loop_sustain`), `loop_start`/`loop_end`, or the WAV's own loop (`smpl` chunk) when the region
+  gives no points. A file whose regions are all `one_shot` plays like a kit.
+- Round robins (`seq_length`/`seq_position`, `lorand`/`hirand` cycled in order), keyswitches
+  (`sw_lokey`/`sw_hikey`/`sw_last`/`sw_default`: a note in the switch range picks the articulation
+  and makes no sound), choke groups (`group`/`off_by`), `note_polyphony=1` (a repeated key cuts the
+  previous note; set `"retrigger"` to override).
+- Controllers stay at their `set_ccN` values (0 when unset): regions gated by `locc`/`hicc` play only
+  if that holds (a piano's pedal-down resonance regions are left out), and `*cc*` modulation is ignored.
+- Generators `*sine`, `*saw`, `*square`, `*triangle`, `*noise`, `*silence` (one cycle at `pitch_keycenter`, looped).
+
+Not played: release triggers (`trigger=release`), filters (`cutoff`, `fil_type`), LFOs and pitch
+envelopes, `<curve>` and `<effect>`. The render warns once, naming the opcodes it skipped.
+`examples/sfz-tour.json` plays `examples/sfz/tour.sfz`, built from generators only.
 
 ## Buses, master, markers
 

@@ -13,6 +13,7 @@ namespace wl {
 struct DecodedAudio {
     double rate = 44100;
     std::vector<float> l, r;     // r empty = mono
+    double loopStart = -1, loopEnd = -1;   // the file's own sustain loop (WAV smpl chunk), end exclusive; -1 = none
     size_t frames() const { return l.size(); }
 };
 

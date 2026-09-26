@@ -10,6 +10,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   DAWproject audio clips. Files are told apart by their contents; MP3s lose their encoder delay
   (LAME/Xing tag), so a one-shot starts on the beat. Kit folders and the sample library pick up
   the new extensions.
+- SFZ instruments in `builtin:sampler`: `"sfz": "<name or path>"` (and `.sfz` files in the sample
+  library, so `wavelength samples --search` finds them). Headers, `#define`/`#include`, key and velocity
+  ranges with crossfades, the amp envelope, loops (the WAV's own `smpl` loop too), round robins,
+  keyswitches, choke groups, `note_polyphony`, controller-gated regions at their `set_cc` values and
+  the `*sine`/`*saw`/`*square`/`*triangle`/`*noise` generators. Opcodes it can't play are named in one
+  warning. `examples/sfz-tour.json` plays a generator-only SFZ.
 - `wavelength serve [SONGS_DIR]`: a local web UI for reviewing songs with a human, built into the
   binary (localhost only, a per-launch token on changes). The arrangement with sections, a chord lane
   and harmony problems from the harmony check, lanes that open into piano rolls, loudness, stems,
