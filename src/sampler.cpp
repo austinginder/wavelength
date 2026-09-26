@@ -156,6 +156,7 @@ struct Zone {
     bool reverse = false, roundRobin = false;
     double pan = 0;                          // kit map entries only
     double startSec = 0;                     // extra start offset (sampler "start"), seconds
+    double lengthSec = 0;                    // sampler "length": play at most this much from the start (0 = to the end)
 };
 
 bool parseMultisample(const std::string &xml, std::vector<Zone> &zones, std::string &err) {
@@ -372,12 +373,15 @@ inline float cubic(const std::vector<float> &x, double pos) {
 void play(const Voice &v, Audio &out, double sr, double attack, double release) {
     const Zone &z = *v.zone;
     const SampleData &s = *v.data;
-    const double stop = z.stop > 0 ? std::min<double>(z.stop, (double)s.frames()) : (double)s.frames();
+    // the region played, in the file's own time: [start, start + length), reversed as a whole with "reverse"
+    const double fileStop = z.stop > 0 ? std::min<double>(z.stop, (double)s.frames()) : (double)s.frames();
+    const double from = std::min(fileStop, z.start + z.startSec * s.rate);
+    const double stop = z.lengthSec > 0 ? std::min(fileStop, from + z.lengthSec * s.rate) : fileStop;
     const double loopLen = z.loopStop - z.loopStart;
     const bool canLoop = z.loop != Zone::Off && loopLen > 16 && z.loopStop <= stop && !z.reverse;
     const double fadeLen = canLoop ? std::min(z.loopFade * loopLen, z.loopStart) : 0;
     const bool stereo = !s.r.empty();
-    double pos = z.start + z.startSec * s.rate;
+    double pos = from;
     const double chokeFade = 0.004;
     const double rateRatio = s.rate / sr;
     double ratio = 1;
@@ -401,7 +405,7 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
         const bool looping = canLoop && (z.loop == Zone::Always || t <= v.noteLen);
         if (looping) while (pos >= z.loopStop) pos -= loopLen;
         if (pos >= stop) break;
-        const double rp = z.reverse ? stop - 1 - (pos - z.start) : pos;
+        const double rp = z.reverse ? stop - 1 - (pos - from) : pos;
         if (rp < 0) break;
         float l = cubic(s.l, rp), r = stereo ? cubic(s.r, rp) : l;
         if (looping && fadeLen > 0 && pos >= z.loopStop - fadeLen) {
@@ -564,7 +568,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
-                                                "retrigger", "bpm", "reverse", "start", "slices", "variants"};
+                                                "retrigger", "bpm", "reverse", "start", "length", "slices", "variants"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
@@ -686,8 +690,9 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     const double loopBpm = cfg.value("bpm", 0.0);   // the sample's own tempo: resampled to the song tempo
     const bool reverseAll = cfg.value("reverse", false);
     const double startSec = std::max(0.0, cfg.value("start", 0.0));   // skip into every sample (seconds)
-    if (reverseAll || startSec > 0)
-        for (auto &z : zones) { if (reverseAll) z.reverse = !z.reverse; z.startSec = startSec; }
+    const double lengthSec = std::max(0.0, cfg.value("length", 0.0));  // and play at most this much of it
+    if (reverseAll || startSec > 0 || lengthSec > 0)
+        for (auto &z : zones) { if (reverseAll) z.reverse = !z.reverse; z.startSec = startSec; z.lengthSec = lengthSec; }
 
     // notes in time order; in mono mode overlapping notes form one legato voice that glides
     std::vector<size_t> idx(track.notes.size());

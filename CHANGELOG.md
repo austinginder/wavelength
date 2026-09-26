@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `builtin:sampler` `length`: play at most that much of every sample after `start`, in the file's own
+  time, and with `reverse` the trimmed region plays backwards, so a reversed swell's length is set in the
+  job (Rewind Signal trimmed its files with ffmpeg).
 - `builtin:shepard`: a Shepard-Risset glissando for each note's length, rising or falling forever, with
   `rate` (octaves per second, a number or a curve), `direction`, `centre`, `width`, `partials`. Also
   `builtin:fx` keys 55 (rise) and 57 (fall). Endless Stair generated these as WAVs in Python.
@@ -84,6 +87,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   `--section NAME`, and both chords' notes with each problem.
 
 ### Changed
+- `builtin:sampler` `start` with `reverse` now trims the file's beginning (the region is cut in the
+  file's time, then reversed, like `builtin:audio`); before, it skipped into the reversed sample.
 - `saturate` `"match": true` now follows the level over time (input vs output RMS over `matchMs`, 300 ms)
   instead of one gain for the whole track, so automated `drive` no longer makes the driven bars louder
   (Rust Protocol's arp: 18 dB louder driven, now within 0.2 dB). `"match": "static"` keeps the old behaviour.

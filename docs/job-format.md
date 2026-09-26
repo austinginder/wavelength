@@ -152,8 +152,8 @@ Studio package folders; paths work too (relative to the job).
 | `mono`, `glide` | false, 0 s | One voice at a time; overlapping notes play legato and glide (seconds) from the previous pitch: 808 slides, portamento leads. |
 | `bpm` | none | The sample's own tempo: resampled (pitch and speed) to the song tempo at each note. |
 | `slices` | none | With `sample`: cut the file into this many equal slices on keys `root`, `root+1`, ... (chop a break). |
-| `start` | 0 | Seconds to skip into every sample. |
-| `reverse` | false | Play samples backwards (reverse cymbals and swells). |
+| `start`, `length` | 0, whole sample | Trim every sample, in seconds of the file: skip `start`, then play at most `length` (like `builtin:audio`). |
+| `reverse` | false | Play samples backwards (reverse cymbals and swells). The trimmed region is reversed as a whole: with `"length": 1.5` a reversed crash swells for 1.5 s and ends on its attack, so start the note 1.5 s before the hit. |
 | `select` | 0 | Value (0-127) matched against multisample `select` ranges (alternate articulations). |
 | `transpose` | 0 | Semitones. |
 | `velocity` | 1 | Velocity sensitivity 0-1 (1 = about 7 dB quieter at half velocity). |
