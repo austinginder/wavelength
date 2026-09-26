@@ -71,6 +71,14 @@ struct Marker {
     bool checks = true;   // "checks": false = this section is meant as it is (a false-ending silence, a soft peak): no arrangement warnings
 };
 
+// render --from/--to: a stretch of the song rendered on its own (with pre-roll that is cut again)
+struct RenderWindow {
+    bool on = false;
+    double fromBeat = 0, toBeat = 0, originBeat = 0;
+    double trimSec = 0;        // pre-roll at the start of the render, cut from every output file
+    double songStartSec = 0;   // song time of the first sample written
+};
+
 struct KeyMark {
     double beat;          // where the key starts
     int tonic;            // pitch class 0-11
@@ -106,6 +114,7 @@ struct Job {
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<Marker> markers;  // sections for per-section loudness in the report
     std::vector<KeyMark> keys;    // declared keys by bar, for `lint --harmony` (the render ignores them)
+    RenderWindow window;
     std::string baseDir;       // relative paths resolve from here
     std::string sourcePath;     // the job file (worker processes re-read it); empty = render in process
     int parallel = -1;          // plugin tracks rendered at once in worker processes; 0 = all in this process; <0 = auto

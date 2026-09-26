@@ -29,7 +29,12 @@ master: much faster than the whole song, and the report shows those tracks alone
 the full render's names (`05-lead.wav`), so scripts can reuse them. With a
 `master.loudness` target the master would push those tracks up to the target on their own; add
 `--level-from out/report.json` (the full render's report) to keep the full mix's master gain, so
-each part plays and measures at the level it has in the song.
+each part plays and measures at the level it has in the song. `--from 41 --to 45` renders only
+bars 41-44 (two bars of pre-roll are rendered first and cut, so reverbs and held notes are already
+going; `--preroll N` changes it): a section in seconds instead of the whole song. The files hold
+just those bars and the report's `window.songStart` says where they sit. Sample-exact against the
+full render for deterministic sounds; synths with free-running oscillators differ in phase from
+any render to the next, window or not.
 
 ## Starting from a DAW project
 

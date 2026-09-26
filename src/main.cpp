@@ -106,6 +106,9 @@ Usage:
       --level-from out/report.json keeps the master at that render's gains (its loudness-target
       and normalize gain) instead of targeting again: a --tracks render then plays each part at
       the level it has in the full mix.
+      --from 41 --to 45 renders only bars 41-44 (after --preroll bars, default 2, rendered and cut:
+      reverbs and held notes are already going); the files hold just those bars, and the report's
+      "window" says where they sit in the song. Quick previews of a section, alone or with --tracks.
   wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--input-lead-in S] [--out DIR] [--json]
       Put a finished mix through a master chain (effects list, master object or a song's job:
       its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
@@ -880,6 +883,18 @@ int cmdRender(const Args &a) {
             kept.push_back(c);
         }
         j["tracks"] = kept;
+    }
+    // --from/--to BAR: render only those bars (to exclusive), after --preroll bars (default 2) that are
+    // rendered and then cut, so reverbs, delays, compressors and held notes are already going
+    if (a.has("--from") || a.has("--to")) {
+        const double bpb = j.contains("timeSignature") ? j["timeSignature"][0].get<double>() * 4.0 / j["timeSignature"][1].get<double>() : 4.0;
+        const double from = a.has("--from") ? std::atof(a.get("--from").c_str()) : 1, pre = a.has("--preroll") ? std::atof(a.get("--preroll").c_str()) : 2;
+        if (!a.has("--to")) return fail(a, "--from needs --to BAR (the bar where the render stops, not included)");
+        const double to = std::atof(a.get("--to").c_str());
+        if (from < 1 || to <= from) return fail(a, "--from/--to are bars: --from 41 --to 45 renders bars 41-44");
+        j["window"] = {{"from", (from - 1) * bpb}, {"to", (to - 1) * bpb}, {"preroll", std::max(0.0, pre) * bpb}};
+    }
+    if (!only.empty() || j.contains("window")) {   // workers re-read the job by track index: the changed job goes to a file next to it
         subsetPath = (fs::absolute(path).parent_path() / (".wavelength-tracks-" + std::to_string(platform::processId()) + ".json")).string();
         std::ofstream(subsetPath) << j.dump();
     }
@@ -972,6 +987,12 @@ int cmdRender(const Args &a) {
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"dropouts", dropouts}, {"failedTracks", r.failedTracks}};
     if (!only.empty()) report["onlyTracks"] = only;
+    if (job.window.on) {   // the files hold bars from..to only; songStart = where that is in the song (seconds)
+        const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+        report["window"] = {{"fromBar", r1(job.window.fromBeat / bpb + 1)}, {"toBar", r1(job.window.toBeat / bpb + 1)},
+                            {"fromBeat", job.window.fromBeat}, {"toBeat", job.window.toBeat}, {"songStart", std::round(job.window.songStartSec * 1e6) / 1e6},
+                            {"seconds", std::round((job.length - job.window.trimSec) * 1000) / 1000}};
+    }
     if (!complete) report["error"] = incomplete;
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return complete ? 0 : 1; }
@@ -1399,7 +1420,7 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--jobs", "--tracks", "--level-from", "--json", "--verbose", "--bitwig", "--instrument"}},
+            {"render", {"--out", "--stems", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},

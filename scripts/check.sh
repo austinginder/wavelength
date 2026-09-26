@@ -54,4 +54,14 @@ w = [x for x in json.load(sys.stdin)["warnings"] if "automation starts at beat" 
 sys.exit(0 if len(w) == 2 and w[0].startswith("bus '"'"'Music'"'"'") and w[1].startswith("master:") else 1)'; then
   echo "FAIL late-curves: bus/master late automation warnings"; fail=1
 fi
+# render --from/--to: a window of the clips tour (a clip starts before it) renders, and its file is the window's length
+if ! "./$build/wavelength" render examples/clips-tour.json --from 3 --to 5 --stems none --out out/check/window/$build --json 2>/dev/null | python3 -c '
+import json, sys, wave
+r = json.load(sys.stdin)
+ok = r.get("ok") and r.get("window") and abs(r["window"]["fromBar"] - 3) < 1e-6 and r["window"]["seconds"] > 0
+sys.exit(0 if ok else 1)'; then
+  echo "FAIL window render (render --from/--to)"; fail=1
+else
+  echo "ok   window render: clips-tour bars 3-4"
+fi
 exit $fail

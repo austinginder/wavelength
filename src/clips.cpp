@@ -142,7 +142,7 @@ bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err, cons
     if (clip.speed <= 0.01) { err = "clip: speed must be positive"; return false; }
     const double durSec = (double)clip.outFrames() / job.sampleRate;
     clip.startSec = hasBeat ? job.tempo.beatToSec(anchorBeat) : job.tempo.beatToSec(anchorBeat) - durSec;
-    if (clip.startSec < 0) { err = "clip: '" + file + "' would start before the song (endAt is too early for its length)"; return false; }
+    if (clip.startSec < -job.tempo.originSec() - 1e-9) { err = "clip: '" + file + "' would start before the song (endAt is too early for its length)"; return false; }
     return true;
 }
 
@@ -208,13 +208,15 @@ bool renderClips(const Job &job, const Track &track, Audio &out, std::vector<std
         }
         const double g = dsp::dbToLin(clip.gainDb);
         const size_t fi = (size_t)(clip.fadeInMs * 0.001 * sr), fo = (size_t)(clip.fadeOutMs * 0.001 * sr);
-        const size_t at = (size_t)std::llround(clip.startSec * sr), n = body.frames();
-        for (size_t i = 0; i < n && at + i < out.frames(); ++i) {
+        // a clip can start before a render window (render --from): play it from where the window begins
+        const int64_t at0 = std::llround(clip.startSec * sr);
+        const size_t n = body.frames(), skip = at0 < 0 ? (size_t)(-at0) : 0, at = at0 < 0 ? 0 : (size_t)at0;
+        for (size_t i = skip; i < n && at + i - skip < out.frames(); ++i) {
             double e = g;
             if (fi && i < fi) e *= (double)i / fi;
             if (fo && i + fo > n) e *= (double)(n - i) / fo;
-            out.left[at + i] += (float)(body.left[i] * e);
-            out.right[at + i] += (float)(body.right[i] * e);
+            out.left[at + i - skip] += (float)(body.left[i] * e);
+            out.right[at + i - skip] += (float)(body.right[i] * e);
         }
     }
     return true;

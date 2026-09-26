@@ -37,13 +37,17 @@ double TempoMap::segSec(size_t i, double db) const {
     return 60.0 / k * std::log((a + k * db) / a);
 }
 
-double TempoMap::beatToSec(double beat) const {
+void TempoMap::setOrigin(double beat) { originSec_ = 0; originSec_ = absBeatToSec(beat); }
+double TempoMap::beatToSec(double beat) const { return absBeatToSec(beat) - originSec_; }
+double TempoMap::secToBeat(double sec) const { return absSecToBeat(sec + originSec_); }
+
+double TempoMap::absBeatToSec(double beat) const {
     size_t i = pts_.size() - 1;
     while (i > 0 && pts_[i].beat > beat) --i;
     return secAt_[i] + segSec(i, beat - pts_[i].beat);
 }
 
-double TempoMap::secToBeat(double sec) const {
+double TempoMap::absSecToBeat(double sec) const {
     size_t i = pts_.size() - 1;
     while (i > 0 && secAt_[i] > sec) --i;
     const double a = pts_[i].bpm, ds = sec - secAt_[i];
@@ -349,6 +353,21 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         if (!j.contains("tempo") || j["tempo"].is_number()) tp.push_back({0, j.value("tempo", 120.0)});
         else for (auto &p : j["tempo"]) tp.push_back({p.value("beat", 0.0), p.at("bpm").get<double>(), p.value("ramp", false)});
         out.tempo = TempoMap(tp);
+        if (j.contains("window")) {   // render --from/--to: only these beats (plus pre-roll), seconds counted from the window's start
+            const json &w = j["window"];
+            const double from = w.at("from").get<double>(), to = w.at("to").get<double>(), pre = std::max(0.0, w.value("preroll", 0.0));
+            if (!(to > from) || from < 0) throw std::runtime_error("\"window\": \"to\" must be after \"from\"");
+            out.window.on = true;
+            out.window.fromBeat = from;
+            out.window.toBeat = to;
+            out.window.originBeat = std::max(0.0, from - pre);
+            out.window.songStartSec = out.tempo.beatToSec(from);   // before the origin moves: song time of the output's first sample
+            out.tempo.setOrigin(out.window.originBeat);
+            out.window.trimSec = out.tempo.beatToSec(from);         // pre-roll rendered, then cut from every output file
+            out.length = out.tempo.beatToSec(to);
+            out.tail = 0;
+            out.leadIn = 0;
+        }
 
         if (!j.contains("tracks") || !j["tracks"].is_array() || j["tracks"].empty()) { err = "job needs a non-empty \"tracks\" array"; return false; }
         for (auto &t : j["tracks"]) {
@@ -378,7 +397,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 for (auto &n : t.value("notes", json::array())) {
                     double b = 1e18;
                     if (n.contains("beat") && n["beat"].is_number()) b = n["beat"].get<double>();
-                    else if (n.contains("time") && n["time"].is_number()) b = out.tempo.secToBeat(n["time"].get<double>());
+                    else if (n.contains("time") && n["time"].is_number()) b = out.tempo.secToBeat(n["time"].get<double>() - out.tempo.originSec());
                     tr.firstSoundBeat = std::min(tr.firstSoundBeat, b);
                 }
                 for (auto &c : t.value("clips", json::array()))
@@ -454,7 +473,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 Note note;
                 double v = n.value("vel", 0.8);
                 if (n.contains("time")) {
-                    note.start = n["time"].get<double>();
+                    note.start = n["time"].get<double>() - out.tempo.originSec();   // song seconds -> render (window) seconds
                     note.length = n.value("length", 0.5);
                 } else {
                     double b = n.at("beat").get<double>(), d = n.value("dur", 1.0);
@@ -580,6 +599,33 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             out.markers.push_back({beat, out.tempo.beatToSec(beat), m.value("name", ""), m.value("checks", true)});
         }
         std::sort(out.markers.begin(), out.markers.end(), [](auto &a, auto &b) { return a.beat < b.beat; });
+        if (out.window.on) {
+            // sections belong to the whole song; in a window the report has none
+            out.markers.clear();
+            // notes that end before the window are gone; notes already sounding start at 0 (the pre-roll's start)
+            for (auto &tr : out.tracks) {
+                std::vector<Note> kept;
+                kept.reserve(tr.notes.size());
+                for (auto &n : tr.notes) {
+                    if (n.start + n.length <= 1e-9) continue;
+                    if (n.start < 0) {
+                        const double cut = -n.start;
+                        auto shift = [cut](std::vector<std::pair<double, double>> &pts) {
+                            std::vector<std::pair<double, double>> o;
+                            for (auto &p : pts) if (p.first >= cut) o.push_back({p.first - cut, p.second});
+                            if (o.empty() && !pts.empty()) o.push_back({0, pts.back().second});
+                            pts = o;
+                        };
+                        shift(n.bend);
+                        shift(n.dyn);
+                        n.length -= cut;
+                        n.start = 0;
+                    }
+                    kept.push_back(n);
+                }
+                tr.notes = std::move(kept);
+            }
+        }
         if (j.contains("keys")) {   // [{"bar": 1, "key": "D minor"}, {"bar": 69, "key": "E minor"}]: read by lint --harmony
             if (!j["keys"].is_array()) throw std::runtime_error("\"keys\" is a list: [{\"bar\": 1, \"key\": \"D minor\"}, ...]");
             const double beatsPerBar = out.tsigNum * 4.0 / out.tsigDen;

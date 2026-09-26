@@ -272,6 +272,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     result.sampleRate = job.sampleRate;
     result.seconds = seconds;
     const size_t leadFrames = (size_t)std::llround(job.leadIn * job.sampleRate);
+    const size_t trimFrames = job.window.on ? (size_t)std::llround(job.window.trimSec * job.sampleRate) : 0;   // render --from pre-roll
     result.leadIn = job.leadIn;
 
     // 0. build every effect chain first, so a typo fails in milliseconds, not after a long render
@@ -406,7 +407,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         std::snprintf(prefix, sizeof prefix, "%02d-", track.stemNumber > 0 ? track.stemNumber : (int)i + 1);
         if (job.stemBits && track.stem) {
             tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
-            if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames)) return false;
+            if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames, trimFrames)) return false;
         }
         tr.levels = measure(audio);
         tr.lufs = integratedLufs(audio, job.sampleRate);
@@ -657,7 +658,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         for (size_t o = 0; o < job.buses.size(); ++o) if (job.buses[o].name == job.buses[b].output) dest = &buses[o];
         if (job.buses[b].stem && job.stemBits) {   // after its fx, before its fader: the same signal as its lufs
             br.file = (fs::path(outDir) / "stems" / ("bus-" + slug(br.name) + ".wav")).string();
-            if (!writeWav(br.file, buses[b], job.sampleRate, err, job.stemBits, leadFrames)) return false;
+            if (!writeWav(br.file, buses[b], job.sampleRate, err, job.stemBits, leadFrames, trimFrames)) return false;
         } else if (job.buses[b].stem) result.warnings.push_back("bus '" + br.name + "': \"stem\": true, but \"stems\" is \"none\": no stem written");
         br.levels = measure(buses[b]);   // before the fader, like a track's stem: `gain` = target - lufs
         br.lufs = integratedLufs(buses[b], job.sampleRate);
@@ -780,7 +781,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         result.normalizeGainDb = gainDb;
     }
     result.mixFile = (fs::path(outDir) / "mix.wav").string();
-    if (!writeWav(result.mixFile, mix, job.sampleRate, err, 32, leadFrames)) return false;
+    if (!writeWav(result.mixFile, mix, job.sampleRate, err, 32, leadFrames, trimFrames)) return false;
     result.mix = measure(mix);
     result.truePeakDb = truePeakDb(mix);
     result.mixLufs = integratedLufs(mix, job.sampleRate);

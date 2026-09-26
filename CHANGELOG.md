@@ -5,6 +5,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `render --from 41 --to 45`: renders only those bars, with `--preroll` bars (default 2) rendered first
+  and cut, so a section of a song takes seconds. Beats stay song beats (plugins see the song's
+  position and tempo); notes already sounding start at the window, clips that began earlier play
+  from where it starts. The report's `window` gives the bars and where the files sit in the song.
 - A warning when a plugin effect's `automate` has `"mix"` (the host dry/wet) and the plugin has its own
   `Mix` parameter, and a hint on an unknown `"Mix"` that the host key is lowercase. `effects.md` explains
   the case-sensitive `mix` key and that plugins which don't report latency (kHs Reverser) aren't
