@@ -99,19 +99,27 @@ public:
 
     // [[beat, value], ...] or [{"beat": b, "value": v}, ...]; `exp` = exponential interpolation.
     // A point [beat, value, "step"] holds the previous value until `beat`, then jumps.
-    // Object form: {"points": [...], "curve": "linear" | "exp" | "step", "lfo": {...}} or
-    // {"value": v, "lfo": {...}} for a steady value with an LFO on it.
+    // [beat, value, "switch"] holds too, then moves to the new value over a short ramp (default 5 ms,
+    // "ramp" in ms on the object form): one point per on/off switch, without a click.
+    // Object form: {"points": [...], "curve": "linear" | "exp" | "step" | "switch", "ramp": ms, "lfo": {...}}
+    // or {"value": v, "lfo": {...}} for a steady value with an LFO on it.
     static Envelope parse(const nlohmann::json &j, const TempoMap &tempo, bool exp) {
         Envelope e;
         e.exp_ = exp;
         const nlohmann::json *points = &j;
-        bool allStep = false;
+        int allMode = 0;           // 0 interpolate, 1 step, 2 switch
+        double rampSec = 0.005;    // "switch": the ramp into each new value
         if (j.is_object()) {
             const std::string curve = j.value("curve", exp ? "exp" : "linear");
             if (curve == "exp") e.exp_ = true;
             else if (curve == "linear") e.exp_ = false;
-            else if (curve == "step") allStep = true;
-            else throw std::runtime_error("automation curve must be linear, exp or step");
+            else if (curve == "step") allMode = 1;
+            else if (curve == "switch") allMode = 2;
+            else throw std::runtime_error("automation curve must be linear, exp, step or switch");
+            if (j.contains("ramp")) {
+                rampSec = j["ramp"].get<double>() / 1000.0;
+                if (rampSec < 0 || rampSec > 10) throw std::runtime_error("automation \"ramp\" is milliseconds, 0 to 10000");
+            }
             if (j.contains("lfo")) e.lfo_ = std::make_shared<Lfo>(Lfo::parse(j["lfo"], tempo));
             const std::string scale = j.value("scale", "plain");
             if (scale == "normalized") e.normalized_ = true;
@@ -121,27 +129,34 @@ public:
             else throw std::runtime_error("automation object needs \"points\" or \"value\"");
         }
         if (!points->is_array() || points->empty()) throw std::runtime_error("automation must be a non-empty array of [beat, value] points");
-        std::vector<std::tuple<double, double, bool>> pts;
+        std::vector<std::tuple<double, double, int>> pts;
         for (const auto &p : *points) {
             double beat, value;
-            bool step = allStep;
+            int mode = allMode;
             if (p.is_array()) {
                 beat = p.at(0).get<double>(); value = p.at(1).get<double>();
                 if (p.size() > 2 && p[2].is_string()) {
                     const std::string m = p[2].get<std::string>();
-                    if (m != "step" && m != "hold") throw std::runtime_error("automation point mode must be \"step\"");
-                    step = true;
+                    if (m == "step" || m == "hold") mode = 1;
+                    else if (m == "switch") mode = 2;
+                    else throw std::runtime_error("automation point mode must be \"step\" or \"switch\"");
                 }
-            } else { beat = p.at("beat").get<double>(); value = p.at("value").get<double>(); step = step || p.value("step", false); }
+            } else {
+                beat = p.at("beat").get<double>(); value = p.at("value").get<double>();
+                if (p.value("step", false)) mode = 1;
+                if (p.value("switch", false)) mode = 2;
+            }
             if (e.exp_ && value <= 0) throw std::runtime_error("exponential automation values must be > 0");
-            pts.push_back({tempo.beatToSec(beat), value, step});
+            pts.push_back({tempo.beatToSec(beat), value, mode});
         }
         std::stable_sort(pts.begin(), pts.end(), [](auto &a, auto &b) { return std::get<0>(a) < std::get<0>(b); });
-        for (auto &[t, v, st] : pts) { e.pts_.push_back({t, v}); e.step_.push_back(st); }
+        e.build(pts, rampSec);
         return e;
     }
 
     bool empty() const { return pts_.empty(); }
+    // the curve's corners (seconds, value) after switches are expanded: for reports and checks
+    const std::vector<std::pair<double, double>> &corners() const { return pts_; }
     // "scale": "normalized": values are 0..1 of a plugin parameter's range (as DAWs store automation)
     bool normalized() const { return normalized_; }
     Envelope scaled(double lo, double hi) const {   // normalized -> the parameter's own range
@@ -176,6 +191,21 @@ public:
     }
 
 private:
+    // sorted (seconds, value, mode) -> corners; a switch becomes a held point plus a short ramp
+    void build(const std::vector<std::tuple<double, double, int>> &pts, double rampSec) {
+        pts_.clear(); step_.clear();
+        for (size_t i = 0; i < pts.size(); ++i) {
+            const auto &[t, v, mode] = pts[i];
+            if (mode != 2 || pts_.empty() || rampSec <= 0) { pts_.push_back({t, v}); step_.push_back(mode != 0); continue; }
+            // hold the previous value up to t, then ramp; the ramp never runs past the next point
+            double ramp = rampSec;
+            if (i + 1 < pts.size()) ramp = std::min(ramp, std::max(0.0, std::get<0>(pts[i + 1]) - t) * 0.5);
+            pts_.push_back({t, pts_.back().second});
+            step_.push_back(true);
+            pts_.push_back({t + std::max(ramp, 1e-6), v});
+            step_.push_back(false);
+        }
+    }
     std::vector<std::pair<double, double>> pts_;   // (seconds, value)
     std::vector<bool> step_;                        // jump (hold, then step) into this point
     bool exp_ = false;

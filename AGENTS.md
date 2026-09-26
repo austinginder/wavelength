@@ -212,8 +212,9 @@ in the job (details in `docs/effects.md`):
   LFOs work on any automatable value (`"lfo": {"cutoff": {"rate": "1/8", "depth": 1}}`), and
   `tremolo`, `gate` (trance gate / gated reverb), `rotary` (Leslie organ), `autowah`, `vibrato`,
   `bitcrush`, `tapestop` and `repeat` (beat-repeat stutters on a bus or the master) are built
-  in. Use `"step"` points for hard switches, not two close points (a stray ramp can quietly
-  lower a whole section).
+  in. Use `"switch"` (or `"step"`) points for hard switches, not two close points (a stray ramp
+  can quietly lower a whole section): `[64, 1, "switch"]` holds the old value to beat 64 and
+  ramps in 5 ms, or `{"curve": "switch", "ramp": 12, "points": [...]}`.
 - **Plugin effect `mix`:** in `automate`, lowercase `"mix"` is the host dry/wet and `"Mix"` the
   plugin's own parameter (case-sensitive only there). `"intended": true` on an effect keeps meant
   distortion (clip, crushed compression) out of the warnings.

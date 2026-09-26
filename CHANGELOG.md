@@ -38,6 +38,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- `"switch"` automation points and curves: `[64, 1, "switch"]` holds the previous value until beat 64,
+  then moves to the new one over a short ramp (5 ms, or `"ramp": ms` on the curve object;
+  `"curve": "switch"` makes every point one). On/off switching takes one point per switch instead of
+  a `[t, prev], [t + 0.012, new]` pair.
 - Track `"harmony": false` leaves unpitched material out of `wavelength lint` (harmony and voice
   leading). Lint also skips, on its own, `builtin:sampler` tracks playing one sample with no pitch
   (noise, or a drum hit under 0.4 s), and lists every skipped track with the reason: a pitched snare

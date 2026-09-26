@@ -47,9 +47,12 @@ value differs from the static one and something already sounds through it (track
 `gain` and `rides`, track `pan` and plugin parameters, and effect `automate` curves on tracks, buses and
 the master; a bus hears its earliest feeding track, by output, send or another bus). Values are
 interpolated linearly between points (exponentially for `cutoff`). A third element
-`"step"` (`[56, -3, "step"]`) holds the previous value until that beat and then jumps. The object
-form `{"points": [...], "curve": "linear" | "exp" | "step", "lfo": {...}}` sets the curve for all
-points, and `{"value": 0.5, "lfo": {...}}` is a steady value with an LFO on it.
+`"step"` (`[56, -3, "step"]`) holds the previous value until that beat and then jumps; `"switch"`
+(`[56, 1, "switch"]`) holds too, then moves to the new value over a short ramp (5 ms, click-free), so
+on/off switching (a filter `mix`, a mute, a throw) takes one point per switch. The object
+form `{"points": [...], "curve": "linear" | "exp" | "step" | "switch", "ramp": 5, "lfo": {...}}` sets the
+curve for all points (`ramp`: the switch ramp in ms), and `{"value": 0.5, "lfo": {...}}` is a steady
+value with an LFO on it.
 
 **LFOs** add a wave on top of any automatable value: on a built-in effect with
 `"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5, "shape": "sine"}}` (next to `automate`), or inside
