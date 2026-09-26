@@ -225,6 +225,11 @@ in the job (details in `docs/effects.md`):
   parameters too: `"automate": {"Frequency (Filter 1)": [[0, "C#4"], [32, "A3", "switch"]]}` or
   `[[0, "0.45 Hz"], [64, "0.96 Hz"]]`; no hand-computed normalized values (Melda frequencies are log
   0..1). `wavelength params <plugin> --set "Name=0.55"` shows what a plain value means.
+- **Tuned effects follow the chords.** Give the job a `"chords": [[0, "C#m"], [80, "A"], ...]`
+  timeline and automate a combs, resonator or filter frequency with `{"follow": "root", "octave": 4}`
+  (`"third"`, `"fifth"`, `"seventh"`, `"from": "A2"`, `"as": "midi"` for semitone pitch parameters):
+  one line instead of a hand-built step curve per chord change. Without `chords` it follows the
+  chords lint reads from the notes.
 - **Groups:** `"output": "Drums"` sends tracks to a group bus (shared glue, one filter sweep
   for the whole band); buses can feed other buses; `master.automation.gain` fades the song.
 - **Feel and expression:** `groove` (swing, lay-back, humanize) instead of hand-shifted notes;

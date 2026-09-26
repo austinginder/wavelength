@@ -28,4 +28,17 @@ struct HarmonyOptions {
 //  "problems": [{kind, bars, at, key, chord, notes, detail}], "info": [...]}
 nlohmann::json analyzeHarmony(const Job &job, const HarmonyOptions &o);
 
+// Why a track is not melodic material ("" = it is): drums, effects, audio, kits, "harmony": false, or a
+// builtin:sampler one-shot with no pitch of its own. Lint and chord detection leave these out.
+std::string unpitchedReason(const Track &t, const std::string &baseDir);
+
+// A chord symbol's tones as semitones above its root: "C#m", "Bb7", "F#m7b5", "Gsus4", "Dmaj7", "A5",
+// "E/G#" (the bass after the slash is ignored). -1 = the chord has no such tone.
+struct ChordTones { int root = -1, third = 4, fifth = 7, seventh = -1; };
+bool parseChordName(const std::string &s, ChordTones &c, std::string &err);
+
+// The chords of a job's melodic tracks as lint --harmony reads them: one per bar, or per half bar when
+// the halves differ, as (beat, chord symbol). Bars without harmony are left out.
+std::vector<std::pair<double, std::string>> detectChords(const Job &job);
+
 } // namespace wl

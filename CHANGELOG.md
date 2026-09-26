@@ -38,6 +38,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- Job-level `"chords"` (`[[beat, "C#m"], ...]` or `{"bar", "chord"}` entries) and curves that follow
+  them: `{"follow": "root" | "third" | "fifth" | "seventh", "octave": 4}` (or `"from": "A2"`,
+  `"transpose"`, `"as": "note" | "hz" | "midi"`) becomes a switch curve through the chord tones for any
+  automatable frequency or pitch: a built-in cutoff, a plugin parameter (as display text through the
+  plugin) or a semitone pitch. Without `chords`, the chords `lint --harmony` reads from the notes.
+  `examples/automation-tour.json` shows it.
 - Automation curves take display text and note names: `[[0, "C#4"], [32, "880 Hz", "switch"]]` on a
   plugin parameter (`automate` on a plugin effect, `automation.params`) is read by the plugin's own
   text-to-value once per distinct text before the render, like static `params`; note names reach it as

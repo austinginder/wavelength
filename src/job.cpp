@@ -181,6 +181,81 @@ void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std
     }
 }
 
+// ---- chord-following curves ------------------------------------------------------------------
+// {"follow": "root" | "third" | "fifth" | "seventh", "octave": 4 | "from": "A2", "transpose": 0,
+//  "as": "note" | "hz" | "midi", "curve": "switch" | "step", "ramp": ms}: a step curve through the chords
+bool isFollow(const json &o) { return o.is_object() && o.contains("follow") && o["follow"].is_string(); }
+
+bool hasFollow(const json &j) {
+    if (isFollow(j)) return true;
+    if (j.is_object()) { for (auto &[k, v] : j.items()) if (k != "notes" && hasFollow(v)) return true; }
+    else if (j.is_array()) for (auto &v : j) if (!v.is_number() && hasFollow(v)) return true;
+    return false;
+}
+
+void replaceFollow(json &j, const std::function<json(const json &)> &f) {
+    if (isFollow(j)) { j = f(j); return; }
+    if (j.is_object()) { for (auto &[k, v] : j.items()) if (k != "notes") replaceFollow(v, f); }
+    else if (j.is_array()) for (auto &v : j) if (!v.is_number()) replaceFollow(v, f);
+}
+
+// "chords": [[beat, "C#m"], ...] or [{"bar": 9, "chord": "C#m"}, {"beat": 36, "chord": "A"}]
+std::vector<std::pair<double, ChordTones>> parseChordList(const json &list, double beatsPerBar) {
+    if (!list.is_array()) throw std::runtime_error("\"chords\" is a list: [[beat, \"C#m\"], ...] or [{\"bar\": 1, \"chord\": \"C#m\"}, ...]");
+    std::vector<std::pair<double, ChordTones>> out;
+    for (const auto &c : list) {
+        double beat;
+        std::string name;
+        if (c.is_array() && c.size() == 2 && c[0].is_number() && c[1].is_string()) { beat = c[0].get<double>(); name = c[1].get<std::string>(); }
+        else if (c.is_object() && c.contains("chord") && (c.contains("bar") || c.contains("beat"))) {
+            beat = c.contains("bar") ? (c["bar"].get<double>() - 1) * beatsPerBar : c["beat"].get<double>();
+            name = c["chord"].get<std::string>();
+        } else throw std::runtime_error("each \"chords\" entry is [beat, \"C#m\"] or {\"bar\": 9, \"chord\": \"C#m\"}");
+        if (name == "-" || name == "N.C." || name == "NC") continue;   // no chord: the previous one holds
+        ChordTones t;
+        std::string err;
+        if (!parseChordName(name, t, err)) throw std::runtime_error("\"chords\": " + err);
+        out.push_back({beat, t});
+    }
+    std::stable_sort(out.begin(), out.end(), [](auto &a, auto &b) { return a.first < b.first; });
+    return out;
+}
+
+json followCurve(const json &spec, const std::vector<std::pair<double, ChordTones>> &chords) {
+    const std::string tone = spec["follow"].get<std::string>();
+    if (tone != "root" && tone != "third" && tone != "fifth" && tone != "seventh")
+        throw std::runtime_error("\"follow\" is \"root\", \"third\", \"fifth\" or \"seventh\" (of the job's \"chords\")");
+    if (chords.empty()) throw std::runtime_error("\"follow\": the job has no \"chords\" and none could be read from its notes");
+    int lowest = 12 * (spec.value("octave", 4) + 1);   // the tone lands in [lowest, lowest + 12)
+    if (spec.contains("from")) lowest = parseKey(spec["from"]);
+    const int transpose = spec.value("transpose", 0);
+    const std::string as = spec.value("as", std::string("note"));
+    if (as != "note" && as != "hz" && as != "midi") throw std::runtime_error("\"follow\" curves give \"as\": \"note\" (default), \"hz\" or \"midi\"");
+    const std::string curve = spec.value("curve", std::string("switch"));
+    if (curve != "switch" && curve != "step") throw std::runtime_error("\"follow\" curves are \"switch\" (default) or \"step\"");
+    json out = spec;
+    for (const char *k : {"follow", "octave", "from", "transpose", "as"}) out.erase(k);
+    out["curve"] = curve;
+    json pts = json::array();
+    json last;
+    for (size_t i = 0; i < chords.size(); ++i) {
+        const ChordTones &c = chords[i].second;
+        int iv = tone == "third" ? c.third : tone == "fifth" ? c.fifth : tone == "seventh" ? c.seventh : 0;
+        if (iv < 0) iv = 0;   // a tone the chord doesn't have (the third of a power chord): the root
+        const int pc = (c.root + iv) % 12;
+        int key = lowest + ((pc - lowest) % 12 + 12) % 12 + transpose;
+        json v;
+        if (as == "midi") v = key;
+        else if (as == "hz") v = std::round(440.0 * std::pow(2.0, (key - 69) / 12.0) * 100) / 100;
+        else v = keyName(key);
+        if (v == last) continue;
+        last = v;
+        pts.push_back({i == 0 ? 0.0 : chords[i].first, v});
+    }
+    out["points"] = pts;
+    return out;
+}
+
 } // namespace
 
 json userJobDefaults(std::string *path) {
@@ -203,6 +278,24 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             if (!j.contains(k)) { j[k] = v; out.appliedDefaults.push_back(k); }
     }
     try {
+        // curves that follow the chords ({"follow": "root", "octave": 4}) become step curves first: from the
+        // job's "chords", or the chords lint --harmony reads from the notes
+        if (hasFollow(j)) {
+            const double bpb = j.contains("timeSignature") ? j["timeSignature"][0].get<double>() * 4 / j["timeSignature"][1].get<double>() : 4.0;
+            std::vector<std::pair<double, ChordTones>> chords;
+            if (j.contains("chords")) chords = parseChordList(j["chords"], bpb);
+            else {
+                json plain = j;
+                replaceFollow(plain, [](const json &) { return json{{"value", 1.0}}; });
+                Job notes;
+                std::string perr;
+                if (!parseJob(plain, baseDir, notes, perr, false)) throw std::runtime_error(perr);
+                json detected = json::array();
+                for (auto &[b, name] : detectChords(notes)) detected.push_back({b, name});
+                chords = parseChordList(detected, bpb);
+            }
+            replaceFollow(j, [&](const json &spec) { return followCurve(spec, chords); });
+        } else if (j.contains("chords")) parseChordList(j["chords"], 4);   // still check it
         out.baseDir = baseDir;
         out.parallel = j.value("parallel", -1);
         out.retries = std::clamp(j.value("retries", 2), 0, 10);

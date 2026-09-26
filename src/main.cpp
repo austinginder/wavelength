@@ -951,27 +951,6 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
     return 0;
 }
 
-// Why a track is not melodic material for lint ("" = it is): drums, effects, audio, kits, an explicit
-// "harmony": false, or a builtin:sampler playing one sample that has no pitch of its own (noise, or a
-// short drum hit: a pitched snare roll is a riser, not a chord).
-std::string unpitchedReason(const Track &t, const std::string &baseDir) {
-    if (!t.harmony) return "\"harmony\": false";
-    if (t.plugin == "builtin:drums" || t.plugin == "builtin:fx" || t.plugin == "builtin:audio" || t.plugin == "builtin:shepard") return t.plugin;
-    if (!t.sampler.is_object()) return "";
-    if (t.sampler.contains("kit") || t.sampler.contains("map")) return "drum kit";
-    if (t.sampler.contains("multisample") || !t.sampler.contains("sample") || !t.sampler["sample"].is_string()) return "";
-    const std::string file = resolveSampleFile(t.sampler["sample"].get<std::string>(), baseDir);
-    Audio a;
-    int sr = 0;
-    std::string err;
-    if (file.empty() || !readWav(file, a, sr, err)) return "";
-    const Analysis x = analyzeAudio(a, sr);
-    if (x.silent) return "";
-    if (x.pitchConfidence < 0.3 && x.tonality < 0.15) return "noise sample";
-    if (x.attackMs <= 20 && x.lastSoundSeconds - x.firstSoundSeconds < 0.4) return "one-shot drum sample";
-    return "";
-}
-
 // ---- lint: voice leading between melodic tracks --------------------------------------------
 // Each track is one voice (its highest sounding note; "--low" names tracks read by their lowest,
 // for basses). At every onset where two voices both move, a perfect fifth or octave (or unison)

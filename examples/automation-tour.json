@@ -1,0 +1,461 @@
+{
+ "tempo": 110,
+ "tail": 3,
+ "stems": "16",
+ "chords": [
+  [
+   0,
+   "Am"
+  ],
+  [
+   4,
+   "F"
+  ],
+  [
+   8,
+   "C"
+  ],
+  [
+   12,
+   "G"
+  ],
+  [
+   16,
+   "Am"
+  ],
+  [
+   20,
+   "F"
+  ],
+  [
+   24,
+   "C"
+  ],
+  [
+   28,
+   "G"
+  ]
+ ],
+ "buses": [
+  {
+   "name": "Echo",
+   "fx": [
+    {
+     "type": "delay",
+     "time": 0.75,
+     "feedback": 0.45,
+     "mix": 1
+    }
+   ]
+  }
+ ],
+ "master": {
+  "fx": [
+   {
+    "type": "limiter",
+    "ceiling": -1.5
+   }
+  ]
+ },
+ "tracks": [
+  {
+   "name": "Keys",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "multisample": "Grand Piano",
+    "release": 0.4
+   },
+   "gain": 4,
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 3.5,
+     "key": 57,
+     "vel": 0.6
+    },
+    {
+     "beat": 0,
+     "dur": 3.5,
+     "key": 60,
+     "vel": 0.6
+    },
+    {
+     "beat": 0,
+     "dur": 3.5,
+     "key": 64,
+     "vel": 0.6
+    },
+    {
+     "beat": 4,
+     "dur": 3.5,
+     "key": 53,
+     "vel": 0.6
+    },
+    {
+     "beat": 4,
+     "dur": 3.5,
+     "key": 57,
+     "vel": 0.6
+    },
+    {
+     "beat": 4,
+     "dur": 3.5,
+     "key": 60,
+     "vel": 0.6
+    },
+    {
+     "beat": 8,
+     "dur": 3.5,
+     "key": 55,
+     "vel": 0.6
+    },
+    {
+     "beat": 8,
+     "dur": 3.5,
+     "key": 60,
+     "vel": 0.6
+    },
+    {
+     "beat": 8,
+     "dur": 3.5,
+     "key": 64,
+     "vel": 0.6
+    },
+    {
+     "beat": 12,
+     "dur": 3.5,
+     "key": 55,
+     "vel": 0.6
+    },
+    {
+     "beat": 12,
+     "dur": 3.5,
+     "key": 59,
+     "vel": 0.6
+    },
+    {
+     "beat": 12,
+     "dur": 3.5,
+     "key": 62,
+     "vel": 0.6
+    },
+    {
+     "beat": 16,
+     "dur": 3.5,
+     "key": 57,
+     "vel": 0.6
+    },
+    {
+     "beat": 16,
+     "dur": 3.5,
+     "key": 60,
+     "vel": 0.6
+    },
+    {
+     "beat": 16,
+     "dur": 3.5,
+     "key": 64,
+     "vel": 0.6
+    },
+    {
+     "beat": 20,
+     "dur": 3.5,
+     "key": 53,
+     "vel": 0.6
+    },
+    {
+     "beat": 20,
+     "dur": 3.5,
+     "key": 57,
+     "vel": 0.6
+    },
+    {
+     "beat": 20,
+     "dur": 3.5,
+     "key": 60,
+     "vel": 0.6
+    },
+    {
+     "beat": 24,
+     "dur": 3.5,
+     "key": 55,
+     "vel": 0.6
+    },
+    {
+     "beat": 24,
+     "dur": 3.5,
+     "key": 60,
+     "vel": 0.6
+    },
+    {
+     "beat": 24,
+     "dur": 3.5,
+     "key": 64,
+     "vel": 0.6
+    },
+    {
+     "beat": 28,
+     "dur": 3.5,
+     "key": 55,
+     "vel": 0.6
+    },
+    {
+     "beat": 28,
+     "dur": 3.5,
+     "key": 59,
+     "vel": 0.6
+    },
+    {
+     "beat": 28,
+     "dur": 3.5,
+     "key": 62,
+     "vel": 0.6
+    }
+   ]
+  },
+  {
+   "name": "Drone",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "multisample": "Farfisa SO Flute",
+    "attack": 0.05
+   },
+   "gain": 2,
+   "harmony": false,
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 0,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 0,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 0,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 4,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 4,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 4,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 4,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 8,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 8,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 8,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 8,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 12,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 12,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 12,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 12,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 16,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 16,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 16,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 16,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 20,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 20,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 20,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 20,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 24,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 24,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 24,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 24,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    },
+    {
+     "beat": 28,
+     "dur": 3.9,
+     "key": 33,
+     "vel": 0.7
+    },
+    {
+     "beat": 28,
+     "dur": 3.9,
+     "key": 45,
+     "vel": 0.7
+    },
+    {
+     "beat": 28,
+     "dur": 3.9,
+     "key": 57,
+     "vel": 0.7
+    },
+    {
+     "beat": 28,
+     "dur": 3.9,
+     "key": 69,
+     "vel": 0.7
+    }
+   ],
+   "fx": [
+    {
+     "type": "filter",
+     "mode": "bandpass",
+     "resonance": 6,
+     "cutoff": "A3",
+     "automate": {
+      "cutoff": {
+       "follow": "root",
+       "octave": 3
+      }
+     }
+    },
+    {
+     "type": "filter",
+     "mode": "highpass",
+     "cutoff": "80 Hz",
+     "mix": 0,
+     "automate": {
+      "mix": {
+       "curve": "switch",
+       "ramp": 8,
+       "points": [
+        [
+         0,
+         0
+        ],
+        [
+         16,
+         1
+        ],
+        [
+         24,
+         0
+        ]
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

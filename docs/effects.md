@@ -64,6 +64,18 @@ reach the plugin as Hz. `"scale": "display"` on the curve object reads plain num
 read once, before the render; the curve then moves in the parameter's own values, so a log-scaled
 frequency sweeps evenly in pitch between two points. A text the plugin can't read fails the render.
 
+**Curves that follow the chords.** In place of a curve, `{"follow": "root", "octave": 4}` gives a step
+curve that retunes on every chord of the job's `chords` list (or the chords read from the notes):
+`follow` is `root`, `third`, `fifth` or `seventh` (a tone the chord doesn't have, the third of a power
+chord or the seventh of a triad, falls back to the root); `octave` puts the tone in that octave (C4-B4 for
+4, the default), or `"from": "A2"` takes the lowest such note at or above A2; `transpose` adds semitones.
+The values are note names by default, so a built-in cutoff gets Hz and a plugin parameter gets the note's
+frequency as display text (`"C#4"` -> `"277.18 Hz"`); `"as": "midi"` gives MIDI note numbers (a
+resonator's Pitch in semitones) and `"as": "hz"` plain Hz numbers. The curve switches at each chord
+(`"curve": "switch"`, 5 ms, `"ramp"` sets it; `"step"` jumps), and keeps `lfo`/`scale` keys:
+`"automate": {"cutoff": {"follow": "root", "octave": 3}}` tunes a band-pass to the chords,
+`"automate": {"Pitch": {"follow": "root", "from": 33, "as": "midi"}}` a resonator.
+
 **LFOs** add a wave on top of any automatable value: on a built-in effect with
 `"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5, "shape": "sine"}}` (next to `automate`), or inside
 any curve's object form (plugin parameters, fader, pan, sends). `rate` is Hz or a tempo-synced

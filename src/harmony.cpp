@@ -1,11 +1,13 @@
 #include "harmony.hpp"
 
 #include "analyze.hpp"
+#include "sampler.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <set>
 #include <tuple>
@@ -425,6 +427,76 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
     std::stable_sort(out["rubs"].begin(), out["rubs"].end(), [](const json &a, const json &b) { return a["count"].get<int>() > b["count"].get<int>(); });
     std::stable_sort(out["problems"].begin(), out["problems"].end(),
                      [](const json &a, const json &b) { return a["bars"][0].get<int>() < b["bars"][0].get<int>(); });
+    return out;
+}
+
+// Why a track is not melodic material for lint ("" = it is): drums, effects, audio, kits, an explicit
+// "harmony": false, or a builtin:sampler playing one sample that has no pitch of its own (noise, or a
+// short drum hit: a pitched snare roll is a riser, not a chord).
+std::string unpitchedReason(const Track &t, const std::string &baseDir) {
+    if (!t.harmony) return "\"harmony\": false";
+    if (t.plugin == "builtin:drums" || t.plugin == "builtin:fx" || t.plugin == "builtin:audio" || t.plugin == "builtin:shepard") return t.plugin;
+    if (!t.sampler.is_object()) return "";
+    if (t.sampler.contains("kit") || t.sampler.contains("map")) return "drum kit";
+    if (t.sampler.contains("multisample") || !t.sampler.contains("sample") || !t.sampler["sample"].is_string()) return "";
+    const std::string file = resolveSampleFile(t.sampler["sample"].get<std::string>(), baseDir);
+    Audio a;
+    int sr = 0;
+    std::string err;
+    if (file.empty() || !readWav(file, a, sr, err)) return "";
+    const Analysis x = analyzeAudio(a, sr);
+    if (x.silent) return "";
+    if (x.pitchConfidence < 0.3 && x.tonality < 0.15) return "noise sample";
+    if (x.attackMs <= 20 && x.lastSoundSeconds - x.firstSoundSeconds < 0.4) return "one-shot drum sample";
+    return "";
+}
+
+bool parseChordName(const std::string &in, ChordTones &c, std::string &err) {
+    static const int base[] = {9, 11, 0, 2, 4, 5, 7};   // A B C D E F G
+    std::string s = in.substr(0, in.find('/'));
+    s.erase(0, s.find_first_not_of(' '));
+    s.erase(s.find_last_not_of(' ') + 1);
+    if (s.empty() || std::toupper((unsigned char)s[0]) < 'A' || std::toupper((unsigned char)s[0]) > 'G') {
+        err = "cannot read chord '" + in + "' (use symbols like \"C#m\", \"Bb7\", \"F#m7b5\", \"Gsus4\")";
+        return false;
+    }
+    int root = base[std::toupper((unsigned char)s[0]) - 'A'];
+    size_t i = 1;
+    while (i < s.size() && (s[i] == '#' || s[i] == 'b')) root += s[i++] == '#' ? 1 : -1;
+    std::string q = s.substr(i);
+    auto eat = [&](const char *p) { const size_t n = std::strlen(p); if (q.compare(0, n, p) == 0) { q.erase(0, n); return true; } return false; };
+    c = ChordTones{};
+    c.root = (root % 12 + 12) % 12;
+    bool maj7 = false, dim = false;
+    if (eat("maj") || eat("Maj") || eat("M")) maj7 = true;   // "Cmaj" alone is C major; "Cmaj7" adds the major 7th
+    else if (eat("min") || eat("m") || eat("-")) c.third = 3;
+    else if (eat("dim") || eat("o")) { c.third = 3; c.fifth = 6; dim = true; }
+    else if (eat("aug") || eat("+")) c.fifth = 8;
+    if (eat("13") || eat("11") || eat("9") || eat("7")) c.seventh = maj7 ? 11 : dim ? 9 : 10;
+    else if (eat("5")) c.third = -1;
+    else eat("6");   // an added sixth: no tone to follow
+    if (eat("b5") || eat("-5")) c.fifth = 6;
+    if (eat("sus4") || eat("sus")) c.third = 5;
+    else if (eat("sus2")) c.third = 2;
+    return true;
+}
+
+std::vector<std::pair<double, std::string>> detectChords(const Job &job) {
+    HarmonyOptions o;
+    for (size_t i = 0; i < job.tracks.size(); ++i)
+        if (!job.tracks[i].notes.empty() && unpitchedReason(job.tracks[i], job.baseDir).empty()) o.tracks.push_back(i);
+    o.keys = job.keys;
+    std::vector<std::pair<double, std::string>> out;
+    if (o.tracks.empty()) return out;
+    const json r = analyzeHarmony(job, o);
+    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+    for (const auto &b : r["bars"]) {
+        const double beat = (b["bar"].get<int>() - 1) * bpb;
+        if (b.contains("halves")) {
+            out.push_back({beat, b["halves"][0].get<std::string>()});
+            out.push_back({beat + bpb / 2, b["halves"][1].get<std::string>()});
+        } else if (b["chord"].get<std::string>() != "-") out.push_back({beat, b["chord"].get<std::string>()});
+    }
     return out;
 }
 
