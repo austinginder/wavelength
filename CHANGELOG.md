@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `"intended": true` on an effect silences its "working too hard" warnings (`clip` shaping, `compressor`
+  and `limiter` gain reduction) when the distortion is meant; Rust Protocol's destroyed arp clip warned
+  on every render.
 - `builtin:audio` clips can play the song's own audio: `"file": {"render": [fromBeat, toBeat], "tracks":
   [...], "tail": 3, "fx": [...]}` captures those beats of the tracks (after their faders) inside the same
   render, runs the clip's own fx over them with a tail, then plays the result like a WAV (`reverse`,

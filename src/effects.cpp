@@ -27,7 +27,7 @@ inline float blend(float dry, double wet, double mix) { return (float)(dry * (1.
 
 void checkKeys(const json &j, std::initializer_list<const char *> allowed, Effect &fx) {
     for (auto &[k, _] : j.items()) {
-        if (k == "type" || k == "automate" || k == "lfo" || k == "bypass" || k == "match" || k == "matchMs") continue;
+        if (k == "type" || k == "automate" || k == "lfo" || k == "bypass" || k == "match" || k == "matchMs" || k == "intended") continue;
         bool ok = false;
         for (auto *a : allowed) ok |= k == a;
         if (!ok) fx.warnings.push_back(fx.label + ": unknown setting '" + k + "' ignored");
@@ -354,7 +354,7 @@ struct Compressor : Effect {
             a.left[i] = blend(a.left[i], a.left[i] * lin, mix);
             a.right[i] = blend(a.right[i], a.right[i] * lin, mix);
         }
-        if (maxGr < -18) warnings.push_back("compressor reached " + std::to_string((int)maxGr) + " dB of gain reduction");
+        if (maxGr < -18 && !intended) warnings.push_back("compressor reached " + std::to_string((int)maxGr) + " dB of gain reduction");
         return true;
     }
 };
@@ -442,7 +442,7 @@ struct Limiter : Effect {
         }
         // a lone transient and sustained crushing both reach -8 dB; how long it lasts tells them apart
         const double pct3 = n ? 100.0 * over3 / n : 0, pct6 = n ? 100.0 * over6 / n : 0;
-        if (dsp::linToDb(minG) < -8 || pct6 > 10) {
+        if ((dsp::linToDb(minG) < -8 || pct6 > 10) && !intended) {
             char buf[260];
             std::snprintf(buf, sizeof buf, "limiter: up to %.1f dB of gain reduction (at %.2f s); more than 3 dB for %.1f%% of the time, more than 6 dB for %.1f%%%s",
                           -dsp::linToDb(minG), worstAt / sr, pct3, pct6,
@@ -515,7 +515,7 @@ struct Clip : Effect {
             a.right[i] = (float)shape(r);
         }
         // shaping a fifth of the samples is distortion, not peak control (shaped counts both channels)
-        if (sounding && shaped > 2 * sounding / 5) {
+        if (sounding && shaped > 2 * sounding / 5 && !intended) {
             const double kneeDb = -dsp::linToDb(1.0 - knee);
             char buf[240];
             std::snprintf(buf, sizeof buf, "clip: %.0f%% of the sounding samples are shaped (the curve starts %.1f dB under the ceiling): this is "
@@ -1258,6 +1258,10 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
         return nullptr;
     }
     if (!err.empty()) { err = context + ": " + err; return nullptr; }
+    if (j.contains("intended")) {
+        if (j["intended"].is_boolean()) fx->intended = j["intended"].get<bool>();
+        else fx->warnings.push_back(fx->label + ": \"intended\" must be true or false; ignored");
+    }
     if (j.contains("automate") && j["automate"].is_object())
         for (auto &[k, v] : j["automate"].items()) {
             double fb, fv;

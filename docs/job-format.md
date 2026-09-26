@@ -70,7 +70,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `mute` | false | Render the stem but leave it out of the mix. |
 | `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |
 | `notes` | `[]` | See below. |
-| `fx` | `[]` | Effect chain (built-in or CLAP plugins), see `effects.md`. |
+| `fx` | `[]` | Effect chain (built-in or CLAP plugins), see `effects.md`. Every effect also takes `bypass`, `match` (level match), `matchMs` and `intended` (no distortion warnings). |
 | `sends` | `{}` | Bus name → send level in dB (post-fader), or an automation curve of dB (`[[beat, dB], ...]`) for throws. |
 | `articulations` | none | Articulation name → keyswitch key (`{"long": 0, "spiccato": 1, "tremolo": 3}`). Notes pick one with `"art"`; the keyswitch note is sent 30 ms before the first note of every change. |
 | `range` | none | `[lowest, highest]` playable keys (`["G3", "C#7"]`): notes outside it get a warning in the report (sample libraries are silent there). |

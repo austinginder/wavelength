@@ -27,6 +27,7 @@ public:
     std::string label;                  // "reverb", "compressor", "Vital", …
     uint32_t latencySamples = 0;        // plugin effects: reported processing delay (already compensated)
     std::vector<std::string> warnings;
+    bool intended = false;              // "intended": true = the distortion or heavy gain reduction is meant: no warning about it
     // curves that start late, as (beat of the first point, warning): kept only when the track sounds before
     // that beat (buildChain decides; a curve on a track that is silent until then holds nothing audible)
     std::vector<std::pair<double, std::string>> lateCurves;

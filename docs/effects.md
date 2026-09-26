@@ -29,7 +29,10 @@ every bus that feeds them. Then `master.gain` (+ `master.automation.gain`), `mas
 
 `markers` split the report into sections with their own loudness (LUFS).
 
-Any effect can be skipped with `"bypass": true`.
+Any effect can be skipped with `"bypass": true`. `"intended": true` on an effect says its distortion or
+heavy gain reduction is meant (a destroyed arp, a crushed room compressor): the `clip`, `compressor` and
+`limiter` warnings about working too hard are left out for that effect. Warnings about mistakes
+(unknown settings, late curves, a plugin that did nothing) still appear.
 
 ## Automation
 
