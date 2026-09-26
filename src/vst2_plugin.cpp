@@ -287,6 +287,17 @@ bool Vst2Plugin::valueFromText(ParamId id, const std::string &text, double &plai
     return true;
 }
 
+bool Vst2Plugin::textForValue(ParamId id, double plain, std::string &text) {
+    Effect *fx = impl_->fx;
+    if ((int32_t)id >= fx->numParams) return false;
+    const float before = fx->getParameter(fx, (int32_t)id);
+    fx->setParameter(fx, (int32_t)id, (float)std::clamp(plain, 0.0, 1.0));
+    const std::string disp = dispatchString(fx, effGetParamDisplay, (int32_t)id), label = dispatchString(fx, effGetParamLabel, (int32_t)id);
+    fx->setParameter(fx, (int32_t)id, before);
+    text = label.empty() ? disp : disp + " " + label;
+    return true;
+}
+
 bool Vst2Plugin::setParams(const std::vector<ParamValue> &values, std::string &err) {
     (void)err;
     Effect *fx = impl_->fx;

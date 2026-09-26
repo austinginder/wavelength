@@ -65,6 +65,8 @@ public:
     virtual bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) = 0;
     // A parameter's plain value from display text ("84.3 Hz", "1/16", "-6 dB"), parsed by the plugin.
     virtual bool valueFromText(ParamId id, const std::string &text, double &plain) { (void)id; (void)text; (void)plain; return false; }
+    // The plugin's display text for a plain value, without changing the parameter.
+    virtual bool textForValue(ParamId id, double plain, std::string &text) { (void)id; (void)plain; (void)text; return false; }
     // Set a value on the edit controller only, so text of other parameters is read in its context
     // (a drum's mode decides whether "17 Hz" is a rate or a time).
     virtual void setControllerValue(ParamId id, double plain) { (void)id; (void)plain; }

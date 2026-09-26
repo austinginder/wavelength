@@ -49,7 +49,8 @@ public:
     bool usesMidiDialect() const;
     bool acceptsMidi() const;
     uint32_t latency() const;       // samples, valid while activated
-    bool textToValue(uint32_t id, const std::string &text, double &value) const;       // note port 0 lists the MIDI dialect (CC / pitch bend as MIDI events)
+    bool textToValue(uint32_t id, const std::string &text, double &value) const;
+    bool valueToText(uint32_t id, double value, std::string &text) const;       // note port 0 lists the MIDI dialect (CC / pitch bend as MIDI events)
 
     // Activate, process `blocks` silent blocks on an audio thread with these parameter
     // events in the first one, then deactivate. Some plugins (JUCE-based ones) only commit

@@ -232,6 +232,24 @@ bool Vst3Plugin::valueFromText(ParamId id, const std::string &text, double &plai
     return true;
 }
 
+bool Vst3Plugin::textForValue(ParamId id, double plain, std::string &text) {
+    auto &ctl = impl_->controller;
+    if (!ctl) return false;
+    String128 s{};
+    if (ctl->getParamStringByValue(id, impl_->toNorm(id, plain), s) != kResultOk) return false;
+    text = Steinberg::Vst::StringConvert::convert(s);
+    const int32 n = ctl->getParameterCount();
+    for (int32 i = 0; i < n; ++i) {   // units, as params() shows them
+        ParameterInfo pi{};
+        if (ctl->getParameterInfo(i, pi) == kResultOk && pi.id == id) {
+            const std::string units = Steinberg::Vst::StringConvert::convert(pi.units);
+            if (!units.empty()) text += " " + units;
+            break;
+        }
+    }
+    return true;
+}
+
 void Vst3Plugin::setControllerValue(ParamId id, double plain) {
     if (impl_->controller) impl_->controller->setParamNormalized(id, impl_->toNorm(id, plain));
 }

@@ -87,9 +87,12 @@ Usage:
       glance, dropouts and drops included. --peaks lists the strongest spectral peaks of the
       window (Hz, note and cents, level; 12 or --top N) and their spacing: where a comb,
       resonator or flanger sits. A render folder also analyzes bus stems.
-  wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--json]
+  wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--set "Name=v"]... [--map "Name" [--steps N]] [--json]
       Show a plugin's parameters, optionally after loading a state/preset.
-      Hidden and read-only parameters are omitted unless --all is given.
+      Hidden and read-only parameters are omitted unless --all is given. --set "Name=0.55"
+      prints the plugin's display text for a plain value (or the value it reads for display
+      text, "Name=800 Hz", or a note name); --map "Name" tabulates value -> display across the
+      range (21 rows, or --steps N). Neither changes anything.
   wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
@@ -546,6 +549,57 @@ int cmdParams(const Args &a) {
     auto inst = openForInspection(a, a.positional[1], info, err);
     if (!inst) return fail(a, err);
     auto params = inst->params();
+    // --set "Name=0.55" (or "Name=800 Hz"): what a value means, in the plugin's own display text;
+    // --map "Name" [--steps N]: value -> display across the whole range. Nothing is changed.
+    if (!a.sets.empty() || a.has("--map")) {
+        auto display = [&](const ParamInfo &p, double v) {
+            std::string t;
+            return inst->textForValue(p.id, v, t) ? t : std::string("?");
+        };
+        auto norm = [](const ParamInfo &p, double v) { return p.max != p.min ? (v - p.min) / (p.max - p.min) : 0.0; };
+        json out = {{"ok", true}, {"plugin", info.id}, {"format", info.format}};
+        if (!a.sets.empty()) out["set"] = json::array();
+        for (const auto &s : a.sets) {
+            const size_t eq = s.find('=');
+            if (eq == std::string::npos) return fail(a, "--set takes \"Name=value\"");
+            ParamInfo p;
+            if (!inst->findParam(s.substr(0, eq), p)) return fail(a, "no parameter '" + s.substr(0, eq) + "' on " + info.name);
+            const std::string rhs = s.substr(eq + 1);
+            char *end = nullptr;
+            double v = std::strtod(rhs.c_str(), &end);
+            const bool number = end != rhs.c_str() && *end == 0;
+            if (!number) {   // display text or a note name: what plain value the plugin reads it as
+                double hz;
+                bool ok = false;
+                if (Envelope::noteHz(rhs, hz)) {
+                    char buf[40];
+                    std::snprintf(buf, sizeof buf, "%.2f Hz", hz);
+                    ok = inst->valueFromText(p.id, buf, v);
+                }
+                if (!ok && !inst->valueFromText(p.id, rhs, v)) return fail(a, info.name + " could not read '" + rhs + "' as a value of '" + p.name + "'");
+            }
+            const std::string d = display(p, v);
+            out["set"].push_back({{"name", p.name}, {"id", p.id}, {"input", rhs}, {"value", v}, {"normalized", norm(p, v)}, {"display", d}});
+            if (!a.has("--json"))
+                std::fprintf(OUT, "%-32s %-12s -> value %.6g (normalized %.4f)  display '%s'\n", p.name.c_str(), rhs.c_str(), v, norm(p, v), d.c_str());
+        }
+        if (a.has("--map")) {
+            ParamInfo p;
+            if (!inst->findParam(a.get("--map"), p)) return fail(a, "no parameter '" + a.get("--map") + "' on " + info.name);
+            const int steps = std::clamp(std::atoi(a.get("--steps", p.stepped && p.max - p.min <= 64 ? std::to_string((int)(p.max - p.min)) : "20").c_str()), 1, 1000);
+            json rows = json::array();
+            if (!a.has("--json")) std::fprintf(OUT, "%s (%s): value -> display\n", p.name.c_str(), info.name.c_str());
+            for (int i = 0; i <= steps; ++i) {
+                const double v = p.min + (p.max - p.min) * i / steps;
+                const std::string d = display(p, v);
+                rows.push_back({{"value", v}, {"normalized", norm(p, v)}, {"display", d}});
+                if (!a.has("--json")) std::fprintf(OUT, "  %10.5g  (%.3f)  %s\n", v, norm(p, v), d.c_str());
+            }
+            out["map"] = {{"name", p.name}, {"id", p.id}, {"rows", rows}};
+        }
+        if (a.has("--json")) emit(out.dump(2, ' ', false, json::error_handler_t::replace));
+        return 0;
+    }
     json list = json::array();
     size_t shown = 0, midiHidden = 0;
     for (auto &p : params) {
@@ -1270,7 +1324,7 @@ int run(int argc, char **argv) {
     {   // an option a command doesn't know is an error: a typo (or a newer flag on an older binary) must not be ignored
         static const std::map<std::string, std::set<std::string>> known = {
             {"plugins", {"--rescan", "--json", "--block", "--unblock", "--reason"}},
-            {"params", {"--preset", "--state", "--format", "--all", "--json", "--verbose"}},
+            {"params", {"--preset", "--state", "--format", "--all", "--map", "--steps", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
             {"samples", {"--search", "--kit", "--roundrobin", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},

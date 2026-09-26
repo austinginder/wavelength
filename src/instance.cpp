@@ -335,6 +335,13 @@ uint32_t Instance::inputChannels(uint32_t port) const {
 bool Instance::textToValue(uint32_t id, const std::string &text, double &value) const {
     return params_ && params_->text_to_value && params_->text_to_value(plugin_, id, text.c_str(), &value);
 }
+bool Instance::valueToText(uint32_t id, double value, std::string &text) const {
+    char buf[256] = {};
+    if (!params_ || !params_->value_to_text || !params_->value_to_text(plugin_, id, value, buf, sizeof buf)) return false;
+    buf[sizeof buf - 1] = 0;
+    text = buf;
+    return true;
+}
 uint32_t Instance::latency() const { return latency_ ? latency_->get(plugin_) : 0; }
 bool Instance::acceptsMidi() const {
     if (!notePorts_ || notePorts_->count(plugin_, true) == 0) return false;

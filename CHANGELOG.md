@@ -38,6 +38,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- `wavelength params <plugin> --set "Rate=0.5"` prints the plugin's display text for a plain value
+  (`'0.4472 Hz'`), or the value that display text or a note name reads as (`--set "Rate=0.45 Hz"`), and
+  `--map "Rate" [--steps N]` a value -> display table across the range, with no `state save` round trip.
 - `analyze --peaks [--top N]`: the strongest spectral peaks of a window (16k-point spectrum, 2.9 Hz
   resolution) as Hz, note and cents and level, and the spacing most of them are multiples of, as a
   note: verifies where a comb, resonator or flanger sits. `analyze <render dir>` also measures bus stems,

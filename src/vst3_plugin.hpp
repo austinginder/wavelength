@@ -29,6 +29,7 @@ public:
     bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) override;
     bool getState(std::vector<uint8_t> &out, std::string &err) override;
     bool valueFromText(ParamId id, const std::string &text, double &plain) override;
+    bool textForValue(ParamId id, double plain, std::string &text) override;
     void setControllerValue(ParamId id, double plain) override;
     std::vector<ParamInfo> params() const override;
     bool setParams(const std::vector<ParamValue> &values, std::string &err) override;

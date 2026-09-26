@@ -224,7 +224,8 @@ in the job (details in `docs/effects.md`):
 - **Automate in the plugin's units.** Curve values can be display text or note names, for plugin
   parameters too: `"automate": {"Frequency (Filter 1)": [[0, "C#4"], [32, "A3", "switch"]]}` or
   `[[0, "0.45 Hz"], [64, "0.96 Hz"]]`; no hand-computed normalized values (Melda frequencies are log
-  0..1). `wavelength params <plugin> --set "Name=0.55"` shows what a plain value means.
+  0..1). `wavelength params <plugin> --set "Name=0.55"` shows what a plain value means (and
+  `--set "Name=800 Hz"` what a text reads as); `--map "Name"` tabulates value -> display.
 - **Buses have stems and faders to stage too.** `"stem": true` on a bus writes `stems/bus-<name>.wav`
   (after its effects, before its fader: listen to or `analyze` a return on its own); the report's
   `buses[].lufs` measures the same point, and `scripts/stage-gains.py` sets `"bus:<Name>"` targets from
