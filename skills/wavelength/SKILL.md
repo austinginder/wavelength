@@ -43,6 +43,12 @@ Settle, from the request (ask only if it is genuinely unclear):
 
 Write the plan into the song folder's generator as comments; it doubles as documentation.
 
+If the human hands you material, start from it: `"$WAVELENGTH" import score.mxl` (MusicXML from
+MuseScore, Sibelius, Dorico; repeats played out, dynamics as velocities), `import part.mid`, or
+`import song.dawproject` (a DAW's tracks, plugins and mixer) each write a `job.json` that renders at
+once. Without Bitwig's sound content, run `"$WAVELENGTH" samples --install-soundfont` once so
+imported parts get General MIDI sounds.
+
 ## 3. Choose sounds from what is installed
 
 Never guess plugin or preset names. List them:
@@ -51,7 +57,7 @@ Never guess plugin or preset names. List them:
 "$WAVELENGTH" plugins --json
 "$WAVELENGTH" presets <plugin> --search <text>      # factory presets by name
 "$WAVELENGTH" audition <plugin>                     # once per plugin: tags like "octave -1", dark, pluck
-"$WAVELENGTH" samples --search <text>               # sample libraries and drum kits (builtin:sampler)
+"$WAVELENGTH" samples --search <text>               # sample libraries, SFZ, SoundFonts, drum kits (builtin:sampler)
 ```
 
 Prefer factory presets by name. Transpose presets tagged `octave -1`. **Check every melodic
@@ -76,6 +82,7 @@ unless the user keeps music somewhere else.
 
 ```sh
 python3 make-job.py
+"$WAVELENGTH" lint job.json --harmony --json            # wrong notes and key clashes, before rendering
 "$WAVELENGTH" render job.json --out out --json
 python3 "$WAVELENGTH_SCRIPTS/stage-gains.py" .        # faders = target - stem LUFS
 python3 make-job.py && "$WAVELENGTH" render job.json --out out --json
@@ -84,8 +91,9 @@ python3 make-job.py && "$WAVELENGTH" render job.json --out out --json
 
 Read `report.json`: no silent tracks, no warnings you can't explain, `sections[].lufs`
 following the contour you planned, `tracks[].sectionLufs` to find what dominates a section.
-Ride faders with `automation.gain` until the sections breathe. Keep iterating while the numbers
-disagree with the plan.
+Ride faders with `automation.rides` until the sections breathe. Keep iterating while the numbers
+disagree with the plan. To check one passage, `render job.json --from 41 --to 45` renders just
+those bars (with the song's buses and master) in seconds.
 
 ## 6. Master
 
@@ -94,19 +102,27 @@ AGENTS.md: EQ, a `multiband` with a compressor per band, a limiter, a true-peak 
 -1 dB, `"loudness": -14`, and `"leadIn": 1` (a second of silence for streaming platforms).
 
 ```sh
-"$WAVELENGTH" master out/mix.wav --chain mastering.json --lead-in 1 --out mastered
-ffmpeg -y -loglevel error -i mastered/mix.wav -b:a 320k <slug>.mp3
+"$WAVELENGTH" master out/mix.wav --chain mastering.json --lead-in 1 --out mastered --deliver mp3,flac
 ```
 
-Once the chain is right, make it the job's own `master` so every render comes out mastered.
+`--deliver` (or `"deliver": ["mp3"]` in the job) writes `mix.mp3`/`mix.flac` next to `mix.wav`,
+decodes them again and reports each file's true peak: an MP3 over -1 dBTP warns with how far to
+lower the limiter. Once the chain is right, make it the job's own `master` so every render comes
+out mastered.
 
 ## 7. Hand it over, listen, fix
 
 Give the human the MP3 path and a short description: the form with timestamps, the instruments
-per section, the loudness. Ask them to listen and name anything that sounds wrong with a time.
+per section, the loudness. For a listening session, `"$WAVELENGTH" serve <songs folder>` opens a
+local page with the arrangement, stems and quick previews where they pin comments to bars and
+tracks; read them from the song's `review.json` and answer there. Ask them to listen and name anything that sounds wrong with a time.
 For a named moment, follow "When the human names a moment" in AGENTS.md: find the bar, render
 that stretch with stems, find the stem that moves, test the instrument alone, fix, re-render.
 Compare versions only at equal loudness.
+
+If the human wants to finish the song in their DAW, `"$WAVELENGTH" export job.json --out
+<slug>.dawproject` opens in Bitwig with the same plugins and sounds; tell them what the export
+listed as left out.
 
 Finish with a `NOTES.md` in the song folder: the prompt, the description, and a table of every
 track with its plugin, preset or patch, and role. It is how the song gets credited and rebuilt.

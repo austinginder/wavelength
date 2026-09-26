@@ -485,14 +485,17 @@ changes don't alter stems. They are 32-bit float by default and big (about 8 MB 
 at 48 kHz); use `"stems": "none"` (or `--stems none`) once you only need the report and the mix.
 A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous render's.
 
-## Known limits (v0.1)
+## Known limits
 
 - CLAP, VST3 and VST2 (no Audio Units yet; no VST2 shell plugins). DAWproject import brings notes,
-  plugins, mixer and automation of volume/pan, not audio clips or a DAW's own devices. Built-in effects cover the
+  plugins, mixer, audio clips and automation of volume, pan and the instrument's parameters; a DAW's
+  own devices only for Bitwig (read from the project behind the export). DAWproject export leaves
+  built-in instruments and most built-in effects out (it lists them). Built-in effects cover the
   essentials; installed plugin effects work in any `fx` chain (Intel-only ones on tracks only).
-- All tracks render in one process. Some plugin families (the nakst synths) share
-  Objective-C class names and print a warning when several load together; if a render
-  crashes, split tracks into separate jobs.
+- Plugin tracks render in worker processes, several at once: a crashing plugin costs its track
+  (retried, then listed in `failedTracks`), not the song.
+- SoundFonts and SFZ play without LFOs (vibrato, tremolo) or pitch envelopes. A job has one time
+  signature: a score's time signature changes keep their timing but not their bar numbers.
 - A plugin whose sound depends on its own GUI or licence dialog may render its demo/default.
   An unlicensed plugin that opens a registration window on every load (on macOS the render
   kills that worker within about 2 s and the track fails saying so) should be blocked: `wavelength plugins --block <plugin>
