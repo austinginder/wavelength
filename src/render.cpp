@@ -188,8 +188,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     for (size_t i = 0; i < job.tracks.size(); ++i)
         if (!buildChain(job.tracks[i].fx, job, "track '" + job.tracks[i].name + "'", trackChains[i], err, job.tracks[i].firstSoundBeat)) return false;
     for (size_t i = 0; i < job.buses.size(); ++i)
-        if (!buildChain(job.buses[i].fx, job, "bus '" + job.buses[i].name + "'", busChains[i], err)) return false;
-    if (!buildChain(job.masterFx, job, "master", masterChain, err)) return false;
+        if (!buildChain(job.buses[i].fx, job, "bus '" + job.buses[i].name + "'", busChains[i], err, job.buses[i].firstSoundBeat)) return false;
+    if (!buildChain(job.masterFx, job, "master", masterChain, err, job.masterFirstSoundBeat)) return false;
+    for (const auto &b : job.buses)
+        for (const auto &w : b.warnings) result.warnings.push_back("bus '" + b.name + "': " + w);
+    for (const auto &w : job.masterWarnings) result.warnings.push_back("master: " + w);
 
     std::error_code ec;
     fs::create_directories(job.stemBits ? fs::path(outDir) / "stems" : fs::path(outDir), ec);   // no empty stems/ when stems are off

@@ -38,4 +38,20 @@ s = sorted(x["track"] for x in j["skipped"])
 sys.exit(0 if p == [("key excursion", [10, 10])] and i == [("secondary dominant", [19, 19])] and s == ["Snare Roll", "Tritone Ping"] else 1)'; then
   echo "FAIL harmony-tour: lint --harmony"; fail=1
 fi
+# late curves on buses and the master warn like on tracks; a bus fed only after its curve starts does not
+mkdir -p out/check/late-curves
+cat > out/check/late-curves/job.json <<'JOB'
+{"tempo": 120, "stems": "none",
+ "buses": [{"name": "Music", "automation": {"gain": [[16, -4], [24, 0]]}},
+           {"name": "Late", "automation": {"rides": {"lift": [[8, -3], [12, 0]]}}}],
+ "master": {"automation": {"rides": [[8, -2], [12, 0]]}},
+ "tracks": [{"name": "Kit", "plugin": "builtin:drums", "output": "Music", "notes": [{"beat": 0, "dur": 0.5, "key": 36, "vel": 0.9}, {"beat": 20, "dur": 0.5, "key": 36, "vel": 0.9}]},
+            {"name": "Snare", "plugin": "builtin:drums", "output": "Late", "notes": [{"beat": 14, "dur": 0.5, "key": 38, "vel": 0.9}]}]}
+JOB
+if ! "./$build/wavelength" render out/check/late-curves/job.json --out "out/check/late-curves/$build" --json 2>/dev/null | python3 -c '
+import json, sys
+w = [x for x in json.load(sys.stdin)["warnings"] if "automation starts at beat" in x]
+sys.exit(0 if len(w) == 2 and w[0].startswith("bus '"'"'Music'"'"'") and w[1].startswith("master:") else 1)'; then
+  echo "FAIL late-curves: bus/master late automation warnings"; fail=1
+fi
 exit $fail

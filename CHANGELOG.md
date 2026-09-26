@@ -78,6 +78,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   averages read Hammerklang's Final as +3.3 dB while its drop landed +1.5.
 
 ### Fixed
+- Late-automation warnings for buses and the master: a bus or master `gain` or `rides` curve (and a
+  bus or master effect curve) that starts late and holds a non-zero value over music already playing
+  through it is now reported, like on tracks. Lights Out's Music bus ride from bar 57 held -4 dB over
+  bars 1-56 silently. A bus fed only from later in the song does not warn.
 - The drop check across an intended near-silence: when the bars before a boundary are more than
   15 dB under the music before them (or under -40 LUFS), `sections[].transition` and the weak-drop
   warning compare with the last 2 bars of music before the silence and say so (`skippedSilence`).

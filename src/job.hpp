@@ -58,6 +58,8 @@ struct Bus {
     nlohmann::json fx = nlohmann::json::array();
     std::string output;             // another bus to feed ("" = master)
     GainCurve gainAutomation;       // dB added to the bus gain over time (automation.gain + rides)
+    double firstSoundBeat = 1e18;   // earliest note of a track feeding it (directly, by send or through buses)
+    std::vector<std::string> warnings;   // found while parsing (late gain curves)
 };
 
 struct Marker {
@@ -91,6 +93,8 @@ struct Job {
     nlohmann::json masterFx = nlohmann::json::array();
     double masterGainDb = 0;
     GainCurve masterGainAutomation; // dB added to the master gain over time (fades, rides)
+    double masterFirstSoundBeat = 1e18;          // earliest note reaching the master
+    std::vector<std::string> masterWarnings;     // found while parsing (late gain curves)
     bool hasMasterLoudness = false;
     double masterLoudness = -14;    // target integrated LUFS after the master chain (gain into the chain is found)
     std::string loudnessGain = "peak";

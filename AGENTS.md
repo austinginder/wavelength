@@ -323,6 +323,9 @@ job.json` lines the sections up and keeps the lead-in.
   `loudness` target hands most of a ride back: riding a section down 2 dB may move its final LUFS
   by 0.3 dB. `sections[].preMasterLufs` shows each section before the master (what the track and bus
   rides did); `sections[].lufs` is the result after it. Compare the two before riding harder.
+- **Start every curve at beat 0.** A curve holds its first value before its first point, so a ride
+  written from bar 57 holds that value over bars 1-56. The report warns about it on tracks, buses
+  and the master (gain, rides, effect curves) whenever something already plays through them.
 - **Master rides run before the chain.** `master.automation.gain` changes the level going into
   the master compressors and limiter, which then pull part of it back: ride tracks or buses to
   shape the section contour, and keep master rides for fades.

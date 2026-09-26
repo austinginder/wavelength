@@ -85,6 +85,22 @@ std::string keyName(int k) {
 
 // After a track's notes are parsed: range warnings, keyswitch notes for articulation
 // changes, and velocity-driven controller curves ("velocityTo").
+// Gain curves (automation.gain and rides) that start late hold their first value from the top of the song:
+// warn when that value is not 0 dB and something sounds through this fader before the curve begins.
+void lateGainWarnings(const json &au, double firstSound, std::vector<std::string> &warnings) {
+    double fb, fv;
+    auto check = [&](const std::string &what, const json &c) {
+        if (firstPoint(c, fb, fv) && fb > 0 && fb > firstSound + 1e-6 && std::fabs(fv) > 1e-9) warnings.push_back(lateCurveWarning(what, fb, fv, 0));
+    };
+    if (au.contains("gain")) check("gain", au["gain"]);
+    if (au.contains("rides")) {
+        const auto &r = au["rides"];
+        const bool named = r.is_object() && !r.contains("points") && !r.contains("value");
+        if (named) for (auto &[k, v] : r.items()) check("ride '" + k + "'", v);
+        else check("rides", r);
+    }
+}
+
 void finishTrackNotes(const json &t, const TempoMap &tempo, Track &tr, const std::vector<int> &noteArt) {
     const size_t played = tr.notes.size();
     if (t.contains("range")) {
@@ -269,17 +285,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 const json autoParams = au.value("params", json::object());
                 for (auto &[k, v] : autoParams.items()) tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, false)});
                 double fb, fv;   // curves that start late hold their first value from the top of the song
-                if (au.contains("gain") && firstPoint(au["gain"], fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv) > 1e-9)
-                    tr.warnings.push_back(lateCurveWarning("gain", fb, fv, 0));
-                if (au.contains("rides")) {
-                    const auto &r = au["rides"];
-                    const bool named = r.is_object() && !r.contains("points") && !r.contains("value");
-                    auto check = [&](const std::string &what, const json &c) {
-                        if (firstPoint(c, fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv) > 1e-9) tr.warnings.push_back(lateCurveWarning(what, fb, fv, 0));
-                    };
-                    if (named) for (auto &[k, v] : r.items()) check("ride '" + k + "'", v);
-                    else check("rides", r);
-                }
+                lateGainWarnings(au, tr.firstSoundBeat, tr.warnings);
                 if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv - tr.pan) > 1e-9)
                     tr.warnings.push_back(lateCurveWarning("pan", fb, fv, tr.pan));
                 for (auto &[k, v] : autoParams.items())
@@ -485,6 +491,25 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 for (const auto &b : out.buses) found |= b.name == bus;
                 if (!found) throw std::runtime_error("track '" + t.name + "' sends to unknown bus '" + bus + "' (declare it in \"buses\")");
             }
+        // when each bus and the master first hear something: the earliest track feeding them (output or send),
+        // through any buses in between. Late gain curves before that hold nothing audible.
+        for (const auto &t : out.tracks) {
+            if (t.mute) continue;
+            if (t.output.empty()) out.masterFirstSoundBeat = std::min(out.masterFirstSoundBeat, t.firstSoundBeat);
+            else out.buses[(size_t)busIndex(t.output)].firstSoundBeat = std::min(out.buses[(size_t)busIndex(t.output)].firstSoundBeat, t.firstSoundBeat);
+            for (const auto &s : t.sends) out.buses[(size_t)busIndex(s.first)].firstSoundBeat = std::min(out.buses[(size_t)busIndex(s.first)].firstSoundBeat, t.firstSoundBeat);
+        }
+        for (size_t pass = 0; pass < out.buses.size(); ++pass)
+            for (const auto &b : out.buses)
+                if (!b.output.empty()) out.buses[(size_t)busIndex(b.output)].firstSoundBeat = std::min(out.buses[(size_t)busIndex(b.output)].firstSoundBeat, b.firstSoundBeat);
+        for (const auto &b : out.buses) if (b.output.empty()) out.masterFirstSoundBeat = std::min(out.masterFirstSoundBeat, b.firstSoundBeat);
+        {
+            const json buses = j.value("buses", json::array());
+            for (size_t i = 0; i < buses.size() && i < out.buses.size(); ++i)
+                if (buses[i].contains("automation")) lateGainWarnings(buses[i]["automation"], out.buses[i].firstSoundBeat, out.buses[i].warnings);
+            if (j.contains("master") && j["master"].contains("automation"))
+                lateGainWarnings(j["master"]["automation"], out.masterFirstSoundBeat, out.masterWarnings);
+        }
     } catch (const std::exception &e) {
         err = std::string("invalid job: ") + e.what();
         return false;

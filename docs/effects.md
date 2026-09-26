@@ -39,7 +39,11 @@ Any effect can be skipped with `"bypass": true`.
   effect: `{"type": "filter", "cutoff": 800, "automate": {"cutoff": [[0, 300], [16, 8000]]}}`.
 
 Curves are `[[beat, value], ...]`; values are held before the first point and after the last,
-and interpolated linearly between points (exponentially for `cutoff`). A third element
+so a curve that starts late holds its first value from the top of the song: the report warns when that
+value differs from the static one and something already sounds through it (track, bus and master
+`gain` and `rides`, track `pan` and plugin parameters, and effect `automate` curves on tracks, buses and
+the master; a bus hears its earliest feeding track, by output, send or another bus). Values are
+interpolated linearly between points (exponentially for `cutoff`). A third element
 `"step"` (`[56, -3, "step"]`) holds the previous value until that beat and then jumps. The object
 form `{"points": [...], "curve": "linear" | "exp" | "step", "lfo": {...}}` sets the curve for all
 points, and `{"value": 0.5, "lfo": {...}}` is a steady value with an LFO on it.
