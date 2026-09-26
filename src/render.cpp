@@ -312,7 +312,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     auto mixTrack = [&](size_t i, Audio &audio, TrackResult &tr) -> bool {
         const Track &track = job.tracks[i];
         char prefix[8];
-        std::snprintf(prefix, sizeof prefix, "%02zu-", i + 1);
+        std::snprintf(prefix, sizeof prefix, "%02d-", track.stemNumber > 0 ? track.stemNumber : (int)i + 1);
         if (job.stemBits && track.stem) {
             tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
             if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames)) return false;

@@ -102,6 +102,7 @@ Usage:
       reports "ok": false and exits 1 (mix.wav and report.json are still written).
       --tracks renders only the named tracks (and, muted, any track that keys their
       sidechains), with the song's buses and master, to check a part without the whole song.
+      Their stems keep the full render's numbers and names (05-lead.wav stays 05-lead.wav).
       --level-from out/report.json keeps the master at that render's gains (its loudness-target
       and normalize gain) instead of targeting again: a --tracks render then plays each part at
       the level it has in the full mix.
@@ -842,6 +843,7 @@ int cmdRender(const Args &a) {
     // Workers re-read the job by track index, so the subset goes to a file next to the job.
     std::string subsetPath;
     std::vector<std::string> only;
+    std::vector<int> stemNumbers;
     if (a.has("--tracks")) {
         std::stringstream ss(a.get("--tracks"));
         for (std::string n; std::getline(ss, n, ',');) {
@@ -867,9 +869,12 @@ int cmdRender(const Args &a) {
             for (auto &t : j["tracks"]) if (need.count(t.value("name", ""))) keys(t.value("fx", json::array()));
         }
         json kept = json::array();
+        size_t position = 0;
         for (auto &t : j["tracks"]) {
             const std::string n = t.value("name", "");
+            ++position;
             if (!need.count(n)) continue;
+            stemNumbers.push_back((int)position);   // stems keep the full render's file names
             json c = t;
             if (!want.count(n)) { c["mute"] = true; c["stem"] = false; }   // renders only to key an effect: no mix, no stem file
             kept.push_back(c);
@@ -884,6 +889,7 @@ int cmdRender(const Args &a) {
     std::string base = fs::absolute(path).parent_path().string();
     if (!parseJob(j, base, job, err)) return fail(a, err);
     job.sourcePath = subsetPath.empty() ? fs::absolute(path).string() : subsetPath;
+    for (size_t k = 0; k < stemNumbers.size() && k < job.tracks.size(); ++k) job.tracks[k].stemNumber = stemNumbers[k];
     if (a.has("--jobs")) job.parallel = std::atoi(a.get("--jobs").c_str());
     if (a.has("--level-from")) {   // play at the level of an earlier render (a full mix): its master gains, not a new target
         std::ifstream rin(a.get("--level-from"));

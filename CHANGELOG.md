@@ -133,6 +133,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ### Changed
 - `builtin:sampler` `start` with `reverse` now trims the file's beginning (the region is cut in the
   file's time, then reversed, like `builtin:audio`); before, it skipped into the reversed sample.
+- `render --tracks` stems keep the full render's numbers and names (`05-lead.wav`, not `01-lead.wav`),
+  so scripts can reuse the filenames.
 - `saturate` `"match": true` now follows the level over time (input vs output RMS over `matchMs`, 300 ms)
   instead of one gain for the whole track, so automated `drive` no longer makes the driven bars louder
   (Rust Protocol's arp: 18 dB louder driven, now within 0.2 dB). `"match": "static"` keeps the old behaviour.

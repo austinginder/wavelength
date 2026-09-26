@@ -25,7 +25,8 @@ is non-zero. Errors are written to be actionable (they name the track, parameter
 
 Working on one part? `render job.json --tracks "Lead,Bass" --stems none` renders just those
 tracks (plus, muted, whatever keys their `duck`/`gate`/sidechain) through the song's buses and
-master: much faster than the whole song, and the report shows those tracks alone. With a
+master: much faster than the whole song, and the report shows those tracks alone. Their stems keep
+the full render's names (`05-lead.wav`), so scripts can reuse them. With a
 `master.loudness` target the master would push those tracks up to the target on their own; add
 `--level-from out/report.json` (the full render's report) to keep the full mix's master gain, so
 each part plays and measures at the level it has in the song.
