@@ -74,7 +74,8 @@ shortened, accents louder. The score's key signatures (when they carry a mode) b
 `lint --harmony` reads the composer's keys; tempo marks become the tempo map (a score without one
 imports at 120: set `tempo`); rehearsal marks become markers. Each note keeps its marks (`"marks":
 ["staccato", "accent"]`, the render ignores them): when you move a part onto an orchestral library,
-turn them into `art` with the track's `articulations`. Grace notes are left out.
+turn them into `art` with the track's `articulations`. Grace notes play as short notes just before
+the beat (`"marks": ["grace"]`); pedal marks hold notes until the pedal lifts.
 
 ## Choosing sounds
 

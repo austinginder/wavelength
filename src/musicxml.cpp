@@ -47,6 +47,7 @@ struct Measure {
     std::vector<std::pair<double, double>> dynamics;     // at, level 0-1
     std::vector<std::pair<double, int>> wedges;          // at, +1 crescendo / -1 diminuendo / 0 stop
     std::vector<std::pair<double, std::string>> rehearsals;
+    std::vector<std::pair<double, int>> pedals;          // at, 1 down / 0 up / 2 change (up and down again)
     bool hasKey = false;
     int fifths = 0;
     std::string mode;                // "" when the score gives none
@@ -131,11 +132,16 @@ void readSound(const xml::Node &snd, Measure &m, double pos) {
     if (!snd.get("tocoda").empty()) m.toCoda = true;
     if (!snd.get("fine").empty()) m.fine = true;
     if (!snd.get("segno").empty()) m.segno = true;
+    if (snd.attr("damper-pedal")) {
+        const std::string d = lower(snd.get("damper-pedal"));
+        m.pedals.push_back({pos, d == "no" || d == "0" ? 0 : 1});
+    }
     if (!snd.get("coda").empty()) m.coda = true;
 }
 
-void readPart(const xml::Node &p, Part &part, size_t &graceSkipped) {
+void readPart(const xml::Node &p, Part &part) {
     int divisions = 1, transpose = 0;
+    std::vector<std::pair<NoteEv, int>> graces;   // grace notes waiting for their main note, with their slot (chords share one)
     double beatsPerMeasure = 4;
     std::set<int> openEnding;
     for (const xml::Node *mx : p.all("measure")) {
@@ -178,6 +184,12 @@ void readPart(const xml::Node &p, Part &part, size_t &graceSkipped) {
                         m.wedges.push_back({at, type == "crescendo" ? 1 : type == "diminuendo" ? -1 : 0});
                     }
                     if (const xml::Node *r = dt->child("rehearsal"); r && !r->text.empty()) m.rehearsals.push_back({at, r->text});
+                    if (const xml::Node *pd = dt->child("pedal"); pd && !(c.child("sound") && c.child("sound")->attr("damper-pedal"))) {
+                        const std::string type = pd->get("type");
+                        if (type == "start" || type == "resume") m.pedals.push_back({at, 1});
+                        else if (type == "stop" || type == "discontinue") m.pedals.push_back({at, 0});
+                        else if (type == "change") m.pedals.push_back({at, 2});
+                    }
                     if (dt->child("segno")) m.segno = true;
                     if (dt->child("coda")) m.coda = true;
                     if (const xml::Node *mt = dt->child("metronome"); mt && !soundTempo && mt->child("per-minute")) {
@@ -205,11 +217,11 @@ void readPart(const xml::Node &p, Part &part, size_t &graceSkipped) {
                 if (c.child("coda")) m.coda = true;
             } else if (c.tag == "note") {
                 const double dur = c.childNum("duration", 0) / divisions;
-                if (c.child("grace")) { ++graceSkipped; continue; }
                 if (c.child("cue")) continue;
+                const bool grace = c.child("grace") != nullptr;   // no time of its own: placed before its main note
                 const bool chord = c.child("chord") != nullptr;
                 const double start = chord ? lastStart : pos;
-                if (!chord) { lastStart = pos; pos += dur; }
+                if (!chord && !grace) { lastStart = pos; pos += dur; }
                 m.length = std::max(m.length, pos);
                 if (c.child("rest")) continue;
                 NoteEv n;
@@ -264,6 +276,25 @@ void readPart(const xml::Node &p, Part &part, size_t &graceSkipped) {
                             if (lv >= 0) m.dynamics.push_back({start, lv});
                             else n.accent = std::max(n.accent, 0.15);   // sf, sfz, fz, rfz ...
                         }
+                }
+                if (grace) {
+                    const int slot = graces.empty() ? 0 : graces.back().second + (chord ? 0 : 1);
+                    graces.push_back({n, slot});
+                    continue;
+                }
+                if (!graces.empty() && !chord) {   // the grace notes before this one: short notes just before the beat
+                    const int slots = graces.back().second + 1;
+                    const double g = std::min(0.125, n.dur / 4);
+                    for (auto &[gn, slot] : graces) {
+                        NoteEv e = gn;
+                        e.at = start - (slots - slot) * g;
+                        e.dur = g;
+                        e.length = 1;
+                        e.tieStart = e.tieStop = false;
+                        e.marks.push_back("grace");
+                        m.notes.push_back(e);
+                    }
+                    graces.clear();
                 }
                 m.notes.push_back(n);
             }
@@ -375,11 +406,10 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
             partIndex[p.id] = parts.size();
             parts.push_back(std::move(p));
         }
-    size_t graceSkipped = 0;
     for (const xml::Node *pn : root->all("part")) {
         auto it = partIndex.find(pn->get("id"));
         if (it == partIndex.end()) { partIndex[pn->get("id")] = parts.size(); parts.push_back(Part{}); parts.back().id = pn->get("id"); it = partIndex.find(pn->get("id")); }
-        readPart(*pn, parts[it->second], graceSkipped);
+        readPart(*pn, parts[it->second]);
     }
     parts.erase(std::remove_if(parts.begin(), parts.end(), [](const Part &p) { return p.measures.empty(); }), parts.end());
     if (parts.empty()) { err = path + " has no parts with measures"; return false; }
@@ -398,7 +428,6 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
     res.measures = count;
     res.playedMeasures = order.size();
     for (auto &m : shape) if (m.daCapo || m.dalSegno) { res.notes.push_back("D.C./D.S. played once, repeats not taken after the jump"); break; }
-    if (graceSkipped) res.notes.push_back(std::to_string(graceSkipped) + " grace note(s) left out");
 
     std::vector<double> startOf(order.size());
     double t = 0;
@@ -491,7 +520,7 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
         for (size_t o = 0; o < order.size(); ++o) {
             const Measure &m = p.measures[order[o]];
             for (const NoteEv &n : m.notes) {
-                const double beat = startOf[o] + n.at;
+                const double beat = std::max(0.0, startOf[o] + n.at);   // a grace note before the first beat starts on it
                 const auto tk = std::make_pair(n.key, n.voice);
                 auto it = tieOpen.find(tk);
                 if (n.tieStop && it != tieOpen.end()) {   // continues a tied note
@@ -510,6 +539,23 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
             }
         }
         if (notes.empty()) continue;
+        // sustain pedal: a note still sounding when its key is let go holds until the pedal lifts
+        std::vector<std::pair<double, int>> pedals;
+        for (size_t o = 0; o < order.size(); ++o)
+            for (auto &[at, pv] : p.measures[order[o]].pedals) pedals.push_back({startOf[o] + at, pv});
+        std::stable_sort(pedals.begin(), pedals.end(), [](auto &a, auto &b) { return a.first < b.first; });
+        if (!pedals.empty()) {
+            for (auto &nj : notes) {
+                const double b = nj["beat"].get<double>(), end = b + nj["dur"].get<double>();
+                bool down = false;   // the pedal before the key is let go (a change at that moment lifts it)
+                for (auto &[at, pv] : pedals) { if (at >= end - 1e-9) break; down = pv != 0; }
+                if (!down) continue;
+                double lift = -1;
+                for (auto &[at, pv] : pedals) if (at >= end - 1e-9 && pv != 1) { lift = at; break; }
+                if (lift < 0) lift = t;   // held to the end of the piece
+                nj["dur"] = r6(lift - b);
+            }
+        }
         std::stable_sort(notes.begin(), notes.end(), [](const json &a, const json &b) { return a["beat"].get<double>() < b["beat"].get<double>(); });
         std::string name = !p.name.empty() && lower(p.name) != "musicxml part" ? p.name : !p.instrumentName.empty() ? p.instrumentName : "Part " + p.id;
         std::string unique = name;

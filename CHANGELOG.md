@@ -15,6 +15,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   part (the GM kits, so congas, cowbells and the rest sound) play it instead of stand-ins.
 - SFZ filters (`cutoff`, `resonance`, `fil_type`, velocity and key tracking), release triggers
   (`trigger=release`, `rt_decay`) and `delay`/`ampeg_delay`.
+- MusicXML: grace notes play as short notes just before their main note (`"marks": ["grace"]`), and
+  pedal marks (`<pedal>`, `<sound damper-pedal>`) hold notes until the pedal lifts.
+- Sample files named with the wrong case (SFZ libraries made on Windows) are found on case-sensitive
+  file systems; a missing sample fails with its full path and, for SFZ, where it was named.
 - Samples and audio clips in AIFF/AIFC, FLAC, MP3 and Ogg Vorbis, not only WAV: `builtin:sampler`
   kits, single samples and multisamples, `builtin:audio` clips, `analyze`, `master` input and
   DAWproject audio clips. Files are told apart by their contents; MP3s lose their encoder delay

@@ -34,6 +34,27 @@ std::string lower(std::string s) {
     return s;
 }
 
+// `path` as it exists on disk, comparing each part without case when the exact spelling is missing (SFZ
+// libraries made on Windows spell "Samples/KICK.wav" for "samples/Kick.wav"); "" when nothing matches
+std::string existingIgnoringCase(const std::string &path) {
+    std::error_code ec;
+    const fs::path p(path);
+    if (fs::exists(p, ec)) return path;
+    fs::path cur = p.root_path();
+    for (const auto &part : p.relative_path()) {
+        fs::path next = cur / part;
+        if (!fs::exists(next, ec)) {
+            const std::string want = lower(part.string());
+            bool found = false;
+            for (auto &e : fs::directory_iterator(cur.empty() ? fs::path(".") : cur, ec))
+                if (lower(e.path().filename().string()) == want) { next = e.path(); found = true; break; }
+            if (!found) return "";
+        }
+        cur = next;
+    }
+    return cur.string();
+}
+
 bool readFile(const std::string &path, std::vector<uint8_t> &out) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
@@ -986,7 +1007,9 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (zip) { if (!zip->read(file, bytes, e2)) { err = e2; return false; } }
         else {
             const std::string p = fs::path(file).is_absolute() ? file : (fs::path(source) / file).string();
-            if (!readFile(p, bytes)) { err = "cannot read " + p; return false; }
+            const std::string found = existingIgnoringCase(p);
+            if (found.empty()) { err = "sample not found: " + p + (isSfz ? " (named by the SFZ's sample= opcode; checked without case too)" : ""); return false; }
+            if (!readFile(found, bytes)) { err = "cannot read " + found; return false; }
         }
         auto d = std::make_shared<SampleData>();
         if (!decodeAudio(bytes.data(), bytes.size(), *d, e2)) { err = fs::path(file).filename().string() + ": " + e2; return false; }
