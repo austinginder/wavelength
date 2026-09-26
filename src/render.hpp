@@ -20,7 +20,7 @@ struct TrackResult {
 };
 
 struct BusResult {
-    std::string name;
+    std::string name, file;           // file: its stem ("stem": true)
     std::vector<std::string> fx;
     Levels levels{};                  // after its fx, before its fader (like a track's stem)
     double lufs = -120;

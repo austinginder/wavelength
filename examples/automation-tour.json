@@ -46,7 +46,8 @@
      "feedback": 0.45,
      "mix": 1
     }
-   ]
+   ],
+   "stem": true
   }
  ],
  "master": {

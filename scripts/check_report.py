@@ -32,7 +32,21 @@ def arrangement_tour(d):
     return bad
 
 
-EXPECT = {"arrangement-tour": arrangement_tour}
+def automation_tour(d):
+    """examples/automation-tour.json: chord-following and switch curves, send throws, a bus stem."""
+    bad = []
+    if d.get("warnings"):
+        bad.append("warnings: " + " | ".join(w[:60] for w in d["warnings"]))
+    buses = {b["name"]: b for b in d["buses"]}
+    echo = buses.get("Echo", {})
+    if not echo.get("file", "").endswith("bus-echo.wav"):
+        bad.append(f"no bus stem for Echo: {echo.get('file')!r}")
+    if echo.get("lufs", -120) < -70:
+        bad.append(f"Echo bus silent ({echo.get('lufs')} LUFS): the throws did not open the send")
+    return bad
+
+
+EXPECT = {"arrangement-tour": arrangement_tour, "automation-tour": automation_tour}
 
 d = json.load(sys.stdin)
 name = sys.argv[1]

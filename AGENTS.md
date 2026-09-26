@@ -225,6 +225,10 @@ in the job (details in `docs/effects.md`):
   parameters too: `"automate": {"Frequency (Filter 1)": [[0, "C#4"], [32, "A3", "switch"]]}` or
   `[[0, "0.45 Hz"], [64, "0.96 Hz"]]`; no hand-computed normalized values (Melda frequencies are log
   0..1). `wavelength params <plugin> --set "Name=0.55"` shows what a plain value means.
+- **Buses have stems and faders to stage too.** `"stem": true` on a bus writes `stems/bus-<name>.wav`
+  (after its effects, before its fader: listen to or `analyze` a return on its own); the report's
+  `buses[].lufs` measures the same point, and `scripts/stage-gains.py` sets `"bus:<Name>"` targets from
+  `targets.json` into `gains.json`.
 - **Delay and reverb throws:** `"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], ...]}}`
   (beat, length in beats, dB) opens the send for single words or notes; no hand-built step curves.
 - **Tuned effects follow the chords.** Give the job a `"chords": [[0, "C#m"], [80, "A"], ...]`

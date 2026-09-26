@@ -205,7 +205,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         if (e.path().extension() == ".wav") fs::remove(e.path(), ec);
     {
         const double perFile = (double)frames * 2 * 4 + 64;
-        const size_t stems = (size_t)std::count_if(job.tracks.begin(), job.tracks.end(), [](const Track &t) { return t.stem; });
+        const size_t stems = (size_t)std::count_if(job.tracks.begin(), job.tracks.end(), [](const Track &t) { return t.stem; }) +
+                             (size_t)std::count_if(job.buses.begin(), job.buses.end(), [](const Bus &b) { return b.stem; });
         const double need = perFile + (job.stemBits ? stems * (double)frames * 2 * (job.stemBits / 8) : 0);
         const auto space = fs::space(outDir, ec);
         if (!ec && (double)space.available < need * 1.05) {
@@ -563,6 +564,10 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         for (auto &w : warnings) result.warnings.push_back("bus '" + br.name + "': " + w);
         Audio *dest = &mix;
         for (size_t o = 0; o < job.buses.size(); ++o) if (job.buses[o].name == job.buses[b].output) dest = &buses[o];
+        if (job.buses[b].stem && job.stemBits) {   // after its fx, before its fader: the same signal as its lufs
+            br.file = (fs::path(outDir) / "stems" / ("bus-" + slug(br.name) + ".wav")).string();
+            if (!writeWav(br.file, buses[b], job.sampleRate, err, job.stemBits, leadFrames)) return false;
+        } else if (job.buses[b].stem) result.warnings.push_back("bus '" + br.name + "': \"stem\": true, but \"stems\" is \"none\": no stem written");
         br.levels = measure(buses[b]);   // before the fader, like a track's stem: `gain` = target - lufs
         br.lufs = integratedLufs(buses[b], job.sampleRate);
         const auto &env = job.buses[b].gainAutomation;

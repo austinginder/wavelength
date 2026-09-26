@@ -58,6 +58,7 @@ struct Bus {
     double gainDb = 0;
     nlohmann::json fx = nlohmann::json::array();
     std::string output;             // another bus to feed ("" = master)
+    bool stem = false;              // "stem": true writes the bus (after its fx, before its fader) to stems/bus-<name>.wav
     GainCurve gainAutomation;       // dB added to the bus gain over time (automation.gain + rides)
     double firstSoundBeat = 1e18;   // earliest note of a track feeding it (directly, by send or through buses)
     std::vector<std::string> warnings;   // found while parsing (late gain curves)

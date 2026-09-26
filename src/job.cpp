@@ -551,6 +551,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             bus.gainDb = b.value("gain", 0.0);
             if (b.contains("fx")) bus.fx = b["fx"];
             bus.output = b.value("output", "");
+            bus.stem = b.value("stem", false);
             if (b.contains("automation") && b["automation"].contains("gain"))
                 bus.gainAutomation = Envelope::parse(b["automation"]["gain"], out.tempo, false);
             if (b.contains("automation") && b["automation"].contains("rides")) addRides(bus.gainAutomation, b["automation"]["rides"], out.tempo);

@@ -834,7 +834,7 @@ int cmdRender(const Args &a) {
                           {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
     json buses = json::array();
     for (auto &b : r.buses)
-        buses.push_back({{"name", b.name}, {"fx", b.fx}, {"lufs", r1(b.lufs)}, {"sections", labelled(b.sectionLufs)},
+        buses.push_back({{"name", b.name}, {"fx", b.fx}, {"file", b.file}, {"lufs", r1(b.lufs)}, {"sections", labelled(b.sectionLufs)},
                          {"sectionLufs", bare(b.sectionLufs)}, {"levels", levelsJson(b.levels)}});
     json sections = json::array();
     for (size_t m = 0; m < r.sections.size(); ++m) {
@@ -879,7 +879,8 @@ int cmdRender(const Args &a) {
                     t.lufs, t.file.c_str());
         for (auto &w : t.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
     }
-    for (auto &b : r.buses) std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS\n", ("bus: " + b.name).c_str(), "", b.levels.peakDb, b.lufs);
+    for (auto &b : r.buses)
+        std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", ("bus: " + b.name).c_str(), "", b.levels.peakDb, b.lufs, b.file.c_str());
     std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  LRA %.1f LU  true peak %.1f dBTP  %s\n", "MIX", "", r.mix.peakDb, r.mixLufs,
                  r.mixLra, r.truePeakDb, r.mixFile.c_str());
     for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
