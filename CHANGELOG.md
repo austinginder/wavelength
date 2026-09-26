@@ -5,6 +5,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `delay` `"loopFx"`: an effect chain (built-in or plugin) inside the feedback loop, run on every echo:
+  barber-pole spirals with a frequency shifter, shimmer, dub echoes that darken as they repeat.
+  Endless Stair relied on MFreqShifter's own feedback for this.
 - Built-in `reverb`: `decay` is automatable, and `freeze` (automatable 0-1) holds the tail with no
   decay and the input muted, so a reverb freeze no longer needs a plugin (Echo Chamber used kHs Reverb
   at 30 s). A 30 s freeze holds within 0.1 dB.

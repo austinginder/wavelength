@@ -66,7 +66,7 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `gain` | `db` 0 *(automatable)* |
 | `eq` | `bands`: list of `{type, freq, q (0.707), gain (dB)}`, type = `highpass`, `lowpass`, `bandpass`, `peak`, `lowshelf`, `highshelf` |
 | `filter` | `mode` lowpass/highpass/bandpass, `cutoff` 1000 Hz *(automatable, exponential)*, `resonance` 0.707 *(automatable)*, `mix` 1 *(automatable)* |
-| `delay` | `time` 0.75 beats (or `ms`), `feedback` 0.35, `pingpong` true, `highpass` 250, `lowpass` 5000 (in the feedback loop), `mix` 0.25 *(automatable)* |
+| `delay` | `time` 0.75 beats (or `ms`), `feedback` 0.35, `pingpong` true, `highpass` 250, `lowpass` 5000 (in the feedback loop), `mix` 0.25 *(automatable)*, `loopFx` (an effect chain inside the feedback loop, see below) |
 | `reverb` | `decay` 2.5 s (RT60) *(automatable)*, `freeze` 0 *(automatable, 0-1)*, `size` 0.7 (0–1), `predelay` 15 ms, `damping` 0.5 (0–1), `width` 1, `highpass` 150 Hz, `mix` 0.3 *(automatable)*, an 8-line feedback delay network. `freeze` 1 holds the tail indefinitely (no decay, no damping) and mutes the input, so what rang at that moment sustains until `freeze` goes back to 0 and it decays with `decay` again (20 ms glide either way): `"automate": {"freeze": [[0, 0], [63.5, 0, "step"], [63.5, 1], [80, 1, "step"], [80, 0]]}` |
 | `compressor` | `threshold` −18 dB, `ratio` 3, `attack` 10 ms, `release` 150 ms, `knee` 6 dB, `makeup` 0 dB, `mix` 1, stereo-linked; `sidechain` (track name) detects on that track's audio instead: real kick-keyed pumping |
 | `limiter` | `ceiling` −1 dB, `release` 80 ms, `lookahead` 5 ms, `truePeak` true (4x oversampled detection, so the ceiling holds for inter-sample peaks too; the report gives the mix's `truePeakDb`) |
@@ -86,6 +86,18 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `multiband` | `crossovers` [250, 2500] Hz (1-3, rising: 2-4 bands, Linkwitz-Riley 4th order, sums back flat), `bands`: one object per band with `fx` (any effect chain: compressor, saturate, eq, plugins), `gain` dB, `solo`, `mute`; `mix` 1. A multiband compressor: `{"type": "multiband", "crossovers": [257, 2840], "bands": [{"fx": [{"type": "compressor", "threshold": -20, "ratio": 2}]}, {}, {}]}` |
 
 `mix` is a dry/wet crossfade: 0 = dry only, 1 = wet only.
+
+### Effects inside a delay's feedback loop (`loopFx`)
+
+`"loopFx": [...]` on a `delay` runs any effect chain (built-in or plugin) on every echo before it goes
+round again: a frequency shifter makes a barber-pole spiral (each repeat a step higher), a pitch shifter
+a shimmer, a band-pass or a bitcrush a dub echo that darkens or degrades as it repeats. Order per pass:
+`loopFx`, then the loop's `highpass`/`lowpass`, then `feedback`. The echoes are rendered one repeat at a
+time over the whole timeline until they fall 80 dB under the first (at most 256 repeats; a loop that
+grows 24 dB over the first echo stops with a warning), so a plugin in `loopFx` runs once per repeat:
+feedback 0.75 at 1/16 is about 30 passes. This equals a real feedback loop for linear effects (filters,
+EQ, frequency and pitch shifters); distortion shapes each echo on its own, not their sum.
+`{"type": "delay", "time": 0.25, "feedback": 0.75, "pingpong": false, "mix": 1, "loopFx": [{"plugin": "MFreqShifter", "params": {"Shift": "38 Hz", "Dry/Wet": 1}}]}`
 
 ### Level match (`"match"`, any effect)
 

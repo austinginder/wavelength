@@ -59,6 +59,43 @@
      }
     }
    ]
+  },
+  {
+   "name": "Dub",
+   "fx": [
+    {
+     "type": "delay",
+     "time": 0.75,
+     "feedback": 0.6,
+     "pingpong": true,
+     "mix": 1,
+     "loopFx": [
+      {
+       "type": "filter",
+       "mode": "bandpass",
+       "cutoff": 900,
+       "resonance": 1.2,
+       "automate": {
+        "cutoff": [
+         [
+          0,
+          500
+         ],
+         [
+          16,
+          3000
+         ]
+        ]
+       }
+      },
+      {
+       "type": "saturate",
+       "drive": 4,
+       "match": true
+      }
+     ]
+    }
+   ]
   }
  ],
  "master": {
@@ -268,7 +305,8 @@
     }
    ],
    "sends": {
-    "Hall": -10
+    "Hall": -10,
+    "Dub": -14
    },
    "fx": [
     {

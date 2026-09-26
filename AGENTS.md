@@ -198,7 +198,8 @@ in the job (details in `docs/effects.md`):
   `wavelength samples --search <text>`; check a kit's key map with `--kit <name>`.
 - **Space:** create buses with a `reverb` (and a `delay`, e.g. `"time": 0.75` beats) at
   `"mix": 1`, and send tracks to them (`"sends": {"Hall": -8}`). Shared reverb glues parts.
-  Automate the reverb's `freeze` (0/1) to hold a chord's tail under a break.
+  Automate the reverb's `freeze` (0/1) to hold a chord's tail under a break. `"loopFx"` on a
+  `delay` puts effects inside its feedback loop (frequency shifter spirals, dub filters).
 - **Clean low end:** `eq` high-pass everything that isn't bass (pads ~140 Hz, leads ~150,
   arps ~250) and low-pass the sub.
 - **Pump:** `duck` bass, pads and arps from the kick (`"trigger": "Drums", "keys": [36]`).

@@ -115,7 +115,8 @@ struct Delay : Effect {
     double timeBeats, timeMs, feedback, hp, lp;
     bool pingpong;
     Envelope mix;
-    Delay(const json &j, const Job &job) {
+    std::vector<std::unique_ptr<Effect>> loop;   // "loopFx": effects inside the feedback loop
+    Delay(const json &j, const Job &job, std::string &err) {
         label = "delay";
         timeBeats = j.value("time", 0.75);
         timeMs = j.value("ms", 0.0);
@@ -124,12 +125,25 @@ struct Delay : Effect {
         lp = j.value("lowpass", 5000.0);
         pingpong = j.value("pingpong", true);
         mix = param(j, "mix", 0.25, job.tempo);
-        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix"}, *this);
+        if (j.contains("loopFx")) {
+            if (!j["loopFx"].is_array()) { err = "delay: \"loopFx\" must be an array of effects"; return; }
+            for (size_t i = 0; i < j["loopFx"].size(); ++i) {
+                const json &e = j["loopFx"][i];
+                if (e.is_object() && e.value("bypass", false)) continue;
+                auto fx = makeEffect(e, job, "loopFx[" + std::to_string(i) + "]", err);
+                if (!fx) return;
+                for (auto &w : fx->warnings) warnings.push_back("delay loopFx: " + w);
+                fx->warnings.clear();
+                loop.push_back(std::move(fx));
+            }
+        }
+        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx"}, *this);
     }
-    bool process(Audio &a, const FxContext &c, std::string &) override {
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate;
         const double secs = timeMs > 0 ? timeMs / 1000.0 : timeBeats * 60.0 / c.job.tempo.bpmAtBeat(0);
         const double d = std::max(1.0, secs * sr);
+        if (!loop.empty()) return processLoop(a, c, d, err);
         dsp::DelayLine L, R;
         L.resize((size_t)d + 4); R.resize((size_t)d + 4);
         Biquad hpl, hpr, lpl, lpr;
@@ -144,6 +158,65 @@ struct Delay : Effect {
             const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
             a.left[i] = blend(a.left[i], tl, m);
             a.right[i] = blend(a.right[i], tr, m);
+        }
+        return true;
+    }
+    // With effects in the loop the echoes are rendered one generation at a time over the whole timeline:
+    // echo 1 = the input delayed; echo k+1 = echo k through loopFx, the loop filters and the feedback
+    // gain, delayed again (channels swapped for ping-pong). For linear effects (filters, frequency and
+    // pitch shifters, EQ) this is exactly a feedback loop; distortion in the loop shapes each echo on its own.
+    bool processLoop(Audio &a, const FxContext &c, double d, std::string &err) {
+        const double sr = c.job.sampleRate;
+        const size_t n = a.frames();
+        auto delayed = [&](Audio &x) {
+            for (auto *ch : {&x.left, &x.right}) {
+                dsp::DelayLine line;
+                line.resize((size_t)d + 4);
+                for (size_t i = 0; i < n; ++i) { const double t = line.tap(d); line.push((*ch)[i]); (*ch)[i] = (float)t; }
+            }
+        };
+        auto peak = [&](const Audio &x) {
+            float p = 0;
+            for (size_t i = 0; i < n; ++i) p = std::max({p, std::fabs(x.left[i]), std::fabs(x.right[i])});
+            return (double)p;
+        };
+        Audio gen = a, wet;
+        if (pingpong)
+            for (size_t i = 0; i < n; ++i) { gen.left[i] = (a.left[i] + a.right[i]) * 0.5f; gen.right[i] = 0; }
+        delayed(gen);
+        wet = gen;
+        const double inPeak = std::max(peak(gen), 1e-9);
+        const int maxGen = 256;
+        int g = 1;
+        for (; g < maxGen; ++g) {
+            for (auto &fx : loop) {
+                if (!fx->process(gen, c, err)) { err = "delay loopFx " + fx->label + ": " + err; return false; }
+                for (auto &w : fx->warnings)
+                    if (std::find(warnings.begin(), warnings.end(), "delay loopFx: " + w) == warnings.end()) warnings.push_back("delay loopFx: " + w);
+                fx->warnings.clear();
+            }
+            for (auto *ch : {&gen.left, &gen.right}) {
+                Biquad h, l;
+                h.set(Biquad::HighPass, hp, 0.7071, 0, sr);
+                l.set(Biquad::LowPass, lp, 0.7071, 0, sr);
+                for (auto &v : *ch) v = (float)(l.process(h.process(v)) * feedback);
+            }
+            if (pingpong) std::swap(gen.left, gen.right);
+            delayed(gen);
+            const double p = peak(gen);
+            if (!std::isfinite(p) || p > inPeak * 16) {
+                warnings.push_back("delay: the loopFx feedback runs away (echo " + std::to_string(g + 1) +
+                                   " is 24 dB over the first); stopped there. Lower \"feedback\" or the gain in loopFx");
+                break;
+            }
+            if (p < inPeak * 1e-4) break;   // 80 dB down: inaudible
+            for (size_t i = 0; i < n; ++i) { wet.left[i] += gen.left[i]; wet.right[i] += gen.right[i]; }
+        }
+        if (g == maxGen) warnings.push_back("delay: loopFx echoes still sounding after 256 repeats were cut off");
+        for (size_t i = 0; i < n; ++i) {
+            const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+            a.left[i] = blend(a.left[i], wet.left[i], m);
+            a.right[i] = blend(a.right[i], wet.right[i], m);
         }
         return true;
     }
@@ -1100,7 +1173,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             if (t == "gain") fx = std::make_unique<Gain>(j, job);
             else if (t == "eq") fx = std::make_unique<Eq>(j, job, err);
             else if (t == "filter") fx = std::make_unique<Filter>(j, job, err);
-            else if (t == "delay") fx = std::make_unique<Delay>(j, job);
+            else if (t == "delay") fx = std::make_unique<Delay>(j, job, err);
             else if (t == "reverb") fx = std::make_unique<Reverb>(j, job);
             else if (t == "compressor") fx = std::make_unique<Compressor>(j, job);
             else if (t == "limiter") fx = std::make_unique<Limiter>(j, job);
