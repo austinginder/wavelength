@@ -932,11 +932,11 @@ int cmdRender(const Args &a) {
                           {"renderSeconds", std::round(t.seconds * 100) / 100},
                           {"latencyCompensatedMs", std::round(t.latencySamples * 1000.0 / r.sampleRate * 100) / 100},
                           {"sections", labelled(t.sectionLufs)}, {"sectionLufs", bare(t.sectionLufs)},
-                          {"levels", levelsJson(t.levels)}, {"warnings", t.warnings}});
+                          {"levels", levelsJson(t.levels)}, {"automation", t.automation}, {"warnings", t.warnings}});
     json buses = json::array();
     for (auto &b : r.buses)
         buses.push_back({{"name", b.name}, {"fx", b.fx}, {"file", b.file}, {"lufs", r1(b.lufs)}, {"sections", labelled(b.sectionLufs)},
-                         {"sectionLufs", bare(b.sectionLufs)}, {"levels", levelsJson(b.levels)}});
+                         {"sectionLufs", bare(b.sectionLufs)}, {"levels", levelsJson(b.levels)}, {"automation", b.automation}});
     json sections = json::array();
     for (size_t m = 0; m < r.sections.size(); ++m) {
         const auto &sec = r.sections[m];
@@ -968,7 +968,7 @@ int cmdRender(const Args &a) {
                    {"duration", std::round((r.seconds + r.leadIn) * 100) / 100},   // the written file, lead-in included
                    {"renderSeconds", std::round(r.renderSeconds * 100) / 100}, {"leadIn", r.leadIn}, {"defaultsApplied", job.appliedDefaults},
                    {"mix", {{"file", r.mixFile}, {"lufs", r1(r.mixLufs)}, {"lra", r1(r.mixLra)}, {"truePeakDb", r1(r.truePeakDb)}, {"levels", levelsJson(r.mix)},
-                            {"masterFx", r.masterFx}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
+                            {"masterFx", r.masterFx}, {"masterAutomation", r.masterAutomation}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"dropouts", dropouts}, {"failedTracks", r.failedTracks}};
     if (!only.empty()) report["onlyTracks"] = only;

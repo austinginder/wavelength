@@ -38,6 +38,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- The report lists every moving automation curve on effects and instrument parameters
+  (`tracks[].automation`, `buses[].automation`, `mix.masterAutomation`): where it sits, its range, its
+  resting value and the beats where it leaves it. Curves nobody hears warn: every point outside the
+  parameter's range (it holds still), or movement only where nothing sounds through the effect.
 - `width` warns when narrowing removes 3 dB or more of what comes in for a second or longer (more side
   than mid energy: a wide or anti-phase reverb vanishing toward mono), with the bars and file times; a
   collapse that runs into the end of the song is left alone.

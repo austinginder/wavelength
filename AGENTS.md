@@ -419,6 +419,12 @@ job.json` lines the sections up and keeps the lead-in.
 - `tracks[].levels.peakDb`, stems are unclipped float; peaks above 0 only matter in the mix.
 - `tracks[].levels.silent: true` with notes present means the sound didn't play: wrong
   plugin (effect instead of instrument), a state that mutes it, or notes out of range.
+- `tracks[].automation`, `buses[].automation` and `mix.masterAutomation`: every automated effect
+  setting and instrument parameter that moves, with `where` (`"fx[2] MComb"`, `"instrument Vital"`),
+  its `min`/`max`, `rest` (the value it holds longest) and `activeBeats` (where it leaves that value):
+  confirms a curve reached the effect when and where you meant. A curve whose points all lie outside
+  the parameter's range, or that only leaves its resting value where nothing sounds through the effect
+  (in or out, so a wet tail counts), gets a warning: that automation is never heard.
 - `warnings` lists everything: the mix's own warnings and every track's (prefixed `track 'Name':`).
   Read it after every render. `mix.levels`: prefer a master `limiter` over `"normalize"`.
 

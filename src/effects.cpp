@@ -11,6 +11,7 @@
 #include <deque>
 #include <filesystem>
 #include <map>
+#include <set>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -666,6 +667,7 @@ struct Duck : Effect {
 struct PluginFx : Effect {
     PluginSetup setup;
     Envelope mix;
+    bool mixAutomated = false;
     std::string key;   // "sidechain": a track's audio into the plugin's sidechain input
     bool hostMixAutomated = false;
     PluginFx(const json &j, const Job &job, std::string &err) {
@@ -687,6 +689,7 @@ struct PluginFx : Effect {
         setup.warmup = j.value("warmup", -1.0);
         setup.preset = j.value("preset", "");
         mix = param(j, "mix", 1, job.tempo);
+        mixAutomated = (j.contains("automate") && j["automate"].contains("mix")) || (j.contains("lfo") && j["lfo"].contains("mix"));
         key = j.value("sidechain", "");
         (void)err;
     }
@@ -707,6 +710,13 @@ struct PluginFx : Effect {
                 warnings.push_back(p.name + ": automate \"mix\" (lowercase) moves the host dry/wet, not the plugin's own '" + pi.name +
                                    "' parameter; write \"" + (pi.name == "mix" ? "#" + std::to_string(pi.id) : pi.name) + "\" to automate that one");
         }
+        for (const auto &au : p.autos) {   // the curves as the plugin reads them (text resolved), with the parameter's range
+            ParamInfo pi;
+            Curve cv{au.name, au.env};
+            if (p.plugin->findParam("#" + std::to_string(au.id), pi)) { cv.lo = std::min(pi.min, pi.max); cv.hi = std::max(pi.min, pi.max); }
+            curves.push_back(cv);
+        }
+        if (mixAutomated) curves.push_back({"mix", mix, 0, 1});
         Audio wet;
         wet.resize(a.frames());
         if (!key.empty()) {
@@ -1199,6 +1209,8 @@ struct Matched : Effect {
         lateCurves = std::move(inner->lateCurves);
         inner->warnings.clear();
         inner->lateCurves.clear();
+        automated = inner->automated;
+        curves = inner->curves;
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         const size_t n = a.frames();
@@ -1206,6 +1218,7 @@ struct Matched : Effect {
         if (!inner->process(a, c, err)) return false;                     // moves energy up where ears weigh it more
         label = inner->label;
         latencySamples = inner->latencySamples;
+        curves = inner->curves;   // a plugin adds its curves while it runs
         for (auto &w : inner->warnings) warnings.push_back(w);
         inner->warnings.clear();
         if (!n) return true;
@@ -1315,6 +1328,16 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
     if (j.contains("intended")) {
         if (j["intended"].is_boolean()) fx->intended = j["intended"].get<bool>();
         else fx->warnings.push_back(fx->label + ": \"intended\" must be true or false; ignored");
+    }
+    fx->automated = (j.contains("automate") && j["automate"].is_object() && !j["automate"].empty()) ||
+                    (j.contains("lfo") && j["lfo"].is_object() && !j["lfo"].empty());
+    if (fx->automated && !j.contains("plugin")) {   // built-in settings: the same curves the effect runs (plugin effects add theirs in process)
+        std::set<std::string> keys;
+        for (const char *k : {"automate", "lfo"})
+            if (j.contains(k) && j[k].is_object()) for (auto &[name, _] : j[k].items()) keys.insert(name);
+        for (const auto &k : keys) {
+            try { fx->curves.push_back({k, param(j, k.c_str(), 0.0, job.tempo)}); } catch (const std::exception &) {}
+        }
     }
     if (j.contains("automate") && j["automate"].is_object())
         for (auto &[k, v] : j["automate"].items()) {

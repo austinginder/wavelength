@@ -2,6 +2,8 @@
 #include "job.hpp"
 #include "wav.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <string>
 #include <vector>
 
@@ -17,6 +19,7 @@ struct TrackResult {
     std::vector<double> sectionLufs;  // post-fader loudness in each marker section
     uint32_t latencySamples = 0;      // plugin processing delay removed from this track (instrument + effects)
     std::vector<std::string> warnings;
+    nlohmann::json automation = nlohmann::json::array();   // per automated setting: where it moves (activeBeats), its range
 };
 
 struct BusResult {
@@ -25,6 +28,7 @@ struct BusResult {
     Levels levels{};                  // after its fx, before its fader (like a track's stem)
     double lufs = -120;
     std::vector<double> sectionLufs;  // per marker section, after its fader and rides
+    nlohmann::json automation = nlohmann::json::array();
 };
 
 struct SectionResult {
@@ -45,6 +49,7 @@ struct RenderResult {
     std::vector<TrackResult> tracks;
     std::vector<BusResult> buses;
     std::vector<std::string> masterFx;
+    nlohmann::json masterAutomation = nlohmann::json::array();
     std::string mixFile;
     Levels mix{};
     double mixLufs = -120, normalizeGainDb = 0, truePeakDb = -120, mixLra = 0;

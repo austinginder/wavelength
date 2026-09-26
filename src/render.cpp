@@ -35,6 +35,80 @@ std::string slug(const std::string &s) {
 
 using Chain = std::vector<std::unique_ptr<Effect>>;
 
+// Mean square per 50 ms of a stereo signal: where something sounds.
+std::vector<float> levelTimeline(const Audio &a, int sampleRate) {
+    const size_t hop = std::max<size_t>(1, (size_t)(0.05 * sampleRate));
+    std::vector<float> out((a.frames() + hop - 1) / hop, 0.f);
+    for (size_t i = 0; i < a.frames(); ++i) out[i / hop] += a.left[i] * a.left[i] + a.right[i] * a.right[i];
+    for (auto &v : out) v /= (float)(2 * hop);
+    return out;
+}
+
+// What each automated setting did: the beats where it leaves its resting value (the value it holds longest),
+// its range, and warnings for curves nobody hears: every point outside the parameter's range, or values that
+// differ from the resting one only where nothing sounds through the effect (in or out: a wet tail counts).
+void reportCurves(const Job &job, const std::string &where, const std::vector<Effect::Curve> &curves, const std::vector<float> &in,
+                  const std::vector<float> &outLv, size_t frames, nlohmann::json &into, std::vector<std::string> &warnings) {
+    const double sr = job.sampleRate, seconds = (double)frames / sr, step = 0.01;
+    const double audible = 1e-7;   // -70 dBFS
+    auto sounds = [&](double t) {
+        const size_t k = (size_t)(t / 0.05);
+        return (k < in.size() && in[k] > audible) || (k < outLv.size() && outLv[k] > audible);
+    };
+    auto fmt = [](double v) { char b[32]; std::snprintf(b, sizeof b, "%.4g", v); return std::string(b); };
+    for (const auto &c : curves) {
+        const bool clamps = c.lo > -1e299;
+        auto val = [&](double t) { const double v = c.env.at(t); return clamps ? std::clamp(v, c.lo, c.hi) : v; };
+        if (clamps) {   // written values that differ but all clamp to one value: the curve holds still
+            std::set<double> written, held;
+            for (auto &[t, v] : c.env.corners()) { written.insert(v); held.insert(std::clamp(v, c.lo, c.hi)); }
+            if (written.size() > 1 && held.size() == 1)
+                warnings.push_back(where + ": every point of the '" + c.param + "' curve lies outside its range [" + fmt(c.lo) + " .. " + fmt(c.hi) +
+                                   "], so it holds at " + fmt(*held.begin()) + " (use the plugin's own values, display text, or \"scale\": \"normalized\")");
+        }
+        std::vector<double> v;
+        for (double t = 0; t < seconds; t += step) v.push_back(val(t));
+        if (v.empty()) continue;
+        const auto [mn, mx] = std::minmax_element(v.begin(), v.end());
+        const double lo = *mn, hi = *mx, eps = std::max(1e-9, 1e-4 * (hi - lo));
+        if (hi - lo <= 1e-9 * std::max(1.0, std::fabs(hi))) continue;   // a steady value: nothing to report
+        std::map<long long, std::pair<size_t, double>> held;   // the value held longest (quantized to eps): count, a value
+        for (double x : v) { auto &h = held[std::llround(x / eps)]; if (!h.first++) h.second = x; }
+        double rest = v.front();
+        size_t best = 0;
+        for (auto &[k, h] : held) if (h.first > best) { best = h.first; rest = h.second; }
+        nlohmann::json ranges = nlohmann::json::array();
+        double a0 = -1, a1 = -1;
+        bool heard = false;
+        size_t count = 0;
+        auto close = [&] {
+            if (a0 < 0) return;
+            ++count;
+            if (ranges.size() < 24) ranges.push_back({std::round(job.tempo.secToBeat(a0) * 100) / 100, std::round(job.tempo.secToBeat(a1) * 100) / 100});
+            a0 = -1;
+        };
+        const double beat = 60.0 / job.tempo.bpmAtBeat(0);
+        for (size_t i = 0; i < v.size(); ++i) {
+            const double t = i * step;
+            if (std::fabs(v[i] - rest) <= eps * 1.5) continue;
+            if (sounds(t)) heard = true;
+            if (a0 >= 0 && t - a1 > beat) close();   // gaps under a beat merge
+            if (a0 < 0) a0 = t;
+            a1 = t + step;
+        }
+        close();
+        nlohmann::json e = {{"where", where}, {"param", c.param}, {"min", std::stod(fmt(lo))}, {"max", std::stod(fmt(hi))}, {"rest", std::stod(fmt(rest))},
+                            {"activeBeats", ranges}};
+        if (count > ranges.size()) e["moreRanges"] = count - ranges.size();
+        if (!heard && count) {
+            e["heard"] = false;
+            warnings.push_back(where + ": the '" + c.param + "' curve leaves its resting value (" + fmt(rest) + ") only where nothing sounds through it"
+                               " (from beat " + ranges[0][0].dump() + "): that automation is never heard");
+        }
+        into.push_back(e);
+    }
+}
+
 // `firstSoundBeat`: when the chain's input first sounds (a track's first note); a curve that starts later
 // but only after that sound holds an inaudible value, so its late-start warning is dropped
 bool buildChain(const nlohmann::json &list, const Job &job, const std::string &context, Chain &chain, std::string &err,
@@ -43,6 +117,7 @@ bool buildChain(const nlohmann::json &list, const Job &job, const std::string &c
         if (list[i].is_object() && list[i].value("bypass", false)) continue;
         auto fx = makeEffect(list[i], job, context + " fx[" + std::to_string(i) + "]", err);
         if (!fx) return false;
+        fx->index = (int)i;
         for (auto &[beat, w] : fx->lateCurves) if (beat > firstSoundBeat + 1e-6) fx->warnings.push_back(w);
         fx->lateCurves.clear();
         chain.push_back(std::move(fx));
@@ -51,12 +126,17 @@ bool buildChain(const nlohmann::json &list, const Job &job, const std::string &c
 }
 
 bool runChain(Chain &chain, Audio &a, const FxContext &ctx, std::vector<std::string> &labels, std::vector<std::string> &warnings,
-              const std::string &context, std::string &err) {
+              const std::string &context, std::string &err, nlohmann::json *automation = nullptr) {
     for (auto &fx : chain) {
+        std::vector<float> in;
+        if (fx->automated && automation) in = levelTimeline(a, ctx.job.sampleRate);
         if (!fx->process(a, ctx, err)) { err = context + ": " + err; return false; }
         muteGarbage(a, ctx.job.sampleRate, context + " " + fx->label, warnings);
         labels.push_back(fx->label);
         for (auto &w : fx->warnings) warnings.push_back(w);
+        if (fx->automated && automation)
+            reportCurves(ctx.job, "fx[" + std::to_string(fx->index) + "] " + fx->label, fx->curves, in, levelTimeline(a, ctx.job.sampleRate), a.frames(),
+                         *automation, warnings);
     }
     return true;
 }
@@ -96,6 +176,16 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     if (!runPlugin(job, p, events, nullptr, audio, err)) { err = track.name + ": " + err; return false; }
     tr.latencySamples += p.plugin->latencySamples;
     for (auto &w : p.warnings) tr.warnings.push_back(w);
+    if (!p.autos.empty()) {   // instrument parameter curves: heard where the instrument sounds
+        std::vector<Effect::Curve> curves;
+        for (const auto &au : p.autos) {
+            ParamInfo pi;
+            Effect::Curve cv{au.name, au.env};
+            if (p.plugin->findParam("#" + std::to_string(au.id), pi)) { cv.lo = std::min(pi.min, pi.max); cv.hi = std::max(pi.min, pi.max); }
+            curves.push_back(cv);
+        }
+        reportCurves(job, "instrument " + p.name, curves, {}, levelTimeline(audio, job.sampleRate), audio.frames(), tr.automation, tr.warnings);
+    }
     return true;
 }
 
@@ -105,7 +195,7 @@ bool renderTrackAudio(const Job &job, size_t i, Chain &chain, const FxContext &c
                       std::string &err, const std::map<size_t, Audio> *rendered = nullptr) {
     const Track &track = job.tracks[i];
     if (!renderInstrument(job, track, audio, tr, verbose, err, rendered)) return false;
-    if (!runChain(chain, audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err)) return false;
+    if (!runChain(chain, audio, ctx, tr.fx, tr.warnings, "track '" + track.name + "'", err, &tr.automation)) return false;
     for (auto &fx : chain) tr.latencySamples += fx->latencySamples;
     return true;
 }
@@ -113,7 +203,7 @@ bool renderTrackAudio(const Job &job, size_t i, Chain &chain, const FxContext &c
 nlohmann::json trackToJson(const TrackResult &t) {
     return {{"ok", true}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"stateFormat", t.stateFormat}, {"preset", t.preset},
             {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automated", t.automated}, {"fx", t.fx},
-            {"warnings", t.warnings}, {"latencySamples", t.latencySamples}};
+            {"warnings", t.warnings}, {"latencySamples", t.latencySamples}, {"automation", t.automation}};
 }
 
 void trackFromJson(const nlohmann::json &j, TrackResult &t) {
@@ -121,6 +211,7 @@ void trackFromJson(const nlohmann::json &j, TrackResult &t) {
     t.preset = j.value("preset", ""); t.notes = j.value("notes", (size_t)0); t.paramsApplied = j.value("paramsApplied", (size_t)0);
     t.automated = j.value("automated", (size_t)0); t.fx = j.value("fx", std::vector<std::string>());
     t.warnings = j.value("warnings", std::vector<std::string>()); t.latencySamples = j.value("latencySamples", 0u);
+    t.automation = j.value("automation", nlohmann::json::array());
 }
 
 } // namespace
@@ -560,7 +651,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         BusResult &br = busResults[b];
         br.name = job.buses[b].name;
         std::vector<std::string> warnings;
-        if (!runChain(busChains[b], buses[b], ctx, br.fx, warnings, "bus '" + br.name + "'", err)) return false;
+        if (!runChain(busChains[b], buses[b], ctx, br.fx, warnings, "bus '" + br.name + "'", err, &br.automation)) return false;
         for (auto &w : warnings) result.warnings.push_back("bus '" + br.name + "': " + w);
         Audio *dest = &mix;
         for (size_t o = 0; o < job.buses.size(); ++o) if (job.buses[o].name == job.buses[b].output) dest = &buses[o];
@@ -602,7 +693,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     }
     if (!job.hasMasterLoudness) {
         std::vector<std::string> warnings;
-        if (!runChain(masterChain, mix, ctx, result.masterFx, warnings, "master", err)) return false;
+        if (!runChain(masterChain, mix, ctx, result.masterFx, warnings, "master", err, &result.masterAutomation)) return false;
         for (auto &w : warnings) result.warnings.push_back("master: " + w);
     } else {
         // a loudness target: find the gain that lands the output on it. The gain goes in front of the
@@ -620,10 +711,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         const nlohmann::json head(job.masterFx.begin(), job.masterFx.begin() + (long)split),
                              tail(job.masterFx.begin() + (long)split, job.masterFx.end());
         std::vector<std::string> headLabels, headWarnings;
+        nlohmann::json headAutomation = nlohmann::json::array(), automation;
         {
             Chain headChain;
             if (!buildChain(head, job, "master", headChain, err)) return false;
-            if (!runChain(headChain, mix, ctx, headLabels, headWarnings, "master", err)) return false;
+            if (!runChain(headChain, mix, ctx, headLabels, headWarnings, "master", err, &headAutomation)) return false;
         }
         const Audio pre = mix;
         double gainDb = 0, reached = -120;
@@ -635,8 +727,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             mix = pre;
             const float g = (float)dsp::dbToLin(gainDb);
             for (size_t f = 0; f < frames; ++f) { mix.left[f] *= g; mix.right[f] *= g; }
-            labels = headLabels; warnings = headWarnings;
-            if (!runChain(chain, mix, ctx, labels, warnings, "master", err)) return false;
+            labels = headLabels; warnings = headWarnings; automation = headAutomation;
+            for (auto &fx : chain) fx->index += (int)split;   // positions in the whole master list
+            if (!runChain(chain, mix, ctx, labels, warnings, "master", err, &automation)) return false;
             reached = integratedLufs(mix, job.sampleRate);
             if (job.levelFixed) break;
             const double miss = job.masterLoudness - reached;
@@ -644,6 +737,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             gainDb = std::clamp(gainDb + miss, -40.0, 30.0);
         }
         result.masterFx = labels;
+        result.masterAutomation = automation;
         for (auto &w : warnings) result.warnings.push_back("master: " + w);
         result.loudnessGainDb = gainDb;
         if (!job.levelFixed && std::fabs(job.masterLoudness - reached) >= 0.3) {

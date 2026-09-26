@@ -31,6 +31,12 @@ public:
     // curves that start late, as (beat of the first point, warning): kept only when the track sounds before
     // that beat (buildChain decides; a curve on a track that is silent until then holds nothing audible)
     std::vector<std::pair<double, std::string>> lateCurves;
+    // automated settings (after process() for plugin effects, whose curves the plugin reads), for the report's
+    // per-effect activity and the dead-curve checks; lo/hi: the parameter's range when it has one
+    struct Curve { std::string param; Envelope env; double lo = -1e300, hi = 1e300; };
+    std::vector<Curve> curves;
+    bool automated = false;   // has "automate" or "lfo": the chain measures its input for those checks
+    int index = -1;           // position in the job's fx list
 };
 
 // Builds one effect from its JSON description. `context` prefixes error messages.
