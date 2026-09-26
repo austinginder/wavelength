@@ -43,6 +43,13 @@ def automation_tour(d):
         bad.append(f"no bus stem for Echo: {echo.get('file')!r}")
     if echo.get("lufs", -120) < -70:
         bad.append(f"Echo bus silent ({echo.get('lufs')} LUFS): the throws did not open the send")
+    drone = {a["param"]: a for t in d["tracks"] if t["name"] == "Drone" for a in t.get("automation", [])}
+    cut = drone.get("cutoff", {})
+    if round(cut.get("min", 0), 1) != 130.8 or round(cut.get("max", 0), 1) != 220.0:   # C3 .. A3: the chord roots in octave 3
+        bad.append(f"follow curve range {cut.get('min')}..{cut.get('max')}, expected 130.8..220 Hz")
+    act = drone.get("mix", {}).get("activeBeats", [])
+    if len(act) != 1 or abs(act[0][0] - 16) > 0.05 or abs(act[0][1] - 24) > 0.05:
+        bad.append(f"switch curve active {act}, expected beats 16-24")
     return bad
 
 
