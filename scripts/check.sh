@@ -64,4 +64,16 @@ sys.exit(0 if ok else 1)'; then
 else
   echo "ok   window render: clips-tour bars 3-4"
 fi
+# serve: the web UI answers, carries its token, refuses changes without it
+mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
+"./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
+spid=$!
+sleep 1
+if curl -s http://127.0.0.1:7499/ | grep -q 'wavelength-token' && curl -s http://127.0.0.1:7499/api/songs | grep -q '"demo"' &&
+   [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' 'http://127.0.0.1:7499/api/review?song=demo')" = "403" ]; then
+  echo "ok   serve: UI, song list, token check"
+else
+  echo "FAIL serve"; fail=1
+fi
+kill $spid 2>/dev/null
 exit $fail

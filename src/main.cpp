@@ -9,10 +9,12 @@
 //   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength lint <job.json> --harmony [--key K] [--ignore "A,B"] [--chords] [--max-bars N] [--json]
+//   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
 //   wavelength version
 #include "analyze.hpp"
 #include "clips.hpp"
 #include "harmony.hpp"
+#include "serve.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
 #include "instance.hpp"
@@ -147,6 +149,12 @@ Usage:
       detected), a chord chart with --chords, one- or two-bar chords outside the key that go
       straight back (heard as a key change), clashes (a minor 2nd/9th held a beat, one note outside
       the key) and in-key rubs grouped per pair of tracks.
+  wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
+      A local web UI for reviewing songs (a folder of song folders, default the current one): the
+      arrangement with its chords and harmony problems, loudness, stems, and quick previews: any
+      bars, any tracks, rendered through the song's sends, buses and master in seconds. Comments
+      pinned to bars, tracks and notes go to each song's review.json for the agent. Read-only on
+      the music; plugins only run in render child processes. --open opens the browser.
   wavelength version
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
@@ -167,7 +175,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1425,6 +1433,7 @@ int run(int argc, char **argv) {
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},
             {"export", {"--out", "--json"}},
+            {"serve", {"--port", "--host", "--open", "--ui"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
             {"timeline", {"--every", "--json"}},
             {"version", {"--json"}}};
@@ -1452,6 +1461,16 @@ int run(int argc, char **argv) {
         if (cmd == "master") return cmdMaster(a);
         if (cmd == "state") return cmdState(a);
         if (cmd == "lint") return cmdLint(a);
+        if (cmd == "serve") {
+            ServeOptions o;
+            if (a.positional.size() > 1) o.root = a.positional[1];
+            if (a.has("--port")) o.port = std::atoi(a.get("--port").c_str());
+            if (a.has("--host")) o.host = a.get("--host");
+            if (a.has("--ui")) o.uiDir = a.get("--ui");
+            o.open = a.has("--open");
+            if (o.port <= 0 || o.port > 65535) return fail(a, "--port must be 1-65535");
+            return serve(o);
+        }
         if (cmd == "timeline") return cmdTimeline(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {

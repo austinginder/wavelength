@@ -44,6 +44,12 @@ FetchContent_Declare(zstd
   URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   SOURCE_SUBDIR build/cmake)
+# cpp-httplib (MIT, header-only): the local web UI of `wavelength serve`
+FetchContent_Declare(httplib
+  GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+  GIT_TAG v0.58.0
+  GIT_SHALLOW TRUE
+  SOURCE_SUBDIR wavelength-no-build)
 # Signalsmith Stretch + Linear (MIT, header-only): pitch-preserving time stretch for audio clips
 FetchContent_Declare(signalsmith_stretch
   GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
@@ -54,7 +60,7 @@ FetchContent_Declare(signalsmith_linear
   GIT_TAG 0.3.1
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR wavelength-no-build)
-FetchContent_MakeAvailable(clap json vst3sdk zstd signalsmith_stretch signalsmith_linear)
+FetchContent_MakeAvailable(clap json vst3sdk zstd signalsmith_stretch signalsmith_linear httplib)
 # zlib (zlib licence): from the system on macOS and Linux, built here where there is none (Windows)
 find_package(ZLIB)
 if(NOT ZLIB_FOUND)
@@ -134,6 +140,8 @@ add_executable(wavelength
   src/clap_plugin.cpp
   src/job.cpp
   src/harmony.cpp
+  src/serve.cpp
+  ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
   src/render.cpp
   src/state_file.cpp
   src/vst3_plugin.cpp
@@ -148,7 +156,13 @@ add_executable(wavelength
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
 target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB libzstd_static)
-target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include
+# the web UI of `wavelength serve`, built into the binary (serve --ui DIR uses a folder instead)
+file(GLOB_RECURSE WAVELENGTH_UI_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ui/*)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
+  COMMAND ${CMAKE_COMMAND} -DUI_DIR=${CMAKE_CURRENT_SOURCE_DIR}/ui -DOUT=${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-ui.cmake
+  DEPENDS ${WAVELENGTH_UI_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-ui.cmake
+  COMMENT "Embedding the web UI")
+target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include ${httplib_SOURCE_DIR}
                            ${signalsmith_linear_SOURCE_DIR}/include)
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -160,6 +174,7 @@ elseif(WIN32)
   # UTF-8 as the process code page (file names), and a self-contained .exe
   target_sources(wavelength PRIVATE src/wavelength.rc)
   target_link_options(wavelength PRIVATE -static)
+  target_link_libraries(wavelength PRIVATE ws2_32 crypt32)   # sockets for `wavelength serve`
   target_compile_definitions(wavelength PRIVATE UNICODE _UNICODE)
 elseif(UNIX)
   # runs on any distribution with glibc as new as the build machine's, without a matching libstdc++

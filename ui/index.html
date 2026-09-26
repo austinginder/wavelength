@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--wavelength-->
+<title>Wavelength</title>
+<link rel="stylesheet" href="ui/editor.css">
+<style>
+:root {
+	--bg: #f4f3ef; --panel: #ffffff; --panel-2: #f8f7f4; --line: #e3e0d8; --text: #1d1c1a; --muted: #6f6b63;
+	--accent: #e0457b; --accent-2: #2f9bd6; --ok: #2e9e6a; --warn: #c98a12; --grid: rgba(0,0,0,.06); --lane: rgba(0,0,0,.025);
+	--section: rgba(224,69,123,.07); --play: #e0457b;
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--bg: #0e0d12; --panel: #16151c; --panel-2: #1c1b24; --line: #2a2833; --text: #ecebf2; --muted: #8d8a9b;
+		--accent: #ff5c93; --accent-2: #4fc3f7; --ok: #4cd190; --warn: #f0b64a; --grid: rgba(255,255,255,.05); --lane: rgba(255,255,255,.02);
+		--section: rgba(255,92,147,.07); --play: #ff5c93;
+	}
+}
+:root[data-theme="dark"] {
+	--bg: #0e0d12; --panel: #16151c; --panel-2: #1c1b24; --line: #2a2833; --text: #ecebf2; --muted: #8d8a9b;
+	--accent: #ff5c93; --accent-2: #4fc3f7; --ok: #4cd190; --warn: #f0b64a; --grid: rgba(255,255,255,.05); --lane: rgba(255,255,255,.02);
+	--section: rgba(255,92,147,.07); --play: #ff5c93;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; }
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+button { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 230px minmax(0, 1fr) 380px; min-height: 100vh; }
+aside.songs { border-right: 1px solid var(--line); padding: 16px 10px; position: sticky; top: 0; height: 100vh; overflow: auto; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .02em; padding: 0 8px 14px; }
+.brand svg { color: var(--accent); }
+.conn { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.conn.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.song { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+.song:hover { background: var(--panel-2); }
+.song.sel { background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.song .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.song .t { color: var(--muted); font-size: 12px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: transparent; }
+.dot.live { background: var(--accent); animation: pulse 1.4s infinite; }
+.dot.done { background: var(--ok); opacity: .7; }
+@keyframes pulse { 50% { opacity: .3; } }
+.follow { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; padding: 12px 8px 0; }
+main { padding: 20px 22px 40px; min-width: 0; }
+.head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { margin: 0; font-size: 26px; letter-spacing: -.01em; }
+.status { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.status.rendering { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.status.writing { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 40%, transparent); }
+.status.done { color: var(--ok); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 16px; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.chip b { display: block; font-size: 16px; font-weight: 600; }
+.chip span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+.card h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+.card h2 .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.transport { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.play { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; cursor: pointer; display: grid; place-items: center; }
+.play:disabled { opacity: .35; cursor: default; }
+select { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; max-width: 260px; }
+.solo { font-size: 12px; color: var(--accent); }
+.tl-wrap { position: relative; }
+canvas#tl { display: block; width: 100%; cursor: crosshair; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.bars { padding: 10px 14px 14px; }
+.bar { display: grid; grid-template-columns: 110px 1fr 54px; gap: 8px; align-items: center; font-size: 12px; padding: 2px 0; }
+.bar .l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar .track, .bar .fill { display: block; }
+.bar .track { height: 10px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 3px; }
+.bar .v { text-align: right; color: var(--muted); }
+.side { border-left: 1px solid var(--line); display: flex; flex-direction: column; height: 100vh; position: sticky; top: 0; }
+.side h2 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 14px 14px 10px; display: flex; }
+.side h2 .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.feed { flex: 1; overflow: auto; padding: 0 14px 10px; min-height: 0; }
+.it { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.it .k { font-size: 11px; color: var(--muted); display: flex; gap: 6px; }
+.it .k .tool { color: var(--accent-2); font-weight: 600; }
+.it pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font: 11.5px/1.4 "IBM Plex Mono", monospace; color: var(--muted); max-height: 90px; overflow: hidden; }
+.it.text p { margin: 3px 0 0; white-space: pre-wrap; }
+.files { height: 30vh; overflow: auto; border-top: 1px solid var(--line); padding: 0 14px 10px; font: 12px/1.6 "IBM Plex Mono", monospace; }
+.fe { display: flex; gap: 8px; white-space: nowrap; }
+.fe .p { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.fe .a { color: var(--ok); } .fe .c { color: var(--accent-2); } .fe .x { color: var(--accent); }
+.fe .w { color: var(--muted); }
+.empty { color: var(--muted); padding: 14px; font-size: 13px; }
+.docs pre { margin: 0; padding: 14px; white-space: pre-wrap; font: 12.5px/1.5 "IBM Plex Mono", monospace; max-height: 360px; overflow: auto; }
+.warns { padding: 8px 14px; font-size: 12px; color: var(--warn); border-top: 1px solid var(--line); }
+@media (max-width: 1200px) { .app { grid-template-columns: 200px minmax(0, 1fr); } .side { grid-column: 1 / -1; height: auto; position: static; border-left: 0; border-top: 1px solid var(--line); } .feed { max-height: 60vh; } }
+@media (max-width: 760px) { .app { grid-template-columns: 1fr; } aside.songs { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; } main { padding: 16px; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="app">
+	<aside class="songs">
+		<div class="brand">
+			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M2 12h2l2-6 3 12 3-9 2 6 2-3h6"/></svg>
+			Wavelength <span class="conn" id="conn" title="event stream"></span>
+		</div>
+		<div id="songs"></div>
+		<label class="follow"><input type="checkbox" id="follow" checked> Follow the newest song</label>
+	</aside>
+
+	<main>
+		<div class="head"><h1 id="title">...</h1><span class="status" id="status"></span></div>
+		<div class="chips" id="chips"></div>
+
+		<section class="card">
+			<h2>Arrangement <button class="ed-open" id="ed-openbtn" title="Open the arrangement editor (E)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"/></svg>Open editor <span class="badge" id="ed-badge" hidden></span></button><span class="r mono" id="tlinfo"></span></h2>
+			<div class="transport">
+				<button class="play" id="play" disabled aria-label="Play"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" id="playicon"><path d="M6 4l14 8-14 8z"/></svg></button>
+				<span class="mono" id="time">0:00 / 0:00</span>
+				<select id="audiosel"></select>
+				<span class="solo" id="solo"></span>
+			</div>
+			<div class="tl-wrap"><canvas id="tl"></canvas></div>
+			<div class="warns" id="warns" hidden></div>
+		</section>
+
+		<div class="grid2">
+			<section class="card"><h2>Sections <span class="r">integrated LUFS</span></h2><div class="bars" id="sections"></div></section>
+			<section class="card"><h2>Tracks <span class="r">stem LUFS</span></h2><div class="bars" id="tracks"></div></section>
+		</div>
+
+		<section class="card docs" id="docs" hidden></section>
+	</main>
+
+	<aside class="side">
+		<h2>Agent <span class="r mono" id="agentinfo"></span></h2>
+		<div class="feed" id="feed"><div class="empty">Looking for a Claude session working in this folder...</div></div>
+		<h2>Files</h2>
+		<div class="files" id="files"></div>
+	</aside>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const state = { slug: null, song: null, songs: [], files: {}, fileLog: [], soloIdx: -1, flash: {}, src: null };
+const audio = new Audio();
+audio.preload = 'metadata';
+
+function ago(ts) {
+	const s = Math.max(0, Date.now() / 1000 - ts);
+	if (s < 60) return Math.round(s) + 's';
+	if (s < 3600) return Math.round(s / 60) + 'm';
+	if (s < 86400) return Math.round(s / 3600) + 'h';
+	return Math.round(s / 86400) + 'd';
+}
+const fmtTime = t => !isFinite(t) ? '0:00' : Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b > 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
+// Audio goes through the songs/ symlink so Caddy serves it (native ranges, no PHP thread held).
+const fileUrl = p => ['songs', state.slug, ...p.split('/')].map(encodeURIComponent).join('/');
+
+/* ---------- tempo map: beats -> seconds ---------- */
+function tempoFn(tempo) {
+	const pts = Array.isArray(tempo) ? tempo.map(p => ({ beat: +p.beat || 0, bpm: +p.bpm || 120, ramp: !!p.ramp })).sort((a, b) => a.beat - b.beat) : [{ beat: 0, bpm: +tempo || 120 }];
+	if (pts[0].beat > 0) pts.unshift({ beat: 0, bpm: pts[0].bpm });
+	// seconds elapsed at each point, and the segment rule for integrating past it
+	const segSec = (a, b, from, to) => {
+		if (!b || !b.ramp) return (to - from) * 60 / a.bpm;
+		const k = (b.bpm - a.bpm) / (b.beat - a.beat), bpmAt = x => a.bpm + k * (x - a.beat);
+		return Math.abs(k) < 1e-9 ? (to - from) * 60 / a.bpm : 60 / k * Math.log(bpmAt(to) / bpmAt(from));
+	};
+	const at = [0];
+	for (let i = 1; i < pts.length; i++) at[i] = at[i - 1] + segSec(pts[i - 1], pts[i], pts[i - 1].beat, pts[i].beat);
+	return beat => {
+		let i = 0;
+		while (i + 1 < pts.length && pts[i + 1].beat <= beat) i++;
+		const next = pts[i + 1];
+		if (next && next.ramp) return at[i] + segSec(pts[i], next, pts[i].beat, beat);
+		return at[i] + (beat - pts[i].beat) * 60 / pts[i].bpm;
+	};
+}
+
+/* ---------- data ---------- */
+async function loadSongs() {
+	const r = await fetch('api/songs').then(r => r.json());
+	setSongs(r.songs);
+}
+function setSongs(list) {
+	state.songs = list;
+	if ($('#follow').checked && list[0] && list[0].slug !== state.slug && Date.now() / 1000 - list[0].mtime < 600) selectSong(list[0].slug);
+	if (!state.slug && list[0]) selectSong(list[0].slug);
+	renderSongList();
+}
+function renderSongList() {
+	$('#songs').innerHTML = state.songs.map(s => {
+		const live = Date.now() / 1000 - s.mtime < 120;
+		return `<button class="song ${s.slug === state.slug ? 'sel' : ''}" data-slug="${esc(s.slug)}">
+			<span class="dot ${live ? 'live' : s.mp3 ? 'done' : ''}"></span><span class="n">${esc(s.slug)}</span><span class="t">${ago(s.mtime)}</span></button>`;
+	}).join('');
+}
+$('#songs').addEventListener('click', e => {
+	const b = e.target.closest('.song');
+	if (!b) return;
+	$('#follow').checked = b.dataset.slug === state.songs[0]?.slug;
+	selectSong(b.dataset.slug);
+});
+
+function selectSong(slug) {
+	if (slug === state.slug) return;
+	state.slug = slug; state.song = null; state.fileLog = []; state.soloIdx = -1; state.soloKind = null; state.pending = null; state.preview = null; state.src = null; state.srcWindow = null; state.srcStart = 0; state.srcLead = null; state.flash = {};
+	window.WLEditor?.reset();
+	audio.pause(); audio.removeAttribute('src');
+	history.replaceState(null, '', '?song=' + encodeURIComponent(slug));
+	$('#feed').innerHTML = '<div class="empty">Looking for a Claude session working in this folder...</div>';
+	renderSongList();
+	loadSong(); loadAgent(); connect();
+}
+
+async function loadSong() {
+	const slug = state.slug;
+	const d = await fetch('api/song?song=' + encodeURIComponent(slug)).then(r => r.json());
+	if (slug !== state.slug) return;
+	state.song = d; state.files = d.files || {};
+	if (!state.fileLog.length) {
+		state.fileLog = Object.entries(state.files).sort((a, b) => a[1][1] - b[1][1]).slice(-40)
+			.map(([p, f]) => ({ type: 'seen', path: p, size: f[0], at: f[1] * 1000 }));
+		renderFiles();
+	}
+	prepareTimeline(); renderAll(); setAudioChoices();
+	window.WLEditor?.refresh();
+}
+
+let agentTimer = 0;
+async function loadAgent() {
+	const slug = state.slug;
+	const d = await fetch('api/agent?song=' + encodeURIComponent(slug)).then(r => r.json());
+	if (slug !== state.slug) return;
+	const feed = $('#feed');
+	const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+	$('#agentinfo').textContent = d.session ? d.session.slice(0, 8) + ' · ' + ago(d.mtime) + ' ago' : '';
+	if (!d.items.length) { feed.innerHTML = '<div class="empty">No Claude session is working in this folder right now.</div>'; return; }
+	feed.innerHTML = d.items.map(i => {
+		const when = i.at ? new Date(i.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+		if (i.kind === 'text') return `<div class="it text"><div class="k">${when}</div><p>${esc(i.text)}</p></div>`;
+		return `<div class="it"><div class="k"><span class="tool">${esc(i.tool)}</span> ${when}</div><div>${esc(i.text)}</div>${i.code && i.code !== i.text ? `<pre>${esc(i.code)}</pre>` : ''}</div>`;
+	}).join('');
+	if (atBottom) feed.scrollTop = feed.scrollHeight;
+}
+
+/* ---------- live stream ---------- */
+let es = null, songTimer = 0;
+function connect() {
+	if (es) es.close();
+	es = new EventSource('api/events?song=' + encodeURIComponent(state.slug));
+	es.onopen = () => $('#conn').classList.add('on');
+	es.onerror = () => $('#conn').classList.remove('on');
+	es.addEventListener('songs', e => setSongs(JSON.parse(e.data)));
+	es.addEventListener('agent', () => { clearTimeout(agentTimer); agentTimer = setTimeout(loadAgent, 400); });
+	es.addEventListener('files', e => {
+		const changes = JSON.parse(e.data);
+		let reload = false;
+		for (const c of changes) {
+			if (c.type === 'removed') delete state.files[c.path];
+			else state.files[c.path] = [c.size, Date.now() / 1000];
+			const last = state.fileLog[state.fileLog.length - 1];
+			if (last && last.path === c.path && c.type === 'changed' && last.type !== 'seen') { last.size = c.size; last.at = Date.now(); last.n = (last.n || 1) + 1; }
+			else state.fileLog.push({ ...c, at: Date.now() });
+			if (/(^|\/)(job|report)\.json$|\.(mp3|md)$|\.json$/.test(c.path) && !/stems\/|solo\/|preview\//.test(c.path)) reload = true;
+			const m = c.path.match(/stems\/(\d+)-/);
+			if (m) state.flash[+m[1] - 1] = Date.now();
+		}
+		state.fileLog = state.fileLog.slice(-300);
+		renderFiles(); renderStatus();
+		if (reload) { clearTimeout(songTimer); songTimer = setTimeout(loadSong, 700); }
+	});
+}
+
+function renderFiles() {
+	const el = $('#files');
+	const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+	el.innerHTML = state.fileLog.map(f => {
+		const cls = { added: 'a', changed: 'c', removed: 'x', seen: 'w' }[f.type];
+		const sym = { added: '+', changed: '~', removed: '-', seen: '·' }[f.type];
+		return `<div class="fe"><span class="${cls}">${sym}</span><span class="p" title="${esc(f.path)}">${esc(f.path)}${f.n > 1 ? ' ×' + f.n : ''}</span><span class="w">${f.size != null ? fmtSize(f.size) : ''}</span></div>`;
+	}).join('') || '<div class="empty">Empty folder.</div>';
+	if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+/* ---------- status, chips, bars ---------- */
+function renderStatus() {
+	const d = state.song, st = $('#status');
+	if (!d) return;
+	const now = Date.now() / 1000, rep = d.reportPath && state.files[d.reportPath];
+	const outDir = d.reportPath ? d.reportPath.replace(/report\.json$/, '') : 'out/';
+	const stems = Object.entries(state.files).filter(([p]) => p.startsWith(outDir + 'stems/') && p.endsWith('.wav'));
+	const fresh = stems.filter(([, f]) => !rep || f[1] > rep[1]);
+	const busy = Object.values(state.files).some(f => now - f[1] < 6);
+	const nTracks = d.job?.tracks.length || 0;
+	if (fresh.length && now - Math.max(...fresh.map(([, f]) => f[1])) < 30) {
+		st.className = 'status rendering'; st.textContent = `Rendering · ${fresh.length}/${nTracks} stems`;
+	} else if (busy) {
+		st.className = 'status writing'; st.textContent = 'Working';
+	} else if (rep) {
+		st.className = 'status done'; st.textContent = 'Rendered ' + ago(rep[1]) + ' ago';
+	} else {
+		st.className = 'status'; st.textContent = d.job ? 'Not rendered yet' : 'Planning';
+	}
+}
+
+function renderAll() {
+	const d = state.song, job = d.job, rep = d.report;
+	$('#title').textContent = d.slug;
+	renderStatus();
+	const tempo = job ? (Array.isArray(job.tempo) ? job.tempo.map(p => p.bpm).join('→') : job.tempo) : null;
+	const chip = (v, l) => v == null || v === '' ? '' : `<div class="chip"><b class="mono">${esc(v)}</b><span>${l}</span></div>`;
+	$('#chips').innerHTML = [
+		chip(tempo, 'BPM'), chip(job?.tracks.length, 'tracks'),
+		chip(job?.tracks.reduce((n, t) => n + t.notes.length, 0).toLocaleString(), 'notes'),
+		chip(rep ? fmtTime(rep.seconds) : null, 'length'),
+		chip(rep?.mix ? rep.mix.lufs.toFixed(1) : null, 'LUFS'),
+		chip(rep?.mix?.truePeakDb != null ? rep.mix.truePeakDb.toFixed(1) : null, 'true peak'),
+		chip(rep ? Math.round(rep.renderSeconds) + 's' : null, 'render'),
+	].join('');
+	$('#tlinfo').textContent = [d.jobPath, d.reportPath].filter(Boolean).join('  ·  ');
+
+	const lufsBars = (rows, lo = -40, hi = -6) => rows.map(r => {
+		const pct = Math.max(0, Math.min(1, (r.v - lo) / (hi - lo))) * 100;
+		return `<div class="bar"><span class="l" title="${esc(r.l)}">${esc(r.l)}</span><span class="track"><span class="fill" style="width:${pct}%;background:${r.c}"></span></span><span class="v mono">${r.v <= -100 ? 'silent' : r.v.toFixed(1)}</span></div>`;
+	}).join('');
+	$('#sections').innerHTML = rep?.sections?.length ? lufsBars(rep.sections.map(s => ({ l: s.name, v: s.lufs, c: 'var(--accent)' })))
+		: '<div class="empty">No report yet.</div>';
+	$('#tracks').innerHTML = rep?.tracks?.length ? lufsBars(rep.tracks.map((t, i) => ({ l: t.name, v: t.lufs, c: hue(i) })))
+		: '<div class="empty">No report yet.</div>';
+	const warns = [...(rep?.warnings || []), ...(rep?.tracks || []).flatMap(t => (t.warnings || []).map(w => t.name + ': ' + w))];
+	$('#warns').hidden = !warns.length;
+	$('#warns').innerHTML = warns.slice(0, 12).map(w => '⚠ ' + esc(w)).join('<br>');
+
+	const docs = Object.entries(d.docs || {});
+	$('#docs').hidden = !docs.length;
+	$('#docs').innerHTML = docs.map(([p, t]) => `<h2>${esc(p)}</h2><pre>${esc(t)}</pre>`).join('');
+	drawTimeline();
+}
+
+/* ---------- audio ---------- */
+// ---- what plays ----
+// Every source knows where it sits in the song: `lead` seconds of silence at the start of the file
+// (the mix's lead-in), then song time from `start`. A bar preview starts mid-song with no lead-in and
+// loops. The playhead, seeking and the editor all work in song seconds.
+const TOKEN = document.querySelector('meta[name="wavelength-token"]')?.content || '';
+function postHeaders() { return { 'Content-Type': 'application/json', 'X-Wavelength-Token': TOKEN }; }
+const songLead = () => state.song?.report?.leadIn ?? state.song?.job?.leadIn ?? 0;
+function songSecNow() { return audio.currentTime - (state.srcLead ?? songLead()) + (state.srcStart || 0); }
+function seekSongSec(s, play) {
+	if (state.srcWindow && (s < state.srcWindow[0] - 1e-3 || s >= state.srcWindow[1])) {   // outside the preview: back to the mix there
+		backToMix(s, play ?? !audio.paused); return;
+	}
+	audio.currentTime = Math.max(0, Math.min(s - (state.srcStart || 0) + (state.srcLead ?? songLead()), (audio.duration || 1e9) - 0.01));
+	if (play && audio.paused) audio.play();
+}
+function setAudioChoices() {
+	const d = state.song, sel = $('#audiosel');
+	const list = d.audio || [];
+	const cur = state.src && state.soloIdx < 0 && !state.srcWindow ? state.src : null;
+	sel.innerHTML = list.map(p => `<option value="${esc(p)}">${esc(p)} · ${ago(state.files[p]?.[1] || 0)} ago</option>`).join('') || '<option>no audio yet</option>';
+	$('#play').disabled = !list.length;
+	if (!list.length) return;
+	if (cur && list.includes(cur)) {
+		sel.value = cur;
+		// the file under the playhead was re-rendered: reload it in place
+		const m = state.files[cur]?.[1];
+		if (m && state.srcMtime && m !== state.srcMtime && !audio.paused) setSrc(cur, songSecNow(), true);
+	} else if (state.soloIdx < 0 && !state.srcWindow) setSrc(list[0], 0, false);
+}
+// opts: { lead: seconds of lead-in in the file (default the song's), start: song seconds at the end of
+// the lead-in, loop, window: [song start, song end] of a preview, label }
+function setSrc(path, songSec, play, opts = {}) {
+	state.src = path; state.srcMtime = state.files[path]?.[1] || opts.mtime || Date.now();
+	state.srcLead = opts.lead ?? songLead(); state.srcStart = opts.start || 0; state.srcWindow = opts.window || null;
+	audio.loop = !!opts.loop;
+	audio.src = fileUrl(path) + '?v=' + state.srcMtime;
+	audio.addEventListener('loadedmetadata', () => {
+		const t = songSec - state.srcStart + state.srcLead;
+		audio.currentTime = Math.max(0, Math.min(t, (audio.duration || t) - 0.01));
+		if (play) audio.play();
+	}, { once: true });
+	window.WLEditor?.redraw?.();
+}
+function backToMix(songSec, play) {
+	state.soloIdx = -1; state.soloKind = null; state.pending = null; state.preview = null; $('#solo').textContent = '';
+	setSrc($('#audiosel').value, songSec, play);
+	drawTimeline();
+}
+$('#audiosel').addEventListener('change', e => { const t = songSecNow(), p = !audio.paused; state.soloIdx = -1; state.soloKind = null; state.pending = null; state.preview = null; $('#solo').textContent = ''; setSrc(e.target.value, t, p); });
+$('#play').addEventListener('click', () => audio.paused ? audio.play() : audio.pause());
+audio.addEventListener('play', () => $('#playicon').innerHTML = '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>');
+audio.addEventListener('pause', () => $('#playicon').innerHTML = '<path d="M6 4l14 8-14 8z"/>');
+document.addEventListener('keydown', e => { if (e.code === 'Space' && e.target === document.body && !document.querySelector('dialog[open]')) { e.preventDefault(); $('#play').click(); } });
+
+function stemFor(i) {
+	const d = state.song, outDir = d.reportPath ? d.reportPath.replace(/report\.json$/, '') : 'out/';
+	const prefix = outDir + 'stems/' + String(i + 1).padStart(2, '0') + '-';
+	return Object.keys(state.files).find(p => p.startsWith(prefix) && p.endsWith('.wav'));
+}
+
+// ---- previews: the server renders bars and tracks through the mix (render --from/--to --tracks) ----
+// spec: { tracks: [names] (empty = all), from, to (bars, to exclusive; none = the whole song), label, i (solo track) }
+function requestPreview(spec) {
+	const slug = state.slug, pending = { ...spec, since: Date.now() };
+	state.pending = pending;
+	const show = r => { $('#solo').textContent = r; $('#solo').title = 'A preview plays only its bars and loops; click the timeline outside them (or pick the mix) to go back'; window.WLEditor?.redraw?.(); };
+	const done = r => {
+		if (state.pending !== pending || state.slug !== slug) return;
+		state.pending = null;
+		const w = r.window, playing = !audio.paused;
+		state.files[r.path] = [0, Date.now() / 1000];
+		if (w) {   // bars: loop them, starting where the playhead is if it is inside
+			const a = w.songStart, b = w.songStart + w.seconds, now = songSecNow();
+			state.preview = { ...spec, window: [a, b] };
+			state.soloIdx = spec.i ?? -1; state.soloKind = spec.i != null ? 'mix' : null;
+			setSrc(r.path, now >= a && now < b ? now : a, true, { lead: 0, start: a, loop: true, window: [a, b] });
+			show(`Preview: ${spec.label} · ${r.seconds != null ? r.seconds + ' s' : 'cached'} · loops`);
+		} else {
+			state.preview = null; state.soloIdx = spec.i ?? -1; state.soloKind = 'mix';
+			setSrc(r.path, songSecNow(), playing || true);
+			show(`Solo in the mix: ${spec.label} (click again to unsolo)`);
+		}
+		drawTimeline();
+	};
+	const poll = async id => {
+		if (state.pending !== pending || state.slug !== slug) return;
+		const r = await fetch('api/preview?id=' + encodeURIComponent(id)).then(r => r.json()).catch(() => ({ status: 'failed', error: 'the server did not answer' }));
+		if (state.pending !== pending) return;
+		if (r.status === 'ready') return done(r);
+		if (r.status === 'queued' || r.status === 'rendering') {
+			show(`${r.status === 'queued' ? 'Waiting to render' : 'Rendering'} ${spec.label}… ${Math.round((Date.now() - pending.since) / 1000)}s`);
+			return setTimeout(() => poll(id), 700);
+		}
+		state.pending = null; show(`Could not render ${spec.label}: ${r.error || r.status}`);
+	};
+	show(`Rendering ${spec.label}…`);
+	fetch('api/preview', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: slug, tracks: spec.tracks || [], from: spec.from || 0, to: spec.to || 0 }) })
+		.then(r => r.json()).then(r => r.error ? (state.pending = null, show(`Could not render ${spec.label}: ${r.error}`)) : r.status === 'ready' ? done(r) : poll(r.id))
+		.catch(() => { state.pending = null; show('The server did not answer'); });
+	drawTimeline();
+}
+
+// Solo a track. "mix" (default): the track through its sends, buses and master at its level in the full
+// mix (a server preview of the whole song, cached until the song changes). "dry": the stem file, the
+// track right after its own effects.
+function toggleSolo(i, kind = 'mix') {
+	const t = songSecNow(), playing = !audio.paused, name = state.song.job.tracks[i].name;
+	if ((state.soloIdx === i && state.soloKind === kind && !state.preview) || (state.pending?.i === i && kind === 'mix')) return backToMix(t, playing);
+	if (kind === 'dry') {
+		if (!stemFor(i)) return;
+		state.pending = null; state.preview = null; state.soloIdx = i; state.soloKind = 'dry';
+		$('#solo').textContent = 'Dry stem: ' + name + ' (before its fader, sends and the master)';
+		setSrc(stemFor(i), t, playing); drawTimeline(); return;
+	}
+	requestPreview({ tracks: [name], label: name, i });
+}
+
+/* ---------- timeline ---------- */
+const LABEL = 170, ROW = 30, TOP = 26;
+const hue = i => `hsl(${(i * 137.5 + 330) % 360} 70% 60%)`;
+let tl = null;
+function prepareTimeline() {
+	const job = state.song.job;
+	if (!job) { tl = null; return; }
+	const toSec = tempoFn(job.tempo);
+	const tracks = job.tracks.map(t => {
+		const notes = t.notes.map(n => {
+			const s = n[4] ? n[0] : toSec(n[0]);
+			const e = n[4] ? n[0] + n[1] : toSec(n[0] + n[1]);
+			return [s, e, n[2], n[3]];
+		});
+		const keys = notes.map(n => n[2]);
+		return { ...t, secs: notes, lo: Math.min(...keys, 127), hi: Math.max(...keys, 0) };
+	});
+	const end = Math.max(1, ...tracks.flatMap(t => t.secs.map(n => n[1])), state.song.report ? state.song.report.seconds - (state.song.report.leadIn || 0) : 0);
+	const markers = (job.markers || []).map(m => ({ name: m.name, t: toSec(+m.beat || 0) }));
+	tl = { tracks, end, markers, leadIn: state.song.report?.leadIn ?? job.leadIn ?? 0 };
+}
+
+function drawTimeline() {
+	if (!state.song) return;
+	const c = $('#tl'), css = getComputedStyle(document.documentElement);
+	const v = n => css.getPropertyValue(n).trim();
+	const w = c.parentElement.clientWidth, n = tl ? tl.tracks.length : 0;
+	const h = tl ? TOP + n * ROW + 8 : 120, dpr = devicePixelRatio || 1;
+	if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; c.style.height = h + 'px'; }
+	const g = c.getContext('2d');
+	g.setTransform(dpr, 0, 0, dpr, 0, 0);
+	g.clearRect(0, 0, w, h);
+	g.font = '12px Inter, sans-serif';
+	if (!tl) { g.fillStyle = v('--muted'); g.fillText('No job.json yet. The agent is still planning.', 14, 60); return; }
+	const label = w < 600 ? 100 : LABEL, span = w - label - 10, X = t => label + (t / tl.end) * span;
+	const rep = state.song.report;
+
+	// sections
+	tl.markers.forEach((m, i) => {
+		const x0 = X(m.t), x1 = X(tl.markers[i + 1]?.t ?? tl.end);
+		if (i % 2 === 0) { g.fillStyle = v('--section'); g.fillRect(x0, 0, x1 - x0, h); }
+		g.fillStyle = v('--grid'); g.fillRect(x0, 0, 1, h);
+		g.fillStyle = v('--muted'); g.save(); g.beginPath(); g.rect(x0, 0, x1 - x0, TOP); g.clip();
+		if (g.measureText(m.name || '').width < x1 - x0 - 8) g.fillText(m.name || '', x0 + 5, 17);
+		g.restore();
+	});
+
+	const now = Date.now();
+	tl.tracks.forEach((t, i) => {
+		const y = TOP + i * ROW;
+		if (i % 2) { g.fillStyle = v('--lane'); g.fillRect(0, y, w, ROW); }
+		const flashing = now - (state.flash[i] || 0) < 1500;
+		const col = hue(i);
+		g.fillStyle = state.soloIdx === i ? v('--accent') : flashing ? col : v('--text');
+		g.font = (state.soloIdx === i ? '600 ' : '') + '12px Inter, sans-serif';
+		g.save(); g.beginPath(); g.rect(0, y, label - 8, ROW); g.clip();
+		g.fillText((t.mute ? '(m) ' : '') + t.name, 12, y + 13);
+		g.fillStyle = v('--muted'); g.font = '10.5px Inter, sans-serif';
+		g.fillText(t.preset ? String(t.preset).split('/').pop().replace(/\.(vstpreset|clap-preset|state|fxb|fxp|vital|json)$/i, '').replace(/--.*$/, '') : t.plugin, 12, y + 25);
+		g.restore();
+		if (stemFor(i)) { g.fillStyle = flashing ? v('--accent') : v('--ok'); g.beginPath(); g.arc(5, y + ROW / 2, 2.5, 0, 7); g.fill(); }
+		// notes, scaled to this track's key range
+		const range = Math.max(12, t.hi - t.lo), pad = 4, ih = ROW - pad * 2;
+		g.globalAlpha = t.mute ? .35 : 1;
+		for (const [s, e, key, vel] of t.secs) {
+			const x = X(s), nw = Math.max(1.5, X(e) - x - .5);
+			const ny = y + pad + ih - ((key - t.lo + (range - (t.hi - t.lo)) / 2) / range) * (ih - 3) - 3;
+			g.fillStyle = col; g.globalAlpha = (t.mute ? .35 : 1) * (.35 + .65 * Math.min(1, vel));
+			g.fillRect(x, ny, nw, 3);
+		}
+		g.globalAlpha = 1;
+		g.fillStyle = v('--grid'); g.fillRect(label, y + ROW - 1, span, 1);
+	});
+
+	// playhead
+	if (audio.src && audio.duration) {
+		const x = X(songSecNow());
+		g.fillStyle = v('--play'); g.fillRect(x - .5, 0, 2, h);
+	}
+	$('#time').textContent = fmtTime(Math.max(0, songSecNow())) + ' / ' + fmtTime(tl.end) + (state.srcWindow ? ' · preview' : '');
+}
+
+$('#tl').addEventListener('click', e => {
+	if (!tl) return;
+	const r = e.target.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+	const label = r.width < 600 ? 100 : LABEL;
+	if (x < label) {
+		const i = Math.floor((y - TOP) / ROW);
+		if (i >= 0 && i < tl.tracks.length) toggleSolo(i);
+		return;
+	}
+	if (!audio.src) return;
+	const t = (x - label) / (r.width - label - 10) * tl.end;
+	seekSongSec(Math.max(0, t));
+	if (audio.paused) audio.play();
+});
+
+// the arrangement editor: button, E key, or double-click the timeline to open it at that spot
+$('#ed-openbtn').addEventListener('click', () => WLEditor.open());
+$('#tl').addEventListener('dblclick', e => {
+	if (!tl) return;
+	const r = e.target.getBoundingClientRect(), x = e.clientX - r.left, label = r.width < 600 ? 100 : LABEL;
+	const sec = Math.max(0, (x - label) / (r.width - label - 10) * tl.end);
+	const job = state.song.job, toSec = tempoFn(job.tempo);
+	let lo = 0, hi = 1; while (toSec(hi) < sec) hi *= 2; for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; toSec(m) < sec ? lo = m : hi = m; }
+	WLEditor.open(lo);
+});
+document.addEventListener('keydown', e => { if ((e.key === 'e' || e.key === 'E') && e.target === document.body && !document.querySelector('dialog[open]')) WLEditor.open(); });
+
+(function frame() {
+	if (!audio.paused || Object.values(state.flash).some(t => Date.now() - t < 1600)) drawTimeline();
+	requestAnimationFrame(frame);
+})();
+addEventListener('resize', () => tl && drawTimeline());
+setInterval(() => { renderSongList(); renderStatus(); }, 5000);
+
+const initial = new URLSearchParams(location.search).get('song');
+if (initial) { $('#follow').checked = false; selectSong(initial); }
+loadSongs();
+</script>
+<script src="ui/editor.js"></script>
+</body>
+</html>

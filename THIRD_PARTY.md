@@ -12,6 +12,7 @@ the Windows build compiles it in.
 | [zstd](https://github.com/facebook/zstd) | 1.5.7 | BSD-3-Clause (dual BSD/GPLv2; used under BSD) | Serum 2 presets |
 | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | 57b93f4 | MIT | time stretch for audio clips |
 | [Signalsmith Linear](https://github.com/Signalsmith-Audio/linear) | 0.3.1 | MIT | FFT/STFT for Signalsmith Stretch |
+| [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.58.0 | MIT | the local web UI of `wavelength serve` |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
 Linux builds link libstdc++ and libgcc statically (GCC Runtime Library Exception: no notice
@@ -166,6 +167,32 @@ SOFTWARE.
 MIT License
 
 Copyright (c) 2025 Signalsmith Audio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## cpp-httplib
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2017 yhirose
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

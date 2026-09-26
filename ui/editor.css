@@ -1,0 +1,59 @@
+/* Arrangement editor: a large dialog over the live viewer. Read-only on the music; comments pinned to
+   bars, tracks and notes go to the song's review.json for the agent. */
+.ed-open { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0;
+	background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; color: var(--text); }
+.ed-open:hover { border-color: var(--accent); color: var(--accent); }
+.ed-open .badge { background: var(--accent); color: #fff; border-radius: 99px; font-size: 10.5px; padding: 0 6px; line-height: 16px; }
+.card h2 .ed-open + .r { margin-left: 10px; }
+
+dialog.ed { width: min(1720px, 97vw); height: 94vh; max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 14px;
+	background: var(--panel); color: var(--text); box-shadow: 0 30px 80px rgba(0,0,0,.35); overflow: hidden; }
+dialog.ed::backdrop { background: rgba(10, 9, 14, .55); backdrop-filter: blur(2px); }
+.ed-grid { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) 340px; height: 100%; }
+.ed-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ed-bar h3 { margin: 0 8px 0 0; font-size: 16px; }
+.ed-bar .sp { flex: 1; }
+.ed-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; height: 32px; padding: 0 10px; border-radius: 8px;
+	border: 1px solid var(--line); background: var(--panel-2); cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--text); }
+.ed-btn:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.ed-btn.on { background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); border-color: var(--accent); color: var(--accent); }
+.ed-btn.play { background: var(--accent); border-color: var(--accent); color: #fff; width: 36px; height: 36px; border-radius: 50%; padding: 0; }
+.ed-btn:disabled { opacity: .4; cursor: default; }
+.ed-group { display: inline-flex; gap: 4px; }
+.ed-clock { font: 500 13px/1 "IBM Plex Mono", monospace; min-width: 150px; }
+.ed-clock small { color: var(--muted); display: block; font-size: 11px; margin-top: 3px; }
+.ed-main { position: relative; min-width: 0; min-height: 0; }
+.ed-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; }
+.ed-scroll canvas { position: sticky; top: 0; left: 0; display: block; }
+.ed-space { position: absolute; top: 0; left: 0; pointer-events: none; }
+.ed-tip { position: absolute; pointer-events: none; background: var(--text); color: var(--panel); font: 11.5px/1.35 "IBM Plex Mono", monospace; padding: 5px 7px;
+	border-radius: 6px; white-space: nowrap; z-index: 3; opacity: .95; }
+.ed-side { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel-2); }
+.ed-side section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.ed-side h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.ed-side h4 .r { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.ed-ref { font: 12px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; word-break: break-word; min-height: 18px; }
+.ed-ref.none { color: var(--muted); font-family: Inter, system-ui, sans-serif; }
+.ed-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ed-side textarea { width: 100%; min-height: 84px; resize: vertical; font: 13px/1.45 Inter, system-ui, sans-serif; color: var(--text); background: var(--panel);
+	border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; }
+.ed-side textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); border-color: var(--accent); }
+.ed-hint { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+.ed-list { flex: 1; overflow: auto; padding: 4px 14px 14px; min-height: 0; }
+.ed-c { border: 1px solid var(--line); background: var(--panel); border-radius: 9px; padding: 8px 10px; margin-top: 8px; cursor: pointer; }
+.ed-c:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ed-c.done { opacity: .55; }
+.ed-c .ref { font: 11.5px/1.4 "IBM Plex Mono", monospace; color: var(--accent); }
+.ed-c.done .ref { color: var(--muted); }
+.ed-c p { margin: 4px 0 6px; white-space: pre-wrap; font-size: 13px; }
+.ed-c .meta { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 11.5px; }
+.ed-c .meta button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 11.5px; }
+.ed-c .meta button:hover { color: var(--accent); }
+.ed-c .meta .sp { flex: 1; }
+.ed-empty { color: var(--muted); font-size: 12.5px; padding: 10px 0; }
+.ed-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+.ed-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+@media (max-width: 1000px) { .ed-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) 40%; } .ed-side { border-left: 0; border-top: 1px solid var(--line); } }
+.ed-status { font-size: 12px; color: var(--accent); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-status.busy { color: var(--warn); }
+.ed-status.busy::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-right: 6px; animation: pulse 1.2s infinite; }

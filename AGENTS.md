@@ -342,6 +342,28 @@ drum hit under 0.4 s: a snare roll played up keys 60-67 is a riser, not a Cdim c
 `--to` and `--section` limit the report, `--max-bars 3` widens what counts as a short excursion,
 `--json` gives `keys`, `problems`, `rubs`, `info` (and `bars` with `--chords`).
 
+## Reviewing with a human: `wavelength serve`
+
+`wavelength serve ~/songs --open` (a folder of song folders) starts a local web UI on
+http://127.0.0.1:7400: each song's arrangement with its sections, a chord lane from the harmony
+check, loudness per section and track, the stems, and quick previews. The human selects bars,
+tracks or notes and hears them rendered through the song's sends, buses and master in seconds
+(`render --from --to --tracks --level-from`, run by the server in child processes and cached
+under `out/preview/`). They leave comments pinned to what they selected; those go to the song's
+`review.json`:
+
+```json
+{"comments": [{"id": "c260925...", "status": "open", "text": "the lead is too busy here",
+  "ref": "bars 41-44 · 1:08-1:15 · Power-up · Lead", "bars": [41, 44], "beats": [160, 176],
+  "time": [68.57, 75.43], "tracks": ["Lead"],
+  "notes": [{"track": "Lead", "key": "E5", "midi": 76, "bar": "42.3", "beat": 166, "dur": 0.5, "vel": 0.8}]}]}
+```
+
+**Before working on a song, read its open comments.** Change the song where it is made (your
+script or job), render, then answer each comment in `review.json`: set `"status": "done"` and add a
+`"reply"` saying what you changed; the UI shows it under the comment. The UI is read-only on the
+music: it never edits the job.
+
 ## Mastering
 
 The last stage, like a DAW's master channel. Put a chain on `master.fx` (an `eq`, a `multiband`

@@ -5,6 +5,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `wavelength serve [SONGS_DIR]`: a local web UI for reviewing songs with a human, built into the
+  binary (localhost only, a per-launch token on changes). The arrangement with sections, a chord lane
+  and harmony problems from the harmony check, lanes that open into piano rolls, loudness, stems,
+  and quick previews: select bars and tracks and hear them through the song's sends, buses and
+  master in seconds (rendered in child processes, cached per job version). Comments pinned to bars,
+  tracks and notes go to each song's `review.json` for the agent, which answers there. Live updates
+  as the agent writes and renders. `--ui DIR` serves the UI from a folder while working on it.
 - `render --from 41 --to 45`: renders only those bars, with `--preroll` bars (default 2) rendered first
   and cut, so a section of a song takes seconds. Beats stay song beats (plugins see the song's
   position and tempo); notes already sounding start at the window, clips that began earlier play
