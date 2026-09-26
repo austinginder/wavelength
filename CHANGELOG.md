@@ -5,6 +5,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Track `"harmony": false` leaves unpitched material out of `wavelength lint` (harmony and voice
+  leading). Lint also skips, on its own, `builtin:sampler` tracks playing one sample with no pitch
+  (noise, or a drum hit under 0.4 s), and lists every skipped track with the reason: a pitched snare
+  roll no longer reads as a Cdim key excursion and a looped noise sweep as a C4 clashing with the pad.
+- `analyze` reports `spectrum.tonality`, the share of the energy in spectral peaks (tones and chords
+  high, noise low).
 - `render --level-from out/report.json`: the master keeps that render's loudness-target and normalize
   gains instead of targeting again, so `render --tracks "Lead"` plays and measures a part at the
   level it has in the full mix (before, a loudness target pushed a lone track up to the target).

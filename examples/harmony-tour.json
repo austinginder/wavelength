@@ -1252,6 +1252,240 @@
      "vel": 0.65
     }
    ]
+  },
+  {
+   "name": "Snare Roll",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "sample": "Bitwig/Classic Drum Machines/Legend 909/Snare Legend 909 01 accent.wav",
+    "root": 60,
+    "oneShot": true
+   },
+   "gain": -26,
+   "notes": [
+    {
+     "beat": 24.0,
+     "dur": 0.2,
+     "key": 60,
+     "vel": 0.3
+    },
+    {
+     "beat": 24.25,
+     "dur": 0.2,
+     "key": 60,
+     "vel": 0.32
+    },
+    {
+     "beat": 24.5,
+     "dur": 0.2,
+     "key": 60,
+     "vel": 0.34
+    },
+    {
+     "beat": 24.75,
+     "dur": 0.2,
+     "key": 61,
+     "vel": 0.36
+    },
+    {
+     "beat": 25.0,
+     "dur": 0.2,
+     "key": 61,
+     "vel": 0.38
+    },
+    {
+     "beat": 25.25,
+     "dur": 0.2,
+     "key": 61,
+     "vel": 0.4
+    },
+    {
+     "beat": 25.5,
+     "dur": 0.2,
+     "key": 61,
+     "vel": 0.42
+    },
+    {
+     "beat": 25.75,
+     "dur": 0.2,
+     "key": 62,
+     "vel": 0.44
+    },
+    {
+     "beat": 26.0,
+     "dur": 0.2,
+     "key": 62,
+     "vel": 0.45
+    },
+    {
+     "beat": 26.25,
+     "dur": 0.2,
+     "key": 62,
+     "vel": 0.47
+    },
+    {
+     "beat": 26.5,
+     "dur": 0.2,
+     "key": 62,
+     "vel": 0.49
+    },
+    {
+     "beat": 26.75,
+     "dur": 0.2,
+     "key": 62,
+     "vel": 0.51
+    },
+    {
+     "beat": 27.0,
+     "dur": 0.2,
+     "key": 63,
+     "vel": 0.53
+    },
+    {
+     "beat": 27.25,
+     "dur": 0.2,
+     "key": 63,
+     "vel": 0.55
+    },
+    {
+     "beat": 27.5,
+     "dur": 0.2,
+     "key": 63,
+     "vel": 0.57
+    },
+    {
+     "beat": 27.75,
+     "dur": 0.2,
+     "key": 63,
+     "vel": 0.59
+    },
+    {
+     "beat": 28.0,
+     "dur": 0.2,
+     "key": 64,
+     "vel": 0.61
+    },
+    {
+     "beat": 28.25,
+     "dur": 0.2,
+     "key": 64,
+     "vel": 0.63
+    },
+    {
+     "beat": 28.5,
+     "dur": 0.2,
+     "key": 64,
+     "vel": 0.65
+    },
+    {
+     "beat": 28.75,
+     "dur": 0.2,
+     "key": 64,
+     "vel": 0.67
+    },
+    {
+     "beat": 29.0,
+     "dur": 0.2,
+     "key": 65,
+     "vel": 0.69
+    },
+    {
+     "beat": 29.25,
+     "dur": 0.2,
+     "key": 65,
+     "vel": 0.71
+    },
+    {
+     "beat": 29.5,
+     "dur": 0.2,
+     "key": 65,
+     "vel": 0.73
+    },
+    {
+     "beat": 29.75,
+     "dur": 0.2,
+     "key": 65,
+     "vel": 0.75
+    },
+    {
+     "beat": 30.0,
+     "dur": 0.2,
+     "key": 65,
+     "vel": 0.76
+    },
+    {
+     "beat": 30.25,
+     "dur": 0.2,
+     "key": 66,
+     "vel": 0.78
+    },
+    {
+     "beat": 30.5,
+     "dur": 0.2,
+     "key": 66,
+     "vel": 0.8
+    },
+    {
+     "beat": 30.75,
+     "dur": 0.2,
+     "key": 66,
+     "vel": 0.82
+    },
+    {
+     "beat": 31.0,
+     "dur": 0.2,
+     "key": 66,
+     "vel": 0.84
+    },
+    {
+     "beat": 31.25,
+     "dur": 0.2,
+     "key": 67,
+     "vel": 0.86
+    },
+    {
+     "beat": 31.5,
+     "dur": 0.2,
+     "key": 67,
+     "vel": 0.88
+    },
+    {
+     "beat": 31.75,
+     "dur": 0.2,
+     "key": 67,
+     "vel": 0.9
+    }
+   ]
+  },
+  {
+   "name": "Tritone Ping",
+   "plugin": "builtin:sampler",
+   "sampler": {
+    "multisample": "Farfisa SO Flute",
+    "attack": 0.02
+   },
+   "gain": -16,
+   "harmony": false,
+   "notes": [
+    {
+     "beat": 8,
+     "dur": 3.5,
+     "key": 80,
+     "vel": 0.5
+    },
+    {
+     "beat": 16,
+     "dur": 3.5,
+     "key": 80,
+     "vel": 0.5
+    },
+    {
+     "beat": 24,
+     "dur": 3.5,
+     "key": 80,
+     "vel": 0.5
+    }
+   ]
   }
  ]
 }

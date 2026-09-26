@@ -34,6 +34,7 @@ struct Track {
     double warmup = -1;                                          // seconds; < 0 = job warmup
     bool mute = false;
     double firstSoundBeat = 1e18;   // earliest note or clip (beats); late automation before it is inaudible
+    bool harmony = true;            // "harmony": false = unpitched material: lint leaves it out of chords and voices
     bool stem = true;               // write this track's stem file (render --tracks turns it off for helper tracks)
     nlohmann::json fx = nlohmann::json::array();               // effect chain, in order
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)

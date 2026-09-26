@@ -189,6 +189,11 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
     std::vector<double> win(N);
     for (size_t i = 0; i < N; ++i) win[i] = 0.5 - 0.5 * std::cos(2 * dsp::kPi * (double)i / (double)(N - 1));
     size_t frames = 0;
+    // tonality: share of each active frame's energy (50 Hz - 16 kHz) in spectral peaks that stand 9 dB over
+    // the bins around them; a chord or a tuned drum is peaky, noise and most drum hits are not
+    double tonalSum = 0, tonalWeight = 0;
+    const size_t k0 = std::max<size_t>(3, (size_t)(50.0 * N / sr)), k1 = std::min(N / 2 - 3, (size_t)(16000.0 * N / sr));
+    std::vector<double> pw(N / 2 + 1), pre(N / 2 + 2);
     for (size_t p = 0; p + N <= n || (p == 0 && n > 0); p += H) {
         double e = 0;
         for (size_t i = 0; i < N; ++i) {
@@ -205,10 +210,24 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
             prevMag[k] = m;
         }
         flux.push_back(f);
-        if (e / N > floorLin * floorLin) ++frames;
+        if (e / N > floorLin * floorLin) {
+            ++frames;
+            pre[0] = 0;
+            for (size_t k = 0; k <= N / 2; ++k) { pw[k] = std::norm(buf[k]); pre[k + 1] = pre[k] + pw[k]; }
+            double tot = 0, peaks = 0;
+            for (size_t k = k0; k <= k1; ++k) {
+                tot += pw[k];
+                if (pw[k] < pw[k - 1] || pw[k] < pw[k - 2] || pw[k] < pw[k + 1] || pw[k] < pw[k + 2]) continue;
+                const size_t lo = k >= 16 ? k - 16 : 0, hi = std::min(N / 2, k + 16);
+                const double around = (pre[hi + 1] - pre[lo] - pw[k - 1] - pw[k] - pw[k + 1]) / (double)(hi - lo - 2);
+                if (pw[k] > 8 * around) peaks += pw[k - 1] + pw[k] + pw[k + 1];
+            }
+            if (tot > 0) { tonalSum += e * std::min(1.0, peaks / tot); tonalWeight += e; }
+        }
         if (p + N >= n) break;
     }
     if (frames) {
+        r.tonality = tonalWeight > 0 ? tonalSum / tonalWeight : 0;
         double tot = 0, wsum = 0;
         for (size_t k = 1; k <= N / 2; ++k) { tot += power[k]; wsum += power[k] * k * sr / N; }
         r.centroidHz = tot > 0 ? wsum / tot : 0;
@@ -272,7 +291,7 @@ nlohmann::json analysisToJson(const Analysis &x, bool withOnsets) {
         {"truePeakDb", r1(x.truePeakDb)}, {"lra", r1(x.lra)}, {"rmsDb", r1(x.rmsDb)},
         {"pitch", {{"hz", r1(x.pitchHz)}, {"note", keyName(x.pitchKey)}, {"key", x.pitchKey}, {"cents", std::lround(x.pitchCents)},
                    {"confidence", std::round(x.pitchConfidence * 100) / 100}}},
-        {"spectrum", {{"centroidHz", std::lround(x.centroidHz)}, {"rolloffHz", std::lround(x.rolloffHz)},
+        {"spectrum", {{"centroidHz", std::lround(x.centroidHz)}, {"rolloffHz", std::lround(x.rolloffHz)}, {"tonality", std::round(x.tonality * 100) / 100},
                       {"bandsDb", {{"sub", r1(x.bandsDb[0])}, {"bass", r1(x.bandsDb[1])}, {"lowMid", r1(x.bandsDb[2])},
                                    {"highMid", r1(x.bandsDb[3])}, {"presence", r1(x.bandsDb[4])}, {"air", r1(x.bandsDb[5])}}}}},
         {"stereo", {{"width", std::round(x.width * 100) / 100}, {"correlation", std::round(x.correlation * 100) / 100}}},

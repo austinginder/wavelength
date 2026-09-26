@@ -16,6 +16,7 @@ struct Analysis {
     double pitchCents = 0;        // deviation from that key
     // spectrum (power-averaged over active frames)
     double centroidHz = 0, rolloffHz = 0;   // rolloff: 85% of the energy lies below
+    double tonality = 0;          // share of the energy in spectral peaks (energy-weighted over active frames): tones and chords high, noise low
     double bandsDb[6] = {-120, -120, -120, -120, -120, -120};   // sub <60, bass 60-250, low-mid 250-2k, high-mid 2k-6k, presence 6k-12k, air >12k (share of total energy)
     // stereo: side/mid RMS ratio (0 = mono) and left/right correlation
     double width = 0, correlation = 1;

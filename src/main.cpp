@@ -885,7 +885,7 @@ int cmdRender(const Args &a) {
 }
 
 // ---- lint --harmony: keys, chords, one-bar excursions and clashes ---------------------------
-int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks, double fromBeat, double toBeat) {
+int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks, double fromBeat, double toBeat, const json &skipped) {
     HarmonyOptions o;
     o.tracks = tracks;
     o.keys = job.keys;
@@ -902,13 +902,18 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
     json names = json::array();
     for (size_t i : tracks) names.push_back(job.tracks[i].name);
     if (a.has("--json")) {
-        json out = {{"ok", true}, {"tracks", names}};
+        json out = {{"ok", true}, {"tracks", names}, {"skipped", skipped}};
         out.update(r);
         if (!a.has("--chords")) out.erase("bars");
         emit(out.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     std::fprintf(OUT, "tracks: %s\n", names.dump().c_str());
+    if (!skipped.empty()) {
+        std::string sk;
+        for (auto &x : skipped) sk += (sk.empty() ? "" : ", ") + x["track"].get<std::string>() + " (" + x["reason"].get<std::string>() + ")";
+        std::fprintf(OUT, "skipped: %s\n", sk.c_str());
+    }
     for (auto &k : r["keys"])
         std::fprintf(OUT, "key: %-9s bars %d-%d (%s%s)\n", k["key"].get<std::string>().c_str(), k["from"].get<int>(), k["to"].get<int>(),
                      k["source"].get<std::string>().c_str(), k.contains("checks") ? ", checks off" : "");
@@ -939,6 +944,27 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
     }
     std::fprintf(OUT, "%zu problem%s\n", r["problems"].size(), r["problems"].size() == 1 ? "" : "s");
     return 0;
+}
+
+// Why a track is not melodic material for lint ("" = it is): drums, effects, audio, kits, an explicit
+// "harmony": false, or a builtin:sampler playing one sample that has no pitch of its own (noise, or a
+// short drum hit: a pitched snare roll is a riser, not a chord).
+std::string unpitchedReason(const Track &t, const std::string &baseDir) {
+    if (!t.harmony) return "\"harmony\": false";
+    if (t.plugin == "builtin:drums" || t.plugin == "builtin:fx" || t.plugin == "builtin:audio") return t.plugin;
+    if (!t.sampler.is_object()) return "";
+    if (t.sampler.contains("kit") || t.sampler.contains("map")) return "drum kit";
+    if (t.sampler.contains("multisample") || !t.sampler.contains("sample") || !t.sampler["sample"].is_string()) return "";
+    const std::string file = resolveSampleFile(t.sampler["sample"].get<std::string>(), baseDir);
+    Audio a;
+    int sr = 0;
+    std::string err;
+    if (file.empty() || !readWav(file, a, sr, err)) return "";
+    const Analysis x = analyzeAudio(a, sr);
+    if (x.silent) return "";
+    if (x.pitchConfidence < 0.3 && x.tonality < 0.15) return "noise sample";
+    if (x.attackMs <= 20 && x.lastSoundSeconds - x.firstSoundSeconds < 0.4) return "one-shot drum sample";
+    return "";
 }
 
 // ---- lint: voice leading between melodic tracks --------------------------------------------
@@ -977,6 +1003,7 @@ int cmdLint(const Args &a) {
     // a voice: a track's top note, its lowest (--low), or the rank-th note from the top of a split chord track
     struct Voice { const Track *t; std::string name; int rank; bool lowest; };
     std::vector<Voice> voices;
+    json skipped = json::array();   // tracks left out, with the reason
     auto addTrack = [&](const Track &t) {
         auto sp = splits.find(t.name);
         if (sp != splits.end()) for (int r = 0; r < sp->second; ++r) voices.push_back({&t, t.name + "." + std::to_string(r + 1), r, false});
@@ -989,9 +1016,12 @@ int cmdLint(const Args &a) {
             addTrack(*it);
         }
     } else
-        for (auto &t : job.tracks)   // melodic tracks: not drums, kits or effects
-            if (!t.notes.empty() && t.plugin != "builtin:drums" && t.plugin != "builtin:fx" && t.plugin != "builtin:audio" && !(t.sampler.is_object() && (t.sampler.contains("kit") || t.sampler.contains("map"))))
-                addTrack(t);
+        for (auto &t : job.tracks) {   // melodic tracks: not drums, kits, effects or unpitched samples
+            if (t.notes.empty()) continue;
+            const std::string why = unpitchedReason(t, job.baseDir);
+            if (why.empty()) addTrack(t);
+            else skipped.push_back({{"track", t.name}, {"reason", why}});
+        }
     for (auto &sp : splits) {
         const std::string n = sp.first;
         if (std::none_of(voices.begin(), voices.end(), [&](const Voice &v) { return v.t->name == n; })) return fail(a, "--split: no track named '" + n + "' among the voices");
@@ -1016,7 +1046,7 @@ int cmdLint(const Args &a) {
             if (std::find(idx.begin(), idx.end(), i) == idx.end() && std::find(ignore.begin(), ignore.end(), v.t->name) == ignore.end()) idx.push_back(i);
         }
         return idx;
-    }(), fromBeat, toBeat);
+    }(), fromBeat, toBeat, skipped);
     auto noteAt = [&](const Voice &v, double t) {
         std::vector<int> keys;
         for (auto &n : v.t->notes)
@@ -1100,10 +1130,15 @@ int cmdLint(const Args &a) {
     json names = json::array();
     for (auto &v : voices) names.push_back(v.name);
     if (a.has("--json")) {
-        emit(json{{"ok", true}, {"voices", names}, {"counts", counts}, {"doublings", doublings}, {"problems", problems}}.dump(2, ' ', false, json::error_handler_t::replace));
+        emit(json{{"ok", true}, {"voices", names}, {"skipped", skipped}, {"counts", counts}, {"doublings", doublings}, {"problems", problems}}.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     std::fprintf(OUT, "voices: %s\n", names.dump().c_str());
+    if (!skipped.empty()) {
+        std::string sk;
+        for (auto &x : skipped) sk += (sk.empty() ? "" : ", ") + x["track"].get<std::string>() + " (" + x["reason"].get<std::string>() + ")";
+        std::fprintf(OUT, "skipped: %s\n", sk.c_str());
+    }
     for (auto &d : doublings)
         std::fprintf(OUT, "  doubling (ignored): %s / %s in %s\n", d["voices"][0].get<std::string>().c_str(), d["voices"][1].get<std::string>().c_str(),
                      d["interval"].get<std::string>().c_str());

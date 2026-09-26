@@ -65,6 +65,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `midiProgram`, `midiChannel` | none | Kept by `import song.mid` (the part's General MIDI program and channel) and written back by `export`; rendering ignores them. |
 | `bendRange` | 2 | The plugin's pitch-bend range in semitones, so `automation.pitchbend` can be written in semitones. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |
+| `harmony` | `false` = unpitched material (a pitched snare roll, a noise sweep, synth drums on a plugin): `wavelength lint` leaves the track out of chords, clashes and voice leading. Kits, `builtin:drums`/`builtin:fx` and single-sample `builtin:sampler` tracks whose sample has no pitch (noise, a short drum hit) are left out without it. |
 | `stem` | `true` = write this track's stem file (when the job writes stems); `false` skips it. |
 | `mute` | false | Render the stem but leave it out of the mix. |
 | `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |

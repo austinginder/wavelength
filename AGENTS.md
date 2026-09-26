@@ -233,7 +233,7 @@ envelope, pitch offset in semitones and cents).
 
 You can't hear the render, so measure it. `wavelength analyze out/<dir> --json` gives, for the
 mix, each stem and each section: pitch (note, cents, confidence), spectral centroid (brightness),
-band balance (sub, bass, low-mid, high-mid, presence, air), stereo width and correlation, onsets
+tonality (share of energy in spectral peaks: tones and chords high, noise low), band balance (sub, bass, low-mid, high-mid, presence, air), stereo width and correlation, onsets
 and the envelope (attack, decay, sustain). Use it to check a preset sounds in the octave you
 wrote, a bass isn't brighter than intended, a section's low end is balanced, a pad is wide, and a
 drum pattern has the hits you expect. `--start/--end` narrow it to a window. Limits: pitch is one
@@ -290,7 +290,10 @@ The key comes from `"keys"` in the job (declare every planned key change there, 
 8-bar windows (a new key has to hold 4 bars; bars with no third, such as an open-fifth drone, take
 the key around them). Detection can put a boundary a bar or two early; declared keys are exact.
 Pitched tracks that aren't harmony (sound effects, synth drums played on plugins, a sonar ping)
-go in `--ignore "SFX,ChipKick"`; drum kits and `builtin:fx` are left out already. `--from`,
+go in `--ignore "SFX,ChipKick"`, or mark the track `"harmony": false` in the job (lint leaves it out
+for good). Left out already, and listed as `skipped` with the reason: drum kits, `builtin:drums`,
+`builtin:fx`, and `builtin:sampler` tracks playing one sample with no pitch of its own (noise, or a
+drum hit under 0.4 s: a snare roll played up keys 60-67 is a riser, not a Cdim chord). `--from`,
 `--to` and `--section` limit the report, `--max-bars 3` widens what counts as a short excursion,
 `--json` gives `keys`, `problems`, `rubs`, `info` (and `bars` with `--chords`).
 
