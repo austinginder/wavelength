@@ -60,7 +60,17 @@ FetchContent_Declare(signalsmith_linear
   GIT_TAG 0.3.1
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR wavelength-no-build)
-FetchContent_MakeAvailable(clap json vst3sdk zstd signalsmith_stretch signalsmith_linear httplib)
+# dr_flac + dr_mp3 (public domain / MIT-0) and stb_vorbis (public domain / MIT): FLAC, MP3 and
+# Ogg Vorbis samples, and decoding a written MP3 back to measure it
+FetchContent_Declare(dr_libs
+  URL https://github.com/mackron/dr_libs/archive/dfe8377631000664666519fdb83da193fd8037f4.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SOURCE_SUBDIR wavelength-no-build)
+FetchContent_Declare(stb
+  URL https://github.com/nothings/stb/archive/2c980bb59875b0d32144a71867fbdebb2f77cd20.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SOURCE_SUBDIR wavelength-no-build)
+FetchContent_MakeAvailable(clap json vst3sdk zstd signalsmith_stretch signalsmith_linear httplib dr_libs stb)
 # zlib (zlib licence): from the system on macOS and Linux, built here where there is none (Windows)
 find_package(ZLIB)
 if(NOT ZLIB_FOUND)
@@ -151,7 +161,11 @@ add_executable(wavelength
   src/dawproject.cpp
   src/bitwig.cpp
   src/midi_file.cpp
-  src/wav.cpp)
+  src/wav.cpp
+  src/audio_file.cpp
+  src/audio_codecs.cpp)
+# the single-file decoders compile inside audio_codecs.cpp; their own warnings are not ours
+set_source_files_properties(src/audio_codecs.cpp PROPERTIES COMPILE_OPTIONS "-w")
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
@@ -163,7 +177,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
   DEPENDS ${WAVELENGTH_UI_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-ui.cmake
   COMMENT "Embedding the web UI")
 target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include ${httplib_SOURCE_DIR}
-                           ${signalsmith_linear_SOURCE_DIR}/include)
+                           ${signalsmith_linear_SOURCE_DIR}/include ${dr_libs_SOURCE_DIR} ${stb_SOURCE_DIR})
 target_compile_options(wavelength PRIVATE -Wall -Wextra -Wno-unused-parameter)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   target_compile_options(wavelength PRIVATE -Wno-psabi)   # GCC 10 ABI notes on arm64, not problems

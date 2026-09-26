@@ -12,6 +12,7 @@
 //   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
 //   wavelength version
 #include "analyze.hpp"
+#include "audio_file.hpp"
 #include "clips.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
@@ -415,7 +416,7 @@ int cmdAnalyze(const Args &a) {
     auto one = [&](const std::string &path, double s, double e, bool onsets, json &out) {
         Audio audio;
         int sr = 0;
-        if (!readWav(path, audio, sr, err)) return false;
+        if (!readAudio(path, audio, sr, err)) return false;
         out = analysisToJson(analyzeAudio(audio, sr, s, e), onsets);
         out["file"] = path;
         if (peaks) {   // --peaks: where the partials sit (combs, resonators, flangers, chords)
@@ -470,7 +471,7 @@ int cmdAnalyze(const Args &a) {
         const std::string file = fs::is_directory(target) ? (fs::path(target) / "mix.wav").string() : target;
         Audio audio;
         int sr = 0;
-        if (!readWav(file, audio, sr, err)) return fail(a, err);
+        if (!readAudio(file, audio, sr, err)) return fail(a, err);
         // in song time the windows start on the first beat (after the lead-in), so they line up with bars
         const double first = a.has("--song-time") && start <= 0 ? leadIn : start;
         const size_t from = (size_t)(std::max(0.0, first) * sr), to = end > 0 ? (size_t)(end * sr) : audio.frames();
@@ -648,7 +649,7 @@ int cmdMaster(const Args &a) {
     Audio in;
     int sr = 0;
     std::string err;
-    if (!readWav(input, in, sr, err)) return fail(a, err);
+    if (!readAudio(input, in, sr, err)) return fail(a, err);
     const std::string chainArg = a.get("--chain");
     const bool inlineChain = !chainArg.empty() && (chainArg[0] == '{' || chainArg[0] == '[');   // JSON on the command line
     json chain;

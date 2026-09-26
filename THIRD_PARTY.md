@@ -13,6 +13,8 @@ the Windows build compiles it in.
 | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | 57b93f4 | MIT | time stretch for audio clips |
 | [Signalsmith Linear](https://github.com/Signalsmith-Audio/linear) | 0.3.1 | MIT | FFT/STFT for Signalsmith Stretch |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.58.0 | MIT | the local web UI of `wavelength serve` |
+| [dr_flac, dr_mp3](https://github.com/mackron/dr_libs) | dfe8377 (dr_flac 0.13.4, dr_mp3 0.7.4) | public domain (Unlicense) or MIT-0 | FLAC and MP3 samples, measuring written MP3s |
+| [stb_vorbis](https://github.com/nothings/stb) | 2c980bb (1.22) | public domain (Unlicense) or MIT | Ogg Vorbis samples |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
 Linux builds link libstdc++ and libgcc statically (GCC Runtime Library Exception: no notice
@@ -204,6 +206,52 @@ furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## dr_flac and dr_mp3
+
+Used under MIT No Attribution (the alternative to the public domain dedication in the same file).
+
+```
+Copyright 2020 David Reid
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## stb_vorbis
+
+Used under the MIT licence (the alternative to the public domain dedication in the same file).
+
+```
+Copyright (c) 2017 Sean Barrett
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE

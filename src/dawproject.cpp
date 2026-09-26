@@ -1,5 +1,6 @@
 #include "dawproject.hpp"
 
+#include "audio_file.hpp"
 #include "bitwig.hpp"
 #include "catalog.hpp"
 #include "sampler.hpp"
@@ -479,9 +480,7 @@ void collectNotes(Ctx &c, const xml::Node &n, double offset, double from, double
 std::string audioFile(Ctx &c, const xml::Node &file, const std::string &where) {
     const std::string path = file.get("path");
     if (path.empty()) return "";
-    std::string ext = fs::path(path).extension().string();
-    for (auto &ch : ext) ch = (char)std::tolower((unsigned char)ch);
-    if (ext != ".wav") { c.res->notes.push_back(where + ": audio file " + fs::path(path).filename().string() + " isn't WAV (only WAV clips play yet); left out"); return ""; }
+    if (!isAudioFileName(path)) { c.res->notes.push_back(where + ": audio file " + fs::path(path).filename().string() + " isn't WAV, AIFF, FLAC, MP3 or Ogg Vorbis; left out"); return ""; }
     if (file.get("external") == "true") {
         std::error_code ec;
         if (fs::exists(path, ec)) return path;

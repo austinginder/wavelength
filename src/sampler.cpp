@@ -1,4 +1,5 @@
 #include "sampler.hpp"
+#include "audio_file.hpp"
 
 #include "platform.hpp"
 #include "zip.hpp"
@@ -39,57 +40,7 @@ bool readFile(const std::string &path, std::vector<uint8_t> &out) {
     return (bool)f;
 }
 
-uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
-uint32_t u32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
-
-// ---- WAV decoding -------------------------------------------------------------------------
-struct SampleData {
-    double rate = 44100;
-    std::vector<float> l, r;     // r empty = mono
-    size_t frames() const { return l.size(); }
-};
-
-bool decodeWav(const std::vector<uint8_t> &d, SampleData &s, std::string &err) {
-    if (d.size() < 12 || memcmp(d.data(), "RIFF", 4) || memcmp(d.data() + 8, "WAVE", 4)) { err = "not a RIFF/WAVE file"; return false; }
-    int format = 0, channels = 0, bits = 0;
-    const uint8_t *data = nullptr;
-    size_t dataLen = 0;
-    for (size_t p = 12; p + 8 <= d.size();) {
-        const uint32_t len = u32(&d[p + 4]);
-        const uint8_t *body = &d[p + 8];
-        const size_t avail = std::min<size_t>(len, d.size() - p - 8);
-        if (!memcmp(&d[p], "fmt ", 4) && avail >= 16) {
-            format = u16(body); channels = u16(body + 2); s.rate = u32(body + 4); bits = u16(body + 14);
-            if (format == 0xFFFE && avail >= 26) format = u16(body + 24);   // WAVE_FORMAT_EXTENSIBLE sub-format
-        } else if (!memcmp(&d[p], "data", 4)) {
-            data = body; dataLen = avail;
-        }
-        p += 8 + len + (len & 1);
-    }
-    if (!data || channels < 1) { err = "WAV has no fmt/data chunk"; return false; }
-    if (!((format == 1 && (bits == 8 || bits == 16 || bits == 24 || bits == 32)) || (format == 3 && (bits == 32 || bits == 64)))) {
-        err = "unsupported WAV encoding (format " + std::to_string(format) + ", " + std::to_string(bits) + " bit)";
-        return false;
-    }
-    const size_t bps = bits / 8, frame = bps * channels, n = dataLen / frame;
-    s.l.resize(n);
-    if (channels > 1) s.r.resize(n);
-    auto get = [&](const uint8_t *q) -> float {
-        if (format == 3) { if (bits == 32) { float f; memcpy(&f, q, 4); return f; } double v; memcpy(&v, q, 8); return (float)v; }
-        switch (bits) {
-        case 8: return (q[0] - 128) / 128.f;
-        case 16: return (int16_t)u16(q) / 32768.f;
-        case 24: return (float)((int32_t)((uint32_t)q[0] << 8 | (uint32_t)q[1] << 16 | (uint32_t)q[2] << 24) >> 8) / 8388608.f;
-        default: return (float)((int32_t)u32(q) / 2147483648.0);
-        }
-    };
-    for (size_t i = 0; i < n; ++i) {
-        const uint8_t *q = data + i * frame;
-        s.l[i] = get(q);
-        if (channels > 1) s.r[i] = get(q + bps);
-    }
-    return true;
-}
+using SampleData = DecodedAudio;
 
 // ---- tiny XML reader for multisample.xml ----------------------------------------------------
 std::string unescape(std::string v) {
@@ -286,7 +237,7 @@ bool looksLikeLoop(const std::string &file) {
     return false;
 }
 
-bool isWav(const fs::path &p) { return lower(p.extension().string()) == ".wav"; }
+bool isWav(const fs::path &p) { return isAudioFileName(p.string()); }
 
 std::vector<std::string> wavsIn(const std::string &dir) {
     std::vector<std::string> out;
@@ -473,7 +424,7 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                         for (size_t q = 0; (q = xml.find("<sample ", q)) != std::string::npos; ++q) ++e.count;
                     }
                     lib.push_back(e);
-                } else if (ext == ".wav") {
+                } else if (isAudioFileName(p.string())) {
                     dirWavs[p.parent_path().string()].push_back(p.string());
                 }
             }
@@ -639,7 +590,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             std::vector<uint8_t> bytes;
             SampleData d;
             std::string e2;
-            if (!readFile(z.file, bytes) || !decodeWav(bytes, d, e2)) { err = "sampler: cannot read " + z.file + " " + e2; return false; }
+            if (!readFile(z.file, bytes) || !decodeAudio(bytes.data(), bytes.size(), d, e2)) { err = "sampler: cannot read " + z.file + " " + e2; return false; }
             const double len = (double)d.frames() / slices;
             for (int i = 0; i < slices && z.root + i <= 127; ++i) {
                 Zone sl = z;
@@ -679,7 +630,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             if (!readFile(p, bytes)) { err = "cannot read " + p; return false; }
         }
         auto d = std::make_shared<SampleData>();
-        if (!decodeWav(bytes, *d, e2)) { err = fs::path(file).filename().string() + ": " + e2; return false; }
+        if (!decodeAudio(bytes.data(), bytes.size(), *d, e2)) { err = fs::path(file).filename().string() + ": " + e2; return false; }
         cache[file] = outData = d;
         return true;
     };

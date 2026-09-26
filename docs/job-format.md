@@ -115,7 +115,7 @@ Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `file` | required | A WAV: absolute, relative to the job, or relative to a sample root (Bitwig content, `$WAVELENGTH_SAMPLES_PATH`); or `{"render": ...}`, the song's own audio (below). |
+| `file` | required | An audio file (WAV, AIFF, FLAC, MP3 or Ogg Vorbis, told apart by content): absolute, relative to the job, or relative to a sample root (Bitwig content, `$WAVELENGTH_SAMPLES_PATH`); or `{"render": ...}`, the song's own audio (below). |
 | `beat` / `endAt` | one of them | Where the clip starts, or the beat where it ends (reverse swells, pickups). |
 | `bpm` | none | The file's own tempo: the clip is sped up or slowed to the song's tempo at its anchor. |
 | `speed` | 1 | An explicit speed factor instead of `bpm`. |
@@ -150,7 +150,8 @@ drop with no pre-render:
 
 Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the open zip + XML
 format of Bitwig's Sampler: pianos, organs, guitars, basses, keys, orchestral), folders of
-drum WAVs, or a single WAV. List what is installed with `wavelength samples [--search text]`.
+drum samples, or a single sample. Samples can be WAV, AIFF/AIFC, FLAC, MP3 (encoder delay
+removed) or Ogg Vorbis. List what is installed with `wavelength samples [--search text]`.
 Names are searched in `$WAVELENGTH_SAMPLES_PATH` (colon-separated folders) and the Bitwig
 Studio package folders; paths work too (relative to the job).
 
@@ -162,9 +163,9 @@ Studio package folders; paths work too (relative to the job).
 | Setting | Default | Meaning |
 |---|---|---|
 | `multisample` | | Name or path of a `.multisample` (or a folder with `multisample.xml`). Key and velocity zones, velocity crossfades, round robins, sustain loops and key tracking come from the file. Keys outside every zone stretch the nearest sample. |
-| `kit` | | A folder of one-shot WAVs mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
+| `kit` | | A folder of one-shot samples mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
 | `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths), or `{"file": ..., "gain": dB, "pan": -1..1, "tune": semitones}`, or just the settings for the kit's own sample on that key. |
-| `sample` + `root` | 60 | One WAV played chromatically, `root` = the key it sounds at its own pitch. |
+| `sample` + `root` | 60 | One sample played chromatically, `root` = the key it sounds at its own pitch. |
 | `attack`, `release` | 0.002 / 0.25 s (kits 0 / 0.05) | Amplitude envelope. |
 | `oneShot` | kits true | Play samples to their end, ignoring note length. |
 | `choke` | kits `[[42, 44, 46]]` | Key groups that cut each other (a closed hat stops the open hat). A one-key group chokes itself. |

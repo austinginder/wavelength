@@ -37,7 +37,7 @@ https://wavelength.run
   automate them with breakpoints, steps and LFOs.
 - **Play samples without a plugin:** `builtin:sampler` plays Bitwig `.multisample`
   instruments (pianos, organs, guitars, basses, orchestral), drum-machine kit folders mapped
-  to General MIDI (Legend 707/808/909, …), loops and single WAVs. It supports glide, per-note
+  to General MIDI (Legend 707/808/909, …), loops and single samples (WAV, AIFF, FLAC, MP3, Ogg Vorbis). It supports glide, per-note
   pitch bend, slices and reverse.
 - **Play expressively:** swing and humanize (`groove`), strummed chords, tempo ramps, MIDI CC,
   pitch bend and pressure.
@@ -213,7 +213,7 @@ render's stem loudness (`<song>/out` by default).
 2. Auditions inside each instrument's range, and an envelope-depth measure for rhythmic patches.
 3. DAWproject import: automation of plugin effects and of Bitwig's own devices, launcher clips, more
    Bitwig devices (Mid-Side Split, Polymer, Phase-4).
-4. FLAC and AIFF samples, SFZ instruments, and a General MIDI SoundFont fallback.
+4. SFZ instruments and a General MIDI SoundFont fallback.
 5. A local service with a web UI and live playback through the speakers; Audio Unit hosting.
 
 ## License

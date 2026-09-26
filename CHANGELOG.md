@@ -5,6 +5,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Samples and audio clips in AIFF/AIFC, FLAC, MP3 and Ogg Vorbis, not only WAV: `builtin:sampler`
+  kits, single samples and multisamples, `builtin:audio` clips, `analyze`, `master` input and
+  DAWproject audio clips. Files are told apart by their contents; MP3s lose their encoder delay
+  (LAME/Xing tag), so a one-shot starts on the beat. Kit folders and the sample library pick up
+  the new extensions.
 - `wavelength serve [SONGS_DIR]`: a local web UI for reviewing songs with a human, built into the
   binary (localhost only, a per-launch token on changes). The arrangement with sections, a chord lane
   and harmony problems from the harmony check, lanes that open into piano rolls, loudness, stems,

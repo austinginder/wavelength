@@ -1,5 +1,6 @@
 #include "clips.hpp"
 
+#include "audio_file.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
 #include "sampler.hpp"
@@ -36,7 +37,7 @@ bool loadFile(const std::string &path, Audio &a, int &sr, std::string &err) {
     auto &c = fileCache();
     auto it = c.find(path);
     if (it != c.end()) { a = it->second.first; sr = it->second.second; return true; }
-    if (!readWav(path, a, sr, err)) return false;
+    if (!readAudio(path, a, sr, err)) return false;
     c[path] = {a, sr};
     return true;
 }

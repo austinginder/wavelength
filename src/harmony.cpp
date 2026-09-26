@@ -1,6 +1,7 @@
 #include "harmony.hpp"
 
 #include "analyze.hpp"
+#include "audio_file.hpp"
 #include "sampler.hpp"
 
 #include <algorithm>
@@ -443,7 +444,7 @@ std::string unpitchedReason(const Track &t, const std::string &baseDir) {
     Audio a;
     int sr = 0;
     std::string err;
-    if (file.empty() || !readWav(file, a, sr, err)) return "";
+    if (file.empty() || !readAudio(file, a, sr, err)) return "";
     const Analysis x = analyzeAudio(a, sr);
     if (x.silent) return "";
     if (x.pitchConfidence < 0.3 && x.tonality < 0.15) return "noise sample";
