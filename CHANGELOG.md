@@ -4,6 +4,18 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-26
+
+Highlights: VST2 hosting (Intel-only plugins under Rosetta); DAWproject import and export (songs open
+in Bitwig with their plugins, built-in instruments printed to audio); MIDI and MusicXML import, MIDI
+export; SoundFonts, SFZ and AIFF/FLAC/MP3/Ogg samples, with a General MIDI fallback for imports;
+MP3 and FLAC deliveries measured after decoding; `wavelength serve`, a local review page for songs;
+`lint --harmony`, `render --from/--to` previews and many new effects and report checks.
+
+Upgrading from 0.2.0: `builtin:sampler` `start` with `reverse` trims the file's beginning before
+reversing, `render --tracks` stems keep the full render's numbers and names, and `saturate`
+`"match": true` follows the level over time (`"match": "static"` restores the old behaviour).
+
 ### Added
 - `wavelength export job.json --out song.dawproject`: the song as a DAWproject Bitwig Studio (and Studio
   One, Cubase) opens with its plugins loaded. Each plugin instrument and plugin effect is opened in a
