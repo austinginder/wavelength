@@ -28,15 +28,17 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
 // DAWproject export (dawproject_export.cpp): tracks with their plugin instrument and plugin effects,
 // each with its state saved as the job sets it up (preset, state file, params) in a worker process;
 // notes, fader, pan, mute, sends, buses as effect tracks, the master, tempo map, time signature,
-// markers, fader and pan curves, plain audio clips. Built-in instruments and effects have no DAW
-// counterpart: their tracks keep the notes and `notes` says what was left out.
+// markers, fader and pan curves, plain audio clips. Built-in instruments have no DAW counterpart:
+// their tracks are printed (see `print`); `notes` says what was printed or left out.
 struct DawprojectExport {
     std::vector<std::string> notes;
     size_t tracks = 0, buses = 0, plugins = 0, noteCount = 0;
 };
 struct Job;
+// `print`: tracks with a built-in instrument (or audio clips the format can't describe) are rendered
+// and placed on the track as audio, dry, next to their notes.
 bool exportDawproject(const Job &job, const nlohmann::json &raw, const std::string &jobPath, const std::string &outPath,
-                      DawprojectExport &out, std::string &err);
+                      DawprojectExport &out, std::string &err, bool print = true);
 // Hidden `__save-state <job> <where> <prefix>`: opens the plugin at `where` ("track:<i>",
 // "track:<i>:fx:<k>", "bus:<i>:fx:<k>", "master:fx:<k>") and saves its state to <prefix>.<ext>;
 // prints one JSON line on `out`.

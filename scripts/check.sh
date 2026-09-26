@@ -121,6 +121,16 @@ sys.exit(0 if ok else 1)' "$dp"; then
 else
   echo "ok   dawproject: hello exports with its plugin states and imports back"
 fi
+# built-in instruments print: the SFZ tour's two sampler tracks arrive as audio files in the project
+if ! "./$build/wavelength" export examples/sfz-tour.json --out "$dp/sfz.dawproject" --json > /dev/null 2>&1 ||
+   ! python3 -c '
+import sys, zipfile
+names = zipfile.ZipFile(sys.argv[1]).namelist()
+sys.exit(0 if "audio/synth-printed.wav" in names and "audio/drums-printed.wav" in names else 1)' "$dp/sfz.dawproject"; then
+  echo "FAIL dawproject: built-in tracks not printed"; fail=1
+else
+  echo "ok   dawproject: built-in instrument tracks printed to audio"
+fi
 # deliveries: FLAC (24 and 16 bit) and a 24-bit WAV decode back to mix.wav's loudness and true peak
 dl="out/check/deliver/$build"
 if ! "./$build/wavelength" render examples/mastering.json --deliver flac,flac:16,wav:24 --out "$dl" --json 2>/dev/null | python3 -c '

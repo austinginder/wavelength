@@ -122,7 +122,8 @@ int saveStateWorker(const std::string &jobPath, const std::string &where, const 
     return 0;
 }
 
-bool exportDawproject(const Job &job, const json &raw, const std::string &jobPath, const std::string &outPath, DawprojectExport &res, std::string &err) {
+bool exportDawproject(const Job &job, const json &raw, const std::string &jobPath, const std::string &outPath, DawprojectExport &res, std::string &err,
+                      bool print) {
     const std::string tmp = (fs::temp_directory_path() / ("wavelength-export-" + std::to_string(platform::processId()))).string();
     std::error_code ec;
     fs::create_directories(tmp, ec);
@@ -131,6 +132,72 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
     Writer w;
     std::set<std::string> usedFiles;
     int stateCount = 0;
+
+    // Printing: tracks whose instrument has no DAW counterpart (built-in instruments, audio clips the
+    // format can't describe) render to audio, dry (the effects stay devices or are listed), in one
+    // `render --tracks` of a copy of the job next to it (so its relative paths still resolve)
+    auto clipUnsupported = [](const json &c) {
+        return !c.contains("file") || !c["file"].is_string() || c.contains("bpm") || c.contains("pitch") || c.value("reverse", false) || c.contains("endAt");
+    };
+    struct Printed { std::string file; double seconds = 0; int rate = 48000; };
+    std::map<size_t, Printed> printed;
+    if (print) {
+        json copy = raw;
+        std::vector<std::string> names;
+        for (size_t i = 0; i < job.tracks.size() && i < copy["tracks"].size(); ++i) {
+            const Track &t = job.tracks[i];
+            if (!isBuiltinSpec(t.plugin)) continue;
+            if (t.plugin == "builtin:audio" && std::none_of(t.clips.begin(), t.clips.end(), clipUnsupported)) continue;
+            if (t.notes.empty() && t.clips.empty()) continue;
+            if (t.name.find(',') != std::string::npos) { res.notes.push_back(t.name + ": a comma in the name keeps it from printing"); continue; }
+            copy["tracks"][i]["fx"] = json::array();
+            names.push_back(t.name);
+        }
+        if (!names.empty()) {
+            copy.erase("deliver");
+            copy["leadIn"] = 0;
+            copy["stems"] = "24";
+            const fs::path tmpJob = fs::absolute(jobPath).parent_path() / (".wavelength-print-" + std::to_string(platform::processId()) + ".json");
+            std::ofstream(tmpJob) << copy.dump();
+            struct RemoveJob { fs::path p; ~RemoveJob() { std::error_code e; fs::remove(p, e); } } removeJob{tmpJob};
+            std::string list;
+            for (auto &n : names) list += (list.empty() ? "" : ",") + n;
+            const std::string outDir = (fs::path(tmp) / "print").string();
+            platform::Process p;
+            std::fprintf(stderr, "printing %zu built-in track(s) to audio...\n", names.size());
+            if (platform::spawn({platform::selfExecutable(), "render", tmpJob.string(), "--tracks", list, "--out", outDir, "--json"}, p, true, true)) {
+                std::string outText, crash;
+                platform::readOutput(p, outText, 3600);
+                while (!platform::finished(p, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            std::ifstream rin(fs::path(outDir) / "report.json");
+            const json rep = rin ? json::parse(rin, nullptr, false) : json();
+            if (!rep.is_object() || !rep.contains("tracks")) res.notes.push_back("printing the built-in tracks failed" + (rep.is_object() && rep.contains("error") ? ": " + rep["error"].get<std::string>() : std::string()));
+            else
+                for (auto &tr : rep["tracks"]) {
+                    const std::string file = tr.value("file", "");
+                    for (size_t i = 0; i < job.tracks.size(); ++i)
+                        if (job.tracks[i].name == tr.value("name", "") && !file.empty() && fs::exists(file, ec) && !printed.count(i)) {
+                            std::ifstream f(file, std::ios::binary);
+                            const std::string name = "audio/" + slug(job.tracks[i].name) + "-printed.wav";
+                            zip.add(name, std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()));
+                            usedFiles.insert(name);
+                            printed[i] = {name, rep.value("seconds", 0.0), rep.value("sampleRate", job.sampleRate)};
+                        }
+                }
+        }
+    }
+    // an audio clip from song beat 0 that plays `seconds` of a file, warped to the tempo map (Bitwig keeps it in time)
+    auto warpedClip = [&](const std::string &file, double seconds, int rate) {
+        const double endBeat = job.tempo.secToBeat(seconds);
+        std::string warps = "<Warp time=\"0.000000\" contentTime=\"0.000000\"/>";
+        const bool mapped = raw.contains("tempo") && raw["tempo"].is_array() && raw["tempo"].size() > 1;
+        for (double b = 1; mapped && b < endBeat; b += 1) warps += "<Warp time=\"" + num(b) + "\" contentTime=\"" + num(job.tempo.beatToSec(b)) + "\"/>";
+        warps += "<Warp time=\"" + num(endBeat) + "\" contentTime=\"" + num(seconds) + "\"/>";
+        return "<Clip time=\"0\" duration=\"" + num(endBeat) + "\" contentTimeUnit=\"beats\" playStart=\"0\"><Warps id=\"" + w.id() +
+               "\" contentTimeUnit=\"seconds\"><Audio id=\"" + w.id() + "\" channels=\"2\" sampleRate=\"" + std::to_string(rate) + "\" duration=\"" +
+               num(seconds) + "\"><File path=\"" + esc(file) + "\"/></Audio>" + warps + "</Warps></Clip>";
+    };
 
     // a device for the plugin at `where`, with its state in plugins/ ("" when it can't be saved)
     auto device = [&](const std::string &where, const std::string &label, const std::string &role) -> std::string {
@@ -222,13 +289,15 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
         const Track &t = job.tracks[i];
         const std::string trackId = w.id(), channelId = w.id();
         const bool audio = t.plugin == "builtin:audio";
+        const bool isPrinted = printed.count(i) > 0;
         std::string devices;
         if (!isBuiltinSpec(t.plugin)) devices = device("track:" + std::to_string(i), t.name, "instrument");
+        else if (isPrinted) res.notes.push_back(t.name + ": " + t.plugin + " printed to audio (dry; the notes are on the track too, for another instrument)");
         else if (!audio) res.notes.push_back(t.name + ": " + t.plugin + " has no DAW counterpart; the notes come across on an empty instrument track");
         devices += chainDevices(t.fx, "track:" + std::to_string(i), t.name);
         const std::string dest = !t.output.empty() && busChannel.count(t.output) ? busChannel[t.output] : masterChannel;
         const std::string volId = w.id(), panId = w.id();
-        structure << "<Track id=\"" << trackId << "\" name=\"" << esc(t.name) << "\" contentType=\"" << (audio ? "audio" : "notes") << "\" loaded=\"true\">"
+        structure << "<Track id=\"" << trackId << "\" name=\"" << esc(t.name) << "\" contentType=\"" << (audio ? "audio" : isPrinted ? "audio notes" : "notes") << "\" loaded=\"true\">"
                   << "<Channel id=\"" << channelId << "\" role=\"regular\" audioChannels=\"2\" destination=\"" << dest << "\" solo=\"false\">";
         if (!devices.empty()) structure << "<Devices>" << devices << "</Devices>";
         structure << "<Mute id=\"" << w.id() << "\" name=\"Mute\" value=\"" << (t.mute ? "true" : "false") << "\"/>"
@@ -257,7 +326,8 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
             }
             lanes << "</Notes></Clip></Clips>";
         }
-        if (audio) {   // audio clips: files played as they are (trimmed); stretched, pitched, reversed or rendered clips are left out
+        if (isPrinted) lanes << "<Clips id=\"" << w.id() << "\">" << warpedClip(printed[i].file, printed[i].seconds, printed[i].rate) << "</Clips>";
+        else if (audio) {   // audio clips: files played as they are (trimmed); stretched, pitched, reversed or rendered clips are left out
             std::string clips;
             size_t skipped = 0;
             for (auto &c : t.clips) {

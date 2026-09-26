@@ -65,8 +65,9 @@ notes. `--instrument "Surge XT"` puts one plugin on every melodic part instead (
 pitch bend then reach it as automation). `wavelength export job.json --out song.mid` goes the other
 way: hand a part to a person to open in Bitwig, Cubase or a notation program. To hand over a whole
 song, `wavelength export job.json --out song.dawproject`: a person opens it in Bitwig with the same
-plugins and sounds, the mixer and the arrangement, and finishes it there (read the export's list of
-what has no DAW counterpart: built-in instruments and most built-in effects).
+plugins and sounds, the mixer and the arrangement, and finishes it there. Built-in instruments
+(sampler kits, drums, FX) arrive printed as audio next to their notes; read the export's list of
+what has no DAW counterpart (most built-in effects).
 
 ## Starting from a score
 

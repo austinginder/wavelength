@@ -142,12 +142,14 @@ Usage:
       MIDI track and channel (notes, sustain pedal, volume/pan/expression, other CCs, pitch
       bend). Channel 10 plays builtin:drums; other channels a General MIDI-family sound from
       the sample library, or PLUGIN for all of them. `render song.mid` imports and renders.
-  wavelength export <job.json> [--out song.mid | song.dawproject] [--json]
+  wavelength export <job.json> [--out song.mid | song.dawproject] [--no-print] [--json]
       Write the job's parts as a MIDI file (type 1): tempo map, time signature, markers, and a
       track per job track with its notes, CC, pitch bend and pressure automation. To a .dawproject
       (Bitwig, Studio One, Cubase): the tracks with their plugins and plugin states as the job sets
       them up, notes, faders, pans, sends, buses, the master, tempo map, markers, fader and pan
-      curves, built-in eq/compressor/limiter as the standard devices; lists what has no counterpart.
+      curves, built-in eq/compressor/limiter as the standard devices. Built-in instruments are
+      printed (rendered dry to audio on the track, notes kept; --no-print: notes only); lists what
+      has no counterpart.
   wavelength timeline <job.json> [--every BARS] [--json]
       Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
       included), in song seconds and in file time (after the lead-in), with the tempo there,
@@ -191,7 +193,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -913,7 +915,7 @@ int cmdExport(const Args &a) {
     std::string out = a.get("--out", (fs::path(src).parent_path() / (fs::path(src).stem().string() + ".mid")).string());
     if (fs::path(out).extension() == ".dawproject") {
         DawprojectExport d;
-        if (!exportDawproject(job, j, src, out, d, err)) return fail(a, err);
+        if (!exportDawproject(job, j, src, out, d, err, !a.has("--no-print"))) return fail(a, err);
         if (a.has("--json")) {
             emit(json{{"ok", true}, {"file", out}, {"tracks", d.tracks}, {"buses", d.buses}, {"plugins", d.plugins}, {"notes", d.noteCount},
                       {"left out", d.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
@@ -1565,7 +1567,7 @@ int run(int argc, char **argv) {
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},
-            {"export", {"--out", "--json"}},
+            {"export", {"--out", "--json", "--no-print"}},
             {"serve", {"--port", "--host", "--open", "--ui"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
             {"timeline", {"--every", "--json"}},
