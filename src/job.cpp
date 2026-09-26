@@ -597,6 +597,12 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             if (j["master"].contains("automation") && j["master"]["automation"].contains("rides"))
                 addRides(out.masterGainAutomation, j["master"]["automation"]["rides"], out.tempo);
         }
+        if (j.contains("picture")) {   // true, or {"width": 1600}
+            const auto &p = j["picture"];
+            if (p.is_boolean()) out.picture = p.get<bool>();
+            else if (p.is_object()) { out.picture = true; out.pictureWidth = std::clamp(p.value("width", 1400), 800, 3200); }
+            else throw std::runtime_error("\"picture\" is true or {\"width\": 1600}");
+        }
         for (auto &m : j.value("markers", json::array())) {
             const double beat = m.at("beat").get<double>();
             out.markers.push_back({beat, out.tempo.beatToSec(beat), m.value("name", ""), m.value("checks", true)});

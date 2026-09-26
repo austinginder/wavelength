@@ -20,6 +20,7 @@ struct TrackResult {
     uint32_t latencySamples = 0;      // plugin processing delay removed from this track (instrument + effects)
     std::vector<std::string> warnings;
     nlohmann::json automation = nlohmann::json::array();   // per automated setting: where it moves (activeBeats), its range
+    std::vector<float> levelTimeline;   // post-fader mean square per 50 ms (job.picture only)
 };
 
 struct BusResult {
@@ -61,6 +62,8 @@ struct RenderResult {
     std::vector<std::string> warnings;
     std::vector<std::string> failedTracks;   // tracks whose plugin crashed or hung; the song rendered without them
     std::vector<Delivery> deliveries;        // job "deliver": MP3/FLAC/WAV files, measured after decoding
+    std::string pictureFile;                 // render --png: song.png
+    int pictureWidth = 0, pictureHeight = 0;
 };
 
 // Worker entry point: render track `index` of the job file (instrument + effects) into

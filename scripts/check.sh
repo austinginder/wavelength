@@ -144,6 +144,21 @@ else
   echo "ok   deliver: flac 24/16 and wav 24 decode back to the mix"
 fi
 # serve: the web UI answers, carries its token, refuses changes without it
+# render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)
+if ! "./$build/wavelength" render examples/synth-tour.json --out "out/check/picture/$build" --stems none --png --json 2>/dev/null | python3 -c '
+import json, struct, sys
+p = json.load(sys.stdin)["picture"]
+d = open(p["file"], "rb").read(24)
+sys.exit(0 if d[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", d[16:24]) == (p["width"], p["height"]) == (1400, p["height"]) and p["height"] > 900 else 1)' ||
+   ! "./$build/wavelength" picture examples/hello.json --out "out/check/picture/$build/hello.png" --width 1000 --json | python3 -c '
+import json, struct, sys
+p = json.load(sys.stdin)
+d = open(p["file"], "rb").read(24)
+sys.exit(0 if struct.unpack(">II", d[16:24]) == (1000, p["height"]) and p["height"] > 200 else 1)'; then
+  echo "FAIL picture: render --png / picture"; fail=1
+else
+  echo "ok   picture: render --png and the arrangement picture"
+fi
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
 "./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
 spid=$!

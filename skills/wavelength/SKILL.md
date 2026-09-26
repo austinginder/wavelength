@@ -89,9 +89,14 @@ python3 make-job.py
 "$WAVELENGTH" lint job.json --harmony --json            # wrong notes and key clashes, before rendering
 "$WAVELENGTH" render job.json --out out --json
 python3 "$WAVELENGTH_SCRIPTS/stage-gains.py" .        # faders = target - stem LUFS
-python3 make-job.py && "$WAVELENGTH" render job.json --out out --json
+python3 make-job.py && "$WAVELENGTH" render job.json --out out --png --json   # out/song.png: look at it
 "$WAVELENGTH" analyze out --json                      # pitch, brightness, bands, width per stem and section
 ```
+
+Look at `out/song.png` (the report names it): the sections, the loudness contour with each
+section's level, the spectrum, and every track's notes over its level. It shows at a glance what
+the numbers only list: a part playing where it should rest, a flat contour, a harsh band.
+`"$WAVELENGTH" picture job.json` draws the arrangement before any render.
 
 Read `report.json`: no silent tracks, no warnings you can't explain, `sections[].lufs`
 following the contour you planned, `tracks[].sectionLufs` to find what dominates a section.

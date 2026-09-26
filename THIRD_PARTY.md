@@ -15,6 +15,7 @@ the Windows build compiles it in.
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.58.0 | MIT | the local web UI of `wavelength serve` |
 | [dr_flac, dr_mp3](https://github.com/mackron/dr_libs) | dfe8377 (dr_flac 0.13.4, dr_mp3 0.7.4) | public domain (Unlicense) or MIT-0 | FLAC and MP3 samples, measuring written MP3s |
 | [stb_vorbis](https://github.com/nothings/stb) | 2c980bb (1.22) | public domain (Unlicense) or MIT | Ogg Vorbis samples |
+| [stb_image_write, stb_truetype](https://github.com/nothings/stb) | 2c980bb (1.16, 1.26) | public domain (Unlicense) or MIT | the song picture (`render --png`): PNG files and its text |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
 `wavelength samples --install-soundfont` downloads [MuseScore General](https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/)
@@ -246,7 +247,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## stb_vorbis
+## stb_vorbis, stb_image_write, stb_truetype
 
 Used under the MIT licence (the alternative to the public domain dedication in the same file).
 
@@ -274,7 +275,8 @@ SOFTWARE.
 `wavelength serve` carries three fonts in `ui/fonts/` (built into the binary): Anybody (Etcetera Type
 Co), Instrument Sans (Instrument) and JetBrains Mono (JetBrains), each under the SIL Open Font
 License 1.1, whose full text ships beside them (`Anybody-OFL.txt`, `InstrumentSans-OFL.txt`,
-`JetBrainsMono-OFL.txt`).
+`JetBrainsMono-OFL.txt`). `jetbrains-mono-ascii.ttf` is JetBrains Mono Regular cut to printable ASCII
+(fontTools `pyftsubset`, no hinting); the song picture (`render --png`) draws its text with it.
 
 ## Formats read, not code used
 

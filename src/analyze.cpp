@@ -12,30 +12,6 @@ namespace wl {
 
 namespace {
 
-// in-place radix-2 FFT, n a power of two
-void fft(std::vector<std::complex<double>> &a) {
-    const size_t n = a.size();
-    for (size_t i = 1, j = 0; i < n; ++i) {
-        size_t bit = n >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (i < j) std::swap(a[i], a[j]);
-    }
-    for (size_t len = 2; len <= n; len <<= 1) {
-        const double ang = -2 * dsp::kPi / (double)len;
-        const std::complex<double> wl(std::cos(ang), std::sin(ang));
-        for (size_t i = 0; i < n; i += len) {
-            std::complex<double> w(1);
-            for (size_t k = 0; k < len / 2; ++k) {
-                const auto u = a[i + k], v = a[i + k + len / 2] * w;
-                a[i + k] = u + v;
-                a[i + k + len / 2] = u - v;
-                w *= wl;
-            }
-        }
-    }
-}
-
 double median(std::vector<double> v) {
     if (v.empty()) return 0;
     std::nth_element(v.begin(), v.begin() + (long)v.size() / 2, v.end());
@@ -201,7 +177,7 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
             buf[i] = v * win[i];
             e += v * v;
         }
-        fft(buf);
+        dsp::fft(buf);
         double f = 0;
         for (size_t k = 0; k <= N / 2; ++k) {
             const double m = std::abs(buf[k]);
@@ -304,7 +280,7 @@ std::vector<SpectralPeak> spectralPeaks(const Audio &a, int sampleRate, double s
             const size_t k = p + i;
             buf[i] = k < s1 ? 0.5 * ((double)a.left[k] + a.right[k]) * win[i] : 0.0;
         }
-        fft(buf);
+        dsp::fft(buf);
         for (size_t k = 0; k <= N / 2; ++k) power[k] += std::norm(buf[k]);
         ++frames;
         if (p + N >= s1) break;

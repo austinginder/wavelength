@@ -1,6 +1,7 @@
 #include "render.hpp"
 
 #include "builtins.hpp"
+#include "picture.hpp"
 #include "clips.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
@@ -447,6 +448,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             Audio post;   // what this track adds to its output, for per-section loudness
             if (!job.markers.empty()) post.resize(frames);
             float postPeak = 0;
+            const size_t levelHop = (size_t)std::llround(0.05 * sr);   // the picture's level lane
+            if (job.picture) tr.levelTimeline.assign(frames / levelHop + 1, 0.f);
             for (size_t f = 0; f < frames; ++f) {
                 if (automated && f % 32 == 0) g = dsp::dbToLin(track.gainDb + track.gainAutomation.at(f / sr));
                 if (f % 32 == 0) for (auto &s : sends) if (s.env) s.amt = dsp::dbToLin(s.env->at(f / sr));
@@ -458,6 +461,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 dest->left[f] += l; dest->right[f] += r;
                 postPeak = std::max({postPeak, std::fabs(l), std::fabs(r)});
                 if (!post.left.empty()) { post.left[f] = l; post.right[f] = r; }
+                if (!tr.levelTimeline.empty()) tr.levelTimeline[f / levelHop] += l * l + r * r;
                 for (auto &s : sends) { s.bus->left[f] += (float)(l * s.amt); s.bus->right[f] += (float)(r * s.amt); }
                 for (auto *c : caps)
                     if (f >= c->f0 && f < c->f1) {
@@ -467,6 +471,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                     }
             }
             tr.postPeakDb = dsp::linToDb(postPeak);
+            for (auto &v : tr.levelTimeline) v /= (float)(2 * levelHop);
             for (size_t m = 0; m < job.markers.size(); ++m) {
                 const double a0 = job.markers[m].sec, b0 = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
                 tr.sectionLufs.push_back(integratedLufs(post, job.sampleRate, (size_t)(a0 * sr), (size_t)(b0 * sr)));
@@ -925,6 +930,35 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 const bool already = std::any_of(own.begin(), own.end(), [&](const std::string &o) { return o == w || o.find(w) != std::string::npos; });
                 if (!already) result.warnings.push_back(named);
             }
+    }
+    if (job.picture) {   // song.png: sections, loudness, spectrum and a lane per track, for agents that can see
+        Picture pic;
+        const fs::path src(job.sourcePath);
+        pic.title = src.empty() ? fs::path(outDir).filename().string()
+                                : (src.filename() == "job.json" ? src.parent_path().filename().string() : src.stem().string());
+        pic.width = job.pictureWidth;
+        pic.from = job.window.on ? job.window.trimSec : 0;
+        pic.seconds = seconds;
+        pic.mix = &mix;
+        pic.mixLufs = result.mixLufs;
+        pic.lra = result.mixLra;
+        pic.truePeak = result.truePeakDb;
+        for (auto &s : result.sections) pic.sectionLufs.push_back(s.lufs);
+        for (auto &d : result.dropouts) if (!d.intended) pic.dropouts.push_back({d.start, d.end});
+        for (size_t i = 0; i < job.tracks.size() && i < result.tracks.size(); ++i) {
+            const TrackResult &t = result.tracks[i];
+            PictureTrack p;
+            p.name = t.name;
+            p.lufs = t.lufs;
+            p.level = t.levelTimeline;
+            p.failed = std::find(result.failedTracks.begin(), result.failedTracks.end(), t.name) != result.failedTracks.end();
+            pic.tracks.push_back(std::move(p));
+        }
+        const std::string file = (fs::path(outDir) / "song.png").string();
+        std::string perr;
+        int h = 0;
+        if (writePicture(file, job, pic, h, perr)) { result.pictureFile = file; result.pictureWidth = std::clamp(pic.width, 800, 3200); result.pictureHeight = h; }
+        else result.warnings.push_back("picture: " + perr);
     }
     result.renderSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return true;

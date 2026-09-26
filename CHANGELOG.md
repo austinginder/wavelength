@@ -16,6 +16,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   `pw`, `fm`, `lfo` and more by name (`wavelength params builtin:synth`; cutoff curves sweep
   exponentially). Renders are deterministic. `examples/synth-tour.json` is a song made only of
   built-in instruments.
+- `render --png` (or the job's `"picture": true`): `song.png` next to `mix.wav`, a picture of the song
+  for agents that can read images but can't hear: the sections and bars, the mix's short-term and
+  momentary loudness with each section's integrated LUFS and the dropouts, a spectrogram of the mix
+  (30 Hz-16 kHz, +3 dB/oct), and a lane per track with its notes over its post-fader level and its
+  loudness. The report names it (`picture.file`, `width`, `height`). `wavelength picture job.json`
+  draws the arrangement (sections, bars, notes) before rendering.
 
 ## [0.3.0] - 2026-09-26
 

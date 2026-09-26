@@ -15,8 +15,8 @@ wavelength plugins --json                    # 1. what instruments exist
 wavelength params <plugin> --json            # 2. what can be shaped (optionally --state preset)
 $EDITOR job.json                             # 3. notes + sounds + gains
 wavelength lint job.json --harmony           # 4. wrong notes, before any render (see Harmony)
-wavelength render job.json --out out/x --json  # 5. render, read the report
-# 6. adjust gains/params/notes from the report and render again
+wavelength render job.json --out out/x --png --json  # 5. render, read the report, look at out/x/song.png
+# 6. adjust gains/params/notes from the report and the picture, and render again
 ```
 
 Always pass `--json`. Stdout then carries exactly one JSON document; plugin chatter goes
@@ -297,6 +297,31 @@ tagged `octave -1` sound an octave below the written note: add `"transpose": 12`
 part higher. `self-playing` presets make sound without notes (latched arps, drones); `rhythmic`
 ones turn a held note into a pattern. `presets --json` has the numbers (centroid, bands,
 envelope, pitch offset in semitones and cents).
+
+## Seeing the song: `render --png`
+
+You can't hear the render, but you can look at it. `wavelength render job.json --png` (or
+`"picture": true` in the job, `{"width": 1800}` for a bigger one) writes `song.png` next to
+`mix.wav` and names it in the report (`picture.file`). Look at it after every full render (in
+Claude Code, read the PNG). Top to bottom:
+
+- **Sections and bars:** the markers as coloured bands, bar numbers under them.
+- **Loudness:** the mix's short-term loudness (3 s, amber), its momentary loudness (0.4 s, faint),
+  and each section's integrated LUFS as a white line with its number. Red bands are dropouts.
+- **Spectrum:** the mix from 30 Hz to 16 kHz, tilted +3 dB per octave so a balanced mix looks even
+  from bass to air.
+- **One lane per track:** its notes (pitch within the track's own range; drums a row per key) over
+  its post-fader level, with the stem's LUFS beside its name.
+
+What to look for: the loudness line should draw the contour you planned (a drop steps up, a
+breakdown dips; a flat line is a flat arrangement). A lane lit where it should rest (a pad under
+the breakdown) or dark where it should play (a silent track, a curve holding it down). Blocks
+of notes that repeat unchanged in every lane for many bars. In the spectrum, a bright band that
+never moves (a harsh or resonant sound), an empty top (dull), a thick smear around 200-500 Hz
+(mud); filter sweeps in a build show as rising edges.
+
+`wavelength picture job.json` draws the arrangement alone (sections, bars, notes) before
+anything is rendered: check the form and the entries of each part in seconds.
 
 ## Listening by numbers: `wavelength analyze`
 

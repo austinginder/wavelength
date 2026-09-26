@@ -36,6 +36,7 @@
 #include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
+#include "picture.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
 
@@ -100,7 +101,7 @@ Usage:
       prints the plugin's display text for a plain value (or the value it reads for display
       text, "Name=800 Hz", or a note name); --map "Name" tabulates value -> display across the
       range (21 rows, or --steps N). Neither changes anything.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--png] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a worker whose plugin crashes is started again (job "retries", default 2); a track that
@@ -115,6 +116,9 @@ Usage:
       --from 41 --to 45 renders only bars 41-44 (after --preroll bars, default 2, rendered and cut:
       reverbs and held notes are already going); the files hold just those bars, and the report's
       "window" says where they sit in the song. Quick previews of a section, alone or with --tracks.
+      --png (or the job's "picture": true) draws DIR/song.png: sections and bars, the mix's loudness over
+      time with each section's level, its spectrum, and a lane per track with its notes over its
+      post-fader level. An agent that can read images sees the whole song at a glance.
       --deliver mp3,flac (mp3:256, flac:16, wav:16, wav:24; none) replaces the job's "deliver": files
       written next to mix.wav, decoded again and measured (report mix.deliveries). MP3 needs LAME
       (libmp3lame, or $WAVELENGTH_LAME; "none" = use ffmpeg) or ffmpeg. --tracks and --from renders skip it.
@@ -151,6 +155,9 @@ Usage:
       curves, built-in eq/compressor/limiter as the standard devices. Built-in instruments are
       printed (rendered dry to audio on the track, notes kept; --no-print: notes only); lists what
       has no counterpart.
+  wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
+      Draws the arrangement before rendering: sections, bars and a lane per track with its notes
+      (default: arrangement.png next to the job). render --png draws the full picture with levels.
   wavelength timeline <job.json> [--every BARS] [--json]
       Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
       included), in song seconds and in file time (after the lead-in), with the tempo there,
@@ -194,7 +201,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1090,6 +1097,7 @@ int cmdRender(const Args &a) {
         job.stemBits = s == "none" ? 0 : s == "16" ? 16 : s == "24" ? 24 : s == "float" || s == "32" ? 32 : -1;
         if (job.stemBits < 0) return fail(a, "--stems must be float, 24, 16 or none");
     }
+    if (a.has("--png")) job.picture = true;
     RenderResult r;
     std::string outDir = a.get("--out", "out");
     bool ok = false;
@@ -1157,6 +1165,7 @@ int cmdRender(const Args &a) {
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"dropouts", dropouts}, {"failedTracks", r.failedTracks}};
     if (!r.deliveries.empty()) report["mix"]["deliveries"] = deliveriesJson(r.deliveries);
+    if (!r.pictureFile.empty()) report["picture"] = {{"file", r.pictureFile}, {"width", r.pictureWidth}, {"height", r.pictureHeight}};
     if (!only.empty()) report["onlyTracks"] = only;
     if (job.window.on) {   // the files hold bars from..to only; songStart = where that is in the song (seconds)
         const double bpb = job.tsigNum * 4.0 / job.tsigDen;
@@ -1181,6 +1190,7 @@ int cmdRender(const Args &a) {
                      d.overshootDb, d.file.c_str());
     for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
     for (auto &w : r.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
+    if (!r.pictureFile.empty()) std::fprintf(OUT, "picture %s\n", r.pictureFile.c_str());
     std::fprintf(OUT, "%.2f s of audio rendered in %.2f s\n", r.seconds, r.renderSeconds);
     if (!complete) { std::fprintf(stderr, "error: %s\n", incomplete.c_str()); return 1; }
     return 0;
@@ -1249,6 +1259,34 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
 }
 
 // ---- timeline: bars and markers -> song time, from the tempo map ------------------------------
+// wavelength picture job.json: the arrangement as an image before rendering (render --png draws the full one)
+int cmdPicture(const Args &a) {
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]");
+    const std::string path = a.positional[1];
+    std::ifstream in(path);
+    if (!in) return fail(a, "cannot read " + path);
+    json j;
+    try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    Job job;
+    std::string err;
+    if (!parseJob(j, fs::absolute(path).parent_path().string(), job, err)) return fail(a, err);
+    double end = 0;
+    for (const auto &t : job.tracks) for (const auto &n : t.notes) end = std::max(end, n.start + n.length);
+    for (const auto &t : job.tracks) if (!t.clips.empty()) end = std::max(end, clipsEndSeconds(job, t));
+    Picture pic;
+    const fs::path src = fs::absolute(path);
+    pic.title = src.filename() == "job.json" ? src.parent_path().filename().string() : src.stem().string();
+    pic.width = std::atoi(a.get("--width", std::to_string(job.pictureWidth)).c_str());
+    pic.seconds = job.length > 0 ? job.length : end + job.tail;
+    const std::string out = a.get("--out", (src.parent_path() / "arrangement.png").string());
+    int h = 0;
+    if (!writePicture(out, job, pic, h, err)) return fail(a, err);
+    const int w = std::clamp(pic.width, 800, 3200);
+    if (a.has("--json")) emit(json{{"ok", true}, {"file", out}, {"width", w}, {"height", h}}.dump(2));
+    else std::fprintf(OUT, "%s (%d x %d)\n", out.c_str(), w, h);
+    return 0;
+}
+
 int cmdTimeline(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength timeline <job.json> [--every BARS] [--json]");
     const std::string path = a.positional[1];
@@ -1595,7 +1633,7 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument"}},
+            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument"}},
@@ -1603,6 +1641,7 @@ int run(int argc, char **argv) {
             {"serve", {"--port", "--host", "--open", "--ui"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
             {"timeline", {"--every", "--json"}},
+            {"picture", {"--out", "--width", "--json"}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
         if (it != known.end())
@@ -1639,6 +1678,7 @@ int run(int argc, char **argv) {
             return serve(o);
         }
         if (cmd == "timeline") return cmdTimeline(a);
+        if (cmd == "picture") return cmdPicture(a);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {
         return fail(a, e.what());

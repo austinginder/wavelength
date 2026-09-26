@@ -169,9 +169,11 @@ add_executable(wavelength
   src/sfz.cpp
   src/sf2.cpp
   src/encode.cpp
-  src/audio_codecs.cpp)
+  src/audio_codecs.cpp
+  src/image_codecs.cpp
+  src/picture.cpp)
 # the single-file decoders compile inside audio_codecs.cpp; their own warnings are not ours
-set_source_files_properties(src/audio_codecs.cpp PROPERTIES COMPILE_OPTIONS "-w")
+set_source_files_properties(src/audio_codecs.cpp src/image_codecs.cpp PROPERTIES COMPILE_OPTIONS "-w")
 # "-dev" between releases; cleared when a release is cut
 set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
