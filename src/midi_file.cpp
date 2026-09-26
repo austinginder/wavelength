@@ -174,6 +174,9 @@ bool parseTrack(const uint8_t *p, size_t n, std::vector<Ev> &out, int &order, st
 
 } // namespace
 
+std::string gmProgramName(int program) { return kGmNames[std::clamp(program, 0, 127)]; }
+std::string gmProgramSound(int program) { return gmMultisample(std::clamp(program, 0, 127)); }
+
 bool importMidiFile(const std::string &path, const std::string &outDir, const std::string &instrument, MidiImport &res, std::string &err) {
     std::vector<uint8_t> d;
     if (!readFile(path, d, err)) return false;

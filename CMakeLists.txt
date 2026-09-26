@@ -161,6 +161,7 @@ add_executable(wavelength
   src/dawproject.cpp
   src/bitwig.cpp
   src/midi_file.cpp
+  src/musicxml.cpp
   src/wav.cpp
   src/audio_file.cpp
   src/sfz.cpp

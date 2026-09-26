@@ -56,12 +56,24 @@ song.dawproject` does both steps.
 ## Starting from a MIDI file
 
 `wavelength import part.mid --out songs/x --json` makes a job from a Standard MIDI File (from
-MuseScore, a DAW, music21, another agent). Channel 10 becomes `builtin:drums`; every other part gets
+a DAW, music21, another agent; from a notation program, prefer its MusicXML: see below). Channel 10 becomes `builtin:drums`; every other part gets
 a General MIDI-family sound from the sample library (piano, strings, brass, ...) so the job renders
 at once: then swap in real plugins and presets track by track (`"plugin"`, `"preset"`), keeping the
 notes. `--instrument "Surge XT"` puts one plugin on every melodic part instead (controllers and
 pitch bend then reach it as automation). `wavelength export job.json --out song.mid` goes the other
 way: hand a part to a person to open in Bitwig, Cubase or a notation program.
+
+## Starting from a score
+
+`wavelength import score.mxl --out songs/x --json` (or `.musicxml`) makes a job from a MusicXML
+score: the usual export of MuseScore, Sibelius, Finale and Dorico, and what music21 writes. It plays
+the score as written: repeats and first/second endings (and D.C./D.S. al Fine/Coda) laid out, ties
+joined, transposing instruments at concert pitch, dynamics and hairpins as velocities, staccato
+shortened, accents louder. The score's key signatures (when they carry a mode) become `keys`, so
+`lint --harmony` reads the composer's keys; tempo marks become the tempo map (a score without one
+imports at 120: set `tempo`); rehearsal marks become markers. Each note keeps its marks (`"marks":
+["staccato", "accent"]`, the render ignores them): when you move a part onto an orchestral library,
+turn them into `art` with the track's `articulations`. Grace notes are left out.
 
 ## Choosing sounds
 

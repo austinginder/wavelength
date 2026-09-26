@@ -23,6 +23,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   over `mix.wav`, and an MP3 that decodes above -1 dBTP warns with how far to lower the ceiling.
   FLAC is encoded by Wavelength itself (verified bit-exact, MD5 signed); MP3 uses LAME loaded at run
   time (`$WAVELENGTH_LAME`, Homebrew and system paths) or ffmpeg, with the LAME tag for gapless decoding.
+- MusicXML import: `wavelength import score.mxl` (or `.musicxml`, `.xml`; `render score.mxl` imports
+  and renders). A track per part with repeats, first/second endings and D.C./D.S. al Fine/Coda played
+  out, ties, chords and voices, transposing instruments at concert pitch, dynamics (marks, the
+  `dynamics` attribute, `<sound dynamics>`) and hairpins as velocities, staccato and accents, tempo
+  and metronome marks as the tempo map, key signatures with a mode as `keys`, rehearsal marks as
+  markers, percussion parts on their MIDI keys. Notes keep their score marks in `"marks"`. Parts get
+  General MIDI sounds from the sample library (their MIDI program, or a guess from the part name).
 - `wavelength serve [SONGS_DIR]`: a local web UI for reviewing songs with a human, built into the
   binary (localhost only, a per-launch token on changes). The arrangement with sections, a chord lane
   and harmony problems from the harmony check, lanes that open into piano rolls, loudness, stems,

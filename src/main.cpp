@@ -30,6 +30,7 @@
 #include "bitwig.hpp"
 #include "dawproject.hpp"
 #include "midi_file.hpp"
+#include "musicxml.hpp"
 #include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
@@ -129,6 +130,12 @@ Usage:
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
       markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
       `render project.dawproject` imports into <out>/import and renders in one go.
+  wavelength import <score.musicxml | score.mxl> [--out DIR] [--instrument PLUGIN] [--json]
+      Turn a MusicXML score (MuseScore, Sibelius, Finale, Dorico, music21) into a job: a track per
+      part, repeats and endings played out, ties, chords and voices, concert pitch for transposing
+      instruments, dynamics and hairpins as velocities, staccato and accents, tempo marks, key
+      signatures (with a mode) as "keys", rehearsal marks as markers. Notes keep their score marks
+      in "marks". Parts get General MIDI sounds like a MIDI import. `render score.mxl` does both steps.
   wavelength import <song.mid> [--out DIR] [--instrument PLUGIN] [--json]
       Turn a Standard MIDI File into a job: tempo map, time signature, markers, one track per
       MIDI track and channel (notes, sustain pedal, volume/pan/expression, other CCs, pitch
@@ -753,7 +760,7 @@ int cmdMaster(const Args &a) {
 // ---- render ----------------------------------------------------------------------------
 // ---- import -------------------------------------------------------------------------
 int cmdImport(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | project.bwproject> [--out DIR]");
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | score.musicxml | score.mxl | project.bwproject> [--out DIR]");
     const std::string src = a.positional[1];
     if (fs::path(src).extension() == ".bwproject") {   // Bitwig's own format: list what it holds
         bitwig::Project p;
@@ -811,6 +818,21 @@ int cmdImport(const Args &a) {
         for (auto &n : m.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
         return 0;
     }
+    if (ext == ".musicxml" || ext == ".mxl" || ext == ".xml") {
+        MusicXmlImport m;
+        std::string err;
+        if (!importMusicXml(src, outDir, a.get("--instrument", ""), m, err)) return fail(a, err);
+        const std::string jobPath = (fs::path(outDir) / "job.json").string();
+        if (a.has("--json")) {
+            emit(json{{"ok", true}, {"job", jobPath}, {"tracks", m.tracks}, {"notes", m.noteCount}, {"measures", m.measures},
+                      {"playedMeasures", m.playedMeasures}, {"left out", m.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+            return 0;
+        }
+        std::fprintf(OUT, "imported %s (MusicXML): %zu tracks, %zu notes, %zu measures (%zu played with repeats) -> %s\n", src.c_str(), m.tracks,
+                     m.noteCount, m.measures, m.playedMeasures, jobPath.c_str());
+        for (auto &n : m.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
+        return 0;
+    }
     DawprojectImport r;
     std::string err;
     if (!importDawproject(src, outDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
@@ -860,6 +882,14 @@ int cmdRender(const Args &a) {
         MidiImport m;
         std::string err;
         if (!importMidiFile(path, importDir, a.get("--instrument", ""), m, err)) return fail(a, err);
+        for (auto &n : m.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
+        path = (fs::path(importDir) / "job.json").string();
+    }
+    if (const std::string ext = fs::path(path).extension().string(); ext == ".musicxml" || ext == ".mxl") {   // import, then render
+        const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
+        MusicXmlImport m;
+        std::string err;
+        if (!importMusicXml(path, importDir, a.get("--instrument", ""), m, err)) return fail(a, err);
         for (auto &n : m.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
         path = (fs::path(importDir) / "job.json").string();
     }

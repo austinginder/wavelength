@@ -25,6 +25,17 @@ std::vector<const Node *> Node::all(const std::string &t) const {
     for (auto &c : children) if (c->tag == t) out.push_back(c.get());
     return out;
 }
+std::string Node::childText(const std::string &t, const std::string &def) const {
+    const Node *c = child(t);
+    return c ? c->text : def;
+}
+double Node::childNum(const std::string &t, double def) const {
+    const Node *c = child(t);
+    if (!c || c->text.empty()) return def;
+    char *end = nullptr;
+    const double v = std::strtod(c->text.c_str(), &end);
+    return end == c->text.c_str() ? def : v;
+}
 void Node::walk(const std::string &t, std::vector<const Node *> &out) const {
     for (auto &c : children) {
         if (c->tag == t) out.push_back(c.get());
@@ -96,13 +107,30 @@ struct Parser {
             node->attrs.push_back({name, decode(s.substr(i, e - i))});
             i = e + 1;
         }
-        // children until </tag>
+        // text and children until </tag>
+        std::string text;
         for (;;) {
-            if (!skipMisc()) { err = "unexpected end: <" + node->tag + "> is not closed"; return nullptr; }
+            const size_t lt = s.find('<', i);
+            if (lt == std::string::npos) { err = "unexpected end: <" + node->tag + "> is not closed"; return nullptr; }
+            text += decode(s.substr(i, lt - i));
+            i = lt;
+            if (s.compare(i, 9, "<![CDATA[") == 0) {
+                const size_t e = s.find("]]>", i);
+                if (e == std::string::npos) { err = "unterminated CDATA"; return nullptr; }
+                text += s.substr(i + 9, e - i - 9);
+                i = e + 3;
+                continue;
+            }
+            if (s.compare(i, 4, "<!--") == 0 || s.compare(i, 2, "<?") == 0 || s.compare(i, 2, "<!") == 0) {
+                if (!skipMisc()) { err = "unexpected end: <" + node->tag + "> is not closed"; return nullptr; }
+                continue;
+            }
             if (s.compare(i, 2, "</") == 0) {
                 const size_t e = s.find('>', i);
                 if (e == std::string::npos) { err = "bad closing tag"; return nullptr; }
                 i = e + 1;
+                const size_t a = text.find_first_not_of(" \t\r\n"), b = text.find_last_not_of(" \t\r\n");
+                if (a != std::string::npos) node->text = text.substr(a, b - a + 1);
                 return node;
             }
             auto c = element();

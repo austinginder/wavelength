@@ -64,6 +64,21 @@ sys.exit(0 if ok else 1)'; then
 else
   echo "ok   window render: clips-tour bars 3-4"
 fi
+# MusicXML: repeats, endings and D.S. al Fine play in order; transposition, dynamics, ties, chords and voices
+if ! { "./$build/wavelength" import examples/scores/repeats.musicxml --out out/check/mx-repeats --json > /dev/null &&
+       "./$build/wavelength" import examples/scores/dynamics.musicxml --out out/check/mx-dynamics --json > /dev/null; } ||
+   ! python3 -c '
+import json, sys
+r = json.load(open("out/check/mx-repeats/job.json"))["tracks"][0]["notes"]
+order = [((n["key"] // 12 - 1) - 4) * 7 + [0, 2, 4, 5, 7, 9, 11].index(n["key"] % 12) + 1 for n in r]
+d = [(n["beat"], n["dur"], n["key"], n["vel"]) for n in json.load(open("out/check/mx-dynamics/job.json"))["tracks"][0]["notes"]]
+want = [(0.0, 1.0, 70, 0.4), (1.0, 1.0, 72, 0.4), (2.0, 1.0, 74, 0.503), (3.0, 1.0, 75, 0.607), (4.0, 0.5, 77, 0.71), (4.0, 4.0, 58, 0.71),
+        (5.0, 1.0, 77, 0.83), (6.0, 4.0, 70, 0.71), (6.0, 2.0, 74, 0.71), (10.0, 2.0, 67, 0.71)]
+sys.exit(0 if order == [1, 2, 1, 2, 3, 4, 3, 5, 6, 7, 8, 9, 10, 6, 7, 8] and d == want else 1)'; then
+  echo "FAIL musicxml import"; fail=1
+else
+  echo "ok   musicxml: repeat order, transposition, dynamics, ties"
+fi
 # deliveries: FLAC (24 and 16 bit) and a 24-bit WAV decode back to mix.wav's loudness and true peak
 dl="out/check/deliver/$build"
 if ! "./$build/wavelength" render examples/mastering.json --deliver flac,flac:16,wav:24 --out "$dl" --json 2>/dev/null | python3 -c '
