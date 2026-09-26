@@ -103,7 +103,7 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 | `clip` | `ceiling` -1 dB, `kneeDb` (where shaping starts, in dB under the ceiling: 2-3 is a gentle transient shaver) or `knee` 0.5 (the same as a fraction of the ceiling's amplitude: 0.5 starts 6 dB under it, which already distorts a loud mix; 0.2-0.3 is typical), `drive` 0 dB *(automatable)*. A soft clipper that never exceeds the ceiling: put it before the master `limiter` (or on a kick or clap) to shave the first milliseconds of transients instead of limiting the whole mix. Warns when it shapes so much that it's distortion. |
 | `saturate` | `drive` 6 dB *(automatable)*, `mix` 1 *(automatable)*, tanh. Quiet material comes out up to `drive` louder: add `"match": true` (see Level match) so an automated `drive` changes the tone and not the balance. |
 | `chorus` | `rate` 0.3 Hz, `depth` 4 ms, `delay` 14 ms, `mix` 0.35 *(automatable)* |
-| `width` | `amount` 1 (0 = mono, >1 wider) *(automatable)* |
+| `width` | `amount` 1 (0 = mono, >1 wider) *(automatable)*. Warns when narrowing takes 3 dB or more of the signal away for a second or longer (more side than mid came in: a wide or anti-phase reverb vanishes toward mono), except where it runs into the song's end |
 | `duck` | `trigger` (track name), `keys` (optional list, e.g. `[36]` = kicks only), `depth` 8 dB *(automatable)*, `attack` 8 ms, `hold` 20 ms, `release` 180 ms, sidechain-style pumping keyed from another track's notes |
 | `tremolo` | `rate` "1/8" (Hz or note value), `shape` sine, `phase`, `depth` 0.5 (0-1) *(automatable)*, `spread` 0 (right channel phase offset; 0.5 = autopan) |
 | `pan` | `position` 0 (-1..1) *(automatable, LFO-able)*: balance a stereo signal |

@@ -38,6 +38,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- `width` warns when narrowing removes 3 dB or more of what comes in for a second or longer (more side
+  than mid energy: a wide or anti-phase reverb vanishing toward mono), with the bars and file times; a
+  collapse that runs into the end of the song is left alone.
 - `wavelength timeline job.json [--every BARS]`: song time and file time of every marker and every N
   bars from the tempo map (ramps included), the tempo there, the last sound and the render's length,
   without rendering (tempo-map songs no longer integrate it by hand).

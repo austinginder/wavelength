@@ -566,9 +566,47 @@ struct Width : Effect {
     Width(const json &j, const Job &job) { label = "width"; amount = param(j, "amount", 1, job.tempo); checkKeys(j, {"amount"}, *this); }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
+        // energy in and out per 0.25 s: narrowing toward mono removes the side signal, and a wide or
+        // anti-phase input (a stereo reverb reads correlation < 0) then mostly vanishes
+        const size_t hop = (size_t)(0.25 * sr);
+        std::vector<double> ein((a.frames() + hop - 1) / hop, 0), eout(ein.size(), 0);
         for (size_t i = 0; i < a.frames(); ++i) {
+            ein[i / hop] += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
             const double w = amount.at(i / sr), m = (a.left[i] + a.right[i]) * 0.5, s = (a.left[i] - a.right[i]) * 0.5 * w;
             a.left[i] = (float)(m + s); a.right[i] = (float)(m - s);
+            eout[i / hop] += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
+        }
+        // 1 s windows where the input sounds (above -60 dBFS) and narrowing takes 3 dB or more (half the energy,
+        // so more side than mid came in) away; overlapping windows merge into one stretch
+        const double floor = 2.0 * hop * 1e-6;
+        const size_t span = 4;
+        std::vector<bool> lost(ein.size(), false);
+        for (size_t w = 0; w + span <= ein.size(); ++w) {
+            double si = 0, so = 0;
+            for (size_t k = w; k < w + span; ++k) { si += ein[k]; so += eout[k]; }
+            if (si > span * floor && so < si * 0.5) for (size_t k = w; k < w + span; ++k) lost[k] = true;
+        }
+        for (size_t w = 0; w < ein.size();) {
+            if (!lost[w]) { ++w; continue; }
+            size_t e = w;
+            double si = 0, so = 0;
+            while (e < ein.size() && lost[e]) { si += ein[e]; so += eout[e]; ++e; }
+            if (e + span < ein.size()) {   // a collapse that runs into the end of the song is an ending, not a hole
+                const double t0 = w * 0.25, t1 = e * 0.25, f0 = t0 + c.job.leadIn, f1 = t1 + c.job.leadIn;
+                const double bpb = c.job.tsigNum * 4.0 / c.job.tsigDen, loss = 10 * std::log10(si / std::max(so, 1e-30));
+                const int b0 = (int)std::floor(c.job.tempo.secToBeat(t0) / bpb) + 1, b1 = (int)std::floor(c.job.tempo.secToBeat(t1 - 1e-6) / bpb) + 1;
+                char buf[400], amount[32], bars[32];
+                if (loss > 60) std::snprintf(amount, sizeof amount, "all");
+                else std::snprintf(amount, sizeof amount, "%.0f dB", loss);
+                if (b0 == b1) std::snprintf(bars, sizeof bars, "bar %d", b0);
+                else std::snprintf(bars, sizeof bars, "bars %d-%d", b0, b1);
+                std::snprintf(buf, sizeof buf, "width: narrowing removes %s of the signal for %.1f s (%s, %d:%04.1f-%d:%04.1f in the file): "
+                              "what comes in there is mostly side (stereo) energy, e.g. a wide or anti-phase reverb, and it vanishes toward mono; "
+                              "narrow less, or narrow before the reverb", amount, t1 - t0, bars,
+                              (int)(f0 / 60), std::fmod(f0, 60.0), (int)(f1 / 60), std::fmod(f1, 60.0));
+                warnings.push_back(buf);
+            }
+            w = e;
         }
         return true;
     }
