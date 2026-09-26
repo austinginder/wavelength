@@ -38,6 +38,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   Resonators and comb freezes stay level-neutral: Tuned Metal's kHs Resonator hats went from +16.7 dB
   to +0.6 dB over the dry sound, MComb's noise choir from +11.3 to 0.0. The gain holds where the input
   is near silence, so rings and tails the effect adds are kept.
+- Automation curves take display text and note names: `[[0, "C#4"], [32, "880 Hz", "switch"]]` on a
+  plugin parameter (`automate` on a plugin effect, `automation.params`) is read by the plugin's own
+  text-to-value once per distinct text before the render, like static `params`; note names reach it as
+  Hz. `"scale": "display"` reads plain numbers as display values. Built-in settings read note names and
+  `Hz`/`kHz`/`dB`/`%` text in curves and as static values (`"cutoff": "A3"`).
 - `"switch"` automation points and curves: `[64, 1, "switch"]` holds the previous value until beat 64,
   then moves to the new one over a short ramp (5 ms, or `"ramp": ms` on the curve object;
   `"curve": "switch"` makes every point one). On/off switching takes one point per switch instead of

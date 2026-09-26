@@ -54,6 +54,16 @@ form `{"points": [...], "curve": "linear" | "exp" | "step" | "switch", "ramp": 5
 curve for all points (`ramp`: the switch ramp in ms), and `{"value": 0.5, "lfo": {...}}` is a steady
 value with an LFO on it.
 
+**Values as text.** A point's value may be a string: a note name (`"C#4"` = 277.18 Hz, for any
+frequency) or a number with its unit. Built-in settings read `Hz`, `kHz`, `dB`, `ms`, `s`, `st` and `%`
+(`"50%"` = 0.5), in curves and as static values (`"cutoff": "A3"`). Plugin parameters (`automate` on a
+plugin effect, `automation.params` on a track) hand the text to the plugin, as static `params` do, so a
+Melda frequency that is log 0..1 underneath takes `[[0, "C#4"], [32, "880 Hz", "switch"]]`; note names
+reach the plugin as Hz. `"scale": "display"` on the curve object reads plain numbers as display values
+(`{"scale": "display", "points": [[0, 800], [16, 2400]]}` for a frequency in Hz). Each distinct text is
+read once, before the render; the curve then moves in the parameter's own values, so a log-scaled
+frequency sweeps evenly in pitch between two points. A text the plugin can't read fails the render.
+
 **LFOs** add a wave on top of any automatable value: on a built-in effect with
 `"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5, "shape": "sine"}}` (next to `automate`), or inside
 any curve's object form (plugin parameters, fader, pan, sends). `rate` is Hz or a tempo-synced

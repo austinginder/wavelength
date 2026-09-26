@@ -5,7 +5,10 @@
 #include "tempo.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -103,12 +106,15 @@ public:
     // "ramp" in ms on the object form): one point per on/off switch, without a click.
     // Object form: {"points": [...], "curve": "linear" | "exp" | "step" | "switch", "ramp": ms, "lfo": {...}}
     // or {"value": v, "lfo": {...}} for a steady value with an LFO on it.
-    static Envelope parse(const nlohmann::json &j, const TempoMap &tempo, bool exp) {
+    // Values may be text: display text ("800 Hz", "-6 dB", "97%") or a note name ("C#4" = its frequency);
+    // "scale": "display" reads numbers as display values too. Built-in values are read here; with
+    // `deferText` (plugin parameters) the curve keeps the text until resolveText() asks the plugin.
+    static Envelope parse(const nlohmann::json &j, const TempoMap &tempo, bool exp, bool deferText = false) {
         Envelope e;
         e.exp_ = exp;
         const nlohmann::json *points = &j;
         int allMode = 0;           // 0 interpolate, 1 step, 2 switch
-        double rampSec = 0.005;    // "switch": the ramp into each new value
+        bool display = false;      // "scale": "display": numbers are display values
         if (j.is_object()) {
             const std::string curve = j.value("curve", exp ? "exp" : "linear");
             if (curve == "exp") e.exp_ = true;
@@ -117,44 +123,74 @@ public:
             else if (curve == "switch") allMode = 2;
             else throw std::runtime_error("automation curve must be linear, exp, step or switch");
             if (j.contains("ramp")) {
-                rampSec = j["ramp"].get<double>() / 1000.0;
-                if (rampSec < 0 || rampSec > 10) throw std::runtime_error("automation \"ramp\" is milliseconds, 0 to 10000");
+                e.rampSec_ = j["ramp"].get<double>() / 1000.0;
+                if (e.rampSec_ < 0 || e.rampSec_ > 10) throw std::runtime_error("automation \"ramp\" is milliseconds, 0 to 10000");
             }
             if (j.contains("lfo")) e.lfo_ = std::make_shared<Lfo>(Lfo::parse(j["lfo"], tempo));
             const std::string scale = j.value("scale", "plain");
             if (scale == "normalized") e.normalized_ = true;
-            else if (scale != "plain") throw std::runtime_error("automation \"scale\" must be plain or normalized");
+            else if (scale == "display") display = true;
+            else if (scale != "plain") throw std::runtime_error("automation \"scale\" must be plain, normalized or display");
             if (j.contains("points")) points = &j["points"];
-            else if (j.contains("value")) { e.pts_.push_back({0.0, j["value"].get<double>()}); e.step_.push_back(false); return e; }
-            else throw std::runtime_error("automation object needs \"points\" or \"value\"");
+            else if (j.contains("value")) {
+                nlohmann::json pt = nlohmann::json::array({0.0, j["value"]});
+                return finish(e, {rawPoint(pt, tempo, 0, display, e)}, deferText);
+            } else throw std::runtime_error("automation object needs \"points\" or \"value\"");
         }
         if (!points->is_array() || points->empty()) throw std::runtime_error("automation must be a non-empty array of [beat, value] points");
-        std::vector<std::tuple<double, double, int>> pts;
-        for (const auto &p : *points) {
-            double beat, value;
-            int mode = allMode;
-            if (p.is_array()) {
-                beat = p.at(0).get<double>(); value = p.at(1).get<double>();
-                if (p.size() > 2 && p[2].is_string()) {
-                    const std::string m = p[2].get<std::string>();
-                    if (m == "step" || m == "hold") mode = 1;
-                    else if (m == "switch") mode = 2;
-                    else throw std::runtime_error("automation point mode must be \"step\" or \"switch\"");
-                }
-            } else {
-                beat = p.at("beat").get<double>(); value = p.at("value").get<double>();
-                if (p.value("step", false)) mode = 1;
-                if (p.value("switch", false)) mode = 2;
-            }
-            if (e.exp_ && value <= 0) throw std::runtime_error("exponential automation values must be > 0");
-            pts.push_back({tempo.beatToSec(beat), value, mode});
-        }
-        std::stable_sort(pts.begin(), pts.end(), [](auto &a, auto &b) { return std::get<0>(a) < std::get<0>(b); });
-        e.build(pts, rampSec);
-        return e;
+        std::vector<Raw> raw;
+        for (const auto &p : *points) raw.push_back(rawPoint(p, tempo, allMode, display, e));
+        std::stable_sort(raw.begin(), raw.end(), [](const Raw &a, const Raw &b) { return a.sec < b.sec; });
+        return finish(e, std::move(raw), deferText);
     }
 
-    bool empty() const { return pts_.empty(); }
+    // Text values still waiting for a plugin to read them (plugin parameter curves).
+    bool needsText() const { return !raw_.empty(); }
+    // Reads every text value through `read(text, value)` (the plugin's own text-to-value; cache it),
+    // then builds the curve. False (and `bad` = the text) when one could not be read.
+    template <class Read> bool resolveText(Read read, std::string &bad) {
+        for (auto &r : raw_)
+            if (!r.text.empty() && !read(r.text, r.value)) { bad = r.text; return false; }
+        auto raw = std::move(raw_);
+        raw_.clear();
+        build(raw);
+        return true;
+    }
+
+    // A note name ("C#4", "Bb2", "A-1"; C4 = MIDI 60) as its frequency in Hz (A4 = 440).
+    static bool noteHz(const std::string &s, double &hz) {
+        static const int base[] = {9, 11, 0, 2, 4, 5, 7};   // A B C D E F G
+        if (s.size() < 2) return false;
+        const char c = (char)std::toupper((unsigned char)s[0]);
+        if (c < 'A' || c > 'G') return false;
+        int semis = base[c - 'A'];
+        size_t i = 1;
+        while (i < s.size() && (s[i] == '#' || s[i] == 'b')) semis += s[i++] == '#' ? 1 : -1;
+        if (i >= s.size()) return false;
+        size_t k = i + (s[i] == '-' ? 1 : 0);
+        if (k >= s.size()) return false;
+        for (size_t x = k; x < s.size(); ++x) if (!std::isdigit((unsigned char)s[x])) return false;
+        const int midi = 12 * (std::stoi(s.substr(i)) + 1) + semis;
+        hz = 440.0 * std::pow(2.0, (midi - 69) / 12.0);
+        return true;
+    }
+    // Text for a built-in value: a note name (its Hz), or a number with an optional unit: Hz, kHz (x1000),
+    // dB, % (/100: 50% = 0.5), ms, s, st.
+    static bool builtinText(const std::string &text, double &v) {
+        if (noteHz(text, v)) return true;
+        const char *s = text.c_str();
+        char *end = nullptr;
+        v = std::strtod(s, &end);
+        if (end == s) return false;
+        std::string unit;
+        for (const char *q = end; *q; ++q) if (!std::isspace((unsigned char)*q)) unit += (char)std::tolower((unsigned char)*q);
+        if (unit.empty() || unit == "hz" || unit == "db" || unit == "ms" || unit == "s" || unit == "st") return true;
+        if (unit == "khz" || unit == "k") { v *= 1000; return true; }
+        if (unit == "%") { v /= 100; return true; }
+        return false;
+    }
+
+    bool empty() const { return pts_.empty() && raw_.empty(); }
     // the curve's corners (seconds, value) after switches are expanded: for reports and checks
     const std::vector<std::pair<double, double>> &corners() const { return pts_; }
     // "scale": "normalized": values are 0..1 of a plugin parameter's range (as DAWs store automation)
@@ -191,21 +227,59 @@ public:
     }
 
 private:
-    // sorted (seconds, value, mode) -> corners; a switch becomes a held point plus a short ramp
-    void build(const std::vector<std::tuple<double, double, int>> &pts, double rampSec) {
+    struct Raw { double sec, value; std::string text; int mode; };   // mode: 0 interpolate, 1 step, 2 switch
+    static Raw rawPoint(const nlohmann::json &p, const TempoMap &tempo, int allMode, bool display, const Envelope &e) {
+        Raw r{0, 0, "", allMode};
+        const nlohmann::json *v;
+        if (p.is_array()) {
+            r.sec = tempo.beatToSec(p.at(0).get<double>());
+            v = &p.at(1);
+            if (p.size() > 2 && p[2].is_string()) {
+                const std::string m = p[2].get<std::string>();
+                if (m == "step" || m == "hold") r.mode = 1;
+                else if (m == "switch") r.mode = 2;
+                else throw std::runtime_error("automation point mode must be \"step\" or \"switch\"");
+            }
+        } else {
+            r.sec = tempo.beatToSec(p.at("beat").get<double>());
+            v = &p.at("value");
+            if (p.value("step", false)) r.mode = 1;
+            if (p.value("switch", false)) r.mode = 2;
+        }
+        if (v->is_string()) r.text = v->get<std::string>();
+        else if (display) { char buf[40]; std::snprintf(buf, sizeof buf, "%.10g", v->get<double>()); r.text = buf; }
+        else r.value = v->get<double>();
+        if (!r.text.empty() && e.normalized_) throw std::runtime_error("\"scale\": \"normalized\" curves take numbers 0..1, not text ('" + r.text + "')");
+        return r;
+    }
+    static Envelope finish(Envelope &e, std::vector<Raw> raw, bool deferText) {
+        const bool text = std::any_of(raw.begin(), raw.end(), [](const Raw &r) { return !r.text.empty(); });
+        if (text && deferText) { e.raw_ = std::move(raw); return e; }
+        for (auto &r : raw)
+            if (!r.text.empty() && !builtinText(r.text, r.value))
+                throw std::runtime_error("cannot read '" + r.text + "' as a value: use a number, a note name (\"C#4\" = its Hz) or a "
+                                         "number with a unit (\"800 Hz\", \"1.2 kHz\", \"-6 dB\", \"50%\")");
+        e.build(raw);
+        return e;
+    }
+    // sorted raw points -> corners; a switch becomes a held point plus a short ramp
+    void build(const std::vector<Raw> &pts) {
         pts_.clear(); step_.clear();
         for (size_t i = 0; i < pts.size(); ++i) {
-            const auto &[t, v, mode] = pts[i];
-            if (mode != 2 || pts_.empty() || rampSec <= 0) { pts_.push_back({t, v}); step_.push_back(mode != 0); continue; }
-            // hold the previous value up to t, then ramp; the ramp never runs past the next point
-            double ramp = rampSec;
-            if (i + 1 < pts.size()) ramp = std::min(ramp, std::max(0.0, std::get<0>(pts[i + 1]) - t) * 0.5);
-            pts_.push_back({t, pts_.back().second});
+            const Raw &r = pts[i];
+            if (exp_ && r.value <= 0 && pts.size() > 1) throw std::runtime_error("exponential automation values must be > 0");
+            if (r.mode != 2 || pts_.empty() || rampSec_ <= 0) { pts_.push_back({r.sec, r.value}); step_.push_back(r.mode != 0); continue; }
+            // hold the previous value up to the switch, then ramp; the ramp never runs past the next point
+            double ramp = rampSec_;
+            if (i + 1 < pts.size()) ramp = std::min(ramp, std::max(0.0, pts[i + 1].sec - r.sec) * 0.5);
+            pts_.push_back({r.sec, pts_.back().second});
             step_.push_back(true);
-            pts_.push_back({t + std::max(ramp, 1e-6), v});
+            pts_.push_back({r.sec + std::max(ramp, 1e-6), r.value});
             step_.push_back(false);
         }
     }
+    std::vector<Raw> raw_;                          // points waiting for text to be read (plugin parameters)
+    double rampSec_ = 0.005;                        // "switch" ramp
     std::vector<std::pair<double, double>> pts_;   // (seconds, value)
     std::vector<bool> step_;                        // jump (hold, then step) into this point
     bool exp_ = false;
@@ -260,7 +334,8 @@ inline Envelope param(const nlohmann::json &obj, const char *key, double def, co
     if (obj.contains("automate") && obj["automate"].contains(key)) {
         const auto &a = obj["automate"][key];
         spec = a.is_object() ? a : nlohmann::json{{"points", a}};
-    } else spec = {{"value", obj.value(key, def)}};
+    } else if (obj.contains(key) && obj[key].is_string()) spec = {{"value", obj[key]}};   // "C#4", "2 kHz"
+    else spec = {{"value", obj.value(key, def)}};
     if (obj.contains("lfo") && obj["lfo"].contains(key)) spec["lfo"] = obj["lfo"][key];
     if (!spec.contains("curve")) spec["curve"] = exp ? "exp" : "linear";
     return Envelope::parse(spec, tempo, exp);

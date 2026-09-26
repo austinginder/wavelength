@@ -284,7 +284,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                     tr.ccAutomation.push_back({num, Envelope::parse(v, out.tempo, false)});
                 }
                 const json autoParams = au.value("params", json::object());
-                for (auto &[k, v] : autoParams.items()) tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, false)});
+                for (auto &[k, v] : autoParams.items()) tr.paramAutomation.push_back({k, Envelope::parse(v, out.tempo, false, true)});
                 double fb, fv;   // curves that start late hold their first value from the top of the song
                 lateGainWarnings(au, tr.firstSoundBeat, tr.warnings);
                 if (au.contains("pan") && firstPoint(au["pan"], fb, fv) && fb > 0 && fb > tr.firstSoundBeat + 1e-6 && std::fabs(fv - tr.pan) > 1e-9)

@@ -644,7 +644,7 @@ struct PluginFx : Effect {
         if (j.contains("automate"))
             for (auto &[k, v] : j["automate"].items()) {
                 if (k == "mix") hostMixAutomated = true;   // lowercase "mix" is always the host dry/wet
-                else setup.automation.push_back({k, Envelope::parse(v, job.tempo, false)});
+                else setup.automation.push_back({k, Envelope::parse(v, job.tempo, false, true)});
             }
         setup.warmup = j.value("warmup", -1.0);
         setup.preset = j.value("preset", "");

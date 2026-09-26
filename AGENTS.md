@@ -221,6 +221,10 @@ in the job (details in `docs/effects.md`):
 - **Level-neutral effects:** `"match": true` on any effect (distortion with automated drive,
   resonators, comb or flanger freezes, plugins) keeps its output at the input's loudness over
   time, so it changes the tone and not the balance. No trim curves by hand.
+- **Automate in the plugin's units.** Curve values can be display text or note names, for plugin
+  parameters too: `"automate": {"Frequency (Filter 1)": [[0, "C#4"], [32, "A3", "switch"]]}` or
+  `[[0, "0.45 Hz"], [64, "0.96 Hz"]]`; no hand-computed normalized values (Melda frequencies are log
+  0..1). `wavelength params <plugin> --set "Name=0.55"` shows what a plain value means.
 - **Groups:** `"output": "Drums"` sends tracks to a group bus (shared glue, one filter sweep
   for the whole band); buses can feed other buses; `master.automation.gain` fades the song.
 - **Feel and expression:** `groove` (swing, lay-back, humanize) instead of hand-shifted notes;

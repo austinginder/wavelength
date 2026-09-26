@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <map>
 
 namespace wl {
 
@@ -135,7 +136,32 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     for (const auto &[key, env] : setup.automation) {
         ParamInfo pi;
         if (!lookup(key, pi)) return false;
-        const Envelope e = env.normalized() ? env.scaled(pi.min, pi.max) : env;
+        Envelope e = env.normalized() ? env.scaled(pi.min, pi.max) : env;
+        if (e.needsText()) {   // display text and note names in the curve, read by the plugin once per distinct text
+            std::map<std::string, double> cache;
+            auto read = [&](const std::string &text, double &plain) {
+                auto it = cache.find(text);
+                if (it != cache.end()) { plain = it->second; return true; }
+                double hz;
+                bool ok = false;
+                if (Envelope::noteHz(text, hz)) {   // a note name: its frequency, in the forms plugins usually read
+                    char buf[3][40];
+                    std::snprintf(buf[0], sizeof buf[0], "%.2f Hz", hz);
+                    std::snprintf(buf[1], sizeof buf[1], "%.2f", hz);
+                    std::snprintf(buf[2], sizeof buf[2], "%.4f kHz", hz / 1000);
+                    for (auto *t : buf) if (!ok) ok = out.plugin->valueFromText(pi.id, t, plain);
+                } else ok = out.plugin->valueFromText(pi.id, text, plain);
+                if (ok) cache[text] = plain;
+                return ok;
+            };
+            std::string bad;
+            if (!e.resolveText(read, bad)) {
+                err = context + ": " + info.name + " could not read '" + bad + "' in the '" + pi.name + "' curve as a value (now showing '" +
+                      pi.display + "'); use its own text format, a note name for a frequency, or a plain number in [" +
+                      std::to_string(pi.min) + " .. " + std::to_string(pi.max) + "]";
+                return false;
+            }
+        }
         out.autos.push_back({pi.id, pi.cookie, pi.name, e});
         out.initial.push_back({pi.id, pi.cookie, std::clamp(e.at(0), std::min(pi.min, pi.max), std::max(pi.min, pi.max))});
     }
