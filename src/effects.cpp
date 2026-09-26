@@ -375,28 +375,57 @@ struct Limiter : Effect {
 // ------------------------------------------------------------------------------ saturate
 struct Saturate : Effect {
     Envelope drive, mix;
-    bool match;
+    enum { None, Static, Follow } match = None;
+    double matchMs = 300;
     Saturate(const json &j, const Job &job) {
         label = "saturate";
         drive = param(j, "drive", 6, job.tempo);
         mix = param(j, "mix", 1, job.tempo);
-        match = j.value("match", false);
-        checkKeys(j, {"drive", "mix", "match"}, *this);
+        if (j.contains("match")) {
+            const json &m = j["match"];
+            if (m.is_boolean()) match = m.get<bool>() ? Follow : None;
+            else if (m.is_string() && m == "static") match = Static;
+            else if (m.is_string() && m == "follow") match = Follow;
+            else warnings.push_back("saturate: match must be true, false, \"follow\" or \"static\"; ignored");
+        }
+        matchMs = std::clamp(j.value("matchMs", 300.0), 20.0, 5000.0);
+        checkKeys(j, {"drive", "mix", "match", "matchMs"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
+        const size_t n = a.frames();
         double inPow = 0, outPow = 0;
-        for (size_t i = 0; i < a.frames(); ++i) {
+        std::vector<float> pin, pout;                      // per-sample power before/after, for "follow"
+        if (match == Follow) { pin.resize(n); pout.resize(n); }
+        for (size_t i = 0; i < n; ++i) {
             const double t = i / sr, k = dbToLin(drive.at(t)), norm = 1.0 / std::tanh(k), m = mix.at(t);
-            inPow += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
+            const double pi = (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
             a.left[i] = blend(a.left[i], std::tanh(a.left[i] * k) * norm, m);
             a.right[i] = blend(a.right[i], std::tanh(a.right[i] * k) * norm, m);
-            outPow += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
+            const double po = (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
+            inPow += pi; outPow += po;
+            if (match == Follow) { pin[i] = (float)pi; pout[i] = (float)po; }
         }
         // tanh drive raises quiet parts by up to the drive: "match" brings the result back to the input's level
-        if (match && outPow > 1e-12 && inPow > 1e-12) {
+        if (match == Static && outPow > 1e-12 && inPow > 1e-12) {
             const float g = (float)std::sqrt(inPow / outPow);
-            for (size_t i = 0; i < a.frames(); ++i) { a.left[i] *= g; a.right[i] *= g; }
+            for (size_t i = 0; i < n; ++i) { a.left[i] *= g; a.right[i] *= g; }
+        } else if (match == Follow && n) {
+            // follow the level over time: input and output power envelopes, smoothed forward and backward
+            // (zero phase, ~matchMs wide) so automated drive is tracked without pumping on transients
+            const double coef = std::exp(-1.0 / (matchMs * 0.0005 * sr));   // two passes of half the window
+            auto smooth = [&](std::vector<float> &v) {
+                double e = v[0];
+                for (size_t i = 0; i < n; ++i) { e = v[i] + (e - v[i]) * coef; v[i] = (float)e; }
+                e = v[n - 1];
+                for (size_t i = n; i-- > 0;) { e = v[i] + (e - v[i]) * coef; v[i] = (float)e; }
+            };
+            smooth(pin); smooth(pout);
+            const double floor = 1e-10, gMax = dbToLin(12), gMin = dbToLin(-40);
+            for (size_t i = 0; i < n; ++i) {
+                const float g = (float)std::clamp(std::sqrt((pin[i] + floor) / (pout[i] + floor)), gMin, gMax);
+                a.left[i] *= g; a.right[i] *= g;
+            }
         }
         return true;
     }

@@ -61,6 +61,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   `--section NAME`, and both chords' notes with each problem.
 
 ### Changed
+- `saturate` `"match": true` now follows the level over time (input vs output RMS over `matchMs`, 300 ms)
+  instead of one gain for the whole track, so automated `drive` no longer makes the driven bars louder
+  (Rust Protocol's arp: 18 dB louder driven, now within 0.2 dB). `"match": "static"` keeps the old behaviour.
 - Every track warning is also listed in the top-level `warnings`, prefixed with the track's name.
   Furnace Liturgy's agent read only the top-level list and missed a late gain curve that held the
   lead organ 9 dB down through the first drop.

@@ -1077,8 +1077,11 @@
       "fx": [
         {
           "type": "saturate",
-          "drive": 9,
-          "match": true
+          "drive": 3,
+          "match": true,
+          "automate": {
+            "drive": [[0, 3], [16, 3], [32, 18]]
+          }
         }
       ],
       "sends": {
