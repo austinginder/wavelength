@@ -395,6 +395,13 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             }
             if (t.contains("sampler")) tr.sampler = t["sampler"];
             if (t.contains("shepard")) tr.shepard = t["shepard"];
+            if (t.contains("drum")) {   // builtin:drums: one drum for every note, whatever its key
+                static const std::map<std::string, int> drums = {{"kick", 36}, {"rim", 37}, {"snare", 38}, {"hat", 42}, {"closed hat", 42}, {"open hat", 46},
+                                                                 {"crash", 49}, {"ride", 51}, {"low tom", 41}, {"tom", 45}, {"mid tom", 45}, {"high tom", 48}};
+                const auto it = t["drum"].is_string() ? drums.find(t["drum"].get<std::string>()) : drums.end();
+                if (it == drums.end()) throw std::runtime_error("track '" + tr.name + "': \"drum\" is one of kick, rim, snare, hat, open hat, crash, ride, low tom, mid tom, high tom");
+                tr.drumKey = it->second;
+            }
             if (t.contains("synth")) tr.synth = t["synth"];
             if (t.contains("clips")) {
                 if (!t["clips"].is_array()) throw std::runtime_error("track '" + tr.name + "': \"clips\" must be an array");

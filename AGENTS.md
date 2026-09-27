@@ -163,6 +163,14 @@ The report says first which tracks played a stand-in (`warnings`, `fallbacks`). 
 original sound's `params`, articulations and plugin curves, so give it its own `automation` when the
 part depends on a sweep.
 
+`wavelength fallbacks <song>` shows what each track plays here. `fallbacks --suggest` proposes a
+built-in stand-in for every track without one (its role from the track's name, preset and notes: a
+General MIDI program then a synth patch for orchestral parts, `builtin:drums` for kits and one-sound drum
+tracks) and sets each one's `gain` so its stem is as loud as the track's own in the last render;
+`--write` puts them in the job (and in your generator script too, or its next run drops them). Hear
+the result with `render --fallbacks`, which plays every track's first available fallback. Library
+samples go by name, never by path: `"sample": "lib:Legend 909/Snare Legend 909 01 accent.wav"`.
+
 ## VST3, VST2 and sample libraries
 
 VST3 and VST2 plugins work everywhere CLAP plugins do. `wavelength plugins` lists them all
@@ -446,6 +454,25 @@ drum hit under 0.4 s: a snare roll played up keys 60-67 is a riser, not a Cdim c
 `--to` and `--section` limit the report, `--max-bars 3` widens what counts as a short excursion,
 `--json` gives `keys`, `problems`, `rubs`, `info` (and `bars` with `--chords`).
 
+## Songs: history, sharing and the format
+
+A song is a folder (docs/song-format.md): `wavelength.json` (title, authors, licence, the job and its
+files), the job, `media/` for files the job uses, `render/` for the render that goes with it,
+`review.json` and `history/`. Keep generator scripts and notes in it; list them in the manifest.
+
+- `wavelength save <song> -m "what changed"` saves a revision (the first save writes the manifest).
+  Every full render of the song's job is a revision too; `history`, `undo`, `redo` and `restore <rev>`
+  move through them (nothing is ever lost), and `diff r12` says what changed in the music since then,
+  by track and bar. Save before a risky change; undo when the human prefers the old version.
+- Paths in the job are relative to the song. Files the job uses live in `media/`; installed
+  sounds go by name (`"preset"`, a library's `kit`/`multisample`/`soundfont`, `lib:` samples).
+  `wavelength upgrade <song>` converts an older folder: it writes the manifest, fixes paths, names
+  presets and library samples, and lists what it could not fix.
+- `render job.json --keep` keeps that render with the song (render/mix.mp3, song.png with `--png`,
+  report.json). `wavelength pack <song>` makes one `.wavelength` file to share (it refuses files from
+  outside the song and lists the plugins it needs); `unpack` and `render song.wavelength` open one.
+- Run `wavelength validate <song>` before sharing.
+
 ## Reviewing with a human: `wavelength serve`
 
 `wavelength serve ~/songs --open` (a folder of song folders) starts a local web UI on
@@ -463,10 +490,12 @@ under `out/preview/`). They leave comments pinned to what they selected; those g
   "notes": [{"track": "Lead", "key": "E5", "midi": 76, "bar": "42.3", "beat": 166, "dur": 0.5, "vel": 0.8}]}]}
 ```
 
-**Before working on a song, read its open comments.** Change the song where it is made (your
-script or job), render, then answer each comment in `review.json`: set `"status": "done"` and add a
-`"reply"` saying what you changed; the UI shows it under the comment. The UI is read-only on the
-music: it never edits the job.
+**Before working on a song, read its open comments:** `wavelength comments <song>` lists them with the
+revision each was made on (its `anchor`: the render that was playing, the bars, tracks and notes) and
+whether the music at those bars and tracks changed since, so an old comment still says what the human
+heard. Change the song where it is made (your script or job), render, then answer each one:
+`wavelength comments <song> --reply <id> --text "what you changed" --done`. The UI shows replies under
+the comment. The UI is read-only on the music: it never edits the job.
 
 ## Mastering
 

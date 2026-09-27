@@ -26,5 +26,8 @@ json validate(const std::string &target);
 // A package unpacked once into the cache (by its hash), for render and serve; "" on error.
 std::string cached(const std::string &file, std::string &err);
 bool isPackage(const std::string &path);
+// `render --keep`: the render in `outDir` (its MP3 delivery, picture and report, revision `rev`) becomes
+// the song's render/ and the manifest's "render" (docs/song-format.md, section 8).
+bool keepRender(Song &song, const std::string &outDir, const json &report, int rev, std::string &err);
 
 } // namespace wl::package

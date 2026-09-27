@@ -474,6 +474,7 @@ std::string multisampleCategory(const std::string &xml) {
 }
 
 std::string resolveIn(const std::string &name, const std::string &baseDir) {
+    if (name.rfind("lib:", 0) == 0) return resolveLibraryFile(name);
     fs::path p(name);
     if (p.is_absolute()) return fs::exists(p) ? p.string() : "";
     if (!baseDir.empty() && fs::exists(fs::path(baseDir) / p)) return (fs::path(baseDir) / p).string();
@@ -665,6 +666,45 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
 } // namespace
 
 std::string resolveSampleFile(const std::string &name, const std::string &baseDir) { return resolveIn(name, baseDir); }
+
+std::string resolveLibraryFile(const std::string &ref) {
+    if (ref.rfind("lib:", 0) != 0) return "";
+    const std::string rel = ref.substr(4);
+    if (rel.empty() || rel[0] == '/' || rel.find('\\') != std::string::npos || rel.find(':') != std::string::npos) return "";
+    for (size_t a = 0;;) {   // no way out of the library: no "..", "." or empty segments
+        const size_t b = rel.find('/', a);
+        const std::string seg = rel.substr(a, b - a);
+        if (seg.empty() || seg == "." || seg == "..") return "";
+        if (b == std::string::npos) break;
+        a = b + 1;
+    }
+    std::error_code ec;
+    for (auto &root : sampleRoots())
+        if (fs::is_regular_file(fs::path(root) / fs::u8path(rel), ec)) return (fs::path(root) / fs::u8path(rel)).string();
+    const size_t slash = rel.rfind('/');
+    if (slash == std::string::npos) return "";
+    const std::string lib = rel.substr(0, slash), file = rel.substr(slash + 1);
+    for (auto &e : sampleLibrary())
+        if ((e.kind == "kit" || e.kind == "loops") && (e.name == lib || e.category + "/" + e.name == lib) &&
+            fs::is_regular_file(fs::path(e.path) / fs::u8path(file), ec))
+            return (fs::path(e.path) / fs::u8path(file)).string();
+    return "";
+}
+
+std::string libraryRef(const std::string &file) {
+    std::error_code ec;
+    const fs::path f = fs::absolute(fs::u8path(file), ec).lexically_normal();
+    for (auto &e : sampleLibrary())   // "lib:Legend 909/Kick.wav" when that names this file
+        if ((e.kind == "kit" || e.kind == "loops") && fs::path(e.path).lexically_normal() == f.parent_path()) {
+            for (const std::string &ref : {"lib:" + e.name + "/" + f.filename().u8string(), "lib:" + e.category + "/" + e.name + "/" + f.filename().u8string()})
+                if (resolveLibraryFile(ref) == f.string()) return ref;
+        }
+    for (auto &root : sampleRoots()) {   // else its path under a sample root
+        const fs::path rel = f.lexically_relative(fs::path(root).lexically_normal());
+        if (!rel.empty() && *rel.begin() != ".." && resolveLibraryFile("lib:" + rel.generic_u8string()) == f.string()) return "lib:" + rel.generic_u8string();
+    }
+    return "";
+}
 
 bool findSampleEntry(const std::string &kind, const std::string &query, const std::string &baseDir, std::string &path, std::string &err) {
     path = resolveIn(query, baseDir);

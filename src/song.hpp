@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -37,11 +38,22 @@ bool checkSongPath(const std::string &rel, std::string &err);
 // The files a revision snapshots: the job and the files whose role is source, notes or media (those
 // that exist), sorted.
 std::vector<std::string> trackedFiles(const Song &song);
-// every file reference in a job ({where, path}): states, sampler files, clips
+// A file the job uses: where it is named, the path (without a "#3" program suffix), the JSON string that
+// names it (to rewrite with path + suffix), the object it belongs to (a track, fallback or effect) and
+// whether it is that object's "state".
+struct FileRef {
+    std::string where, path, suffix;
+    nlohmann::json *slot, *owner;
+    bool state = false;
+};
+// Every file reference in a job: states (tracks, fallbacks, effects on tracks, buses and the master),
+// sampler files and kit folders given as paths, clips. "lib:" names are library files, not the song's.
+std::vector<FileRef> fileRefs(nlohmann::json &job);
 std::vector<std::pair<std::string, std::string>> jobFileRefs(const nlohmann::json &job);
 
 std::string newUuid();
 std::string nowRfc3339();
+std::string rfc3339(std::time_t t);   // local time with its offset
 // who is acting: WAVELENGTH_AUTHOR (and WAVELENGTH_AUTHOR_KIND), else an agent when one is detected
 // (Claude Code, Codex), else the user's login name
 nlohmann::json actor();

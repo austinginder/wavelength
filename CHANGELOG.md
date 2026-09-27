@@ -27,6 +27,31 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   - `scripts/wavelength_song.py`: a second, independent reader in Python (standard library only) that
     validates, unpacks and inspects songs; `scripts/make-song-fixtures.py` writes valid packages and
     ones every reader must refuse, and `check.sh` runs both readers over them.
+  - `wavelength upgrade <song> [--license SPDX] [--author NAME] [--dry-run] [--no-copy]` brings a
+    folder made before the format up to it: the manifest (title, summary, prompt, description, model
+    and the rest from a `site.json` when there is one), paths inside the song made relative, files in
+    scratch `out/` copied into `media/`, preset files outside the song replaced by the plugin's preset
+    name (checked to load the same file, or the same bytes), library samples replaced by `lib:` names,
+    other outside files copied into `media/` with a licence reminder, `review.json` in the current
+    shape, the last render kept when it matches the job, and a revision. It keeps the job's key order
+    and indent, and lists what it could not fix.
+  - `render --keep` keeps the render with the song: its MP3 (added to the deliveries when missing),
+    picture (with `--png`) and report go to `render/`, and the manifest's `render` names them with the
+    revision and job hash.
+- `"lib:<library>/<file>"` names one file of an installed sample library (a kit or loop folder as
+  `samples` lists it, or a path under a sample root) for a sampler `sample`, a kit `map` entry or an
+  audio clip, so a job never depends on where a computer keeps its libraries.
+- `wavelength fallbacks <song|job>` shows what each track plays on this computer. `--suggest`
+  proposes a built-in stand-in for every plugin or library track without one, from its name, preset
+  and notes (a General MIDI program and then a synth patch for orchestral parts, `builtin:drums` for
+  kits and one-sound drum tracks, a `builtin:synth` patch by role), with each one's `gain` set so its
+  stem is as loud as the track's own in the last render (measured in one child render); `--write`
+  adds them to the job. `render --fallbacks` plays every track's first available fallback, to hear a
+  song as a computer without its plugins would.
+- `builtin:drums` takes `"drum": "snare"` (kick, rim, snare, hat, open hat, crash, ride, low/mid/high
+  tom): every note plays that drum, whatever its key.
+- `presets Vital` lists Vital's own library (`~/Music/Vital`, `~/Documents/Vital`: factory banks, packs
+  and user presets), so a song can name a Vital preset instead of pointing at its file.
 - `wavelength import song.bwproject` imports a Bitwig Studio project without a DAWproject export:
   tempo, time signature, tracks named as Bitwig shows them, their plugins, states and Bitwig's own
   devices, faders, pans, mutes, sends, the master, arranger note clips (play start and loops, muted
@@ -97,6 +122,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 
 ### Fixed
+- `presets` listed macOS zip leftovers (`__MACOSX/._name` files) as presets.
 - `wavelength serve`: comments and previews failed with 403 in a page opened before the server started
   again (after a rebuild or a login-item restart), because each start made a new token. The token is now
   kept in the settings folder (readable by this user only), a page whose token is stale fetches the

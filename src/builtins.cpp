@@ -249,7 +249,7 @@ bool renderBuiltin(const std::string &plugin, const Job &job, const Track &track
         Voice v{out, sr, (size_t)std::llround(n.start * sr)};
         const double vel = n.velocity;
         if (kind == "drums") {
-            switch (n.key) {
+            switch (track.drumKey ? track.drumKey : n.key) {
             case 35: case 36: kick(v, vel, nz); break;
             case 37: rim(v, vel, nz); break;
             case 38: case 40: snare(v, vel, nz); break;

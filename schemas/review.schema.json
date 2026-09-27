@@ -65,8 +65,7 @@
     },
     "anchor": {
       "type": "object",
-      "description": "What was heard when the comment was written. Never rewritten.",
-      "required": ["revision"],
+      "description": "What was heard when the comment was written. Never rewritten. Comments from before the format have no revision.",
       "properties": {
         "revision": {"type": "integer", "minimum": 1},
         "render": {"$ref": "#/$defs/hashRef", "description": "The render report's hash."},
@@ -80,9 +79,9 @@
     },
     "reply": {
       "type": "object",
-      "required": ["author", "text"],
+      "required": ["text"],
       "properties": {
-        "author": {"$ref": "#/$defs/person"},
+        "author": {"$ref": "#/$defs/person", "description": "Tools SHOULD write it; replies from before the format have none."},
         "time": {"type": "string"},
         "revision": {"type": "integer", "minimum": 1},
         "text": {"type": "string"}
@@ -118,9 +117,7 @@
         "notes": {"type": "array", "items": {"$ref": "#/$defs/legacyNote"}, "description": "Legacy."},
         "render": {"type": "number", "description": "Legacy: an identifier of the render that was playing (not a hash)."},
         "reply": {"type": "string", "description": "Legacy: the single reply."}
-      },
-      "if": {"required": ["anchor"]},
-      "then": {"required": ["created", "author"]}
+      }
     }
   }
 }

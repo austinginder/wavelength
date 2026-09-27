@@ -37,6 +37,12 @@ const std::vector<SampleLibraryEntry> &sampleLibrary();
 // A sample file by path (absolute, relative to baseDir, or relative to a sample root); "" if missing.
 std::string resolveSampleFile(const std::string &name, const std::string &baseDir);
 std::vector<std::string> sampleRoots();
+// "lib:<library>/<file>": a file of an installed sample library, never one of the song's: a kit or loop
+// folder by name ("lib:Legend 909/Kick Legend 909 01.wav", or "lib:Classic Drum Machines/Legend 909/...")
+// or a path under a sample root ("lib:Bitwig/Anti-Loops/Genys/Kick.wav"); "" when it isn't installed.
+std::string resolveLibraryFile(const std::string &ref);
+// The shortest "lib:" name of an installed library file (absolute path); "" when it is in no library.
+std::string libraryRef(const std::string &file);
 // A library entry of `kind` by path or name (as the sampler finds "multisample", "sfz", "soundfont")
 bool findSampleEntry(const std::string &kind, const std::string &query, const std::string &baseDir, std::string &path, std::string &err);
 // Where `samples --install-soundfont` puts SoundFonts (a sample root when it exists)

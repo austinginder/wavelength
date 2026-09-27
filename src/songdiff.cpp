@@ -131,7 +131,7 @@ int lastBarOf(const Job &job) {
     return (int)std::ceil(end / bpb);
 }
 
-const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "transpose", "articulations",
+const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "drum", "transpose", "articulations",
                             "velocityTo", "fallback", "warmup", "bendRange", "roll"};
 const char *kMixKeys[] = {"gain", "pan", "mute", "output", "sends", "stem", "harmony", "groove"};
 

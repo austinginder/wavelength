@@ -170,6 +170,9 @@ when the wet timing matters.
 
 - `builtin:drums`, synthesized kit on the General MIDI map: 35/36 kick, 37 rim, 38/40 snare,
   42/44 closed hat, 46 open hat, 49/57 crash, 51 ride, 41/43 low tom, 45/47 mid tom, 48/50 high tom.
+  `"drum": "snare"` on the track plays that one drum for every note, whatever its key (`kick`, `rim`,
+  `snare`, `hat`, `open hat`, `crash`, `ride`, `low tom`, `mid tom`, `high tom`): a stand-in for a
+  one-sound track, such as a snare roll written as pitches.
 - `builtin:fx`, 48 (C3) impact, 50 (D3) riser lasting the note's length, 52 (E3) reverse swell
   ending when the note ends, 53 (F3) sub drop, 55 (G3) Shepard rise and 57 (A3) Shepard fall lasting
   the note's length (the `builtin:shepard` defaults at 0.15 octaves per second).

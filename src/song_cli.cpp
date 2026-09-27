@@ -1,10 +1,13 @@
 #include "song_cli.hpp"
 
+#include "fallback.hpp"
 #include "history.hpp"
+#include "platform.hpp"
 #include "package.hpp"
 #include "review.hpp"
 #include "song.hpp"
 #include "songdiff.hpp"
+#include "upgrade.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -38,6 +41,8 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"pack", {{"--json", false}, {"--out", true}, {"--no-history", false}, {"--no-render", false}, {"--no-review", false}}},
     {"unpack", {{"--json", false}, {"--out", true}, {"--force", false}}},
     {"validate", {{"--json", false}}},
+    {"fallbacks", {{"--json", false}, {"--suggest", false}, {"--write", false}, {"--no-measure", false}}},
+    {"upgrade", {{"--json", false}, {"--license", true}, {"--author", true}, {"--dry-run", false}, {"--no-copy", false}}},
     {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
 };
 
@@ -328,6 +333,186 @@ int cmdValidate(const CliArgs &a, const Out &o) {
     return r["ok"] ? 0 : 1;
 }
 
+// the job of a song folder, or a job file
+bool jobOf(const std::string &arg, fs::path &jobPath, std::string &err) {
+    std::error_code ec;
+    const fs::path p = fs::absolute(arg.empty() ? "." : arg, ec);
+    if (fs::is_regular_file(p, ec) && p.extension() == ".json" && p.filename() != "wavelength.json") { jobPath = p; return true; }
+    Song song;
+    if (!openSong(p.string(), song, err)) return false;
+    jobPath = song.jobPath();
+    return true;
+}
+
+// the newest report of a full render next to the job (render/ kept with the song, or out/)
+json lastReport(const fs::path &dir) {
+    std::error_code ec;
+    fs::path best;
+    for (const char *r : {"render/report.json", "out/report.json"})
+        if (fs::exists(dir / r, ec) && (best.empty() || fs::last_write_time(dir / r, ec) > fs::last_write_time(best, ec))) best = dir / r;
+    if (best.empty()) return nullptr;
+    try { json j = json::parse(readText(best)); if (j.is_object() && j.contains("tracks") && !j.contains("window")) return j; } catch (...) {}
+    return nullptr;
+}
+
+// each suggested fallback's gain, so its stem is as loud as the track's own in the last render: every
+// entry at `index` is rendered in place of its track (those tracks only, one child render)
+void measureFallbacks(const fs::path &jobPath, const json &job, json &suggestions, size_t index, const json &report, json &notes) {
+    json tmp = job;
+    std::vector<std::string> names;
+    std::map<std::string, double> orig;
+    for (auto &t : report["tracks"]) if (t.contains("lufs") && t["lufs"].is_number()) orig[t.value("name", std::string())] = t["lufs"].get<double>();
+    const std::string baseDir = jobPath.parent_path().string();
+    for (auto &t : tmp["tracks"]) {
+        const std::string name = t.value("name", std::string());
+        if (!suggestions.contains(name) || suggestions[name]["fallback"].size() <= index || name.find(',') != std::string::npos || !orig.count(name)) continue;
+        const json &f = suggestions[name]["fallback"][index];
+        std::string why;
+        if (!soundAvailable(f, baseDir, why)) { notes.push_back("track '" + name + "': " + why + " here, so its fallback " + std::to_string(index + 1) + " is not level-matched"); continue; }
+        t.erase("fallback");
+        useSound(t, f);
+        t.erase("gain");   // measured at 0 dB; stems are before the fader anyway
+        names.push_back(name);
+    }
+    if (names.empty()) return;
+    std::error_code ec;
+    const std::string pid = std::to_string(platform::processId());
+    const fs::path tmpJob = jobPath.parent_path() / (".wavelength-fallbacks-" + pid + ".json");
+    const fs::path outDir = platform::cacheDir() / "fallbacks" / pid;
+    std::string err, list;
+    for (auto &n : names) list += (list.empty() ? "" : ",") + n;
+    if (!writeText(tmpJob, tmp.dump(), err)) { notes.push_back("cannot measure the fallbacks: " + err); return; }
+    platform::Process proc;
+    std::string out, crash;
+    json rep;
+    if (platform::spawn({platform::selfExecutable(), "render", tmpJob.string(), "--tracks", list, "--out", outDir.string(), "--stems", "none", "--deliver", "none", "--json"},
+                        proc, true, true)) {
+        platform::readOutput(proc, out, 1800);
+        while (!platform::finished(proc, crash)) platform::pumpEvents(50);
+        try { rep = json::parse(out); } catch (...) {}
+    }
+    fs::remove(tmpJob, ec);
+    fs::remove_all(outDir, ec);
+    if (!rep.is_object() || !rep.contains("tracks")) { notes.push_back("cannot measure the fallbacks: " + (rep.is_object() ? rep.value("error", std::string("the render failed")) : std::string("the render failed"))); return; }
+    for (auto &t : rep["tracks"]) {
+        const std::string name = t.value("name", std::string());
+        if (!suggestions.contains(name) || !t.contains("lufs") || !t["lufs"].is_number() || t["lufs"].get<double>() < -70 || orig[name] < -70) continue;
+        const json *track = nullptr;
+        for (auto &x : job["tracks"]) if (x.value("name", std::string()) == name) track = &x;
+        const double fader = track && track->contains("gain") && (*track)["gain"].is_number() ? (*track)["gain"].get<double>() : 0.0;
+        const double delta = orig[name] - t["lufs"].get<double>();
+        json &f = suggestions[name]["fallback"][index];
+        f["gain"] = std::round(std::clamp(fader + delta, -40.0, 24.0) * 2) / 2 + 0.0;   // + 0.0: no "-0"
+        suggestions[name]["measured"][index] = {{"own", std::round(orig[name] * 10) / 10}, {"fallback", std::round(t["lufs"].get<double>() * 10) / 10}};
+    }
+}
+
+int cmdFallbacks(const CliArgs &a, const Out &o) {
+    fs::path jobPath;
+    std::string err;
+    if (!jobOf(a.pos.size() > 1 ? a.pos[1] : ".", jobPath, err)) return o.fail(err);
+    const std::string jobText = readText(jobPath);
+    json job;
+    try { job = json::parse(jobText); } catch (const std::exception &e) { return o.fail(jobPath.string() + " is not valid JSON: " + e.what()); }
+    if (!job.contains("tracks") || !job["tracks"].is_array()) return o.fail(jobPath.string() + " has no tracks");
+    const std::string baseDir = jobPath.parent_path().string();
+    if (!a.has("--suggest") && !a.has("--write")) {   // what each track plays here
+        json rows = json::array();
+        for (auto &t : job["tracks"]) {
+            if (!t.is_object()) continue;
+            std::string why;
+            const bool own = soundAvailable(t, baseDir, why);
+            json row = {{"track", t.value("name", std::string())}, {"plugin", t.value("plugin", std::string())}, {"available", own},
+                        {"fallbacks", t.contains("fallback") ? (t["fallback"].is_array() ? t["fallback"].size() : 1) : 0}};
+            if (!own) {
+                row["missing"] = why;
+                const json list = !t.contains("fallback") ? json::array() : t["fallback"].is_array() ? t["fallback"] : json::array({t["fallback"]});
+                for (size_t i = 0; i < list.size(); ++i) { std::string w; if (soundAvailable(list[i], baseDir, w)) { row["plays"] = i + 1; break; } }
+            }
+            rows.push_back(row);
+        }
+        if (o.json) { o.emit({{"ok", true}, {"tracks", rows}}); return 0; }
+        int silent = 0, bare = 0;
+        for (auto &r : rows) {
+            const std::string status = r["available"] ? "plays" : r.contains("plays") ? "fallback " + r["plays"].dump() : "SILENT";
+            silent += status == "SILENT";
+            bare += r["fallbacks"] == 0 && r["plugin"].get<std::string>().rfind("builtin:", 0) != 0;
+            std::fprintf(o.f, "  %-24s %-28s %-11s %s\n", r["track"].get<std::string>().c_str(), r["plugin"].get<std::string>().c_str(), status.c_str(),
+                         r["fallbacks"] == 0 ? "no fallback" : (r["fallbacks"].dump() + " fallback" + (r["fallbacks"] == 1 ? "" : "s")).c_str());
+        }
+        if (silent) std::fprintf(o.f, "%d track%s can't play here\n", silent, silent == 1 ? "" : "s");
+        if (bare) std::fprintf(o.f, "%d track%s with a plugin or library have no fallback (wavelength fallbacks --suggest)\n", bare, bare == 1 ? "" : "s");
+        return 0;
+    }
+    json suggestions = json::object(), notes = json::array();
+    size_t longest = 0;
+    for (auto &t : job["tracks"]) {
+        const json s = suggestFallback(t);
+        if (s.is_null()) continue;
+        suggestions[t.value("name", std::string())] = s;
+        longest = std::max(longest, s["fallback"].size());
+    }
+    const json report = lastReport(jobPath.parent_path());
+    if (a.has("--no-measure")) {}
+    else if (report.is_null()) notes.push_back("no render to match levels against: the fallbacks play at the track's fader (render first, then suggest again)");
+    else for (size_t i = 0; i < longest; ++i) measureFallbacks(jobPath, job, suggestions, i, report, notes);
+    bool wrote = false;
+    if (a.has("--write") && !suggestions.empty()) {   // into the job, keeping its key order and indent
+        nlohmann::ordered_json oj = nlohmann::ordered_json::parse(jobText);
+        for (auto &t : oj["tracks"]) {
+            const std::string name = t.value("name", std::string());
+            if (!suggestions.contains(name) || t.contains("fallback")) continue;
+            nlohmann::ordered_json rebuilt = nlohmann::ordered_json::object();
+            const auto fb = nlohmann::ordered_json::parse(suggestions[name]["fallback"].dump());
+            for (auto &[k, v] : t.items()) {
+                if (k == "notes") rebuilt["fallback"] = fb;
+                rebuilt[k] = v;
+            }
+            if (!rebuilt.contains("fallback")) rebuilt["fallback"] = fb;
+            t = rebuilt;
+        }
+        const size_t nl = jobText.find('\n');
+        int indent = -1;
+        if (nl != std::string::npos) { indent = 0; while (nl + 1 + indent < jobText.size() && jobText[nl + 1 + indent] == ' ') ++indent; indent = std::max(indent, 1); }
+        if (!writeText(jobPath, oj.dump(indent) + "\n", err)) return o.fail(err);
+        wrote = true;
+        Song song;
+        if (openSong(jobPath.parent_path().string(), song, err) && song.hasManifest())
+            for (auto &f : song.manifest.value("files", json::array()))
+                if (f.value("role", std::string()) == "source" && fs::path(f.value("path", std::string())).extension() != ".json")
+                    notes.push_back(f.value("path", std::string()) + " may rebuild " + jobPath.filename().string() + ": give it these fallbacks too, or the next run drops them");
+    }
+    if (o.json) { o.emit({{"ok", true}, {"job", jobPath.string()}, {"written", wrote}, {"suggestions", suggestions}, {"notes", notes}}); return 0; }
+    for (auto &[name, s] : suggestions.items()) {
+        std::fprintf(o.f, "%-24s %-7s %s\n", name.c_str(), s["role"].get<std::string>().c_str(), s["why"].get<std::string>().c_str());
+        std::fprintf(o.f, "    \"fallback\": %s\n", s["fallback"].dump().c_str());
+    }
+    for (auto &n : notes) std::fprintf(o.f, "note: %s\n", n.get<std::string>().c_str());
+    if (suggestions.empty()) std::fprintf(o.f, "every track is built in or already has a fallback\n");
+    else if (wrote) std::fprintf(o.f, "wrote %zu fallback%s into %s\n", suggestions.size(), suggestions.size() == 1 ? "" : "s", jobPath.filename().string().c_str());
+    else std::fprintf(o.f, "%zu suggestion%s (--write puts them in the job)\n", suggestions.size(), suggestions.size() == 1 ? "" : "s");
+    return 0;
+}
+
+int cmdUpgrade(const CliArgs &a, const Out &o) {
+    upgrade::Options opt;
+    opt.license = a.get("--license");
+    opt.author = a.get("--author");
+    opt.dryRun = a.has("--dry-run");
+    opt.copyOutside = !a.has("--no-copy");
+    json r;
+    std::string err;
+    if (!upgrade::run(a.pos.size() > 1 ? a.pos[1] : ".", opt, r, err)) return o.fail(err);
+    if (o.json) { o.emit(r); return 0; }
+    for (auto &c : r["changes"]) std::fprintf(o.f, "  %s\n", c.get<std::string>().c_str());
+    for (auto &p : r["problems"]) std::fprintf(o.f, "problem: %s\n", p.get<std::string>().c_str());
+    for (auto &n : r["notes"]) std::fprintf(o.f, "note: %s\n", n.get<std::string>().c_str());
+    if (opt.dryRun) std::fprintf(o.f, "%zu changes (dry run: nothing written)\n", r["changes"].size());
+    else if (r.contains("revision")) std::fprintf(o.f, "%zu changes, saved as revision %d\n", r["changes"].size(), r["revision"].get<int>());
+    else std::fprintf(o.f, "already up to date\n");
+    return 0;
+}
+
 } // namespace
 
 bool isSongCommand(const std::string &cmd) { return kCommands.count(cmd) > 0; }
@@ -347,6 +532,8 @@ int runSongCommand(int argc, char **argv, std::FILE *f) {
     if (cmd == "unpack") return cmdUnpack(a, o);
     if (cmd == "validate") return cmdValidate(a, o);
     if (cmd == "comments") return cmdComments(a, o);
+    if (cmd == "upgrade") return cmdUpgrade(a, o);
+    if (cmd == "fallbacks") return cmdFallbacks(a, o);
     return cmdStep(a, o);
 }
 

@@ -164,31 +164,84 @@ std::vector<std::string> trackedFiles(const Song &song) {
     return std::vector<std::string>(out.begin(), out.end());
 }
 
-std::vector<std::pair<std::string, std::string>> jobFileRefs(const json &job) {
-    std::vector<std::pair<std::string, std::string>> out;
-    auto looksLikeFile = [](const std::string &v) {
+std::vector<FileRef> fileRefs(json &job) {
+    std::vector<FileRef> out;
+    auto hasExt = [](const std::string &v, std::initializer_list<const char *> exts) {
         const std::string l = lower(v);
-        for (const char *ext : {".wav", ".aif", ".aiff", ".flac", ".mp3", ".ogg", ".sfz", ".sf2", ".sf3"})
+        for (const char *ext : exts)
             if (l.size() > std::strlen(ext) && l.compare(l.size() - std::strlen(ext), std::string::npos, ext) == 0) return true;
-        return v.find('/') != std::string::npos;
+        return false;
     };
-    for (auto &t : job.value("tracks", json::array())) {
-        if (!t.is_object()) continue;
-        const std::string name = t.value("name", std::string("track"));
-        if (t.contains("state")) {
-            const auto &s = t["state"];
-            std::string file = s.is_string() ? s.get<std::string>() : s.is_object() && s.contains("file") && s["file"].is_string() ? s["file"].get<std::string>() : "";
-            for (const char *pick : {".syx#", ".mtdrum#"})   // "<cartridge>.syx#3": one program of the file
-                if (const size_t at = lower(file).rfind(pick); at != std::string::npos) file.resize(at + std::strlen(pick) - 1);
-            if (!file.empty()) out.push_back({"track '" + name + "' state", file});
+    auto add = [&](const std::string &where, json &slot, json &owner, bool isState = false) {
+        if (!slot.is_string()) return;
+        std::string path = slot.get<std::string>(), suffix;
+        if (path.empty() || path.rfind("lib:", 0) == 0) return;   // a sample library's file, by name
+        for (const char *pick : {".syx#", ".mtdrum#"})   // "<cartridge>.syx#3": one program of the file
+            if (const size_t at = lower(path).rfind(pick); at != std::string::npos) {
+                suffix = path.substr(at + std::strlen(pick) - 1);
+                path.resize(at + std::strlen(pick) - 1);
+            }
+        out.push_back({where, path, suffix, &slot, &owner, isState});
+    };
+    auto state = [&](json &o, const std::string &where) {
+        if (!o.contains("state")) return;
+        json &s = o["state"];
+        if (s.is_string()) add(where + " state", s, o, true);
+        else if (s.is_object() && s.contains("file")) add(where + " state", s["file"], o, true);
+    };
+    auto chain = [&](json &o, const std::string &where) {
+        if (!o.contains("fx") || !o["fx"].is_array()) return;
+        for (size_t i = 0; i < o["fx"].size(); ++i)
+            if (o["fx"][i].is_object()) state(o["fx"][i], where + " fx " + std::to_string(i + 1));
+    };
+    auto sound = [&](json &o, const std::string &where) {
+        state(o, where);
+        chain(o, where);
+        if (!o.contains("sampler") || !o["sampler"].is_object()) return;
+        json &sm = o["sampler"];
+        for (const char *k : {"sample", "sfz", "soundfont", "multisample"})
+            if (sm.contains(k) && sm[k].is_string()) {
+                const std::string v = sm[k].get<std::string>();
+                if (v.find('/') != std::string::npos || v.find('\\') != std::string::npos ||
+                    hasExt(v, {".wav", ".wave", ".aif", ".aiff", ".aifc", ".flac", ".mp3", ".ogg", ".sfz", ".sf2", ".sf3", ".multisample"}))
+                    add(where + " sampler." + k, sm[k], o);
+            }
+        const bool namedKit = sm.contains("kit") && sm["kit"].is_string();
+        if (namedKit && sm["kit"].get<std::string>().find('/') != std::string::npos) add(where + " sampler.kit", sm["kit"], o);
+        for (const char *k : {"map", "kit"})   // key -> file: names inside a kit folder, else files of the song
+            if (sm.contains(k) && sm[k].is_object())
+                for (auto &[key, v] : sm[k].items()) {
+                    json &slot = v.is_object() && v.contains("file") ? v["file"] : v;
+                    if (slot.is_string() && (!namedKit || slot.get<std::string>().find('/') != std::string::npos))
+                        add(where + " sampler." + k + " " + key, slot, o);
+                }
+    };
+    if (!job.is_object()) return out;
+    if (job.contains("tracks") && job["tracks"].is_array())
+        for (auto &t : job["tracks"]) {
+            if (!t.is_object()) continue;
+            const std::string where = "track '" + t.value("name", std::string("track")) + "'";
+            sound(t, where);
+            if (t.contains("clips") && t["clips"].is_array())
+                for (auto &c : t["clips"])
+                    if (c.is_object() && c.contains("file")) add(where + " clip", c["file"], c);
+            if (t.contains("fallback")) {
+                json &fb = t["fallback"];
+                if (fb.is_object()) sound(fb, where + " fallback");
+                else if (fb.is_array())
+                    for (auto &f : fb) if (f.is_object()) sound(f, where + " fallback");
+            }
         }
-        if (t.contains("sampler") && t["sampler"].is_object())
-            for (const char *k : {"sample", "sfz", "soundfont"})
-                if (t["sampler"].contains(k) && t["sampler"][k].is_string() && looksLikeFile(t["sampler"][k].get<std::string>()))
-                    out.push_back({"track '" + name + "' sampler." + k, t["sampler"][k].get<std::string>()});
-        for (auto &c : t.value("clips", json::array()))
-            if (c.is_object() && c.contains("file") && c["file"].is_string()) out.push_back({"track '" + name + "' clip", c["file"].get<std::string>()});
-    }
+    if (job.contains("buses") && job["buses"].is_array())
+        for (auto &b : job["buses"]) if (b.is_object()) chain(b, "bus '" + b.value("name", std::string("bus")) + "'");
+    if (job.contains("master") && job["master"].is_object()) chain(job["master"], "master");
+    return out;
+}
+
+std::vector<std::pair<std::string, std::string>> jobFileRefs(const json &job) {
+    json copy = job;
+    std::vector<std::pair<std::string, std::string>> out;
+    for (auto &r : fileRefs(copy)) out.push_back({r.where, r.path});
     return out;
 }
 
@@ -205,8 +258,9 @@ std::string newUuid() {
     return s;
 }
 
-std::string nowRfc3339() {
-    const std::time_t t = std::time(nullptr);
+std::string nowRfc3339() { return rfc3339(std::time(nullptr)); }
+
+std::string rfc3339(std::time_t t) {
     std::tm local{};
 #ifdef _WIN32
     localtime_s(&local, &t);

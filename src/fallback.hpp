@@ -12,6 +12,17 @@ namespace wl {
 
 // Swaps in each track's first fallback that is available here and returns how many it swapped; `notes`
 // gets a line per swap, and per track that has fallbacks but can play neither its own sound nor any of them.
-int applyFallbacks(nlohmann::json &job, const std::string &baseDir, std::vector<std::string> &notes);
+// `force`: every track with fallbacks plays the first available one, as on a computer without its plugin.
+int applyFallbacks(nlohmann::json &job, const std::string &baseDir, std::vector<std::string> &notes, bool force = false);
+
+// true when this computer can play `sound` (a track or a fallback entry); `why` says what is missing
+bool soundAvailable(const nlohmann::json &sound, const std::string &baseDir, std::string &why);
+// `track` plays `sound` instead of its own (what applyFallbacks does for the first available fallback)
+void useSound(nlohmann::json &track, const nlohmann::json &sound);
+// A stand-in for a track that has none, from built-in sounds: its role (bass, pad, lead, arp, keys, drums,
+// strings, brass...) guessed from its name, plugin, preset and notes. {"role", "why", "fallback": [sounds]}
+// (a General MIDI SoundFont program first for orchestral parts, then a builtin:synth patch); null when the
+// track needs none (it is built in, or already has fallbacks).
+nlohmann::json suggestFallback(const nlohmann::json &track);
 
 } // namespace wl

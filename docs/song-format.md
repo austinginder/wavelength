@@ -139,8 +139,9 @@ their track, start beat and key; they carry no IDs.
 Every file reference in the job (a `state` file, a sampler `sample`, `sfz` or `soundfont` path, a
 clip `file`) MUST be a relative path inside the song folder, normally under `media/`. Anything the
 song uses from outside the folder is referred to **by name**: a plugin, a preset (`"preset"`), a
-sample library (`"multisample"`, `"kit"`, `"soundfont"` names), so the song does not depend on where
-another computer keeps it.
+sample library (`"multisample"`, `"kit"`, `"soundfont"` names) or one file of a library
+(`"lib:Legend 909/Kick Legend 909 01 accent.wav"`: a `lib:` name is never a file of the song), so
+the song does not depend on where another computer keeps it.
 
 A song SHOULD NOT copy third-party files into `media/` (factory presets, commercial samples) unless
 their licence allows redistribution. Name them instead.
@@ -272,8 +273,10 @@ repository) and `--bundle` (a git bundle) give the same commits on every compute
 - `status` is `open` or `done`; `resolved` says which revision addressed it. Replies may come from
   people or agents.
 - Comments are not part of history: writing one never makes a revision.
-- Readers MUST accept comments written before this spec, whose anchor fields sit on the comment itself
-  and whose single `reply` is a string.
+- `id`, `status` and `text` are required. Tools SHOULD write `created`, `author` and
+  `anchor.revision` on a comment and `author` on a reply.
+- Readers MUST accept comments written before this spec: their anchor fields sit on the comment itself,
+  their single `reply` is a string, and they have no author or revision.
 
 ## 8. The render
 
@@ -318,8 +321,9 @@ A song is untrusted input. Implementations:
   Schema, the job, object hashes, and the package's entry rules.
 - JSON Schemas: `schemas/wavelength.schema.json` (manifest), `schemas/review.schema.json`,
   `schemas/history-entry.schema.json`.
-- Example songs in `examples/songs/`: valid packages, and packages every reader must refuse (path
-  traversal, symbolic links, `.git`, a bad hash).
+- Test songs from `scripts/make-song-fixtures.py`: a valid folder and package, packages every reader
+  must refuse (path traversal, absolute paths, symbolic links, `.git`, a bad hash, names that collide
+  by case, a newer format) and one it must accept with a warning.
 - A second, independent reader (Python, in `scripts/wavelength_song.py`) validates and unpacks
   packages without the engine, so the spec never depends on one implementation.
 

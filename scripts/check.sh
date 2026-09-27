@@ -233,13 +233,15 @@ if (cd out/check/song && "$w" save -m first >/dev/null && "$w" render job.json -
     python3 -c 'import json;j=json.load(open("job.json"));j["title"]="changed";json.dump(j,open("job.json","w"))' &&
     "$w" save -m second >/dev/null && "$w" undo >/dev/null && cmp -s job.json ../../../examples/synth-tour.json &&
     "$w" redo >/dev/null && grep -q '"changed"' job.json && "$w" diff r1 --json | grep -q '"ok": true' &&
-    grep -q '"revision": 2' out/report.json && "$w" pack --out ../song.wavelength >/dev/null) &&
+    grep -q '"revision": 2' out/report.json && "$w" render job.json --png --keep >/dev/null 2>&1 && [ -s render/mix.mp3 ] && [ -s render/song.png ] &&
+    python3 -c 'import json,sys;m=json.load(open("wavelength.json"));sys.exit(0 if m["render"]["revision"]==6 and m["render"]["job"].startswith("sha256:") else 1)' &&
+    "$w" pack --out ../song.wavelength >/dev/null) &&
    python3 scripts/wavelength_song.py validate out/check/song.wavelength >/dev/null &&
    "$w" validate out/check/song.wavelength >/dev/null &&
    "$w" unpack out/check/song.wavelength --out out/check/song-unpacked >/dev/null && cmp -s out/check/song/job.json out/check/song-unpacked/job.json &&
    "$w" history out/check/song --to-git out/check/song-git >/dev/null &&
    [ "$(git -C out/check/song-git rev-list --count HEAD)" = "$(grep -c . out/check/song/history/log.jsonl)" ]; then
-  echo "ok   song: save, render revision, undo/redo, diff, pack, unpack, git export"
+  echo "ok   song: save, render revision, undo/redo, diff, render --keep, pack, unpack, git export"
 else
   echo "FAIL song format"; fail=1
 fi
@@ -252,6 +254,38 @@ for f in out/check/fixtures/good out/check/fixtures/*.wavelength; do
   [ $c = $want ] && [ $p = $want ] || { echo "     $(basename "$f"): engine $c, python $p, want $want"; fixtures_ok=0; }
 done
 if [ $fixtures_ok = 1 ]; then echo "ok   song fixtures: engine and Python reader agree"; else echo "FAIL song fixtures"; fail=1; fi
+# upgrade: a pre-format folder (absolute paths inside it, a sample in scratch out/) gets a manifest,
+# relative paths (the scratch sample copied into media/), a revision, and still renders; both readers accept it
+up="$PWD/out/check/upgrade"
+rm -rf "$up" && mkdir -p "$up/sounds" "$up/out"
+cp "out/check/synth-tour/$build/mix.wav" "$up/sounds/hit.wav" && cp "out/check/synth-tour/$build/mix.wav" "$up/out/tail.wav"
+python3 - "$up" <<'PY'
+import json, sys
+d = sys.argv[1]
+note = lambda b: {"beat": b, "key": 60, "dur": 1, "vel": 0.8}
+json.dump({"tempo": 120, "tracks": [
+    {"name": "Hit", "plugin": "builtin:sampler", "sampler": {"sample": d + "/sounds/hit.wav", "oneShot": True}, "notes": [note(0)]},
+    {"name": "Tail", "plugin": "builtin:sampler", "sampler": {"sample": d + "/out/tail.wav", "oneShot": True}, "notes": [note(2)]}]},
+    open(d + "/job.json", "w"))
+PY
+if "$w" upgrade "$up" --license CC0-1.0 --author Tester >/dev/null &&
+   python3 -c 'import json,sys;j=json.load(open(sys.argv[1]+"/job.json"));m=json.load(open(sys.argv[1]+"/wavelength.json"));s=[t["sampler"]["sample"] for t in j["tracks"]];sys.exit(0 if s==["sounds/hit.wav","media/tail.wav"] and m["license"]=="CC0-1.0" and m["authors"][0]["name"]=="Tester" else 1)' "$up" &&
+   [ -s "$up/media/tail.wav" ] && [ "$("$w" history "$up" --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["revisions"]))')" = 1 ] &&
+   "$w" validate "$up" >/dev/null && python3 scripts/wavelength_song.py validate "$up" >/dev/null &&
+   "$w" render "$up/job.json" --out "$up/out" >/dev/null 2>&1; then
+  echo "ok   upgrade: manifest, relative paths, scratch file into media/, revision, renders"
+else
+  echo "FAIL upgrade"; fail=1
+fi
+# fallbacks: every CLAP track of hello gets a built-in stand-in, and render --fallbacks plays them all
+rm -rf out/check/fallbacks && mkdir -p out/check/fallbacks && cp examples/hello.json out/check/fallbacks/job.json
+if "$w" fallbacks out/check/fallbacks/job.json --suggest --write --no-measure >/dev/null &&
+   "$w" render out/check/fallbacks/job.json --fallbacks --out out/check/fallbacks/out --json 2>/dev/null |
+   python3 -c 'import json,sys;r=json.load(sys.stdin);n=len(json.load(open("examples/hello.json"))["tracks"]);sys.exit(0 if len(r.get("fallbacks",[]))==n and all(t["lufs"]>-40 for t in r["tracks"]) else 1)'; then
+  echo "ok   fallbacks: suggested for every plugin track, render --fallbacks plays them"
+else
+  echo "FAIL fallbacks"; fail=1
+fi
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
 "./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
 spid=$!

@@ -73,6 +73,18 @@ json requiresOf(const json &job) {
                 out.push_back({{"track", id}, {"library", {{"kind", kind}, {"name", v}}}, {"fallback", fallback}});
             }
         }
+        // single files of a library ("lib:Legend 909/Kick.wav"), one entry per library
+        std::set<std::string> libs;
+        auto libFile = [&](const json &v) {
+            if (!v.is_string() || v.get<std::string>().rfind("lib:", 0) != 0) return;
+            const std::string rel = v.get<std::string>().substr(4), lib = rel.substr(0, rel.rfind('/'));
+            if (libs.insert(lib).second) out.push_back({{"track", id}, {"library", {{"kind", "files"}, {"name", lib}}}, {"fallback", fallback}});
+        };
+        if (t.contains("sampler") && t["sampler"].is_object()) {
+            if (t["sampler"].contains("sample")) libFile(t["sampler"]["sample"]);
+            for (auto &z : t["sampler"].value("zones", json::array())) if (z.is_object()) { libFile(z.value("sample", json())); libFile(z.value("file", json())); }
+        }
+        for (auto &c : t.value("clips", json::array())) if (c.is_object()) libFile(c.value("file", json()));
     }
     return out;
 }
@@ -145,6 +157,12 @@ void validateFolder(const fs::path &dir, json &problems) {
         if (!m.contains(k) || !m[k].is_string() || m[k].get<std::string>().empty()) problem("error", "wavelength.json", std::string("missing \"") + k + "\"");
     std::string why;
     if (!checkSongPath(song.jobFile(), why)) problem("error", "wavelength.json", "job: " + why);
+    if (m.contains("authors")) {
+        if (!m["authors"].is_array()) problem("error", "wavelength.json", "authors must be a list");
+        else for (auto &a : m["authors"])
+            if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) { problem("error", "wavelength.json", "each author is an object with a name"); break; }
+    }
+    if (m.contains("files") && !m["files"].is_array()) problem("error", "wavelength.json", "files must be a list");
     std::error_code ec;
     for (auto &f : m.value("files", json::array())) {
         const std::string p = f.value("path", std::string());
@@ -181,8 +199,12 @@ void validateFolder(const fs::path &dir, json &problems) {
         }
     }
     if (fs::exists(song.dir / "review.json", ec)) {
-        try { const json r = json::parse(readText(song.dir / "review.json")); if (!r.contains("comments")) problem("warning", "review.json", "no comments list"); }
-        catch (...) { problem("error", "review.json", "not valid JSON"); }
+        try {
+            const json r = json::parse(readText(song.dir / "review.json"));
+            if (!r.is_object() || !r.contains("comments") || !r["comments"].is_array()) problem("error", "review.json", "no comments list");
+            else for (auto &c : r["comments"])
+                if (!c.is_object() || !c.contains("id") || !c.contains("text")) { problem("error", "review.json", "a comment without an id or text"); break; }
+        } catch (...) { problem("error", "review.json", "not valid JSON"); }
     }
 }
 
@@ -214,8 +236,16 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
     std::set<std::string> known;
     for (auto &f : m.value("files", json::array())) known.insert(f.value("path", std::string()));
     json all = m.value("files", json::array());
-    for (auto &[where, path] : jobFileRefs(job))
-        if (known.insert(path).second) all.push_back({{"path", path}, {"role", "media"}});
+    for (auto &[where, path] : jobFileRefs(job)) {
+        const fs::path full = song.dir / fs::u8path(path);
+        if (fs::is_directory(full, ec)) {   // a kit folder: every file in it
+            for (auto it = fs::recursive_directory_iterator(full, ec); it != fs::recursive_directory_iterator(); it.increment(ec))
+                if (it->is_regular_file(ec) && !it->is_symlink(ec)) {
+                    const std::string rel = it->path().lexically_relative(song.dir).generic_u8string();
+                    if (known.insert(rel).second) all.push_back({{"path", rel}, {"role", "media"}});
+                }
+        } else if (known.insert(path).second) all.push_back({{"path", path}, {"role", "media"}});
+    }
     for (auto f : all) {
         const std::string p = f.value("path", std::string()), role = f.value("role", std::string());
         if (!checkSongPath(p, why)) { err = "wavelength.json: " + why; return false; }
@@ -329,6 +359,39 @@ json validate(const std::string &target) {
     bool ok = true;
     for (auto &p : problems) ok &= p["severity"] != "error";
     return {{"ok", ok}, {"problems", problems}};
+}
+
+bool keepRender(Song &song, const std::string &outDir, const json &report, int rev, std::string &err) {
+    std::error_code ec;
+    std::string mp3;
+    for (auto &d : report.value("mix", json::object()).value("deliveries", json::array()))
+        if (d.value("format", std::string()) == "mp3") mp3 = d.value("file", std::string());
+    if (mp3.empty() || !fs::is_regular_file(mp3, ec)) { err = "the render made no MP3 to keep"; return false; }
+    const fs::path dir = song.dir / "render";
+    fs::create_directories(dir, ec);
+    fs::copy_file(mp3, dir / "mix.mp3", fs::copy_options::overwrite_existing, ec);
+    if (ec) { err = "cannot copy " + mp3 + " into render/: " + ec.message(); return false; }
+    const std::string png = report.contains("picture") ? report["picture"].value("file", std::string()) : "";
+    const bool picture = !png.empty() && fs::is_regular_file(png, ec);
+    if (picture) fs::copy_file(png, dir / "song.png", fs::copy_options::overwrite_existing, ec);
+    else fs::remove(dir / "song.png", ec);   // an older picture no longer shows this render
+    if (!writeText(dir / "report.json", report.dump(2, ' ', false, json::error_handler_t::replace) + "\n", err)) return false;
+    json &m = song.manifest;
+    json r = {{"revision", rev}, {"mix", "render/mix.mp3"}, {"report", "render/report.json"}};
+    if (picture) r["picture"] = "render/song.png";
+    if (report.contains("song") && report["song"].contains("job")) r["job"] = report["song"]["job"];
+    m["render"] = r;
+    json files = json::array();
+    for (auto &f : m.value("files", json::array()))
+        if (f.value("role", std::string()) != "render") files.push_back(f);
+    for (const char *p : {"render/mix.mp3", "render/song.png", "render/report.json"}) {
+        if (std::string(p) == "render/song.png" && !picture) continue;
+        const fs::path full = song.dir / p;
+        files.push_back({{"path", p}, {"role", "render"}, {"mediaType", mediaTypeOf(p)}, {"size", (uint64_t)fs::file_size(full, ec)}, {"sha256", sha256File(full.string())}});
+    }
+    m["files"] = files;
+    m["updated"] = nowRfc3339();
+    return writeManifest(song, err);
 }
 
 std::string cached(const std::string &file, std::string &err) {

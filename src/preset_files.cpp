@@ -253,6 +253,10 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         dirs.push_back("/Library/Application Support/Native Instruments/" + plugin.name + "/Rack Presets");
         dirs.push_back(fs::path(home) / "Documents/Native Instruments/User Content" / plugin.name / "Rack Presets");
     }
+    if (p == "vital") {   // Vital's own library: factory banks, packs and user presets
+        dirs.push_back(fs::path(home) / "Music/Vital");
+        dirs.push_back(fs::path(home) / "Documents/Vital");
+    }
     if (p == "obxf") {
         dirs.push_back("/Library/Application Support/Surge Synth Team/OB-Xf/Patches");
         dirs.push_back(fs::path(home) / "Documents/Surge Synth Team/OB-Xf/Patches");
@@ -271,6 +275,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (!kExtensions.count(ext) || !belongsTo(it->path(), ext, plugin)) continue;
             const std::string file = it->path().string();
+            if (it->path().filename().string().rfind("._", 0) == 0 || file.find("/__MACOSX/") != std::string::npos) continue;   // macOS zip leftovers
             if (!seen.insert(file).second) continue;
             PresetInfo pi;
             pi.name = it->path().stem().string();

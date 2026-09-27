@@ -58,6 +58,7 @@ MAX_LOG = 256 * 1024 ** 2
 
 AUDIO_EXT = (".wav", ".wave", ".aif", ".aiff", ".aifc", ".flac", ".mp3", ".ogg", ".oga",
              ".opus", ".m4a", ".caf", ".w64")
+LIB_PREFIX = "lib:"
 SAMPLER_EXT = AUDIO_EXT + (".sfz", ".sf2", ".sf3", ".multisample")
 
 # Patterns are matched with re.fullmatch (a bare "$" would accept a trailing newline).
@@ -982,6 +983,13 @@ def job_references(job):
             kit = sampler.get("kit")
             if isinstance(kit, str) and ("/" in kit or "\\" in kit):
                 refs.append((base + ".sampler.kit", kit, "file"))
+            for key in ("map", "kit"):   # key -> file: names inside a named kit's folder, else the song's files
+                m = sampler.get(key)
+                if isinstance(m, dict):
+                    for k, v in m.items():
+                        f = v.get("file") if isinstance(v, dict) else v
+                        if isinstance(f, str) and (not isinstance(kit, str) or "/" in f):
+                            refs.append(("%s.sampler.%s.%s" % (base, key, k), f, "file"))
 
     def fx(chain, base):
         if isinstance(chain, list):
@@ -1079,6 +1087,10 @@ def check_job(tree, manifest, problems):
     listed = listed_files(manifest)
     job_dir = posixpath.dirname(jp)
     for where, value, kind in job_references(job):
+        if value.startswith(LIB_PREFIX):   # a sample library's file, by name (section 4.2)
+            if any(seg in ("", ".", "..") for seg in value[len(LIB_PREFIX):].split("/")):
+                problems.error(jp, "%s %r has an empty, '.' or '..' segment" % (where, value), "path-traversal")
+            continue
         bad = path_problems(value)
         for code, message in bad:
             problems.error(jp, "%s %r %s" % (where, value, message), code)
@@ -1375,13 +1387,15 @@ def check_review(tree, revs, problems):
         if "anchor" in c:
             for k in ("created", "author"):
                 if k not in c:
-                    f.err(w + "." + k, "is required on a comment with an anchor")
+                    f.warn(w + "." + k, "is missing (a comment from before the format?)", "review-legacy")
         anchor = f.obj(c, "anchor", w)
         if anchor is not None:
             a = w + ".anchor"
-            rev = f.integer(anchor, "revision", a, required=True, minimum=1)
-            if rev is not None and revs is not None and rev not in revs:
-                f.err(a + ".revision", "%d is not in the history" % rev, "review-revision")
+            rev = f.integer(anchor, "revision", a, minimum=1)
+            if "revision" not in anchor:
+                f.warn(a + ".revision", "is missing (a comment from before the format?)", "review-legacy")
+            elif rev is not None and revs is not None and rev not in revs:
+                f.warn(a + ".revision", "%d is not in the history (pruned?)" % rev, "review-revision")
             f.string(anchor, "render", a, pattern=HASHREF_RE, what="\"sha256:\" and 64 lowercase hex digits")
             f.pair(anchor, "time", a)
             f.pair(anchor, "bars", a, integer=True, minimum=1)
@@ -1405,7 +1419,9 @@ def check_review(tree, revs, problems):
             if not isinstance(r, dict):
                 f.err(rw, "must be an object")
                 continue
-            f.person(r, "author", rw, required=True)
+            f.person(r, "author", rw)
+            if "author" not in r:
+                f.warn(rw + ".author", "is missing (a reply from before the format?)", "review-legacy")
             f.time(r, "time", rw, strict=False)
             rev = f.integer(r, "revision", rw, minimum=1)
             if rev is not None and revs is not None and rev not in revs:

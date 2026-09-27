@@ -64,7 +64,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `transpose` | 0 | Semitones added to every note (presets that sound an octave off, key changes). |
 | `output` | master | A bus name: the track feeds that bus instead of the master (group buses / sub-mixes). |
 | `roll` | 0 | Beats between notes that start together, lowest first (strummed or rolled chords); negative rolls from the top. |
-| `fallback` | none | Stand-in sounds for when this computer lacks the track's plugin (or its `builtin:sampler` library): a sound object or a list, tried in order, e.g. `[{"plugin": "Surge XT", "preset": "Trance Seq Bass"}, {"plugin": "builtin:synth", "preset": "BA Pluck", "gain": -2}]`. The first one available replaces the track's sound: `plugin`, `preset`, `state`, `params`, `synth`, `sampler`, `articulations`, `range`, `velocityTo`, `warmup` and the plugin's own `automation.params`/`cc`/`pressure` curves go, and every key the fallback gives is set (`gain`, `transpose`, `fx`, its own `automation`...). Notes lose their `art` when the fallback has no `articulations`. The report lists each swap first in `warnings` and in `fallbacks`; a track that can play neither its sound nor any fallback fails the render, naming both. |
+| `fallback` | none | Stand-in sounds for when this computer lacks the track's plugin (or its `builtin:sampler` library): a sound object or a list, tried in order, e.g. `[{"plugin": "Surge XT", "preset": "Trance Seq Bass"}, {"plugin": "builtin:synth", "preset": "BA Pluck", "gain": -2}]`. The first one available replaces the track's sound: `plugin`, `preset`, `state`, `params`, `synth`, `sampler`, `articulations`, `range`, `velocityTo`, `warmup` and the plugin's own `automation.params`/`cc`/`pressure` curves go, and every key the fallback gives is set (`gain`, `transpose`, `fx`, its own `automation`...). Notes lose their `art` when the fallback has no `articulations`. The report lists each swap first in `warnings` and in `fallbacks`; a track that can play neither its sound nor any fallback fails the render, naming both. `wavelength fallbacks --suggest` proposes built-in stand-ins at matched levels; `render --fallbacks` plays them all to hear the result. |
 | `midiProgram`, `midiChannel` | none | Kept by `import song.mid` (the part's General MIDI program and channel) and written back by `export`; rendering ignores them. |
 | `bendRange` | 2 | The plugin's pitch-bend range in semitones, so `automation.pitchbend` can be written in semitones. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |
@@ -155,7 +155,7 @@ Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `file` | required | An audio file (WAV, AIFF, FLAC, MP3 or Ogg Vorbis, told apart by content): absolute, relative to the job, or relative to a sample root (Bitwig content, `$WAVELENGTH_SAMPLES_PATH`); or `{"render": ...}`, the song's own audio (below). |
+| `file` | required | An audio file (WAV, AIFF, FLAC, MP3 or Ogg Vorbis, told apart by content): relative to the job (in a song: under `media/`), a library file by name (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, see [Library files](#library-files-lib)), an absolute path, or relative to a sample root; or `{"render": ...}`, the song's own audio (below). |
 | `beat` / `endAt` | one of them | Where the clip starts, or the beat where it ends (reverse swells, pickups). |
 | `bpm` | none | The file's own tempo: the clip is sped up or slowed to the song's tempo at its anchor. |
 | `speed` | 1 | An explicit speed factor instead of `bpm`. |
@@ -196,6 +196,16 @@ removed) or Ogg Vorbis. List what is installed with `wavelength samples [--searc
 Names are searched in `$WAVELENGTH_SAMPLES_PATH` (colon-separated folders) and the Bitwig
 Studio package folders; paths work too (relative to the job).
 
+#### Library files: `lib:`
+
+One file of an installed sample library, by name, so a job never depends on where a computer keeps
+it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists
+it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum
+Machines/Legend 909/..."`), or `"lib:<path under a sample root>"`
+(`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit
+`map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in
+the manifest's `requires`, and `wavelength upgrade` turns absolute library paths into `lib:` names.
+
 ```json
 {"name": "Keys", "plugin": "builtin:sampler", "sampler": {"multisample": "Grand Piano", "release": 0.4}, "notes": [...]}
 {"name": "Drums", "plugin": "builtin:sampler", "sampler": {"kit": "Legend 707", "map": {"36": "Kick Legend 707 02.wav"}}, "notes": [...]}
@@ -208,7 +218,7 @@ Studio package folders; paths work too (relative to the job).
 | `soundfont` + `program` / `bank` / `preset` | bank 0 | A SoundFont (`.sf2`, or `.sf3` with Ogg Vorbis samples) by name or path, and one of its presets: General MIDI `program` 0-127 in `bank` (128 = drum kits, `program` picks the kit), or `"preset": "Violin"` by name. `wavelength samples --soundfont <name>` lists its presets; `wavelength samples --install-soundfont` downloads MuseScore General (MIT, 40 MB), the General MIDI set imports fall back on. See [SoundFonts](#soundfonts) below. |
 | `kit` | | A folder of one-shot samples mapped to General MIDI keys by file name (36 kick, 38 snare, 39 clap, 37 rim, 42 closed hat, 46 open hat, 49 crash, 51 ride, 45/47/50 toms, 54 tambourine, 56 cowbell; unrecognised files take free keys from 60). `wavelength samples --kit <name>` prints the map. Or an object `{"36": "file.wav", ...}`. |
 | `map` | `{}` | Key → file overrides on top of a kit (file names inside the kit folder, or paths), or `{"file": ..., "gain": dB, "pan": -1..1, "tune": semitones}`, or just the settings for the kit's own sample on that key. |
-| `sample` + `root` | 60 | One sample played chromatically, `root` = the key it sounds at its own pitch. |
+| `sample` + `root` | 60 | One sample played chromatically, `root` = the key it sounds at its own pitch. A path relative to the job, or an installed library's file by name: `"lib:Legend 909/Snare Legend 909 01 accent.wav"` (see below). |
 | `attack`, `release` | 0.002 / 0.25 s (kits 0 / 0.05) | Amplitude envelope. |
 | `oneShot` | kits true | Play samples to their end, ignoring note length. |
 | `choke` | kits `[[42, 44, 46]]` | Key groups that cut each other (a closed hat stops the open hat). A one-key group chokes itself. |

@@ -123,7 +123,9 @@ json tools() {
          {"stems", {{"type", "string"}, {"enum", {"none", "16", "24", "float"}}, {"description", "stem files (default none)"}}},
          {"deliver", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "extra files next to mix.wav: mp3, flac, wav:16..."}}},
          {"loop", prop("boolean", "with from_bar/to_bar: a seamless loop for games (tail folded onto the start, smpl loop chunk)")},
-         {"picture", prop("boolean", "attach the song picture (default true)")}},
+         {"picture", prop("boolean", "attach the song picture (default true)")},
+         {"keep", prop("boolean", "a song's whole render: keep its MP3, picture and report in the song's render/ (the render that goes with it)")},
+         {"fallbacks", prop("boolean", "play every track's first available fallback, as a computer without the plugins would")}},
         {"job"}, writes));
     list.push_back(tool("picture", "Picture of an arrangement",
         "Draws a job's arrangement before rendering (sections, bars, every track's notes) and returns the image; the render tool "
@@ -138,6 +140,41 @@ json tools() {
     list.push_back(tool("timeline", "Song time of bars and markers",
         "Song time of every marker and every few bars from the tempo map, in song and file seconds: find bar 57, or plan a length.",
         {{"job", prop("string", "path to job.json")}, {"every", prop("number", "bars between rows (default 8)")}}, {"job"}, readOnly));
+    const json song = prop("string", "the song folder (with wavelength.json and its job)");
+    list.push_back(tool("save", "Save a revision of a song",
+        "Saves the song's job and its source, notes and media files as a revision in its history (the first save makes the "
+        "manifest). Save before a risky change; renders are revisions too.",
+        {{"song", song}, {"message", prop("string", "what changed")}}, {"song"}, writes));
+    list.push_back(tool("history", "A song's revisions",
+        "Every revision, newest last: saves, renders (with their loudness), undo, redo, restore, and which one is current.",
+        {{"song", song}}, {"song"}, readOnly));
+    list.push_back(tool("undo", "Undo, redo or restore a song",
+        "Undo steps back one change the way an editor does, redo steps forward again, restore brings back any revision's files. "
+        "Each adds a revision, so nothing is lost.",
+        {{"song", song}, {"action", {{"type", "string"}, {"enum", {"undo", "redo", "restore"}}, {"description", "default undo"}}},
+         {"revision", prop("number", "for restore: the revision to bring back")}},
+        {"song"}, writes));
+    list.push_back(tool("diff", "What changed in a song",
+        "What changed in the music between two revisions, by track and bar: sounds, mix, effects and curves, notes.",
+        {{"song", song}, {"from", prop("number", "revision (default: the last one)")}, {"to", prop("number", "revision (default: the folder now)")}},
+        {"song"}, readOnly));
+    list.push_back(tool("comments", "A song's review comments",
+        "The human's open comments from the review UI, each with the revision and render it was made on, the bars, tracks and "
+        "notes it points at, and whether the music there changed since. Read them before working on a song.",
+        {{"song", song}, {"all", prop("boolean", "include resolved ones")}}, {"song"}, readOnly));
+    list.push_back(tool("reply", "Answer a comment",
+        "Replies to a comment (what you changed and where) and, with done, resolves it at the song's current revision.",
+        {{"song", song}, {"id", prop("string", "the comment's id")}, {"text", prop("string", "the reply")}, {"done", prop("boolean", "resolve it")}},
+        {"song", "id", "text"}, writes));
+    list.push_back(tool("fallbacks", "Stand-in sounds for a song",
+        "What each track plays on this computer; with suggest, a built-in stand-in for every plugin or library track without "
+        "one, level-matched to the last render; with write, adds them to the job.",
+        {{"song", song}, {"suggest", prop("boolean", "propose fallbacks")}, {"write", prop("boolean", "write them into the job")}},
+        {"song"}, writes));
+    list.push_back(tool("pack", "Pack a song into one file",
+        "Makes a .wavelength file (a ZIP of the song folder: job, listed files, comments, history) to share, and lists the "
+        "plugins and libraries it needs. Validates the song first.",
+        {{"song", song}, {"out", prop("string", "the .wavelength file (default <slug>.wavelength in the current folder)")}}, {"song"}, writes));
     list.push_back(tool("import", "Import MIDI, MusicXML, DAWproject or a Bitwig project",
         "Makes a job from a MIDI file, a MusicXML score (MuseScore, Sibelius, Dorico), a DAWproject or a Bitwig Studio project (.bwproject, no export needed), ready to render and edit.",
         {{"file", prop("string", ".mid, .musicxml/.mxl, .dawproject or .bwproject")}, {"out", prop("string", "folder for job.json")}}, {"file", "out"}, writes));
@@ -448,6 +485,57 @@ private:
             return r;
         }
         if (name == "render") return render(a, id, progress);
+        if (name == "save") {
+            std::vector<std::string> args = {"save", need(a, "song"), "--json"};
+            if (!str(a, "message").empty()) { args.push_back("-m"); args.push_back(str(a, "message")); }
+            if (!run(args, id, progress, 120, out, fail)) return fail;
+            return text(out.dump(1));
+        }
+        if (name == "history" || name == "comments") {
+            std::vector<std::string> args = {name, need(a, "song"), "--json"};
+            if (name == "comments" && a.value("all", false)) args.push_back("--all");
+            if (!run(args, id, progress, 120, out, fail)) return fail;
+            return text(out.dump(1));
+        }
+        if (name == "undo") {
+            const std::string action = str(a, "action").empty() ? "undo" : str(a, "action");
+            if (action != "undo" && action != "redo" && action != "restore") return text("error: action is undo, redo or restore", true);
+            std::vector<std::string> args = {action, need(a, "song")};
+            if (action == "restore") {
+                if (!a.contains("revision") || !a["revision"].is_number()) return text("error: restore needs a revision", true);
+                args.push_back(numArg(a["revision"]));
+            }
+            args.push_back("--json");
+            if (!run(args, id, progress, 120, out, fail)) return fail;
+            return text(out.dump(1));
+        }
+        if (name == "diff") {
+            std::vector<std::string> args = {"diff", need(a, "song")};
+            for (const char *k : {"from", "to"})
+                if (a.contains(k) && a[k].is_number()) args.push_back("r" + numArg(a[k]));
+            args.push_back("--json");
+            if (!run(args, id, progress, 120, out, fail)) return fail;
+            return text(out.dump(1));
+        }
+        if (name == "reply") {
+            std::vector<std::string> args = {"comments", need(a, "song"), "--reply", need(a, "id"), "--text", need(a, "text"), "--json"};
+            if (a.value("done", false)) args.push_back("--done");
+            if (!run(args, id, progress, 120, out, fail)) return fail;
+            return text(out.dump(1));
+        }
+        if (name == "fallbacks") {
+            std::vector<std::string> args = {"fallbacks", need(a, "song"), "--json"};
+            if (a.value("suggest", false) || a.value("write", false)) args.push_back("--suggest");
+            if (a.value("write", false)) args.push_back("--write");
+            if (!run(args, id, progress, 1800, out, fail)) return fail;
+            return text(out.dump(1));
+        }
+        if (name == "pack") {
+            std::vector<std::string> args = {"pack", need(a, "song"), "--json"};
+            if (!str(a, "out").empty()) { args.push_back("--out"); args.push_back(str(a, "out")); }
+            if (!run(args, id, progress, 600, out, fail)) return fail;
+            return text(out.dump(1));
+        }
         return text("error: unknown tool " + name, true);
     }
 
@@ -461,6 +549,8 @@ private:
         if (a.contains("from_bar") && a["from_bar"].is_number()) { args.push_back("--from"); args.push_back(numArg(a["from_bar"])); }
         if (a.contains("to_bar") && a["to_bar"].is_number()) { args.push_back("--to"); args.push_back(numArg(a["to_bar"])); }
         if (a.value("loop", false)) args.push_back("--loop");
+        if (a.value("keep", false)) args.push_back("--keep");
+        if (a.value("fallbacks", false)) args.push_back("--fallbacks");
         if (a.contains("tracks") && a["tracks"].is_array()) {
             std::string t;
             for (auto &x : a["tracks"]) if (x.is_string()) t += (t.empty() ? "" : ",") + x.get<std::string>();

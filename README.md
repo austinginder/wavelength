@@ -66,6 +66,11 @@ https://wavelength.run
   arrangement before rendering.
 - **Measure:** BS.1770 loudness per track, bus, marker section and mix (it matches
   `ffmpeg -af ebur128`), per-track loudness per section, true peak and per-track render time.
+- **Keep and share songs:** an open [song format](docs/song-format.md): a folder with a manifest,
+  revisions (`save`, `undo`, `redo`, `restore`, `diff` by track and bar, git export), comments pinned
+  to the revision and render they were made on, and `.wavelength` files (a ZIP) to share, checked
+  before anything is unpacked. `fallbacks --suggest` gives every track a built-in stand-in at its own
+  level, so a shared song plays on a machine without the plugins.
 
 ## Use it from an agent
 
@@ -211,6 +216,11 @@ A minimal job:
 | `picture <job.json> [--out FILE.png] [--width PX] [--json]` | The arrangement as an image before rendering: sections, bars and a lane per track with its notes (`arrangement.png` next to the job). `render --png` draws the full picture: loudness, spectrum and each track's level too. |
 | `timeline <job.json> [--every BARS] [--json]` | Song time of every marker and every BARS bars from the tempo map (ramps included), in song seconds and file time (after the lead-in), with the tempo there and the song's length, before rendering. |
 | `master <mix.wav> --chain <chain \| job> [--loudness L] [--lead-in S] [--out DIR] [--deliver mp3,flac] [--json]` | Masters a finished mix: plays it through a master chain (an effect list, a master object, or a song's job with its markers; a file or inline JSON) and reports loudness and true peak before and after, per section. |
+| `save [song] [-m MSG]`, `history`, `undo`, `redo`, `restore <rev>`, `diff [A [B]]` | Revisions of a song ([song format](docs/song-format.md)): the job and its source, notes and media in `history/`, every full render recorded with its loudness. `diff` names what changed by track and bar; `history --to-git DIR` exports the revisions as git commits outside the song. |
+| `comments [song] [--reply ID --text T --done]` | A song's open comments with the revision they were made on and whether the music they point at changed since; answer and resolve them. |
+| `pack [song]`, `unpack <file.wavelength>`, `validate <song \| file>` | One shareable file per song and back (entries checked first: no paths out of the folder, links, `.git` or zip bombs; nothing runs). `render song.wavelength` renders one directly. |
+| `upgrade [song] [--license SPDX] [--author NAME] [--dry-run]` | Brings an older song folder up to the format: manifest, relative paths, preset and `lib:` names for installed sounds, and a revision. |
+| `fallbacks [song] [--suggest [--write]]` | What each track plays on this computer; `--suggest` proposes built-in stand-ins at matched levels, `render --fallbacks` plays them. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 
 `docs [agents | job-format | effects]` prints the docs built into the binary (the operating guide and

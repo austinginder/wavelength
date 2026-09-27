@@ -111,7 +111,7 @@ Usage:
       prints the plugin's display text for a plain value (or the value it reads for display
       text, "Name=800 Hz", or a note name); --map "Name" tabulates value -> display across the
       range (21 rows, or --steps N). Neither changes anything.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--from BAR --to BAR [--loop]] [--png] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--from BAR --to BAR [--loop]] [--png] [--keep] [--fallbacks] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a worker whose plugin crashes is started again (job "retries", default 2); a track that
@@ -133,6 +133,10 @@ Usage:
       --png (or the job's "picture": true) draws DIR/song.png: sections and bars, the mix's loudness over
       time with each section's level, its spectrum, and a lane per track with its notes over its
       post-fader level. An agent that can read images sees the whole song at a glance.
+      --keep (a song's job, rendered whole) keeps this render with the song: its MP3, picture and report
+      go to render/ and the manifest's "render" names them, so the song can be heard without rendering.
+      --fallbacks plays every track's first available fallback, as a computer without its plugins would
+      (`wavelength fallbacks --suggest` proposes them).
       --deliver mp3,flac (mp3:256, flac:16, wav:16, wav:24; none) replaces the job's "deliver": files
       written next to mix.wav, decoded again and measured (report mix.deliveries). MP3 needs LAME
       (libmp3lame, or $WAVELENGTH_LAME; "none" = use ffmpeg) or ffmpeg. --tracks and --from renders skip it.
@@ -232,6 +236,12 @@ Usage:
       render and serve open a .wavelength file directly.
   wavelength validate <song | file.wavelength> [--json]
       A song folder or package against the format spec.
+  wavelength upgrade [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy] [--json]
+      Brings a song folder made before the format up to it: writes wavelength.json (from site.json when
+      there is one), makes paths inside the song relative, moves files the job uses out of out/ into
+      media/, names library samples ("lib:Legend 909/Kick.wav") and preset files (by preset name), copies
+      other outside files into media/ (--no-copy: only reports them), updates review.json, keeps the last
+      render when it matches the job, and saves a revision. Lists what it could not fix.
   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
       A local web UI for reviewing songs (a folder of song folders, default the current one): the
       arrangement with its chords and harmony problems, loudness, stems, and quick previews: any
@@ -258,7 +268,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1058,7 +1068,8 @@ int cmdRender(const Args &a) {
     try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
     // tracks whose plugin or sample library isn't on this computer play their "fallback"
     std::vector<std::string> fallbackNotes;
-    const int swapped = applyFallbacks(j, fs::absolute(path).parent_path().string(), fallbackNotes);
+    if (a.has("--fallbacks") && a.has("--keep")) return fail(a, "--keep keeps the song's own render, not one with --fallbacks");
+    const int swapped = applyFallbacks(j, fs::absolute(path).parent_path().string(), fallbackNotes, a.has("--fallbacks"));
     // --tracks "Lead,Bass": render only those (plus, muted, the tracks that key their sidechains).
     // Workers re-read the job by track index, so the subset goes to a file next to the job.
     std::string subsetPath;
@@ -1149,6 +1160,16 @@ int cmdRender(const Args &a) {
         if (job.stemBits < 0) return fail(a, "--stems must be float, 24, 16 or none");
     }
     if (a.has("--png")) job.picture = true;
+    Song keepSong;
+    if (a.has("--keep")) {   // the render goes with the song: it needs a song, the whole song and an MP3
+        if (!songOfJob(path, keepSong)) return fail(a, "--keep needs a song (its job next to wavelength.json: `wavelength save` makes one)");
+        if (!only.empty() || job.window.on) return fail(a, "--keep keeps a whole render, not --tracks or --from/--to");
+        if (std::none_of(job.deliver.begin(), job.deliver.end(), [](const DeliverySpec &d) { return d.format == "mp3"; })) {
+            DeliverySpec mp3;
+            if (!parseDeliverySpec("mp3", mp3, err)) return fail(a, err);
+            job.deliver.push_back(mp3);
+        }
+    }
     RenderResult r;
     std::string outDir = a.get("--out", "out");
     bool ok = false;
@@ -1236,10 +1257,12 @@ int cmdRender(const Args &a) {
     if (!complete) report["error"] = incomplete;
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
     int songRev = 0;   // a full render of a song is a revision (docs/song-format.md): the report names it
-    if (complete && only.empty() && !job.window.on) {
+    if (complete && only.empty() && !job.window.on && !a.has("--fallbacks")) {   // stand-ins on purpose are not the song
         std::string herr;
         songRev = history::recordRender(path, outDir, report, herr);
         if (!herr.empty()) std::fprintf(stderr, "warning: song history: %s\n", herr.c_str());
+        if (a.has("--keep") && songRev > 0 && !package::keepRender(keepSong, outDir, report, songRev, herr))
+            std::fprintf(stderr, "warning: --keep: %s\n", herr.c_str());
     }
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return complete ? 0 : 1; }
     for (auto &t : r.tracks) {
@@ -1762,7 +1785,7 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop"}},
+            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop", "--keep", "--fallbacks"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument", "--list"}},
