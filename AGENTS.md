@@ -47,7 +47,8 @@ setup. With stems the tracks (and `"stem": true` buses) are layers of the same l
 music: bring them in and out by intensity. Write the loop's bars so their last beat leads back into
 their first; notes that start before the loop don't sound in it. `--deliver flac` or `wav:16` for
 smaller files (MP3 pads the start and can't loop seamlessly). Stingers and one-shots are plain
-`--from/--to` renders of their own bars.
+`--from/--to` renders of their own bars. The master chain runs before the fold, so a loop can peak a
+little over its limiter's ceiling where the tail folds in: the report's `mix.truePeakDb` says by how much.
 
 ## Starting from a DAW project
 
