@@ -99,6 +99,20 @@ section's level, the spectrum, and every track's notes over its level. It shows 
 the numbers only list: a part playing where it should rest, a flat contour, a harsh band.
 `"$WAVELENGTH" picture job.json` draws the arrangement before any render.
 
+Read the picture of the render **with its master** (the master's compressors flatten contrast the
+pre-master still had), in this order:
+- **Loudness line:** it should draw the form you planned. A flat line from the first drop to the
+  end is a flat song; a breakdown that dips under 4-5 dB doesn't breathe. Ride tracks or buses
+  (`automation.rides`, before the master) rather than the master, which hands most of it back.
+- **Drop marks** at the section boundaries: the jump from the last 2 bars before it to the first 4
+  after it. Green is 3 dB or more, amber passes but under 3, red is a weak drop: empty the build
+  (see AGENTS.md "Arranging"), don't just turn it down.
+- **Spectrum:** high-pass sweeps show as rising dark edges in the builds; low end that comes back
+  in the last bar before a drop (risers, reverse swells, a full-range roll) eats the drop.
+  A bright band that never moves is a harsh or resonant sound; an empty top is dull.
+- **Lanes:** notes over each track's level after its fader (the label is `tracks[].postFaderLufs`,
+  before any bus). A lane lit where it should rest, or a part far louder or quieter than its role.
+
 Read `report.json`: no silent tracks, no warnings you can't explain, `sections[].lufs`
 following the contour you planned, `tracks[].sectionLufs` to find what dominates a section.
 Ride faders with `automation.rides` until the sections breathe. Keep iterating while the numbers
