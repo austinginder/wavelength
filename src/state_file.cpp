@@ -211,7 +211,10 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         // follow the form of the plugin's own state
         const auto text = data;
         out.transform = [text, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &) {
-            state = current.size() >= 5 && std::memcmp(current.data(), "#pgm=", 5) == 0 ? h2pToLegacyState(text, name) : h2pToState(text, name);
+            const bool legacy = current.size() >= 5 && std::memcmp(current.data(), "#pgm=", 5) == 0;
+            const bool modern = current.size() >= 9 && std::memcmp(current.data() + 4, "#pgm=", 5) == 0;
+            const bool plain = !legacy && !modern && current.size() >= 4 && (std::memcmp(current.data(), "/*@M", 4) == 0 || std::memcmp(current.data(), "#AM=", 4) == 0);
+            state = legacy ? h2pToLegacyState(text, name) : plain ? text : h2pToState(text, name);   // plain: a u-he Audio Unit's AM_STATE
             return true;
         };
     } else if (fmt == "dx7") {

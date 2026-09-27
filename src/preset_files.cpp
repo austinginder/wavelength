@@ -61,7 +61,11 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".echobode") return p == "echobode";
     if (ext == ".tide") return p == "pendulate";
     if (ext == ".srgfx") return p == "surgexteffects";
-    if (ext == ".preset") {   // HISE user presets (other plugins use .preset for their own formats)
+    if (ext == ".preset") {   // HISE user presets (other plugins use .preset for their own formats), in <Product>/User Presets/
+        bool ours = false;
+        for (fs::path d = file.parent_path(); !d.empty() && d != d.parent_path(); d = d.parent_path())
+            if (d.filename() == "User Presets") { ours = squash(d.parent_path().filename().string()) == p; break; }
+        if (!ours) return false;
         std::ifstream in(file, std::ios::binary);
         std::vector<uint8_t> head(512);
         in.read(reinterpret_cast<char *>(head.data()), (std::streamsize)head.size());

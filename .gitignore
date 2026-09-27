@@ -4,6 +4,7 @@ out/
 .DS_Store
 third_party/
 build-dev/
+build-compat/
 __pycache__/
 dist/
 build-linux*/

@@ -118,8 +118,7 @@ uint16_t stepBits(const std::string &s) {
 }
 
 // bytes after the programs of the plugin's own bank (MIDI note map + an opaque blob), kept as is
-bool bankTail(const std::vector<uint8_t> &comp, std::vector<uint8_t> &tail) {
-    const size_t base = 170;
+bool bankTail(const std::vector<uint8_t> &comp, size_t base, std::vector<uint8_t> &tail) {
     if (comp.size() < base + 8) return false;
     const uint32_t count = rbe32(comp, base + 4);
     size_t o = base + 8;
@@ -153,11 +152,15 @@ bool isMicrotonicText(const std::vector<uint8_t> &d) {
 
 bool microtonicKitState(Plugin &plugin, const std::vector<uint8_t> &comp, const std::vector<uint8_t> &preset,
                         const std::string &name, std::vector<uint8_t> &out, std::string &err) {
+    // the plugin's chunk (0xeddb81a6 ...) arrives in the VST3 state (magic, u8, u8, u32 LE length, FXB), in
+    // an FXB (a VST 2 bank), or bare (a VST 2 plugin's chunk, an Audio Unit's unwrapped "vstdata")
     static const uint8_t magic[4] = {0x59, 0xa2, 0xcd, 0x18};
-    if (comp.size() < 180 || std::memcmp(comp.data(), magic, 4) || std::memcmp(comp.data() + 10, "CcnK", 4)) {
-        err = "a Microtonic kit loads into Microtonic only";
-        return false;
-    }
+    size_t chunkAt = 0;
+    enum { Vst3, Fxb, Bare } form;
+    if (comp.size() >= 180 && !std::memcmp(comp.data(), magic, 4) && !std::memcmp(comp.data() + 10, "CcnK", 4)) { form = Vst3; chunkAt = 170; }
+    else if (comp.size() >= 170 && !std::memcmp(comp.data(), "CcnK", 4) && !std::memcmp(comp.data() + 8, "FBCh", 4)) { form = Fxb; chunkAt = 160; }
+    else if (comp.size() >= 8 && rbe32(comp, 0) == 0xeddb81a6) form = Bare;
+    else { err = "a Microtonic kit loads into Microtonic only"; return false; }
     Node root;
     std::string header;
     if (!parseText(std::string(preset.begin(), preset.end()), root, header) || header.rfind("MicrotonicPresetV", 0) != 0) {
@@ -168,7 +171,7 @@ bool microtonicKitState(Plugin &plugin, const std::vector<uint8_t> &comp, const 
     const Node *drums = body.get("DrumPatches"), *patterns = body.get("Patterns");
     if (!drums || !patterns) { err = "kit has no DrumPatches / Patterns"; return false; }
     std::vector<uint8_t> tail;
-    if (!bankTail(comp, tail)) { err = "unexpected Microtonic state layout"; return false; }
+    if (!bankTail(comp, chunkAt, tail)) { err = "unexpected Microtonic state layout"; return false; }
 
     std::vector<uint8_t> prog;
     be32(prog, 0x5c652a78);
@@ -215,9 +218,10 @@ bool microtonicKitState(Plugin &plugin, const std::vector<uint8_t> &comp, const 
     be32(chunk, 1);
     chunk.insert(chunk.end(), prog.begin(), prog.end());
     chunk.insert(chunk.end(), tail.begin(), tail.end());
+    if (form == Bare) { out = chunk; return true; }
     std::vector<uint8_t> fxb = {'F', 'B', 'C', 'h'};
     be32(fxb, 1);
-    fxb.insert(fxb.end(), comp.begin() + 26, comp.begin() + 30);   // fxID: NuMT or NuMm (Multi)
+    fxb.insert(fxb.end(), comp.begin() + (long)chunkAt - 144, comp.begin() + (long)chunkAt - 140);   // fxID: NuMT or NuMm (Multi)
     be32(fxb, 1); be32(fxb, 1);
     fxb.insert(fxb.end(), 128, 0);
     be32(fxb, (uint32_t)chunk.size());
@@ -225,6 +229,7 @@ bool microtonicKitState(Plugin &plugin, const std::vector<uint8_t> &comp, const 
     std::vector<uint8_t> body2 = {'C', 'c', 'n', 'K'};
     be32(body2, (uint32_t)fxb.size());
     body2.insert(body2.end(), fxb.begin(), fxb.end());
+    if (form == Fxb) { out = body2; return true; }
     out.assign(comp.begin(), comp.begin() + 4);
     out.push_back(0); out.push_back(0);
     for (int i = 0; i < 4; ++i) out.push_back((uint8_t)(body2.size() >> (8 * i)));

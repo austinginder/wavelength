@@ -7,6 +7,7 @@
 #include <zstd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -939,19 +940,41 @@ namespace {
 // +16, chunk size at +156, chunk at +160). The chunk is a header (";yMqmrAM" + the reversed fxID + a
 // version, 16 bytes; Permut8: 4 magic bytes), u32 LE body length, zlib(body).
 const uint8_t kScMagic[4] = {0x59, 0xa2, 0xcd, 0x18};
+// The same chunk reaches us wrapped four ways: the VST3 state (magic, u8 0, u8 program, u32 LE length,
+// FXB bank), a bare FXB bank (VST 2 bank files), an FXP program (an Audio Unit's "vstdata"), or the
+// chunk itself (a VST 2 plugin's own chunk). The state is written back the way it came.
 struct ScState {
-    const uint8_t *fxb = nullptr, *chunk = nullptr;
+    std::vector<uint8_t> prefix, head;   // bytes before the FXB/FXP; the FXB/FXP header up to its chunk size field
+    bool vst3 = false, wrapped = false;  // VST3 state prefix; FXB/FXP around the chunk
+    const uint8_t *chunk = nullptr;
     size_t header = 0;
     std::vector<uint8_t> body;
 };
 bool scUnpack(const std::vector<uint8_t> &st, const char *fxid, const std::string &plugin, const std::string &what, ScState &sc, std::string &err) {
-    if (st.size() < 10 + 160 + 8 || std::memcmp(st.data(), kScMagic, 4) || std::memcmp(st.data() + 10, "CcnK", 4) ||
-        std::memcmp(st.data() + 18, "FBCh", 4) || std::memcmp(st.data() + 26, fxid, 4)) { err = "a " + what + " loads into " + plugin + " only"; return false; }
-    sc.fxb = st.data() + 10;
-    const uint32_t csize = be32(sc.fxb + 156);
-    if (10 + 160 + (size_t)csize > st.size() || csize < 8) { err = "unexpected " + plugin + " state layout"; return false; }
-    sc.chunk = sc.fxb + 160;
-    sc.header = std::memcmp(sc.chunk, ";yMqmrAM", 8) == 0 ? 16 : 4;
+    const std::string wrong = "a " + what + " loads into " + plugin + " only";
+    size_t at = 0;
+    if (st.size() >= 10 && !std::memcmp(st.data(), kScMagic, 4)) { sc.vst3 = true; at = 10; sc.prefix.assign(st.begin(), st.begin() + 10); }
+    size_t chunkAt = at, csize = st.size() - at;
+    if (st.size() >= at + 60 && !std::memcmp(st.data() + at, "CcnK", 4)) {
+        const bool bank = !std::memcmp(st.data() + at + 8, "FBCh", 4), program = !std::memcmp(st.data() + at + 8, "FPCh", 4);
+        if (!bank && !program) { err = wrong; return false; }
+        if (std::memcmp(st.data() + at + 16, fxid, 4)) { err = wrong; return false; }
+        const size_t sizeAt = at + (bank ? 156 : 56);
+        if (st.size() < sizeAt + 4) { err = "unexpected " + plugin + " state layout"; return false; }
+        sc.wrapped = true;
+        sc.head.assign(st.begin() + (long)at, st.begin() + (long)sizeAt);
+        csize = be32(st.data() + sizeAt);
+        chunkAt = sizeAt + 4;
+        if (chunkAt + csize > st.size()) { err = "unexpected " + plugin + " state layout"; return false; }
+    } else if (sc.vst3) { err = wrong; return false; }
+    sc.chunk = st.data() + chunkAt;
+    if (csize < 8) { err = "unexpected " + plugin + " state layout"; return false; }
+    if (!std::memcmp(sc.chunk + 4, "mrAM", 4)) {   // ";yMq" for a bank, other bytes for one program: then "mrAM", the fxID reversed
+        sc.header = 16;
+        const char rev[4] = {fxid[3], fxid[2], fxid[1], fxid[0]};
+        if (csize < 20 || std::memcmp(sc.chunk + 8, rev, 4)) { err = wrong; return false; }
+    } else if (!sc.wrapped && std::strcmp(fxid, "NuPr")) { err = wrong; return false; }   // a bare chunk must say whose it is
+    else sc.header = 4;
     if (csize < sc.header + 4) { err = "unexpected " + plugin + " state layout"; return false; }
     uLongf blen = le32(sc.chunk + sc.header);
     sc.body.resize(blen);
@@ -968,15 +991,17 @@ bool scPack(const ScState &sc, const std::vector<uint8_t> &body, int current, st
     std::vector<uint8_t> newChunk(sc.chunk, sc.chunk + sc.header);
     put32(newChunk, (uint32_t)body.size());
     newChunk.insert(newChunk.end(), z.begin(), z.end());
-    std::vector<uint8_t> rest(sc.fxb + 8, sc.fxb + 156);   // from "FBCh" to the chunk size
+    if (!sc.wrapped) { out = newChunk; return true; }
+    std::vector<uint8_t> rest(sc.head.begin() + 8, sc.head.end());   // from "FBCh"/"FPCh" to the chunk size
     putBe32(rest, (uint32_t)newChunk.size());
     rest.insert(rest.end(), newChunk.begin(), newChunk.end());
-    std::vector<uint8_t> newFxb = {'C', 'c', 'n', 'K'};
-    putBe32(newFxb, (uint32_t)rest.size());
-    newFxb.insert(newFxb.end(), rest.begin(), rest.end());
+    std::vector<uint8_t> fx = {'C', 'c', 'n', 'K'};
+    putBe32(fx, (uint32_t)rest.size());
+    fx.insert(fx.end(), rest.begin(), rest.end());
+    if (!sc.vst3) { out = fx; return true; }
     out = {kScMagic[0], kScMagic[1], kScMagic[2], kScMagic[3], 0, (uint8_t)current};
-    put32(out, (uint32_t)newFxb.size());
-    out.insert(out.end(), newFxb.begin(), newFxb.end());
+    put32(out, (uint32_t)fx.size());
+    out.insert(out.end(), fx.begin(), fx.end());
     return true;
 }
 // a text patch (Synplant, Echobode) in program slot 0, named: its keys are sorted, so a missing
@@ -986,7 +1011,9 @@ bool scWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &pat
     ScState sc;
     if (!scUnpack(st, fxid, plugin, what, sc, err)) return false;
     const auto &body = sc.body;
-    const uint32_t count = body.size() >= 4 ? le32(body.data()) : 0;
+    // one program (an FXP, an Audio Unit's state): u32 LE length + the patch text, no list
+    const bool single = body.size() >= 8 && le32(body.data()) == body.size() - 4 && std::isalpha(body[4]);
+    const uint32_t count = single ? 0 : body.size() >= 4 ? le32(body.data()) : 0;
     size_t p = 4;
     std::vector<std::vector<uint8_t>> patches;
     for (uint32_t i = 0; i < count && p + 4 <= body.size(); ++i) {
@@ -995,8 +1022,9 @@ bool scWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &pat
         patches.emplace_back(body.begin() + (long)p + 4, body.begin() + (long)(p + 4 + n));
         p += 4 + n;
     }
-    if (patches.empty()) { err = plugin + " state has no programs"; return false; }
-    const std::vector<uint8_t> trailer(body.begin() + (long)p, body.end());
+    if (!single && patches.empty()) { err = plugin + " state has no programs"; return false; }
+    const std::vector<uint8_t> trailer = single ? std::vector<uint8_t>() : std::vector<uint8_t>(body.begin() + (long)p, body.end());
+    if (single) patches.push_back({});
     std::string text(patch.begin(), patch.end()), esc;
     text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
     for (char c : name) { if (c == '\\' || c == '"') esc += '\\'; esc += c; }
@@ -1010,7 +1038,7 @@ bool scWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &pat
     if (text.empty() || text.back() != '\n') text += '\n';
     patches[0].assign(text.begin(), text.end());
     std::vector<uint8_t> nb;
-    put32(nb, (uint32_t)patches.size());
+    if (!single) put32(nb, (uint32_t)patches.size());
     for (auto &t : patches) { put32(nb, (uint32_t)t.size()); nb.insert(nb.end(), t.begin(), t.end()); }
     nb.insert(nb.end(), trailer.begin(), trailer.end());
     return scPack(sc, nb, 0, out, err);

@@ -1789,7 +1789,9 @@ int run(int argc, char **argv) {
     }
 #endif
     // internal: one plugin of `compat`, after the Rosetta re-exec above (an Intel-only plugin's worker runs as x86_64)
-    if (cmd == "__compat" && a.positional.size() > 3) return compatWorker(a.positional[1], a.positional[2], std::atoi(a.positional[3].c_str()));
+    if (cmd == "__compat" && a.positional.size() > 3)
+        return compatWorker(a.positional[1], a.positional[2], std::atoi(a.positional[3].c_str()),
+                            a.positional.size() > 5 ? std::atoi(a.positional[4].c_str()) : -1, a.positional.size() > 5 ? a.positional[5] : "");
     if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
         std::vector<PluginInfo> plugins;
         std::string err;

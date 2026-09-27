@@ -170,6 +170,17 @@ bool Vst2Plugin::loadState(const StateFile &sf, std::string &err) {
         return true;
     }
     if (sf.state.empty()) { err = name_ + ": empty state"; return false; }
+    if (!(im.fx->flags & kFlagProgramChunks) && im.fx->numParams > 0 && sf.state.size() == (size_t)im.fx->numParams * 4) {
+        // what getState() saves for a parameter-list plugin: its values as big-endian floats
+        for (int32_t i = 0; i < im.fx->numParams; ++i) {
+            const uint8_t *q = sf.state.data() + (size_t)i * 4;
+            const uint32_t bits = (uint32_t)q[0] << 24 | (uint32_t)q[1] << 16 | (uint32_t)q[2] << 8 | q[3];
+            float f;
+            std::memcpy(&f, &bits, 4);
+            im.fx->setParameter(im.fx, i, f);
+        }
+        return true;
+    }
     if (!(im.fx->flags & kFlagProgramChunks)) {
         err = name_ + " does not take state chunks (it saves parameter lists: use an FxCk .fxp or \"params\")";
         return false;

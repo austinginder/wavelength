@@ -116,11 +116,14 @@ std::vector<PresetInfo> listPresets(const PluginInfo &info, bool rescanNks, std:
         // VST 2 plugins always report a program list; placeholders ("Program 1", "Default") are not a library
         auto generic = [](std::string n) {
             std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-            for (const char *w : {"program", "prog", "preset", "patch", "default", "init"})
+            for (const char *w : {"programchange", "program", "prog", "preset", "patch", "default", "init", "untitled"})
                 if (n.rfind(w, 0) == 0) { n.erase(0, strlen(w)); break; }
-            return n.find_first_not_of(" 0123456789") == std::string::npos;
+            return n.find_first_not_of(" 0123456789:-._#") == std::string::npos;   // "Program 12", "065: -"
         };
+        names.erase(std::remove_if(names.begin(), names.end(), [](const std::string &n) { return n.find_first_not_of(" ") == std::string::npos; }), names.end());
         if (std::all_of(names.begin(), names.end(), generic)) names.clear();
+        if (names.size() == 1 && (lower(info.name).rfind(lower(names[0]), 0) == 0 || lower(names[0]).rfind(lower(info.name), 0) == 0))
+            names.clear();   // one program named after the plugin ("Kontakt" in Kontakt 7)
         if (names.size() > 1 && std::all_of(names.begin(), names.end(), [&](const std::string &n) { return n == names[0]; })) names.clear();
         for (auto &n : names) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
     } else {

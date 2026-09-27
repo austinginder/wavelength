@@ -18,6 +18,7 @@
 #include <fstream>
 #include <memory>
 #include <thread>
+#include <vector>
 
 namespace wl {
 
@@ -70,6 +71,7 @@ std::string statusText(OSStatus st) {
     case kAudioUnitErr_InvalidScope: return "invalid scope";
     case kAudioUnitErr_Unauthorized: return "not authorized (licence)";
     case kAudioComponentErr_InstanceInvalidated: return "the plugin process ended";
+    case 4097: case 4099: return "its out-of-process host ended (the plugin crashed there)";   // NSXPCConnectionInterrupted / Invalid
     default: break;
     }
     const OSType t = (OSType)st;
@@ -272,35 +274,148 @@ std::unique_ptr<Plugin> AuPlugin::create(const PluginInfo &info, std::string &er
     if (im.get(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, f) == noErr && f.mChannelsPerFrame) im.outChannels = f.mChannelsPerFrame;
     UInt32 count = 0;
     if (im.get(kAudioUnitProperty_ElementCount, kAudioUnitScope_Input, 0, count) == noErr) im.inputBuses = count;
+    AudioUnitInitialize(im.unit);   // some units (Surge) give no state or presets until initialized; render sets it up again
+    // AUMIDISynth plays nothing like General MIDI until it has a sound bank: give it the system's
+    if (im.manufacturer == 'appl' && im.subtype == 'msyn') {
+        const char *bank = "/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls";
+        CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8 *>(bank), (CFIndex)std::strlen(bank), false);
+        if (url) { AudioUnitSetProperty(im.unit, kMusicDeviceProperty_SoundBankURL, kAudioUnitScope_Global, 0, &url, sizeof(url)); CFRelease(url); }
+    }
     return p;
 }
 
 void AuPlugin::pump(double ms) { platform::pumpEvents(ms); }
 
-bool AuPlugin::getState(std::vector<uint8_t> &out, std::string &err) {
+namespace {
+// the unit's ClassInfo property list, and back
+CFPropertyListRef copyClassInfo(AudioUnit u, OSStatus &st) {
     CFPropertyListRef plist = nullptr;
     UInt32 size = sizeof(plist);
-    const OSStatus st = AudioUnitGetProperty(impl_->unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &plist, &size);
-    if (st != noErr || !plist) { err = name_ + ": cannot read its state (" + statusText(st) + ")"; return false; }
+    st = AudioUnitGetProperty(u, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &plist, &size);
+    return st == noErr ? plist : nullptr;
+}
+bool plistBytes(CFPropertyListRef plist, std::vector<uint8_t> &out) {
     CFErrorRef cfErr = nullptr;
     CFDataRef data = CFPropertyListCreateData(nullptr, plist, kCFPropertyListXMLFormat_v1_0, 0, &cfErr);
-    CFRelease(plist);
-    if (!data) { if (cfErr) CFRelease(cfErr); err = name_ + ": its state is not a property list"; return false; }
+    if (!data) { if (cfErr) CFRelease(cfErr); return false; }
     out.assign(CFDataGetBytePtr(data), CFDataGetBytePtr(data) + CFDataGetLength(data));
     CFRelease(data);
     return true;
 }
+CFPropertyListRef plistFrom(const std::vector<uint8_t> &bytes) {
+    if (bytes.size() < 8) return nullptr;
+    CFDataRef data = CFDataCreate(nullptr, bytes.data(), (CFIndex)bytes.size());
+    CFPropertyListRef plist = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListMutableContainersAndLeaves, nullptr, nullptr);
+    CFRelease(data);
+    if (plist && CFGetTypeID(plist) != CFDictionaryGetTypeID()) { CFRelease(plist); return nullptr; }
+    return plist;
+}
+// Where a plugin keeps its own state inside the ClassInfo: JUCE plugins under "jucePluginState",
+// VST-bridged ones under "vstdata" (the VST 2 chunk). Apple's units keep parameters under "data".
+CFStringRef ownStateKey(CFDictionaryRef d, bool vendorData) {
+    // a VST3-style pair (Serum 2): "Processor State" is the component state, "Controller State" goes with it
+    for (CFStringRef k : {CFSTR("jucePluginState"), CFSTR("vstdata"), CFSTR("Processor State")})
+        if (CFDictionaryContainsKey(d, k)) return k;
+    // a vendor's own key ("AAS _lua_state"): the one data value that isn't the AU SDK's parameter "data"
+    const CFIndex n = CFDictionaryGetCount(d);
+    std::vector<const void *> keys((size_t)n), values((size_t)n);
+    CFDictionaryGetKeysAndValues(d, keys.data(), values.data());
+    CFStringRef found = nullptr;
+    for (CFIndex i = 0; i < n; ++i) {
+        if (CFGetTypeID(keys[(size_t)i]) != CFStringGetTypeID() || CFGetTypeID(values[(size_t)i]) != CFDataGetTypeID()) continue;
+        if (CFStringCompare((CFStringRef)keys[(size_t)i], CFSTR("data"), 0) == kCFCompareEqualTo) continue;
+        if (found) return nullptr;   // several: can't tell which is the plugin's state
+        found = (CFStringRef)keys[(size_t)i];
+    }
+    // a third-party unit that keeps its whole state under "data" (DUNE 3); Apple's own units keep a
+    // parameter blob there, which plugin state bytes must not replace
+    if (!found && vendorData && CFDictionaryContainsKey(d, CFSTR("data"))) found = CFSTR("data");
+    return found;
+}
+// VST-bridged units keep an .fxp/.fxb in "vstdata": its chunk, and a new chunk in that same wrapper
+uint32_t rbe32(const uint8_t *q) { return (uint32_t)q[0] << 24 | (uint32_t)q[1] << 16 | (uint32_t)q[2] << 8 | q[3]; }
+void wbe32(std::vector<uint8_t> &v, size_t at, uint32_t x) { for (int i = 0; i < 4; ++i) v[at + (size_t)i] = (uint8_t)(x >> (8 * (3 - i))); }
+size_t fxChunkAt(const uint8_t *d, size_t n) {   // 0 = not an FXP/FXB with a chunk
+    if (n < 60 || std::memcmp(d, "CcnK", 4)) return 0;
+    if (!std::memcmp(d + 8, "FPCh", 4)) return 60;
+    if (!std::memcmp(d + 8, "FBCh", 4) && n >= 160) return 160;
+    return 0;
+}
+std::vector<uint8_t> fxUnwrap(const uint8_t *d, size_t n) {
+    const size_t at = fxChunkAt(d, n);
+    if (!at) return std::vector<uint8_t>(d, d + n);
+    const size_t len = std::min<size_t>(rbe32(d + at - 4), n - at);
+    return std::vector<uint8_t>(d + at, d + at + len);
+}
+std::vector<uint8_t> fxRewrap(const uint8_t *tmpl, size_t n, const std::vector<uint8_t> &chunk) {
+    const size_t at = fxChunkAt(tmpl, n);
+    if (!at || fxChunkAt(chunk.data(), chunk.size())) return chunk;   // no wrapper to copy, or already wrapped
+    std::vector<uint8_t> out(tmpl, tmpl + at);
+    out.insert(out.end(), chunk.begin(), chunk.end());
+    wbe32(out, at - 4, (uint32_t)chunk.size());
+    wbe32(out, 4, (uint32_t)(out.size() - 8));
+    return out;
+}
+
+} // namespace
+
+bool AuPlugin::getState(std::vector<uint8_t> &out, std::string &err) {
+    // the plugin's own state bytes where it has them (the same a VST3/CLAP build of a JUCE plugin
+    // saves), so preset formats that patch the current state work on Audio Units too; otherwise the
+    // whole ClassInfo (.aupreset)
+    OSStatus st = noErr;
+    CFPropertyListRef plist = copyClassInfo(impl_->unit, st);
+    if (!plist) { err = name_ + ": cannot read its state (" + statusText(st) + ")"; return false; }
+    bool ok = false;
+    if (CFGetTypeID(plist) == CFDictionaryGetTypeID())
+        if (CFStringRef k = ownStateKey((CFDictionaryRef)plist, impl_->manufacturer != 'appl')) {
+            CFTypeRef v = CFDictionaryGetValue((CFDictionaryRef)plist, k);
+            if (v && CFGetTypeID(v) == CFDataGetTypeID()) {
+                const uint8_t *d = CFDataGetBytePtr((CFDataRef)v);
+                const size_t n = (size_t)CFDataGetLength((CFDataRef)v);
+                out = CFStringCompare(k, CFSTR("vstdata"), 0) == kCFCompareEqualTo ? fxUnwrap(d, n) : std::vector<uint8_t>(d, d + n);
+                ok = true;
+            }
+        }
+    if (!ok) ok = plistBytes(plist, out);
+    CFRelease(plist);
+    if (!ok) err = name_ + ": its state is not a property list";
+    return ok;
+}
 
 bool AuPlugin::loadState(const StateFile &sf, std::string &err) {
     if (sf.state.empty()) { err = name_ + ": empty state"; return false; }
-    CFDataRef data = CFDataCreate(nullptr, sf.state.data(), (CFIndex)sf.state.size());
-    CFErrorRef cfErr = nullptr;
-    CFPropertyListRef plist = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, &cfErr);
-    CFRelease(data);
+    CFPropertyListRef plist = plistFrom(sf.state);   // an .aupreset: the whole ClassInfo
     if (!plist) {
-        if (cfErr) CFRelease(cfErr);
-        err = name_ + ": an Audio Unit takes its state as a property list (.aupreset); this file is not one";
-        return false;
+        // the plugin's own state bytes (a JUCE plugin's state, a VST 2 chunk): put them where its
+        // ClassInfo keeps them
+        OSStatus st = noErr;
+        CFPropertyListRef current = copyClassInfo(impl_->unit, st);
+        CFStringRef k = current && CFGetTypeID(current) == CFDictionaryGetTypeID() ? ownStateKey((CFDictionaryRef)current, impl_->manufacturer != 'appl') : nullptr;
+        if (!k) {
+            if (current) CFRelease(current);
+            err = name_ + ": this Audio Unit takes its state as a property list (.aupreset), and it keeps no plugin state of its own to put these bytes into";
+            return false;
+        }
+        CFMutableDictionaryRef d = CFDictionaryCreateMutableCopy(nullptr, 0, (CFDictionaryRef)current);
+        CFRelease(current);
+        std::vector<uint8_t> bytes = sf.state;
+        if (CFStringCompare(k, CFSTR("vstdata"), 0) == kCFCompareEqualTo) {   // into the .fxp/.fxb wrapper it keeps there
+            CFTypeRef old = CFDictionaryGetValue(d, k);
+            if (old && CFGetTypeID(old) == CFDataGetTypeID())
+                bytes = fxRewrap(CFDataGetBytePtr((CFDataRef)old), (size_t)CFDataGetLength((CFDataRef)old), bytes);
+        }
+        CFDataRef data = CFDataCreate(nullptr, bytes.data(), (CFIndex)bytes.size());
+        CFDictionarySetValue(d, k, data);
+        CFRelease(data);
+        // the AU SDK's parameter blob would set every parameter back to the values saved with it
+        if (CFStringCompare(k, CFSTR("data"), 0) != kCFCompareEqualTo) CFDictionaryRemoveValue(d, CFSTR("data"));
+        if (!sf.controllerState.empty() && CFStringCompare(k, CFSTR("Processor State"), 0) == kCFCompareEqualTo) {
+            CFDataRef c = CFDataCreate(nullptr, sf.controllerState.data(), (CFIndex)sf.controllerState.size());
+            CFDictionarySetValue(d, CFSTR("Controller State"), c);
+            CFRelease(c);
+        }
+        plist = d;
     }
     const OSStatus st = AudioUnitSetProperty(impl_->unit, kAudioUnitProperty_ClassInfo, kAudioUnitScope_Global, 0, &plist, sizeof(plist));
     CFRelease(plist);
@@ -310,8 +425,11 @@ bool AuPlugin::loadState(const StateFile &sf, std::string &err) {
 }
 
 bool AuPlugin::saveStateFile(const std::string &path, size_t &bytes, std::string &err) {
+    OSStatus st = noErr;
+    CFPropertyListRef plist = copyClassInfo(impl_->unit, st);
     std::vector<uint8_t> data;
-    if (!getState(data, err)) return false;
+    if (!plist || !plistBytes(plist, data)) { if (plist) CFRelease(plist); err = name_ + ": cannot read its state (" + statusText(st) + ")"; return false; }
+    CFRelease(plist);
     std::ofstream o(path, std::ios::binary);
     o.write(reinterpret_cast<const char *>(data.data()), (std::streamsize)data.size());
     if (!o) { err = "cannot write " + path; return false; }
@@ -367,7 +485,9 @@ bool AuPlugin::loadPreset(const std::string &query, std::string &loadedName, std
         }
     if (!hit) { CFRelease(presets); err = name_ + " has no factory preset matching '" + query + "'"; return false; }
     AUPreset chosen = *hit;
-    const OSStatus st = AudioUnitSetProperty(impl_->unit, kAudioUnitProperty_PresentPreset, kAudioUnitScope_Global, 0, &chosen, sizeof(chosen));
+    OSStatus st = AudioUnitSetProperty(impl_->unit, kAudioUnitProperty_PresentPreset, kAudioUnitScope_Global, 0, &chosen, sizeof(chosen));
+    if (st != noErr)   // older units only answer the property it replaced
+        st = AudioUnitSetProperty(impl_->unit, 28 /* kAudioUnitProperty_CurrentPreset */, kAudioUnitScope_Global, 0, &chosen, sizeof(chosen));
     loadedName = cfString(hit->presetName);
     CFRelease(presets);
     if (st != noErr) { err = name_ + " did not load preset '" + loadedName + "' (" + statusText(st) + ")"; return false; }
@@ -517,36 +637,48 @@ bool AuPlugin::render(const Job &job, const std::vector<TimedEvent> &events, con
     im.sampleRate = sr;
     im.block = block;
     AudioUnitUninitialize(u);
-    // stereo float at the job's rate on the output, and on the inputs of an effect
-    const UInt32 outCh = im.outChannels >= 2 ? 2 : im.outChannels;
-    AudioStreamBasicDescription fmt = floatFormat(sr, outCh);
-    OSStatus st = im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, fmt);
-    if (st != noErr) { fmt = floatFormat(sr, im.outChannels); st = im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, fmt); }
-    if (st != noErr) { err = name_ + " does not take a " + std::to_string((int)sr) + " Hz float output (" + statusText(st) + ")"; return false; }
-    const UInt32 renderCh = fmt.mChannelsPerFrame;
+    // float at the job's rate: stereo where the unit takes it, else its own channel counts, else mono
     im.input = input;
     im.sidechain = sidechain;
     sidechainConnected = false;
-    for (UInt32 bus = 0; bus < std::min<UInt32>(im.inputBuses, 2); ++bus) {
-        AudioStreamBasicDescription inFmt = floatFormat(sr, 2);
-        if (im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, bus, inFmt) != noErr) {
-            inFmt = floatFormat(sr, 1);
-            im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, bus, inFmt);
-        }
-        AURenderCallbackStruct cb{renderInput, &im};
-        if (im.set(kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, bus, cb) == noErr && bus == 1 && sidechain) sidechainConnected = true;
+    UInt32 renderCh = 0;
+    OSStatus st = noErr;
+    std::vector<std::pair<UInt32, UInt32>> layouts = {{2, 2}};   // (out, in)
+    {
+        AudioStreamBasicDescription f{};
+        UInt32 inNative = 2;
+        if (im.get(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, f) == noErr && f.mChannelsPerFrame) inNative = f.mChannelsPerFrame;
+        if (im.outChannels != 2 || inNative != 2) layouts.push_back({im.outChannels, inNative});
+        layouts.push_back({1, 1});
     }
-    im.set(kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, block);
-    HostCallbackInfo host{};
-    host.hostUserData = &im;
-    host.beatAndTempoProc = beatAndTempo;
-    host.musicalTimeLocationProc = musicalTime;
-    host.transportStateProc2 = transportState;
-    im.set(kAudioUnitProperty_HostCallbacks, kAudioUnitScope_Global, 0, host);
-    const UInt32 offline = 1;
-    im.set(kAudioUnitProperty_OfflineRender, kAudioUnitScope_Global, 0, offline);
-    st = AudioUnitInitialize(u);
-    if (st != noErr) { err = name_ + " failed to start (" + statusText(st) + ")"; return false; }
+    for (auto [outCh, inCh] : layouts) {
+        AudioStreamBasicDescription fmt = floatFormat(sr, outCh);
+        st = im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, fmt);
+        if (st != noErr) continue;
+        for (UInt32 bus = 0; bus < std::min<UInt32>(im.inputBuses, 2); ++bus) {
+            AudioStreamBasicDescription inFmt = floatFormat(sr, inCh);
+            if (im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, bus, inFmt) != noErr) {
+                inFmt = floatFormat(sr, 1);
+                im.set(kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, bus, inFmt);
+            }
+            AURenderCallbackStruct cb{renderInput, &im};
+            if (im.set(kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, bus, cb) == noErr && bus == 1 && sidechain) sidechainConnected = true;
+        }
+        im.set(kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, block);
+        HostCallbackInfo host{};
+        host.hostUserData = &im;
+        host.beatAndTempoProc = beatAndTempo;
+        host.musicalTimeLocationProc = musicalTime;
+        host.transportStateProc2 = transportState;
+        im.set(kAudioUnitProperty_HostCallbacks, kAudioUnitScope_Global, 0, host);
+        const UInt32 offline = 1;
+        im.set(kAudioUnitProperty_OfflineRender, kAudioUnitScope_Global, 0, offline);
+        st = AudioUnitInitialize(u);
+        if (st == noErr) { renderCh = outCh; break; }
+        AudioUnitUninitialize(u);
+        if (st != kAudioUnitErr_FormatNotSupported && st != kAudioUnitErr_FailedInitialization) break;
+    }
+    if (!renderCh) { err = name_ + " failed to start at " + std::to_string((int)sr) + " Hz float (" + statusText(st) + ")"; return false; }
     pump((warmup >= 0 ? warmup : job.warmup) * 1000.0);
     setParams(initial, err);
 

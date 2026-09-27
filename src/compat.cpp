@@ -26,6 +26,7 @@ namespace wl {
 namespace {
 
 constexpr double kLength = 3.0, kOn = 0.5, kLen = 1.0;
+constexpr int kTestVersion = 2;   // bump when the tests change: cached results of older tests are run again
 
 double since(std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); }
 
@@ -101,6 +102,8 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
                 {"arch", info.arch}, {"instrument", isInstrument(info)}};
     std::vector<std::string> fails, warns, notes;
     std::string last = "start";
+    bool presetSounds = false;   // a preset rendered sound (a sample player silent until one is loaded)
+    for (const auto &s : steps) if (s.value("step", "") == "preset" && s.value("lufs", -120.0) > -70) presetSounds = true;
     for (const auto &s : steps) {
         const std::string step = s.value("step", "");
         last = step;
@@ -118,8 +121,13 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
             rec["render"].erase("step");
             if (!s.value("ok", false)) fails.push_back("render fails: " + s.value("error", std::string("?")));
             else if (s.value("garbage", false)) fails.push_back("outputs garbage (NaN or far over 0 dBFS)");
-            else if (s.value("silent", false))
-                (rec["instrument"].get<bool>() ? fails : warns).push_back(rec["instrument"].get<bool>() ? "renders silence (a C2-C5 chord, 5 s warm-up)" : "outputs silence from a noise input");
+            else if (s.value("silent", false)) {
+                const bool inst = rec["instrument"].get<bool>(), empty = rec.value("presets", 0) == 0;
+                if (!inst) warns.push_back("outputs silence from a noise input");
+                else if (empty) warns.push_back("renders silence at its defaults and lists no presets (a sample player waiting for an instrument?)");
+                else if (presetSounds) notes.push_back("silent at its defaults; its presets play");
+                else fails.push_back("renders silence (a C2-C5 chord, 5 s warm-up), and so do the presets tried");
+            }
             else if (s.value("passthrough", false)) notes.push_back("passes audio through unchanged at its defaults");
             if (s.value("warmedUp", false)) notes.push_back("silent until given a 5 s warm-up (samples load after activation)");
             if (s.value("realtime", 0.0) > 1.0) warns.push_back("renders slower than real time (" + std::to_string(s.value("realtime", 0.0)).substr(0, 4) + "x)");
@@ -132,7 +140,9 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
                 std::string l = n;
                 std::transform(l.begin(), l.end(), l.begin(), ::tolower);
                 const bool initial = l.find("init") != std::string::npos || l.find("default") != std::string::npos || l == "basic" || l == "empty";
-                (initial ? notes : warns).push_back("preset '" + n + "' changes neither parameters nor sound" + (initial ? " (an init preset)" : ""));
+                const bool program = s.value("source", "") == "program";   // often the program the plugin starts with
+                (initial || program ? notes : warns).push_back("preset '" + n + "' changes neither parameters nor sound" +
+                                                               (initial ? " (an init preset)" : program ? " (a program: perhaps the one it starts with)" : ""));
             }
         } else if (step == "state") {
             rec["state"] = s;
@@ -177,7 +187,7 @@ std::string markdownReport(const json &result) {
 
 std::string compatCachePath() { return (platform::cacheDir() / "compat.json").string(); }
 
-int compatWorker(const std::string &spec, const std::string &resultsFile, int presetCount) {
+int compatWorker(const std::string &spec, const std::string &resultsFile, int presetCount, int only, const std::string &baseFile) {
     std::ofstream out(resultsFile, std::ios::app);
     auto emit = [&](json j) { out << j.dump(-1, ' ', false, json::error_handler_t::replace) << "\n"; out.flush(); };
     PluginInfo info;
@@ -185,22 +195,6 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
     if (!resolvePlugin(spec, info, err, true)) { emit({{"step", "open"}, {"ok", false}, {"error", err}}); return 1; }
     const bool instrument = isInstrument(info);
     auto t0 = std::chrono::steady_clock::now();
-    PluginSetup setup;
-    setup.spec = spec;
-    OpenedPlugin p;
-    const bool opened = openPlugin(setup, "compat", p, err);
-    emit({{"step", "open"}, {"ok", opened}, {"ms", std::round(since(t0))}, {"error", err}, {"params", opened ? p.plugin->params().size() : 0}});
-    if (!opened) return 1;
-    const std::vector<ParamInfo> params0 = p.plugin->params();
-
-    // presets it lists
-    std::string perr;
-    const auto presets = listPresets(info, false, perr);
-    size_t programs = 0, files = 0;
-    for (auto &x : presets) { if (x.stateFile) ++files; else if (x.category == "Programs") ++programs; }   // the rest: the plugin's own discovery
-    emit({{"step", "presets"}, {"count", presets.size()}, {"programs", programs}, {"files", files}, {"other", presets.size() - programs - files}, {"error", perr}});
-
-    // the test render (instruments get a longer warm-up when silent: samples stream in after activation)
     Audio noise;
     noise.resize((size_t)(kLength * 48000));
     uint32_t rng = 12345;
@@ -208,50 +202,103 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
         rng = rng * 1664525u + 1013904223u;
         noise.left[i] = noise.right[i] = (float)(((rng >> 8) / 8388608.0 - 1.0) * 0.1);
     }
-    Take base = renderTest(p, instrument, 0.4, noise);
-    bool warmedUp = false;
-    if (base.ok && base.silent && instrument) {
-        Take again = renderTest(p, instrument, 5.0, noise);
-        if (again.ok && !again.silent) { base = std::move(again); warmedUp = true; }
-    }
-    json r = {{"step", "render"}, {"ok", base.ok}, {"error", base.error}, {"silent", base.silent}, {"garbage", base.garbage},
-              {"lufs", std::round(base.lufs * 10) / 10}, {"peakDb", std::round(base.peakDb * 10) / 10}, {"ms", std::round(base.ms)},
-              {"realtime", std::round(base.ms / 1000 / kLength * 100) / 100}, {"warmedUp", warmedUp}};
-    if (!instrument && base.ok) r["passthrough"] = sameAudio(base.audio, noise);
-    emit(r);
 
-    // state: save, load it back, save again
-    {
-        json rec = {{"step", "state"}};
-        std::vector<uint8_t> a, b;
-        std::string e;
-        const bool saved = p.plugin->getState(a, e);
-        rec["saved"] = saved;
-        rec["bytes"] = a.size();
-        if (saved) {
-            StateFile sf;
-            sf.state = a;
-            sf.format = "raw";
-            const bool reloaded = p.plugin->loadState(sf, e);
-            rec["reloaded"] = reloaded;
-            if (reloaded && p.plugin->getState(b, e)) rec["stable"] = a == b;
-        }
-        if (!e.empty()) rec["error"] = e;
-        emit(rec);
-    }
-    // presets spread over the list, one of each source when there are several; each loads into a fresh
-    // instance, as a render opens it (a preset over another plugin state is not what renders do)
+    // defaults and the reference render: measured here, or (one preset per process) read from the full run
+    std::vector<ParamInfo> params0;
+    Take base;
+    bool warmedUp = false;
+    std::vector<PresetInfo> presets;
     std::vector<size_t> pick;
-    if (!presets.empty() && presetCount > 0) {
-        auto add = [&](size_t i) { if (i < presets.size() && std::find(pick.begin(), pick.end(), i) == pick.end() && (int)pick.size() < presetCount) pick.push_back(i); };
-        for (size_t i = 0; i < presets.size(); ++i) if (!presets[i].stateFile) { add(i); break; }
-        for (size_t i = presets.size(); i-- > 0;) if (presets[i].stateFile) { add(i); break; }
-        for (int k = 0; (int)pick.size() < presetCount && k < 8; ++k) add(presets.size() * (size_t)(k + 1) / 5);
+    if (only >= 0) {
+        std::ifstream in(baseFile);
+        std::string line;
+        while (std::getline(in, line)) {
+            const json j = json::parse(line, nullptr, false);
+            if (!j.is_object()) continue;
+            if (j.value("step", "") == "defaults")
+                for (auto &v : j["values"]) { ParamInfo pi{}; pi.id = v[0]; pi.value = v[1]; pi.min = 0; pi.max = v[2]; params0.push_back(pi); }
+            if (j.value("step", "") == "render") {
+                base.ok = j.value("ok", false); base.silent = j.value("silent", true); base.lufs = j.value("lufs", -120.0);
+                base.centroid = j.value("centroid", 0.0); warmedUp = j.value("warmedUp", false);
+                if (j.contains("bands")) for (int b = 0; b < 6; ++b) base.bands[b] = j["bands"][b];
+            }
+        }
+        std::string perr;
+        presets = listPresets(info, false, perr);
+        if ((size_t)only < presets.size()) pick.push_back((size_t)only);
+    } else {
+        PluginSetup setup;
+        setup.spec = spec;
+        OpenedPlugin p;
+        const bool opened = openPlugin(setup, "compat", p, err);
+        emit({{"step", "open"}, {"ok", opened}, {"ms", std::round(since(t0))}, {"error", err}, {"params", opened ? p.plugin->params().size() : 0}});
+        if (!opened) return 1;
+        params0 = p.plugin->params();
+        json values = json::array();
+        for (auto &x : params0) values.push_back({x.id, x.value, std::fabs(x.max - x.min)});
+        emit({{"step", "defaults"}, {"values", values}});
+
+        std::string perr;
+        presets = listPresets(info, false, perr);
+        size_t programs = 0, files = 0;
+        for (auto &x : presets) { if (x.stateFile) ++files; else if (x.category == "Programs") ++programs; }   // the rest: the plugin's own discovery
+        emit({{"step", "presets"}, {"count", presets.size()}, {"programs", programs}, {"files", files}, {"other", presets.size() - programs - files}, {"error", perr}});
+
+        // the test render (instruments get a longer warm-up when silent: samples stream in after activation)
+        double warm = 0.4;
+        base = renderTest(p, instrument, warm, noise);
+        if (base.ok && base.silent && instrument) {
+            Take again = renderTest(p, instrument, 5.0, noise);
+            if (again.ok && !again.silent) { base = std::move(again); warmedUp = true; warm = 5.0; }
+        }
+        json bands = json::array();
+        for (double b : base.bands) bands.push_back(std::round(b * 10) / 10);
+        json r = {{"step", "render"}, {"ok", base.ok}, {"error", base.error}, {"silent", base.silent}, {"garbage", base.garbage},
+                  {"lufs", std::round(base.lufs * 10) / 10}, {"peakDb", std::round(base.peakDb * 10) / 10}, {"ms", std::round(base.ms)},
+                  {"realtime", std::round(std::max(0.0, base.ms - warm * 1000) / 1000 / kLength * 100) / 100}, {"warmedUp", warmedUp},
+                  {"centroid", std::round(base.centroid)}, {"bands", bands}};
+        if (!instrument && base.ok) r["passthrough"] = sameAudio(base.audio, noise);
+        emit(r);
+
+        // state: save, load it back, save again
+        {
+            json rec = {{"step", "state"}};
+            std::vector<uint8_t> a, b;
+            std::string e;
+            const bool saved = p.plugin->getState(a, e);
+            rec["saved"] = saved;
+            rec["bytes"] = a.size();
+            if (saved) {
+                StateFile sf;
+                sf.state = a;
+                sf.format = "raw";
+                const bool reloaded = p.plugin->loadState(sf, e);
+                rec["reloaded"] = reloaded;
+                if (reloaded && p.plugin->getState(b, e)) rec["stable"] = a == b;
+            }
+            if (!e.empty()) rec["error"] = e;
+            emit(rec);
+        }
+        // presets spread over the list, one of each source when there are several
+        if (!presets.empty() && presetCount > 0) {
+            auto add = [&](size_t i) { if (i < presets.size() && std::find(pick.begin(), pick.end(), i) == pick.end() && (int)pick.size() < presetCount) pick.push_back(i); };
+            {   // a program from the middle of its list (the first is usually what the plugin starts with)
+                std::vector<size_t> progs;
+                for (size_t i = 0; i < presets.size(); ++i) if (!presets[i].stateFile) progs.push_back(i);
+                if (!progs.empty()) add(progs[progs.size() / 2]);
+            }
+            for (size_t i = presets.size(); i-- > 0;) if (presets[i].stateFile) { add(i); break; }
+            for (int k = 0; (int)pick.size() < presetCount && k < 8; ++k) add(presets.size() * (size_t)(k + 1) / 5);
+        }
+        json names = json::array();
+        for (size_t i : pick) names.push_back(presets[i].name);
+        emit({{"step", "picks"}, {"indices", pick}, {"names", names}});
     }
-    p = OpenedPlugin{};   // one instance at a time
+    // each preset loads into a fresh instance, as a render opens it (not over another state)
     for (size_t i : pick) {
         const PresetInfo &pr = presets[i];
-        json rec = {{"step", "preset"}, {"name", pr.name}, {"category", pr.category}, {"source", pr.stateFile ? "file" : "program"}};
+        json rec = {{"step", "preset"}, {"index", i}, {"name", pr.name}, {"category", pr.category}, {"source", pr.stateFile ? "file" : "program"}};
+        if (only >= 0) rec["isolated"] = true;
         PluginSetup ps;
         ps.spec = spec;
         if (pr.stateFile && !pr.location.empty()) ps.stateFile = pr.location;
@@ -301,7 +348,18 @@ int runCompat(const CompatOptions &opt, json &result, std::string &err) {
     const fs::path tmp = fs::temp_directory_path() / ("wavelength-compat-" + std::to_string(platform::processId()));
     fs::create_directories(tmp);
     const std::string self = platform::selfExecutable();
-    struct Worker { PluginInfo info; platform::Process proc; std::string results; size_t lines = 0; std::chrono::steady_clock::time_point last, start; };
+    struct Worker {
+        PluginInfo info;
+        platform::Process proc;
+        std::string results, base;         // this run's step file; the full run's (isolated presets read its defaults)
+        size_t lines = 0;
+        std::chrono::steady_clock::time_point last, start;
+        std::vector<json> steps;           // every run's steps so far
+        std::vector<size_t> isolate;       // presets still to test, one process each
+        int current = -1;                  // the preset this run tests (-1 = the full run)
+        std::string ended;                 // how the full run ended, when it did not finish
+        std::vector<std::string> extra;    // findings from the isolated runs
+    };
     std::vector<Worker> running;
     size_t next = 0, finished = 0, tested = 0, reused = 0;
     std::vector<std::string> keys;
@@ -328,11 +386,11 @@ int runCompat(const CompatOptions &opt, json &result, std::string &err) {
                 continue;
             }
             const json &old = cache["plugins"].contains(k) ? cache["plugins"][k] : json();
-            if (!opt.rebuild && old.is_object() && old.value("engine", "") == WAVELENGTH_VERSION && old.value("bundleTime", 0LL) == bundleTime(p) &&
+            if (!opt.rebuild && old.is_object() && old.value("test", 0) == kTestVersion && old.value("engine", "") == WAVELENGTH_VERSION && old.value("bundleTime", 0LL) == bundleTime(p) &&
                 old.value("pluginVersion", "") == p.version) { ++reused; ++finished; continue; }
             Worker w;
             w.info = p;
-            w.results = (tmp / ("r" + std::to_string(next) + ".jsonl")).string();
+            w.results = w.base = (tmp / ("r" + std::to_string(next) + ".jsonl")).string();
             std::ofstream(w.results).close();
             platform::spawn({self, "__compat", specOf(p), w.results, std::to_string(opt.presets)}, w.proc, false, !opt.verbose);
             w.last = w.start = std::chrono::steady_clock::now();
@@ -361,8 +419,52 @@ int runCompat(const CompatOptions &opt, json &result, std::string &err) {
             else if (hung) ended = "hung (no progress for " + std::to_string(opt.timeoutSec) + " s)";
             else if (!crash.empty()) ended = "crashed (" + crash + ")";
             else if (!done && !(final.size() == 1 && !final[0].value("ok", true))) ended = "ended without finishing";
-            json rec = summarize(w.info, final, ended);
+            if (w.current < 0) {   // the full run
+                for (auto &x : final) if (x.value("step", "") != "done") w.steps.push_back(x);
+                // it got through the plugin's own tests and died among the presets: test the rest one process each
+                size_t picked = 0, tested = 0;
+                std::vector<size_t> picks;
+                for (auto &x : final) {
+                    if (x.value("step", "") == "picks") for (auto &k : x["indices"]) picks.push_back(k.get<size_t>());
+                    if (x.value("step", "") == "preset") ++tested;
+                }
+                picked = picks.size();
+                if (!ended.empty() && !window && picked > tested) {
+                    w.isolate.assign(picks.begin() + (long)tested, picks.end());
+                    w.extra.push_back("__second_instance");   // resolved once the first isolated preset runs
+                    ended.clear();
+                } else w.ended = ended;
+            } else {   // one preset in its own process
+                bool reported = false;
+                for (auto &x : final) if (x.value("step", "") == "preset") { w.steps.push_back(x); reported = true; }
+                std::string name = "#" + std::to_string(w.current);
+                for (auto &x : w.steps) if (x.value("step", "") == "picks")
+                    for (size_t k = 0; k < x["indices"].size(); ++k) if (x["indices"][k].get<int>() == w.current) name = x["names"][k].get<std::string>();
+                const bool first = !w.extra.empty() && w.extra.back() == "__second_instance";
+                if (first) w.extra.pop_back();
+                if (!reported && !ended.empty()) w.extra.push_back("preset '" + name + "' " + ended);
+                else if (first) w.extra.push_back("crashes when a second instance opens in the same process (its presets were tested one process each)");
+            }
+            if (!w.isolate.empty()) {   // next isolated preset in the same slot
+                w.current = (int)w.isolate.front();
+                w.isolate.erase(w.isolate.begin());
+                w.results = w.base + "." + std::to_string(w.current);
+                std::ofstream(w.results).close();
+                platform::spawn({self, "__compat", specOf(w.info), w.results, std::to_string(opt.presets), std::to_string(w.current), w.base}, w.proc, false, !opt.verbose);
+                w.lines = 0;
+                w.last = std::chrono::steady_clock::now();
+                ++i;
+                continue;
+            }
+            ended = w.ended;
+            std::vector<json> all = w.steps;
+            if (w.current < 0) all = final;   // the full run finished normally
+            all.push_back({{"step", "done"}});
+            json rec = summarize(w.info, all, ended);
+            for (auto &x : w.extra) rec["warnings"].push_back(x);
+            if (rec["status"] == "ok" && !w.extra.empty()) rec["status"] = "warn";
             rec["engine"] = WAVELENGTH_VERSION;
+            rec["test"] = kTestVersion;
             rec["bundleTime"] = bundleTime(w.info);
             rec["pluginVersion"] = w.info.version;
             rec["seconds"] = std::round(since(w.start) / 100) / 10;

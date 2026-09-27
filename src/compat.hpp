@@ -24,8 +24,11 @@ struct CompatOptions {
 
 // Runs the sweep; `result` gets {"summary", "plugins": [...]} (every tested or cached plugin).
 int runCompat(const CompatOptions &opt, nlohmann::json &result, std::string &err);
-// The worker: tests one plugin, appending one JSON line per step to `resultsFile`.
-int compatWorker(const std::string &spec, const std::string &resultsFile, int presets);
+// The worker: tests one plugin, appending one JSON line per step to `resultsFile`. With `only` >= 0 it
+// tests just that preset (by its index in the preset list) against the defaults and reference render
+// a full run wrote to `baseFile`: a plugin that crashes on a second instance in one process gets its
+// presets tested one process each.
+int compatWorker(const std::string &spec, const std::string &resultsFile, int presets, int only = -1, const std::string &baseFile = "");
 // Where results are cached
 std::string compatCachePath();
 

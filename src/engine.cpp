@@ -53,7 +53,12 @@ bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string 
         if (!findPreset(files, q, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
             nksPresets(info, true);
             files = filePresets(info);
-            if (files.empty() || !findPreset(files, q, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
+            if (files.empty() || !findPreset(files, q, hit, fileErr)) {
+                // the plugin's own library had the name but would not load it: that is the error that matters
+                const bool known = pluginErr.find(" did not load preset") != std::string::npos;
+                err = files.empty() || known ? pluginErr : fileErr;
+                return false;
+            }
         }
     }
     if (!suffix.empty()) hit.location += suffix;
