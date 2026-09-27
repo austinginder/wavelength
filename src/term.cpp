@@ -61,7 +61,8 @@ const Style &err() { return gErr; }
 int width() {
 #ifdef _WIN32
     CONSOLE_SCREEN_BUFFER_INFO info;
-    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_ERROR_HANDLE), &info)) return info.srWindow.Right - info.srWindow.Left + 1;
+    if (GetConsoleScreenBufferInfo((HANDLE)_get_osfhandle(_fileno(gOutFile)), &info) || GetConsoleScreenBufferInfo(GetStdHandle(STD_ERROR_HANDLE), &info))
+        return info.srWindow.Right - info.srWindow.Left + 1;
 #else
     winsize w{};
     for (int fd : {fileno(gOutFile), 2})

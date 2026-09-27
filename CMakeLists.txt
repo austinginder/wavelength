@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_TOOLCHAIN_FILE AND NOT CMAKE_OSX_ARCHITECTURES)
   set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
 endif()
-project(wavelength VERSION 0.4.0 LANGUAGES C CXX)
+project(wavelength VERSION 0.5.0 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
 endif()
@@ -190,7 +190,7 @@ add_executable(wavelength
 # the single-file decoders compile inside audio_codecs.cpp; their own warnings are not ours
 set_source_files_properties(src/audio_codecs.cpp src/image_codecs.cpp PROPERTIES COMPILE_OPTIONS "-w")
 # "-dev" between releases; cleared when a release is cut
-set(WAVELENGTH_VERSION_SUFFIX "")
+set(WAVELENGTH_VERSION_SUFFIX "-dev")
 target_compile_definitions(wavelength PRIVATE WAVELENGTH_VERSION="${PROJECT_VERSION}${WAVELENGTH_VERSION_SUFFIX}")
 target_link_libraries(wavelength PRIVATE clap nlohmann_json::nlohmann_json vst3hosting ZLIB::ZLIB libzstd_static)
 # the web UI of `wavelength serve`, built into the binary (serve --ui DIR uses a folder instead)
