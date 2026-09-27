@@ -19,7 +19,9 @@
 #include "clips.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
+#include "help.hpp"
 #include "self_upgrade.hpp"
+#include "term.hpp"
 #include "sf2.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
@@ -79,199 +81,6 @@ namespace {
 FILE *OUT = stdout;
 void emit(const std::string &s) { std::fputs(s.c_str(), OUT); std::fputc('\n', OUT); std::fflush(OUT); }
 
-const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https://wavelength.run)
-
-Usage:
-  wavelength plugins [--rescan] [--json] | plugins --block <plugin> [--reason TEXT] | --unblock <plugin>
-      List installed CLAP, VST3 and VST2 plugins and the built-in instruments (cached; --rescan
-      reloads every bundle). A blocked plugin (one that opens a licence window on every load,
-      or crashes) is never loaded: render, params, presets and audition refuse it by name.
-  wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
-      List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
-      preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
-  wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--install-soundfont [--force]] [--json]
-      List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ and
-      SoundFonts); --kit shows the General MIDI key each of a kit's files is mapped to, --soundfont
-      a SoundFont's presets. --install-soundfont downloads MuseScore General (MIT), the General MIDI set.
-  wavelength audition <plugin> [--jobs 4] [--limit N] [--rebuild] [--json] | audition --retag
-      Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
-      offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
-      (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
-  wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--every S] [--peaks [--top N]] [--json]
-      Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
-      onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
-      every stem and every marker section. --start/--end are seconds into the file; with
-      --song-time they are song time (a render's lead-in is added from its report.json).
-      --grid lists each onset's beat and its timing offset from the nearest 1/div-beat step.
-      --every S prints the loudness of every S-second window (file time, or song time from the
-      first beat with --song-time), labelled with the render's sections: the song's contour at a
-      glance, dropouts and drops included. --peaks lists the strongest spectral peaks of the
-      window (Hz, note and cents, level; 12 or --top N) and their spacing: where a comb,
-      resonator or flanger sits. A render folder also analyzes bus stems.
-  wavelength params <plugin> [--preset NAME] [--state FILE] [--format F] [--all] [--set "Name=v"]... [--map "Name" [--steps N]] [--json]
-      Show a plugin's parameters, optionally after loading a state/preset.
-      Hidden and read-only parameters are omitted unless --all is given. --set "Name=0.55"
-      prints the plugin's display text for a plain value (or the value it reads for display
-      text, "Name=800 Hz", or a note name); --map "Name" tabulates value -> display across the
-      range (21 rows, or --steps N). Neither changes anything.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--from BAR --to BAR [--loop]] [--png] [--keep] [--fallbacks] [--json] [--verbose]
-      Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
-      in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
-      a worker whose plugin crashes is started again (job "retries", default 2); a track that
-      still fails is left out of the mix and listed in "failedTracks", and the render then
-      reports "ok": false and exits 1 (mix.wav and report.json are still written).
-      --tracks renders only the named tracks (and, muted, any track that keys their
-      sidechains), with the song's buses and master, to check a part without the whole song.
-      Their stems keep the full render's numbers and names (05-lead.wav stays 05-lead.wav).
-      --level-from out/report.json keeps the master at that render's gains (its loudness-target
-      and normalize gain) instead of targeting again: a --tracks render then plays each part at
-      the level it has in the full mix.
-      --from 41 --to 45 renders only bars 41-44 (after --preroll bars, default 2, rendered and cut:
-      reverbs and held notes are already going); the files hold just those bars, and the report's
-      "window" says where they sit in the song. Quick previews of a section, alone or with --tracks.
-      --loop with --from/--to renders those bars as a seamless loop for games and apps: only the notes
-      that start inside them, rendered on past the end, with the tail (reverbs, releases) folded back
-      onto the start. Every file (mix, stems as layers, bus stems) is exactly the loop's length and
-      carries a smpl loop chunk (Godot's WAV import loops it; so do samplers).
-      --png (or the job's "picture": true) draws DIR/song.png: sections and bars, the mix's loudness over
-      time with each section's level, its spectrum, and a lane per track with its notes over its
-      post-fader level. An agent that can read images sees the whole song at a glance.
-      --keep (a song's job, rendered whole) keeps this render with the song: its MP3, picture and report
-      go to render/ and the manifest's "render" names them, so the song can be heard without rendering.
-      --fallbacks plays every track's first available fallback, as a computer without its plugins would
-      (`wavelength fallbacks --suggest` proposes them).
-      --deliver mp3,flac (mp3:256, flac:16, wav:16, wav:24; none) replaces the job's "deliver": files
-      written next to mix.wav, decoded again and measured (report mix.deliveries). MP3 needs LAME
-      (libmp3lame, or $WAVELENGTH_LAME; "none" = use ffmpeg) or ffmpeg. --tracks and --from renders skip it.
-  wavelength master <mix.wav> --chain <chain.json | job.json> [--loudness LUFS] [--lead-in S] [--input-lead-in S] [--out DIR] [--deliver mp3,flac] [--json]
-      Put a finished mix through a master chain (effects list, master object or a song's job:
-      its master, markers and tempo; a file, or JSON inline) without re-rendering; reports
-      loudness before and after. A mix with a lead-in (read from the render's report.json, or
-      --input-lead-in) is lined up with the markers and keeps its lead-in unless --lead-in.
-      --deliver (or the job's "deliver") writes MP3/FLAC/WAV files of the result, as for render.
-  wavelength state save <plugin> --out FILE [--preset NAME | --state FILE [--format F]] [--set "Name=value"]... [--json]
-      Load an optional starting preset or state, apply parameter values, save a preset
-      (.clap-preset for CLAP plugins, .vstpreset for VST3).
-  wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
-      Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
-      tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
-      markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
-      `render project.dawproject` imports into <out>/import and renders in one go.
-  wavelength import <project.bwproject> [--out DIR] [--list] [--json]
-      Turn a Bitwig Studio project into a job without exporting it: tempo, tracks with their
-      plugins, states and Bitwig's own devices, faders, pans, mutes, sends, arranger note clips
-      (play start, loops) and automation of faders, pans and instrument plugin parameters. Audio
-      clips and Bitwig 6 automation clips aren't read yet: export a DAWproject for those. --list shows
-      the project's tracks and devices instead. `render project.bwproject` imports and renders.
-  wavelength import <score.musicxml | score.mxl> [--out DIR] [--instrument PLUGIN] [--json]
-      Turn a MusicXML score (MuseScore, Sibelius, Finale, Dorico, music21) into a job: a track per
-      part, repeats and endings played out, ties, chords and voices, concert pitch for transposing
-      instruments, dynamics and hairpins as velocities, staccato and accents, tempo marks, key
-      signatures (with a mode) as "keys", rehearsal marks as markers. Notes keep their score marks
-      in "marks". Parts get General MIDI sounds like a MIDI import. `render score.mxl` does both steps.
-  wavelength import <song.mid> [--out DIR] [--instrument PLUGIN] [--json]
-      Turn a Standard MIDI File into a job: tempo map, time signature, markers, one track per
-      MIDI track and channel (notes, sustain pedal, volume/pan/expression, other CCs, pitch
-      bend). Channel 10 plays builtin:drums; other channels a General MIDI-family sound from
-      the sample library, or PLUGIN for all of them. `render song.mid` imports and renders.
-  wavelength export <job.json> [--out song.mid | song.dawproject] [--no-print] [--json]
-      Write the job's parts as a MIDI file (type 1): tempo map, time signature, markers, and a
-      track per job track with its notes, CC, pitch bend and pressure automation. To a .dawproject
-      (Bitwig, Studio One, Cubase): the tracks with their plugins and plugin states as the job sets
-      them up, notes, faders, pans, sends, buses, the master, tempo map, markers, fader and pan
-      curves, built-in eq/compressor/limiter as the standard devices. Built-in instruments are
-      printed (rendered dry to audio on the track, notes kept; --no-print: notes only); lists what
-      has no counterpart.
-  wavelength kit [install [names...] [--force] | remove NAME] [--json]
-      Free instruments for a machine without plugins (a cloud container, CI): Surge XT (with its
-      factory patches), OB-Xf (with its patches) and Dexed from their own releases, and the General
-      MIDI SoundFont. They go into Wavelength's own folder, never the system's plugin folders. Without
-      a subcommand it lists them with their licence, size and status; an entry whose plugin is already
-      installed elsewhere is skipped unless --force.
-  wavelength docs [agents | job-format | effects | song-format] [--section TEXT] [--json]
-      The docs that match this binary, built in: the operating guide for agents (read it first), the
-      job format and the effects reference. --section prints one part (a heading or part of one).
-  wavelength mcp
-      Runs a Model Context Protocol server on stdin/stdout for MCP clients (Claude Desktop, Claude Code,
-      Cursor): tools to read the guide, list instruments, presets, samples and parameters, lint, render
-      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject/Bitwig projects;
-      for songs: save, history, undo, diff, comments and replies, fallbacks, pack.
-  wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
-      Draws the arrangement before rendering: sections, bars and a lane per track with its notes
-      (default: arrangement.png next to the job). render --png draws the full picture with levels.
-  wavelength timeline <job.json> [--every BARS] [--json]
-      Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
-      included), in song seconds and in file time (after the lead-in), with the tempo there,
-      the last sound and the render's end: plan a length or find bar 57 without rendering.
-  wavelength lint <job.json> [--tracks "Soprano,Alto,Bass"] [--low "Bass"] [--split "Organ=4"]
-                  [--from BAR] [--to BAR] [--section NAME] [--crossings] [--json]
-      Voice-leading check between melodic tracks (one voice each: its top note, its lowest for
-      --low tracks, or N voices top to bottom for --split chord tracks): parallel fifths and
-      octaves in similar motion, and with --crossings a voice below the next one in order (high
-      to low). Each problem shows both chords' notes and where they are; --from/--to/--section
-      limit the report to a bar range or a marker's section.
-  wavelength lint <job.json> --harmony [--key "D minor"] [--ignore "SFX,Ping"] [--chords] [--max-bars 2]
-                  [--from BAR] [--to BAR] [--section NAME] [--json]
-      Harmony check on the notes: the key of every stretch of bars (the job's "keys", --key, or
-      detected), a chord chart with --chords, one- or two-bar chords outside the key that go
-      straight back (heard as a key change), clashes (a minor 2nd/9th held a beat, one note outside
-      the key) and in-key rubs grouped per pair of tracks.
-  wavelength save [song] [-m MESSAGE] [--json]
-      Saves a revision of the song (docs/song-format.md): the job and the manifest's source, notes and
-      media files, in history/ inside the song folder. The first save writes the manifest,
-      wavelength.json. Every full render of a song's job adds a revision too, and its report names it.
-  wavelength history [song] [--named] [--json] | history [song] --to-git DIR | --bundle FILE.bundle
-      The revisions, newest last (* marks the current one). --to-git writes them as commits to a new
-      git repository outside the song (--bundle: one file), the same commits on every run.
-  wavelength undo [song] | redo [song] | restore [song] <revision> [--json]
-      Undo and redo step through changes the way an editor does; restore brings back any revision's
-      files. Each adds a revision, so nothing is ever lost.
-  wavelength diff [song] [A [B]] [--json]
-      What changed in the music between two revisions (r12 or 12; A defaults to the last revision, B
-      to the folder now): tracks, sounds, mix, effects and curves by bar, and notes per bar.
-  wavelength comments [song] [--all] [--json] | --reply ID --text TEXT [--done] | --resolve ID | --reopen ID
-      The song's comments (review.json) with the revision each was made on and whether the music they
-      point at has changed since. Open ones by default; --all includes resolved.
-  wavelength pack [song] [--out FILE.wavelength] [--no-history] [--no-render] [--no-review] [--json]
-      One shareable file: the song folder as a ZIP (the job, listed files, comments and history).
-      Refuses a job that uses files outside the song. Lists the plugins and libraries it needs.
-  wavelength unpack <file.wavelength> [--out DIR] [--force] [--json]
-      Checks every entry first (no paths outside the folder, no links, no .git); never runs anything.
-      render and serve open a .wavelength file directly.
-  wavelength validate <song | file.wavelength> [--json]
-      A song folder or package against the format spec.
-  wavelength fallbacks [song | job.json] [--suggest [--write] [--no-measure]] [--json]
-      What each track plays on this computer: its own plugin or library, or which fallback. --suggest
-      proposes a built-in stand-in (a synth patch, the drum kit, a General MIDI program) for every
-      track without one, each level-matched to the song's last render in out/ or render/ (one child
-      render per fallback position; --no-measure skips that); --write puts them in the job.
-  wavelength migrate [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy] [--json]
-      Brings a song folder made before the format up to it: writes wavelength.json (from site.json when
-      there is one), makes paths inside the song relative, copies files the job uses out of out/ into
-      media/, names library samples ("lib:Legend 909/Kick.wav") and preset files (by preset name), copies
-      other outside files into media/ (--no-copy: only reports them), updates review.json, keeps the last
-      render when it matches the job, and saves a revision. Lists what it could not fix.
-  wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
-      A local web UI for reviewing songs (a folder of song folders, default the current one): the
-      arrangement with its chords and harmony problems, loudness, stems, and quick previews: any
-      bars, any tracks, rendered through the song's sends, buses and master in seconds. Comments
-      pinned to bars, tracks and notes go to each song's review.json for the agent. Read-only on
-      the music; plugins only run in render child processes. --open opens the browser.
-  wavelength version [--check] [--json]
-      This build's version (and the song format it reads); --check also asks GitHub for the latest release.
-  wavelength upgrade [--check] [--force] [--json]
-      Replaces this binary with the latest release for this computer when there is a newer one: downloaded
-      from GitHub, checked against the release's SHA256SUMS.txt and run once before it takes this one's
-      place (a release folder's docs and examples are refreshed too). --check only reports. A development
-      build (-dev) is left alone unless --force.
-
-<plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
-.clap/.vst3/.vst bundle. Prefix with clap:, vst3: or vst2: when a name exists in more than one format.
-State formats: auto (default), clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree (.odin), h2p,
-dx7 (<cartridge>.syx#<voice>), synplant, cherry, ngrr, microtonic, soundbox, decentsampler,
-juce-string (.vital), raw.
-Exit status is non-zero on any error; with --json, errors are {"ok":false,"error":...}.
-)";
 
 struct Args {
     std::vector<std::string> positional;
@@ -283,7 +92,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks", "--check"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks", "--check", "--help"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -298,8 +107,107 @@ Args parse(int argc, char **argv) {
     return a;
 }
 
+// a column on a terminal: cut to `w` characters and padded, so styling it keeps the table aligned
+std::string col(const std::string &s, size_t w) {
+    std::string out;
+    size_t chars = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (((unsigned char)s[i] & 0xC0) != 0x80 && ++chars > w) break;
+        out += s[i];
+    }
+    return term::pad(out, w);
+}
+
+// ---- render, on a terminal: a table, sections, warnings wrapped to the window, a closing line ----
+std::string mmss(double s) {
+    char b[24];
+    std::snprintf(b, sizeof b, "%d:%02d", (int)s / 60, (int)s % 60);
+    return b;
+}
+
+void printWrapped(const std::string &lead, const std::string &text, size_t indent) {
+    const size_t room = (size_t)std::max(40, term::width() - 1) - indent;
+    std::string line, word;
+    bool first = true;
+    auto flush = [&] { std::fprintf(OUT, "%s%s\n", first ? lead.c_str() : std::string(indent, ' ').c_str(), line.c_str()); line.clear(); first = false; };
+    std::istringstream words(text);
+    while (words >> word) {
+        if (!line.empty() && term::visibleWidth(line) + 1 + term::visibleWidth(word) > room) flush();
+        line += (line.empty() ? "" : " ") + word;
+    }
+    if (!line.empty() || first) flush();
+}
+
+// a path as short as it can be said: relative to the current folder, else from ~
+std::string shortPath(const std::string &p) {
+    std::error_code ec;
+    const fs::path abs = fs::absolute(fs::u8path(p), ec).lexically_normal();
+    const fs::path rel = abs.lexically_relative(fs::current_path(ec));
+    if (!rel.empty() && *rel.begin() != "..") return rel.generic_u8string();
+    const fs::path home = platform::homeDir(), fromHome = abs.lexically_relative(home);
+    if (!fromHome.empty() && *fromHome.begin() != "..") return "~/" + fromHome.generic_u8string();
+    return p;
+}
+
+int printRenderSummary(const RenderResult &r, int songRev, bool complete, const std::string &incomplete) {
+    const term::Style &st = term::out();
+    size_t nameW = 5, plugW = 10;
+    for (auto &t : r.tracks) { nameW = std::max(nameW, term::visibleWidth(t.name)); plugW = std::max(plugW, term::visibleWidth(t.pluginName)); }
+    for (auto &b : r.buses) nameW = std::max(nameW, term::visibleWidth(b.name) + 4);
+    nameW = std::min<size_t>(nameW, 28);
+    plugW = std::min<size_t>(plugW, 26);
+    auto cut = [](const std::string &s, size_t w) { return term::visibleWidth(s) <= w ? s : s.substr(0, w - 1) + "\u2026"; };
+    auto num = [](double v, const char *unit) { char b[32]; std::snprintf(b, sizeof b, "%6.1f %s", v, unit); return std::string(b); };
+    std::fprintf(OUT, "\n  %s  %s  %s  %s\n", term::pad(st.dim("Track"), nameW).c_str(), term::pad(st.dim("Sound"), plugW).c_str(),
+                 term::pad(st.dim("   Peak"), 9).c_str(), st.dim("  Loudness").c_str());
+    for (auto &t : r.tracks) {
+        const bool silent = t.lufs < -70;
+        std::fprintf(OUT, "  %s  %s  %s  %s\n", term::pad(silent ? st.red(cut(t.name, nameW)) : cut(t.name, nameW), nameW).c_str(),
+                     term::pad(st.dim(cut(t.pluginName, plugW)), plugW).c_str(), num(t.levels.peakDb, "dB").c_str(),
+                     silent ? st.red("  silent").c_str() : num(t.lufs, "LUFS").c_str());
+        for (auto &w : t.warnings) printWrapped("    " + st.warn() + " ", w, 6);
+    }
+    for (auto &b : r.buses)
+        std::fprintf(OUT, "  %s  %s  %s  %s\n", term::pad(st.dim("bus ") + cut(b.name, nameW - 4), nameW).c_str(), std::string(plugW, ' ').c_str(),
+                     num(b.levels.peakDb, "dB").c_str(), num(b.lufs, "LUFS").c_str());
+    std::string rule;
+    for (size_t i = 0; i < nameW + plugW + 29; ++i) rule += "\u2500";
+    std::fprintf(OUT, "  %s\n", st.dim(rule).c_str());
+    const std::string tp = num(r.truePeakDb, "dBTP");
+    std::fprintf(OUT, "  %s  %s  %s  %s\n", term::pad(st.bold("Mix"), nameW).c_str(), term::pad(st.dim("LRA " + num(r.mixLra, "LU").substr(1)), plugW).c_str(),
+                 r.truePeakDb > 0 ? st.red(tp).c_str() : r.truePeakDb > -1 ? st.yellow(tp).c_str() : tp.c_str(), st.bold(num(r.mixLufs, "LUFS")).c_str());
+    for (auto &d : r.deliveries)
+        std::fprintf(OUT, "  %s  %s  %s  %s   %s\n", term::pad(d.spec.format, nameW).c_str(), std::string(plugW, ' ').c_str(), num(d.truePeakDb, "dBTP").c_str(),
+                     num(d.lufs, "LUFS").c_str(), st.dim(shortPath(d.file)).c_str());
+    if (!r.sections.empty()) {
+        std::fprintf(OUT, "\n  %s\n", st.bold("Sections").c_str());
+        size_t secW = 8;
+        for (auto &sec : r.sections) secW = std::max(secW, term::visibleWidth(sec.name));
+        for (auto &sec : r.sections)
+            std::fprintf(OUT, "  %s  %s  %s\n", term::pad(sec.name, std::min<size_t>(secW, 28)).c_str(), num(sec.lufs, "LUFS").c_str(),
+                         st.dim(mmss(sec.start) + "-" + mmss(sec.end)).c_str());
+    }
+    if (!r.warnings.empty()) {
+        std::fprintf(OUT, "\n");
+        for (auto &w : r.warnings) printWrapped("  " + st.warn() + " ", w, 4);
+    }
+    std::fprintf(OUT, "\n");
+    if (!complete) {
+        printWrapped(st.fail() + " ", incomplete, 2);
+        return 1;
+    }
+    std::string done = st.ok() + " " + st.bold("Rendered " + mmss(r.seconds)) + " in " + num(r.renderSeconds, "s").substr(num(r.renderSeconds, "s").find_first_not_of(' ')) + "  " + st.arrow() + " " + shortPath(r.mixFile);
+    std::fprintf(OUT, "%s\n", done.c_str());
+    std::string extra;
+    if (!r.pictureFile.empty()) extra += "picture " + shortPath(r.pictureFile);
+    if (songRev) extra += (extra.empty() ? "" : "  " + st.dot() + "  ") + "song revision " + std::to_string(songRev);
+    if (!extra.empty()) std::fprintf(OUT, "  %s\n", st.dim(extra).c_str());
+    return 0;
+}
+
 int fail(const Args &a, const std::string &msg) {
     if (a.has("--json")) emit(json{{"ok", false}, {"error", msg}}.dump(2, ' ', false, json::error_handler_t::replace));
+    else if (term::err().on) std::fprintf(stderr, "%s %s %s\n", term::err().fail().c_str(), term::err().red(term::err().bold("error:")).c_str(), msg.c_str());
     else std::fprintf(stderr, "error: %s\n", msg.c_str());
     return 1;
 }
@@ -348,12 +256,24 @@ int cmdPlugins(const Args &a) {
     }
     for (auto &p : all) {
         bool instrument = std::find(p.features.begin(), p.features.end(), "instrument") != p.features.end();
+        const term::Style &st = term::out();
+        if (st.on) {
+            const std::string f = col(p.format, 7);
+            const std::string format = p.format == "clap" ? st.cyan(f) : p.format == "vst3" ? st.blue(f) : p.format == "vst2" ? st.yellow(f) : st.green(f);
+            std::fprintf(OUT, "%s %s %s %s %s%s%s\n", format.c_str(), st.bold(col(p.name, 32)).c_str(), st.dim(col(p.id, 30)).c_str(),
+                         st.dim(col(p.vendor, 22)).c_str(), instrument ? "instrument" : st.dim("effect").c_str(),
+                         p.arch.empty() ? "" : st.yellow("  (" + p.arch + ", Rosetta)").c_str(), blocked.contains(p.id) ? st.red("  BLOCKED").c_str() : "");
+            continue;
+        }
         std::fprintf(OUT, "%-7s %-32.32s %-30.30s %-22.22s %s\n", p.format.c_str(), p.name.c_str(), p.id.c_str(), p.vendor.c_str(),
                      (std::string(instrument ? "instrument" : "effect") + (p.arch.empty() ? "" : "  (" + p.arch + ", Rosetta)") +
                       (blocked.contains(p.id) ? "  BLOCKED" : "")).c_str());
     }
     for (auto &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
-    std::fprintf(OUT, "\n%zu plugins (CLAP, VST3, VST2 and built-in). Use \"clap:Name\", \"vst3:Name\" or \"vst2:Name\" when a name exists in more than one format.\n", all.size());
+    if (term::out().on)
+        std::fprintf(OUT, "\n%s %s\n", term::out().bold(std::to_string(all.size()) + " plugins").c_str(),
+                     term::out().dim("(CLAP, VST3, VST2 and built-in). Use \"clap:Name\", \"vst3:Name\" or \"vst2:Name\" when a name exists in more than one format.").c_str());
+    else std::fprintf(OUT, "\n%zu plugins (CLAP, VST3, VST2 and built-in). Use \"clap:Name\", \"vst3:Name\" or \"vst2:Name\" when a name exists in more than one format.\n", all.size());
     return 0;
 }
 
@@ -398,6 +318,7 @@ int cmdPresets(const Args &a) {
             if (!q.empty() && hay.find(q) == std::string::npos) continue;
             ++shown;
             if (a.has("--json")) list.push_back({{"name", p.name}, {"category", p.category}, {"description", p.description}});
+            else if (term::out().on) std::fprintf(OUT, "%s %s %s\n", term::out().dim(col(p.category, 8)).c_str(), term::out().bold(col(p.name, 20)).c_str(), p.description.c_str());
             else std::fprintf(OUT, "%-8s %-20s %s\n", p.category.c_str(), p.name.c_str(), p.description.c_str());
         }
         if (a.has("--json")) emit(json{{"ok", true}, {"plugin", "builtin:synth"}, {"presets", list}}.dump(2));
@@ -436,6 +357,11 @@ int cmdPresets(const Args &a) {
             std::string tags;
             if (audition.contains(p.name) && audition[p.name].contains("tags"))
                 for (auto &t : audition[p.name]["tags"]) tags += (tags.empty() ? "" : ", ") + t.get<std::string>();
+            if (term::out().on) {
+                const term::Style &st = term::out();
+                std::fprintf(OUT, "%s %s%s%s\n", st.dim(col(p.category, 24)).c_str(), st.bold(p.name).c_str(),
+                             p.description.empty() ? "" : st.dim("   " + p.description.substr(0, 90)).c_str(), tags.empty() ? "" : ("   " + st.cyan(tags)).c_str());
+            } else
             std::fprintf(OUT, "%-24.24s %s%s%s%s\n", p.category.c_str(), p.name.c_str(), p.description.empty() ? "" : "   (",
                          p.description.empty() ? "" : (p.description.substr(0, 90) + ")").c_str(), tags.empty() ? "" : ("   [" + tags + "]").c_str());
         }
@@ -506,6 +432,12 @@ int cmdSamples(const Args &a) {
         if (!q.empty() && hay.find(q) == std::string::npos) continue;
         ++shown;
         if (a.has("--json")) list.push_back({{"kind", e.kind}, {"name", e.name}, {"category", e.category}, {"count", e.count}, {"path", e.path}});
+        else if (term::out().on) {
+            const term::Style &st = term::out();
+            const std::string unit = e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : "zones";
+            std::fprintf(OUT, "%s %s %s %s\n", st.cyan(col(e.kind, 12)).c_str(), st.dim(col(e.category, 22)).c_str(), st.bold(col(e.name, 44)).c_str(),
+                         st.dim(std::to_string(e.count) + " " + unit).c_str());
+        }
         else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
                           e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : "zones");
     }
@@ -884,8 +816,13 @@ int cmdMaster(const Args &a) {
     const std::string outDir = a.get("--out", (fs::path(input).parent_path() / "mastered").string());
     RenderResult r;
     bool ok = false;
-    try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
-    catch (const std::exception &e) { err = std::string("master failed: ") + e.what(); }
+    {
+        term::Progress bar("Mastering " + fs::path(input).filename().string());
+        setRenderProgress([&](size_t done, size_t total, const std::string &now) { bar.update(done, total, now); });
+        try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
+        catch (const std::exception &e) { err = std::string("master failed: ") + e.what(); }
+        setRenderProgress(nullptr);
+    }
     if (!ok) return fail(a, err);
     std::error_code ec;
     fs::remove_all(fs::path(outDir) / "stems", ec);
@@ -1197,8 +1134,13 @@ int cmdRender(const Args &a) {
     RenderResult r;
     std::string outDir = a.get("--out", "out");
     bool ok = false;
-    try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
-    catch (const std::exception &e) { err = std::string("render failed: ") + e.what(); }
+    {   // a progress line on a terminal (never in a pipe or with --json)
+        term::Progress bar(std::string(job.window.on ? "Previewing " : "Rendering ") + titleOfJob(fs::absolute(path)));
+        setRenderProgress([&](size_t done, size_t total, const std::string &now) { bar.update(done, total, now); });
+        try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
+        catch (const std::exception &e) { err = std::string("render failed: ") + e.what(); }
+        setRenderProgress(nullptr);
+    }
     if (!ok)   // a track with fallbacks that can't play any of them: name what was tried
         for (auto &n : fallbackNotes)
             if (n.find("none of its fallbacks") != std::string::npos) err += "; " + n;
@@ -1289,6 +1231,7 @@ int cmdRender(const Args &a) {
             std::fprintf(stderr, "warning: --keep: %s\n", herr.c_str());
     }
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return complete ? 0 : 1; }
+    if (term::out().on) return printRenderSummary(r, songRev, complete, incomplete);
     for (auto &t : r.tracks) {
         std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", t.name.c_str(), t.pluginName.c_str(), t.levels.peakDb,
                     t.lufs, t.file.c_str());
@@ -1380,10 +1323,22 @@ int cmdKit(const Args &a) {
     if (sub.empty() || sub == "list") {
         const json list = kitList();
         if (a.has("--json")) { emit(json{{"ok", true}, {"folder", kitDir().string()}, {"kit", list}}.dump(2)); return 0; }
-        for (auto &e : list)
+        for (auto &e : list) {
+            const term::Style &st = term::out();
+            const std::string status = e["status"].get<std::string>();
+            if (st.on) {
+                const bool installed = status.rfind("installed", 0) == 0;
+                std::fprintf(OUT, "%s %s %s %s %s  %s %s\n            %s\n", st.accent(col(e["name"].get<std::string>(), 10)).c_str(),
+                             st.bold(col(e["title"].get<std::string>(), 18)).c_str(), st.dim(col(e["version"].get<std::string>(), 7)).c_str(),
+                             st.dim(col(e["license"].get<std::string>(), 17)).c_str(), st.dim(col(std::to_string(e["downloadMB"].get<int>()) + " MB", 7)).c_str(),
+                             installed ? st.ok().c_str() : st.dim("\u25cb").c_str(), installed ? st.green(status).c_str() : status.c_str(),
+                             st.dim(e["about"].get<std::string>()).c_str());
+                continue;
+            }
             std::fprintf(OUT, "%-10s %-18s %-7s %-17s %4d MB  %s\n            %s\n", e["name"].get<std::string>().c_str(), e["title"].get<std::string>().c_str(),
                          e["version"].get<std::string>().c_str(), e["license"].get<std::string>().c_str(), e["downloadMB"].get<int>(),
-                         e["status"].get<std::string>().c_str(), e["about"].get<std::string>().c_str());
+                         status.c_str(), e["about"].get<std::string>().c_str());
+        }
         std::fprintf(OUT, "\nwavelength kit install [names] downloads them from their own releases into %s (never the system's plugin folders).\n",
                      kitDir().string().c_str());
         return 0;
@@ -1751,7 +1706,17 @@ int main(int argc, char **argv) {
 int run(int argc, char **argv) {
     OUT = platform::takeStdout();
     Args a = parse(argc, argv);
-    if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
+    term::init(OUT, a.has("--json"));
+    // help: the short list, `help <command>`, `<command> --help` or -h, `help all`
+    const bool dashH = std::find(a.positional.begin(), a.positional.end(), "-h") != a.positional.end();
+    if (a.positional.empty() || a.positional[0] == "help" || a.positional[0] == "-h" || a.has("--help") || dashH) {
+        std::string topic;
+        if (!a.positional.empty() && a.positional[0] == "help") topic = a.positional.size() > 1 ? a.positional[1] : "";
+        else if (!a.positional.empty() && a.positional[0] != "-h") topic = a.positional[0];
+        if (a.has("--all")) topic = "all";
+        const int code = printHelp(OUT, topic, WAVELENGTH_VERSION);
+        return a.positional.empty() ? 1 : code;
+    }
     const std::string cmd = a.positional[0];
     if (isSongCommand(cmd)) return runSongCommand(argc, argv, OUT);   // save, history, undo... (song_cli.cpp)
     if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
@@ -1876,11 +1841,16 @@ int run(int argc, char **argv) {
             std::string err;
             if (!selfUpgrade(opt, r, err)) return fail(a, err);
             if (a.has("--json")) { for (auto &[k, v] : r.items()) info[k] = v; emit(info.dump(2)); return 0; }
-            if (opt.check)
+            const term::Style &st = term::out();
+            if (opt.check && st.on)
+                std::fprintf(OUT, "%s wavelength %s %s the latest release is %s%s\n", r["upgradeAvailable"].get<bool>() ? st.yellow("\u2191").c_str() : st.ok().c_str(),
+                             st.bold(WAVELENGTH_VERSION).c_str(), st.dot().c_str(), st.bold(r["latest"].get<std::string>()).c_str(),
+                             r["upgradeAvailable"].get<bool>() ? (": " + st.cyan("wavelength upgrade") + " installs it").c_str() : st.dim(" (up to date)").c_str());
+            else if (opt.check)
                 std::fprintf(OUT, "wavelength %s; the latest release is %s%s\n", WAVELENGTH_VERSION, r["latest"].get<std::string>().c_str(),
                              r["upgradeAvailable"].get<bool>() ? ": `wavelength upgrade` installs it" : " (up to date)");
             else
-                for (auto &n : r["notes"]) std::fprintf(OUT, "%s\n", n.get<std::string>().c_str());
+                for (auto &n : r["notes"]) std::fprintf(OUT, "%s%s\n", st.on ? (st.ok() + " ").c_str() : "", n.get<std::string>().c_str());
             return 0;
         }
     } catch (const std::exception &e) {

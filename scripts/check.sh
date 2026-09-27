@@ -297,6 +297,14 @@ if "$w" fallbacks out/check/fallbacks/job.json --suggest --write --no-measure >/
 else
   echo "FAIL fallbacks"; fail=1
 fi
+# help: the grouped list, one command's details by `help <command>` and by `--help`, plain in a pipe
+if "./$build/wavelength" help | grep -q "^Make music" && "./$build/wavelength" help render | grep -q -- "--loop" &&
+   "./$build/wavelength" render --help | head -1 | grep -q "^wavelength render" && "./$build/wavelength" help all | grep -q "^Usage:" &&
+   ! "./$build/wavelength" help | grep -q $'\x1b'; then
+  echo "ok   help: grouped list, per command, plain in a pipe"
+else
+  echo "FAIL help"; fail=1
+fi
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
 "./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
 spid=$!

@@ -7,6 +7,7 @@
 #include "review.hpp"
 #include "song.hpp"
 #include "songdiff.hpp"
+#include "term.hpp"
 #include "migrate.hpp"
 
 #include <nlohmann/json.hpp>
@@ -51,11 +52,18 @@ struct Out {
     bool json;
     int fail(const std::string &err) const {
         if (json) { std::fputs((nlohmann::json{{"ok", false}, {"error", err}}.dump(2) + "\n").c_str(), f); }
+        else if (term::err().on) std::fprintf(stderr, "%s %s %s\n", term::err().fail().c_str(), term::err().red(term::err().bold("error:")).c_str(), err.c_str());
         else std::fprintf(stderr, "error: %s\n", err.c_str());
         return 1;
     }
     void emit(const nlohmann::json &j) const { std::fputs((j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n").c_str(), f); }
 };
+
+// a line that says something worked: "✓ ..." on a terminal, the plain text in a pipe
+void done(const Out &o, const std::string &text) {
+    if (term::out().on) std::fprintf(o.f, "%s %s\n", term::out().ok().c_str(), text.c_str());
+    else std::fprintf(o.f, "%s\n", text.c_str());
+}
 
 bool parseArgs(int argc, char **argv, CliArgs &a, std::string &err) {
     const std::string cmd = argv[1];
@@ -104,7 +112,7 @@ bool songFor(const CliArgs &a, Song &song, const Out &o, bool create, std::strin
         song.manifest = newManifest(song.dir);
         song.manifest["generator"] = {{"name", "wavelength"}, {"version", WAVELENGTH_VERSION}};
         if (!writeManifest(song, err)) return false;
-        if (!o.json) std::fprintf(o.f, "wrote %s/wavelength.json\n", song.dir.filename().string().c_str());
+        if (!o.json) std::fprintf(o.f, "%s%s/wavelength.json\n", term::out().on ? (term::out().ok() + " wrote ").c_str() : "wrote ", song.dir.filename().string().c_str());
     }
     return true;
 }
@@ -119,6 +127,11 @@ int cmdSave(const CliArgs &a, const Out &o) {
     const int rev = history::save(song, a.get("--message"), actor(), false, err);
     if (!rev) return o.fail(err);
     if (o.json) o.emit({{"ok", true}, {"revision", rev}, {"changed", rev != prev}});
+    else if (term::out().on) {
+        const term::Style &st = term::out();
+        if (rev == prev) std::fprintf(o.f, "%s\n", st.dim("nothing changed since revision " + std::to_string(rev)).c_str());
+        else std::fprintf(o.f, "%s %s%s\n", st.ok().c_str(), st.bold("revision " + std::to_string(rev)).c_str(), a.has("--message") ? (" " + st.dim(a.get("--message"))).c_str() : "");
+    }
     else if (rev == prev) std::fprintf(o.f, "nothing changed since revision %d\n", rev);
     else std::fprintf(o.f, "revision %d%s\n", rev, a.has("--message") ? (": " + a.get("--message")).c_str() : "");
     return 0;
@@ -133,7 +146,7 @@ int cmdHistory(const CliArgs &a, const Out &o) {
         const std::string target = bundle ? a.get("--bundle") : a.get("--to-git");
         if (!history::exportGit(song, target, bundle, err)) return o.fail(err);
         if (o.json) o.emit({{"ok", true}, {bundle ? "bundle" : "repository", target}});
-        else std::fprintf(o.f, "%s %s\n", bundle ? "bundle" : "repository", target.c_str());
+        else done(o, std::string(bundle ? "bundle " : "repository ") + target);
         return 0;
     }
     std::vector<json> entries;
@@ -159,6 +172,17 @@ int cmdHistory(const CliArgs &a, const Out &o) {
         if (a.has("--named") && !e.value("named", false)) continue;
         const int rev = e.value("rev", 0);
         const std::string when = e.value("time", std::string()).substr(0, 16);
+        const term::Style &st = term::out();
+        if (st.on) {
+            const std::string op = e.value("op", std::string()), o7 = op + std::string(op.size() < 7 ? 7 - op.size() : 0, ' ');
+            const std::string opStyled = op == "save" ? st.green(o7) : op == "render" ? st.blue(o7) : st.yellow(o7);
+            std::string r5 = "r" + std::to_string(rev);
+            r5 += std::string(r5.size() < 5 ? 5 - r5.size() : 0, ' ');
+            std::fprintf(o.f, "%s %s %s %s %s %s\n", rev == latest ? st.green("\u25cf").c_str() : " ", rev == latest ? st.bold(r5).c_str() : r5.c_str(),
+                         st.dim(when).c_str(), opStyled.c_str(), st.dim(term::pad(e.value("by", json::object()).value("name", std::string()).substr(0, 18), 18)).c_str(),
+                         summary(e).c_str());
+            continue;
+        }
         std::fprintf(o.f, "%s r%-4d %-16s %-7s %-18s %s\n", rev == latest ? "*" : " ", rev, when.c_str(), e.value("op", std::string()).c_str(),
                      e.value("by", json::object()).value("name", std::string()).substr(0, 18).c_str(), summary(e).c_str());
     }
@@ -182,7 +206,7 @@ int cmdStep(const CliArgs &a, const Out &o) {
         const int rev = history::restore(song, (int)target, actor(), err);
         if (!rev) return o.fail(err);
         if (o.json) o.emit({{"ok", true}, {"revision", rev}, {"restored", target}});
-        else std::fprintf(o.f, "restored revision %ld (now revision %d)\n", target, rev);
+        else done(o, "restored revision " + std::to_string(target) + " (now revision " + std::to_string(rev) + ")");
         return 0;
     }
     if (!songFor(b, song, o, false, err)) return o.fail(err);
@@ -193,7 +217,7 @@ int cmdStep(const CliArgs &a, const Out &o) {
     const json *e = history::find(entries, rev);
     const int target = e ? e->value("target", 0) : 0;
     if (o.json) o.emit({{"ok", true}, {"revision", rev}, {"restored", target}});
-    else std::fprintf(o.f, "%s: the song is back at revision %d (now revision %d)\n", cmd.c_str(), target, rev);
+    else done(o, cmd + ": the song is back at revision " + std::to_string(target) + " (now revision " + std::to_string(rev) + ")");
     return 0;
 }
 
@@ -258,7 +282,7 @@ int cmdComments(const CliArgs &a, const Out &o) {
         if (!found) return o.fail("no comment " + id + " in " + song.title());
         if (!review::write(song.dir, data, err)) return o.fail(err);
         if (o.json) o.emit({{"ok", true}, {"comment", id}, {"revision", rev}});
-        else std::fprintf(o.f, "comment %s %s\n", id.c_str(), a.has("--reopen") ? "reopened" : a.has("--resolve") || a.has("--done") ? "resolved" : "answered");
+        else done(o, "comment " + id + " " + (a.has("--reopen") ? "reopened" : a.has("--resolve") || a.has("--done") ? "resolved" : "answered"));
         return 0;
     }
     json list = json::array();
@@ -273,6 +297,19 @@ int cmdComments(const CliArgs &a, const Out &o) {
     for (auto &c : list) {
         const json an = c["anchor"], now = c["now"];
         const std::string rev = an.contains("revision") ? "r" + an["revision"].dump() : "revision unknown";
+        const term::Style &st = term::out();
+        if (st.on) {   // a card per comment
+            const bool done = c.value("status", std::string("open")) == "done";
+            std::fprintf(o.f, "%s %s  %s  %s  %s\n", done ? st.ok().c_str() : st.yellow("\u25cf").c_str(), st.bold(an.value("ref", std::string("whole song"))).c_str(),
+                         st.dim(rev).c_str(), st.dim(c.value("author", json::object()).value("name", std::string("?")) + ", " + c.value("created", std::string()).substr(0, 16)).c_str(),
+                         st.dim(c.value("id", std::string())).c_str());
+            std::fprintf(o.f, "  %s\n", c.value("text", std::string()).c_str());
+            if (now.value("outdated", false)) for (auto &w : now["why"]) std::fprintf(o.f, "  %s %s\n", st.warn().c_str(), st.yellow("changed since: " + w.get<std::string>()).c_str());
+            for (auto &r : c["replies"])
+                std::fprintf(o.f, "  %s %s%s\n", st.dim("\u21b3").c_str(), r.value("text", std::string()).c_str(), r.contains("revision") ? st.dim("  r" + r["revision"].dump()).c_str() : "");
+            std::fprintf(o.f, "\n");
+            continue;
+        }
         std::fprintf(o.f, "%s  %s  %s  %s  (%s, %s)\n", c.value("id", std::string()).c_str(), c.value("status", std::string("open")).c_str(), rev.c_str(),
                      an.value("ref", std::string("whole song")).c_str(), c.value("author", json::object()).value("name", std::string("?")).c_str(),
                      c.value("created", std::string()).substr(0, 16).c_str());
@@ -286,7 +323,8 @@ int cmdComments(const CliArgs &a, const Out &o) {
         for (auto &r : c["replies"])
             std::fprintf(o.f, "  reply%s: %s\n", r.contains("revision") ? (" (r" + r["revision"].dump() + ")").c_str() : "", r.value("text", std::string()).c_str());
     }
-    std::fprintf(o.f, "\nAnswer with: wavelength comments %s --reply <id> --text \"...\" [--done]\n", a.pos.size() > 1 ? a.pos[1].c_str() : ".");
+    if (term::out().on) std::fprintf(o.f, "%s\n", term::out().dim("Answer with: wavelength comments " + (a.pos.size() > 1 ? a.pos[1] : std::string(".")) + " --reply <id> --text \"...\" [--done]").c_str());
+    else std::fprintf(o.f, "\nAnswer with: wavelength comments %s --reply <id> --text \"...\" [--done]\n", a.pos.size() > 1 ? a.pos[1].c_str() : ".");
     return 0;
 }
 
@@ -301,12 +339,21 @@ int cmdPack(const CliArgs &a, const Out &o) {
     json r;
     if (!package::pack(song, a.get("--out"), opt, r, err)) return o.fail(err);
     if (o.json) { o.emit(r); return 0; }
-    std::fprintf(o.f, "%s (%.1f MB, %zu entries)\n", r["file"].get<std::string>().c_str(), r["bytes"].get<double>() / 1048576.0, r["entries"].get<size_t>());
+    {
+        char size[64];
+        std::snprintf(size, sizeof size, " (%.1f MB, %zu entries)", r["bytes"].get<double>() / 1048576.0, r["entries"].get<size_t>());
+        done(o, (term::out().on ? term::out().bold(r["file"].get<std::string>()) : r["file"].get<std::string>()) + (term::out().on ? term::out().dim(size) : std::string(size)));
+    }
     int missing = 0;
     for (auto &q : r["requires"]) {
         const std::string what = q.contains("plugin") ? q["plugin"].value("name", std::string()) + (q.contains("preset") ? " '" + q.value("preset", std::string()) + "'" : "")
                                                       : q["library"].value("kind", std::string()) + " '" + q["library"].value("name", std::string()) + "'";
         if (!q.value("fallback", false)) ++missing;
+        if (term::out().on) {
+            const term::Style &st = term::out();
+            std::fprintf(o.f, "  %s needs %s %s%s\n", q.value("fallback", false) ? st.ok().c_str() : st.warn().c_str(), st.bold(term::pad(what, 40)).c_str(),
+                         st.dim("track " + q.value("track", std::string())).c_str(), q.value("fallback", false) ? st.dim("  (has a fallback)").c_str() : st.yellow("  (no fallback)").c_str());
+        } else
         std::fprintf(o.f, "  needs %-40s track %s%s\n", what.c_str(), q.value("track", std::string()).c_str(), q.value("fallback", false) ? "  (has a fallback)" : "");
     }
     if (missing) std::fprintf(o.f, "%d track%s without a fallback will be silent where their plugin or library is missing (wavelength fallbacks --suggest)\n", missing, missing == 1 ? "" : "s");
@@ -319,17 +366,22 @@ int cmdUnpack(const CliArgs &a, const Out &o) {
     std::string err;
     if (!package::unpack(a.pos[1], a.get("--out"), a.has("--force"), r, err)) return o.fail(err);
     if (o.json) o.emit(r);
-    else std::fprintf(o.f, "%s -> %s\n", r.value("title", std::string()).c_str(), r["folder"].get<std::string>().c_str());
+    else done(o, r.value("title", std::string()) + (term::out().on ? " " + term::out().arrow() + " " : " -> ") + r["folder"].get<std::string>());
     return 0;
 }
 
 int cmdValidate(const CliArgs &a, const Out &o) {
     const json r = package::validate(a.pos.size() > 1 ? a.pos[1] : ".");
     if (o.json) { o.emit(r); return r["ok"] ? 0 : 1; }
-    for (auto &p : r["problems"])
-        std::fprintf(o.f, "%-7s %s%s%s\n", p.value("severity", std::string()).c_str(), p.value("path", std::string()).c_str(), p.value("path", std::string()).empty() ? "" : ": ",
-                     p.value("message", std::string()).c_str());
-    std::fprintf(o.f, "%s\n", r["ok"] ? "valid" : "not valid");
+    const term::Style &st = term::out();
+    for (auto &p : r["problems"]) {
+        const std::string path = p.value("path", std::string()), msg = p.value("message", std::string());
+        if (st.on) std::fprintf(o.f, "%s %s%s\n", p.value("severity", std::string()) == "error" ? st.fail().c_str() : st.warn().c_str(),
+                                path.empty() ? "" : (st.bold(path) + st.dim(": ")).c_str(), msg.c_str());
+        else std::fprintf(o.f, "%-7s %s%s%s\n", p.value("severity", std::string()).c_str(), path.c_str(), path.empty() ? "" : ": ", msg.c_str());
+    }
+    if (st.on) std::fprintf(o.f, "%s\n", r["ok"] ? (st.ok() + " " + st.green("valid")).c_str() : (st.fail() + " " + st.red("not valid")).c_str());
+    else std::fprintf(o.f, "%s\n", r["ok"] ? "valid" : "not valid");
     return r["ok"] ? 0 : 1;
 }
 
@@ -438,8 +490,15 @@ int cmdFallbacks(const CliArgs &a, const Out &o) {
             const std::string status = r["available"] ? "plays" : r.contains("plays") ? "fallback " + r["plays"].dump() : "SILENT";
             silent += status == "SILENT";
             bare += r["fallbacks"] == 0 && r["plugin"].get<std::string>().rfind("builtin:", 0) != 0;
-            std::fprintf(o.f, "  %-24s %-28s %-11s %s\n", r["track"].get<std::string>().c_str(), r["plugin"].get<std::string>().c_str(), status.c_str(),
-                         r["fallbacks"] == 0 ? "no fallback" : (r["fallbacks"].dump() + " fallback" + (r["fallbacks"] == 1 ? "" : "s")).c_str());
+            const std::string count = r["fallbacks"] == 0 ? "no fallback" : r["fallbacks"].dump() + " fallback" + (r["fallbacks"] == 1 ? "" : "s");
+            const term::Style &st = term::out();
+            if (st.on) {
+                const std::string mark = status == "plays" ? st.ok() : status == "SILENT" ? st.fail() : st.warn();
+                const std::string what = status == "plays" ? "plays" : status == "SILENT" ? st.red("silent here") : st.yellow("plays " + status);
+                std::fprintf(o.f, "  %s %s %s %s %s\n", mark.c_str(), st.bold(term::pad(r["track"].get<std::string>(), 24)).c_str(),
+                             st.dim(term::pad(r["plugin"].get<std::string>(), 28)).c_str(), term::pad(what, 18).c_str(), st.dim(count).c_str());
+            } else
+            std::fprintf(o.f, "  %-24s %-28s %-11s %s\n", r["track"].get<std::string>().c_str(), r["plugin"].get<std::string>().c_str(), status.c_str(), count.c_str());
         }
         if (silent) std::fprintf(o.f, "%d track%s can't play here\n", silent, silent == 1 ? "" : "s");
         if (bare) std::fprintf(o.f, "%d track%s with a plugin or library have no fallback (wavelength fallbacks --suggest)\n", bare, bare == 1 ? "" : "s");
@@ -485,12 +544,19 @@ int cmdFallbacks(const CliArgs &a, const Out &o) {
     }
     if (o.json) { o.emit({{"ok", true}, {"job", jobPath.string()}, {"written", wrote}, {"suggestions", suggestions}, {"notes", notes}}); return 0; }
     for (auto &[name, s] : suggestions.items()) {
+        if (term::out().on) {
+            const term::Style &st = term::out();
+            std::fprintf(o.f, "%s %s %s\n", st.bold(term::pad(name, 24)).c_str(), st.cyan(term::pad(s["role"].get<std::string>(), 8)).c_str(), st.dim(s["why"].get<std::string>()).c_str());
+            std::fprintf(o.f, "    %s %s\n", st.dim("\"fallback\":").c_str(), s["fallback"].dump().c_str());
+        } else {
         std::fprintf(o.f, "%-24s %-7s %s\n", name.c_str(), s["role"].get<std::string>().c_str(), s["why"].get<std::string>().c_str());
         std::fprintf(o.f, "    \"fallback\": %s\n", s["fallback"].dump().c_str());
+        }
     }
-    for (auto &n : notes) std::fprintf(o.f, "note: %s\n", n.get<std::string>().c_str());
-    if (suggestions.empty()) std::fprintf(o.f, "every track is built in or already has a fallback\n");
-    else if (wrote) std::fprintf(o.f, "wrote %zu fallback%s into %s\n", suggestions.size(), suggestions.size() == 1 ? "" : "s", jobPath.filename().string().c_str());
+    const term::Style &st = term::out();
+    for (auto &n : notes) std::fprintf(o.f, "%s%s\n", st.on ? (st.warn() + " ").c_str() : "note: ", n.get<std::string>().c_str());
+    if (suggestions.empty()) done(o, "every track is built in or already has a fallback");
+    else if (wrote) done(o, "wrote " + std::to_string(suggestions.size()) + " fallback" + (suggestions.size() == 1 ? "" : "s") + " into " + jobPath.filename().string());
     else std::fprintf(o.f, "%zu suggestion%s (--write puts them in the job)\n", suggestions.size(), suggestions.size() == 1 ? "" : "s");
     return 0;
 }
@@ -505,12 +571,13 @@ int cmdMigrate(const CliArgs &a, const Out &o) {
     std::string err;
     if (!migrate::run(a.pos.size() > 1 ? a.pos[1] : ".", opt, r, err)) return o.fail(err);
     if (o.json) { o.emit(r); return 0; }
-    for (auto &c : r["changes"]) std::fprintf(o.f, "  %s\n", c.get<std::string>().c_str());
-    for (auto &p : r["problems"]) std::fprintf(o.f, "problem: %s\n", p.get<std::string>().c_str());
-    for (auto &n : r["notes"]) std::fprintf(o.f, "note: %s\n", n.get<std::string>().c_str());
+    const term::Style &st = term::out();
+    for (auto &c : r["changes"]) std::fprintf(o.f, "  %s%s\n", st.on ? (st.dim("\u00b7") + " ").c_str() : "", c.get<std::string>().c_str());
+    for (auto &p : r["problems"]) std::fprintf(o.f, "%s%s\n", st.on ? (st.fail() + " ").c_str() : "problem: ", p.get<std::string>().c_str());
+    for (auto &n : r["notes"]) std::fprintf(o.f, "%s%s\n", st.on ? (st.warn() + " ").c_str() : "note: ", n.get<std::string>().c_str());
     if (opt.dryRun) std::fprintf(o.f, "%zu changes (dry run: nothing written)\n", r["changes"].size());
-    else if (r.contains("revision")) std::fprintf(o.f, "%zu changes, saved as revision %d\n", r["changes"].size(), r["revision"].get<int>());
-    else std::fprintf(o.f, "already up to date\n");
+    else if (r.contains("revision")) done(o, std::to_string(r["changes"].size()) + " changes, saved as revision " + std::to_string(r["revision"].get<int>()));
+    else done(o, "already up to date");
     return 0;
 }
 

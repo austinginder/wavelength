@@ -490,6 +490,12 @@ void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
 
 } // namespace
 
+namespace {
+RenderProgress gProgress;
+}
+
+void setRenderProgress(RenderProgress progress) { gProgress = std::move(progress); }
+
 bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderResult &result, std::string &err) {
     const auto t0 = std::chrono::steady_clock::now();
     double end = 0;
@@ -737,6 +743,10 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     const bool isolate = parallel > 0 && !job.sourcePath.empty();
     const fs::path tmp = fs::temp_directory_path() / ("wavelength-render-" + std::to_string(platform::processId()));
     if (isolate) fs::create_directories(tmp, ec);
+    auto progress = [&](const std::string &now) {
+        if (!gProgress) return;
+        gProgress((size_t)std::count(trackDone.begin(), trackDone.end(), true), job.tracks.size(), now);
+    };
     auto finish = [&](size_t i, Audio &audio) {   // mix a finished track; keep it if it keys an effect
         if (sources.count(i)) scAudio[i] = audio;
         if (!mixTrack(i, audio, trackResults[i])) return false;
@@ -781,6 +791,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         if (verbose) std::fprintf(stderr, "rendering %s (%s) in worker %d...\n", job.tracks[i].name.c_str(), job.tracks[i].plugin.c_str(), proc.id);
         running.push_back({i, proc, std::chrono::steady_clock::now()});
         started[i] = true;
+        std::string names;
+        for (auto &r : running) names += (names.empty() ? "" : ", ") + job.tracks[r.index].name;
+        progress(names);
     };
     auto ready = [&](size_t i) { for (size_t d : deps[i]) if (!trackDone[d]) return false; return true; };
     bool failed = false;
@@ -809,6 +822,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             audio.resize(frames);
             const auto tt = std::chrono::steady_clock::now();
             if (verbose) std::fprintf(stderr, "rendering %s (%s)...\n", track.name.c_str(), track.plugin.c_str());
+            progress(track.name);
             std::map<size_t, Audio> rendered;   // this track's render clips, by clip index
             for (auto &c : captures) if (c.track == i) rendered[c.clip] = std::move(c.audio);
             if (!renderTrackAudio(job, i, trackChains[i], ctx, audio, tr, verbose, err, &rendered) || !finish(i, audio)) { failed = true; break; }
@@ -882,11 +896,15 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             fs::remove(prefix + ".pcm", rec);
             fs::remove(prefix + ".json", rec);
             running.erase(running.begin() + (long)r);
+            std::string names;
+            for (auto &x : running) names += (names.empty() ? "" : ", ") + job.tracks[x.index].name;
+            progress(names);
         }
     }
     cleanup();
     if (failed) return false;
     for (auto &tr : trackResults) result.tracks.push_back(std::move(tr));
+    progress("buses and master");
     if (!job.window.on) {   // a window is too short to judge the mix or the arrangement
         mixChecks(job, result.tracks, seconds, result.warnings);
         repetitionChecks(job, result.warnings);

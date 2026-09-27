@@ -2,7 +2,7 @@
 
 A headless music engine for AI agents. Wavelength plays notes through real, installed CLAP, VST3 and VST2 instruments (Vital, Serum 2, Surge XT, OB-Xf, Dexed, BBC Symphony Orchestra, Reaktor, …) and sample libraries, offline, with no DAW and no screen. It mixes them with built-in effects, buses and automation, and returns WAV stems, a mixdown and a machine-readable report with loudness per track and section.
 
-It is built for agents: jobs are JSON, every command except `serve` and `mcp` has `--json` output with actionable errors, and plugin output never pollutes stdout. See **[AGENTS.md](AGENTS.md)** for the operating guide and mixing playbook, **[docs/job-format.md](docs/job-format.md)** for the job schema and **[docs/effects.md](docs/effects.md)** for effects, buses, automation and the built-in instruments.
+It is built for agents: jobs are JSON, every command except `serve` and `mcp` has `--json` output with actionable errors, and plugin output never pollutes stdout. People at a terminal get colour, tables and a progress line; pipes, `--json` and `NO_COLOR` stay plain text. See **[AGENTS.md](AGENTS.md)** for the operating guide and mixing playbook, **[docs/job-format.md](docs/job-format.md)** for the job schema and **[docs/effects.md](docs/effects.md)** for effects, buses, automation and the built-in instruments.
 
 https://wavelength.run
 
@@ -171,6 +171,7 @@ A minimal job:
 | `migrate [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy]` | Brings an older song folder up to the format: manifest, relative paths, preset and `lib:` names for installed sounds, and a revision. It copies other outside files into `media/` (`--no-copy`: only lists them). |
 | `fallbacks [song] [--suggest [--write] [--no-measure]]` | What each track plays on this computer; `--suggest` proposes built-in stand-ins at the levels of the last full render (`--no-measure` skips that), `--write` puts them in the job, `render --fallbacks` plays them. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
+| `help [command \| all]` | The commands grouped by task; one command's options and details (also `<command> --help`); or all of them. |
 | `version [--check] [--json]` | Prints the engine's version; `--check` asks GitHub for the latest release. |
 | `upgrade [--check] [--force] [--json]` | Installs the latest release over this binary when there is a newer one, checked against the release's SHA-256 sums. A development build is left alone unless `--force`. |
 

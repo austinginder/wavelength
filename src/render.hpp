@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -79,5 +80,10 @@ int renderTrackWorker(const std::string &jobPath, size_t index, const std::strin
 // Renders every track (instrument → effects) to its own stem, applies faders and sends,
 // processes buses and the master chain, and writes mix.wav under outDir.
 bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderResult &result, std::string &err);
+
+// Called while renderJob runs (the CLI draws it on a terminal): tracks done of all tracks, and what is
+// rendering now. Set before a render, cleared (nullptr) after.
+using RenderProgress = std::function<void(size_t done, size_t total, const std::string &now)>;
+void setRenderProgress(RenderProgress progress);
 
 } // namespace wl

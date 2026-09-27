@@ -158,6 +158,8 @@ add_executable(wavelength
   src/fallback.cpp
   src/kit.cpp
   src/self_upgrade.cpp
+  src/help.cpp
+  src/term.cpp
   src/song.cpp
   src/history.cpp
   src/song_cli.cpp
