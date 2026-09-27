@@ -5,7 +5,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
-- More presets by name: every program of OB-Xd's `.fxb` banks (`"<bank>.fxb#<n>"` as state), Surge 1.x patches, DecentSampler presets in the library folder its settings name, u-he NKS effect presets (`.nksfx`, Zebrify) and Reaktor Blocks racks (`.nksr`), VST2 program lists (Helm 274, Monique 143; placeholder lists such as "Program 1..n" are skipped), and TyrellN6 `.h2p` presets (older u-he builds take the text without a length prefix; Wavelength follows the plugin's own state).
+- More presets by name: every program of OB-Xd's `.fxb` banks (`"<bank>.fxb#<n>"` as state), Surge 1.x patches, DecentSampler presets in the library folder its settings name, u-he NKS effect presets (`.nksfx`, Zebrify) and Reaktor Blocks racks (`.nksr`), VST2 program lists (Helm 274, Monique 143; placeholder lists such as "Program 1..n" are skipped), audjoo Helix's 1,302 `.hxp` patches (state format `helix`), and TyrellN6 `.h2p` presets (older u-he builds take the text without a length prefix; Wavelength follows the plugin's own state).
 
 ### Fixed
 - `params`, `presets`, `state` and `audition` on an Intel-only plugin (re-run under Rosetta) wrote their output to stderr, so scripts reading stdout got nothing.

@@ -27,7 +27,8 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 }
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
-                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset"};
+                                           ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
+                                           ".hxp"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -56,6 +57,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".mtpreset" || ext == ".mtdrum") return p.find("microtonic") != std::string::npos;
     if (ext == ".sbset") return p == "soundbox";
     if (ext == ".dspreset") return p == "decentsampler";
+    if (ext == ".hxp") return p == "helix";
     if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
         std::ifstream in(file, std::ios::binary);
         char head[20] = {};
@@ -291,6 +293,13 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     if (p == "vital") {   // Vital's own library: factory banks, packs and user presets
         dirs.push_back(fs::path(home) / "Music/Vital");
         dirs.push_back(fs::path(home) / "Documents/Vital");
+    }
+    if (p == "helix") {   // audjoo Helix: factory patches beside the plugin, user patches in Application Support
+        for (const char *d : {"/Library/Audio/Plug-Ins/VST/audjoo_helix_data/patches", "/Library/Audio/Plug-Ins/VST3/audjoo_helix_data/patches"})
+            dirs.push_back(d);
+        dirs.push_back(fs::path(plugin.bundlePath).parent_path() / "audjoo_helix_data" / "patches");
+        dirs.push_back(fs::path(home) / "Library/Audio/Plug-Ins/VST/audjoo_helix_data/patches");
+        dirs.push_back(fs::path(home) / "Library/Application Support/audjoo_helix_userdata/patches");
     }
     if (p == "obxf") {
         dirs.push_back("/Library/Application Support/Surge Synth Team/OB-Xf/Patches");

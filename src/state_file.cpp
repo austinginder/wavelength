@@ -125,6 +125,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
     std::string fmt = format.empty() ? "auto" : format;
+    if (fmt == "auto" && endsWith(path, ".hxp")) fmt = "helix";
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
             : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
@@ -170,6 +171,12 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         if (!serumPresetToStates(data, out.state, out.controllerState, err)) { err = path + ": " + err; return false; }
     } else if (fmt == "juce-valuetree") {
         if (!valueTreeToJuceXml(data, out.state, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "helix") {   // audjoo Helix .hxp: its chunk, bare or in an .fxp (whose size field is often stale)
+        if (data.size() >= 60 && std::memcmp(data.data(), "CcnK", 4) == 0 && std::memcmp(data.data() + 8, "FPCh", 4) == 0) {
+            const size_t n = (size_t(data[56]) << 24) | (size_t(data[57]) << 16) | (size_t(data[58]) << 8) | data[59];
+            out.state.assign(data.begin() + 60, data.begin() + 60 + std::min(n, data.size() - 60));
+        } else out.state = data;
+        if (out.state.size() < 12 || std::memcmp(out.state.data(), "JonasNorberg", 12) != 0) { err = path + " is not a Helix patch"; return false; }
     } else if (fmt == "h2p") {
         std::string name = path.substr(path.find_last_of("/\\") + 1);
         if (endsWith(name, ".h2p")) name.resize(name.size() - 4);
@@ -233,7 +240,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;
