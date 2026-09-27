@@ -1,7 +1,9 @@
 #include "song_cli.hpp"
 
 #include "history.hpp"
+#include "review.hpp"
 #include "song.hpp"
+#include "songdiff.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -31,6 +33,8 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"undo", {{"--json", false}}},
     {"redo", {{"--json", false}}},
     {"restore", {{"--json", false}}},
+    {"diff", {{"--json", false}}},
+    {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
 };
 
 struct Out {
@@ -184,6 +188,99 @@ int cmdStep(const CliArgs &a, const Out &o) {
     return 0;
 }
 
+// "r12", "12" -> 12; "now" -> 0; -1 when it isn't a revision
+int revisionArg(const std::string &s) {
+    if (s == "now") return 0;
+    const std::string n = s.size() > 1 && (s[0] == 'r' || s[0] == 'R') ? s.substr(1) : s;
+    if (n.empty() || n.find_first_not_of("0123456789") != std::string::npos) return -1;
+    return std::atoi(n.c_str());
+}
+
+int cmdDiff(const CliArgs &a, const Out &o) {
+    std::vector<int> revs;
+    CliArgs b = a;
+    b.pos = {a.pos[0]};
+    for (size_t i = 1; i < a.pos.size(); ++i) {
+        const int r = revisionArg(a.pos[i]);
+        if (r >= 0 && !(i == 1 && fs::is_directory(a.pos[i]))) revs.push_back(r);
+        else b.pos.push_back(a.pos[i]);
+    }
+    Song song;
+    std::string err;
+    if (!songFor(b, song, o, false, err)) return o.fail(err);
+    std::vector<json> entries;
+    if (!history::read(song, entries, err)) return o.fail(err);
+    if (revs.size() > 2) return o.fail("usage: wavelength diff [song] [A [B]] (revisions like r12; B defaults to the folder now)");
+    const int ra = revs.empty() ? history::current(entries) : revs[0], rb = revs.size() > 1 ? revs[1] : 0;
+    if (ra <= 0 && revs.empty()) return o.fail("the song has no revisions to compare with yet (wavelength save)");
+    json ja, jb;
+    if (!history::jobAt(song, ra, ja, err) || !history::jobAt(song, rb, jb, err)) return o.fail(err);
+    SongDiff d;
+    if (!diffJobs(ja, jb, song.dir.string(), d, err)) return o.fail(err);
+    const std::string from = ra ? "r" + std::to_string(ra) : "now", to = rb ? "r" + std::to_string(rb) : "now";
+    if (o.json) { json r = diffToJson(d); r["ok"] = true; r["from"] = from; r["to"] = to; o.emit(r); }
+    else std::fprintf(o.f, "%s -> %s\n%s", from.c_str(), to.c_str(), diffToText(d).c_str());
+    return 0;
+}
+
+int cmdComments(const CliArgs &a, const Out &o) {
+    Song song;
+    std::string err;
+    if (!songFor(a, song, o, false, err)) return o.fail(err);
+    json data = review::read(song.dir);
+    const std::string id = a.has("--reply") ? a.get("--reply") : a.has("--resolve") ? a.get("--resolve") : a.get("--reopen");
+    if (!id.empty()) {   // answer, resolve or reopen one comment
+        if (a.has("--reply") && a.get("--text").empty()) return o.fail("--reply needs --text \"...\"");
+        bool found = false;
+        int rev = 0;
+        if (a.has("--reply") || a.has("--resolve")) {   // the revision that answers it: the folder as it is now
+            rev = history::save(song, "", actor(), false, err);
+            if (!rev) return o.fail(err);
+        }
+        for (auto &c : data["comments"]) {
+            if (c.value("id", std::string()) != id) continue;
+            found = true;
+            c = review::normalize(c);
+            const std::string when = nowRfc3339();
+            if (!a.get("--text").empty()) c["replies"].push_back({{"author", actor()}, {"time", when}, {"revision", rev}, {"text", a.get("--text")}});
+            if (a.has("--resolve") || a.has("--done")) { c["status"] = "done"; c["resolved"] = {{"revision", rev}, {"time", when}, {"by", actor()}}; }
+            if (a.has("--reopen")) { c["status"] = "open"; c.erase("resolved"); }
+        }
+        if (!found) return o.fail("no comment " + id + " in " + song.title());
+        if (!review::write(song.dir, data, err)) return o.fail(err);
+        if (o.json) o.emit({{"ok", true}, {"comment", id}, {"revision", rev}});
+        else std::fprintf(o.f, "comment %s %s\n", id.c_str(), a.has("--reopen") ? "reopened" : a.has("--resolve") || a.has("--done") ? "resolved" : "answered");
+        return 0;
+    }
+    json list = json::array();
+    for (auto &raw : data["comments"]) {
+        json c = review::normalize(raw);
+        if (!a.has("--all") && c.value("status", std::string("open")) == "done") continue;
+        c["now"] = review::status(song, raw);
+        list.push_back(c);
+    }
+    if (o.json) { o.emit({{"ok", true}, {"song", song.title()}, {"comments", list}}); return 0; }
+    if (list.empty()) { std::fprintf(o.f, "%s: no %scomments\n", song.title().c_str(), a.has("--all") ? "" : "open "); return 0; }
+    for (auto &c : list) {
+        const json an = c["anchor"], now = c["now"];
+        const std::string rev = an.contains("revision") ? "r" + an["revision"].dump() : "revision unknown";
+        std::fprintf(o.f, "%s  %s  %s  %s  (%s, %s)\n", c.value("id", std::string()).c_str(), c.value("status", std::string("open")).c_str(), rev.c_str(),
+                     an.value("ref", std::string("whole song")).c_str(), c.value("author", json::object()).value("name", std::string("?")).c_str(),
+                     c.value("created", std::string()).substr(0, 16).c_str());
+        std::fprintf(o.f, "  \"%s\"\n", c.value("text", std::string()).c_str());
+        if (!now["since"].empty()) {
+            std::string s;
+            for (auto &e : now["since"]) s += (s.empty() ? "" : ", ") + std::string("r") + e["rev"].dump() + " " + e.value("op", std::string());
+            std::fprintf(o.f, "  since: %s\n", s.c_str());
+        }
+        if (now.value("outdated", false)) for (auto &w : now["why"]) std::fprintf(o.f, "  changed: %s\n", w.get<std::string>().c_str());
+        for (auto &r : c["replies"])
+            std::fprintf(o.f, "  reply%s: %s\n", r.contains("revision") ? (" (r" + r["revision"].dump() + ")").c_str() : "", r.value("text", std::string()).c_str());
+    }
+    std::fprintf(o.f, "\nAnswer with: wavelength comments %s --reply <id> --text \"...\" [--done]\n", a.pos.size() > 1 ? a.pos[1].c_str() : ".");
+    return 0;
+}
+
 } // namespace
 
 bool isSongCommand(const std::string &cmd) { return kCommands.count(cmd) > 0; }
@@ -198,6 +295,8 @@ int runSongCommand(int argc, char **argv, std::FILE *f) {
     const std::string cmd = a.pos[0];
     if (cmd == "save") return cmdSave(a, o);
     if (cmd == "history") return cmdHistory(a, o);
+    if (cmd == "diff") return cmdDiff(a, o);
+    if (cmd == "comments") return cmdComments(a, o);
     return cmdStep(a, o);
 }
 

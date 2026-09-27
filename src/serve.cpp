@@ -3,6 +3,8 @@
 #include "harmony.hpp"
 #include "job.hpp"
 #include "platform.hpp"
+#include "review.hpp"
+#include "song.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -75,6 +77,8 @@ FileMap scanSong(const fs::path &dir) {
     for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator() && !ec; it.increment(ec)) {
         const auto name = it->path().filename().string();
         if (!name.empty() && name[0] == '.') { if (it->is_directory(ec)) it.disable_recursion_pending(); continue; }
+        // a song's history objects are its revisions' files by hash: history/log.jsonl says what they are
+        if (name == "objects" && it->path().parent_path().filename() == "history") { it.disable_recursion_pending(); continue; }
         if (!it->is_regular_file(ec)) continue;
         if (files.size() >= kScanLimit) break;
         const std::string rel = fs::relative(it->path(), dir, ec).generic_string();
@@ -573,15 +577,24 @@ int Server::run() {
 
     // review comments: GET lists them, POST {op: add|status|delete} changes them. The agent answers by
     // editing review.json itself ("status": "done" and a "reply" the editor shows under the comment).
-    auto readReview = [](const fs::path &p) {
-        json d;
-        if (!readJson(p, d) || !d.contains("comments") || !d["comments"].is_array()) d = {{"comments", json::array()}};
-        return d;
+    // comments as the page reads them: the spec's shape (review.hpp), each with how the song moved since
+    auto reviewView = [&](const std::string &slug) {
+        Song song;
+        std::string err;
+        if (!openSong(songDir(slug).string(), song, err)) { song = Song{}; song.dir = songDir(slug); }
+        json out = {{"comments", json::array()}};
+        const json data = review::read(song.dir);   // named: the loop must not outlive it
+        for (auto &c : data["comments"]) {
+            json n = review::normalize(c);
+            n["now"] = review::status(song, c);
+            out["comments"].push_back(n);
+        }
+        return out;
     };
     http_.Get("/api/review", [&](const httplib::Request &req, httplib::Response &res) {
         std::string s;
         if (!slugOf(req, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
-        sendJson(res, readReview(songDir(s) / "review.json"));
+        sendJson(res, reviewView(s));
     });
     http_.Post("/api/review", [&](const httplib::Request &req, httplib::Response &res) {
         std::string s;
@@ -589,19 +602,22 @@ int Server::run() {
         json in;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
         std::lock_guard<std::mutex> lock(mu_);
-        const fs::path path = songDir(s) / "review.json";
-        json data = readReview(path);
+        json data = review::read(songDir(s));
         const std::string op = in.value("op", std::string());
         if (op == "add") {
             std::string text = in.value("text", std::string());
             if (text.find_first_not_of(" \n\t") == std::string::npos) return sendJson(res, {{"error", "empty comment"}}, 400);
             const auto now = std::chrono::system_clock::now();
             const std::time_t tt = std::chrono::system_clock::to_time_t(now);
-            char stamp[32], idb[32];
-            std::strftime(stamp, sizeof stamp, "%Y-%m-%dT%H:%M:%S%z", std::localtime(&tt));
+            char idb[32];
             std::strftime(idb, sizeof idb, "c%y%m%d%H%M%S", std::localtime(&tt));
-            json c = {{"id", std::string(idb) + fnv(text + stamp).substr(0, 3)}, {"created", stamp}, {"status", "open"}, {"text", text.substr(0, 4000)}};
-            for (const char *k : {"ref", "bars", "beats", "time", "tracks", "notes", "render"}) if (in.contains(k)) c[k] = in[k];
+            const std::string stamp = nowRfc3339();
+            // the anchor keeps what was heard: the render's revision and report, the bars, time and tracks picked
+            Song song;
+            std::string serr;
+            if (!openSong(songDir(s).string(), song, serr)) { song = Song{}; song.dir = songDir(s); }
+            json c = {{"id", std::string(idb) + fnv(text + stamp).substr(0, 3)}, {"created", stamp}, {"author", actor()}, {"status", "open"},
+                      {"text", text.substr(0, 4000)}, {"anchor", review::anchorFor(song, in, in.value("report", std::string()))}};
             data["comments"].push_back(c);
         } else if (op == "status" || op == "delete") {
             json kept = json::array();
@@ -614,8 +630,9 @@ int Server::run() {
             }
             data["comments"] = kept;
         } else return sendJson(res, {{"error", "unknown op"}}, 400);
-        std::ofstream(path) << data.dump(4) << "\n";
-        sendJson(res, data);
+        std::string werr;
+        if (!review::write(songDir(s), data, werr)) return sendJson(res, {{"error", werr}}, 500);
+        sendJson(res, reviewView(s));
     });
 
     // previews: POST {song, tracks: [...], from: bar, to: bar} starts one (or returns the cached one)

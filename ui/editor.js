@@ -287,8 +287,8 @@
 		}
 		// comment pins
 		E.comments.forEach(c => {
-			if (!c.beats) return;
-			const x = X(c.beats[0]);
+			if (!c.anchor?.beats) return;
+			const x = X(c.anchor.beats[0]);
 			if (x < HEAD - 6 || x > w + 6) return;
 			g.fillStyle = c.status === 'done' ? muted : accent;
 			g.beginPath(); g.moveTo(x, RULER - 2); g.lineTo(x - 5, 4); g.lineTo(x + 5, 4); g.closePath(); g.fill();
@@ -465,7 +465,7 @@
 			const bar = barOf(beatAt(p.x)), row = E.harmony?.bars?.find(b => b.bar === bar);
 			const probs = (E.harmony?.problems || []).filter(q => bar >= q.bars[0] && bar <= q.bars[1]);
 			const rubs = (E.harmony?.rubs || []).filter(q => q.bars.includes(bar));
-			const cs = E.comments.filter(c => c.bars && bar >= c.bars[0] && bar <= c.bars[1]);
+			const cs = E.comments.filter(c => c.anchor?.bars && bar >= c.anchor.bars[0] && bar <= c.anchor.bars[1]);
 			html = `bar ${bar} · ${fmtTime(E.data.toSec((bar - 1) * E.data.bpb))}${row ? ' · ' + esc(row.chord) + (row.key ? ' in ' + esc(row.key) : '') : ''}`
 				+ probs.map(q => '<br>⚠ ' + esc(q.detail.split(':')[0])).join('')
 				+ rubs.map(q => '<br>rub: ' + esc(q.tracks.join(' / ')) + ' ' + esc(q.example)).join('')
@@ -574,7 +574,7 @@
 		const text = $d('#ed-text').value.trim();
 		if (!text) { $d('#ed-text').focus(); return; }
 		const r = reference();
-		const body = { op: 'add', text, ref: r.ref || 'whole song', render: state.song.reportPath ? state.files[state.song.reportPath]?.[1] : null };
+		const body = { op: 'add', text, ref: r.ref || 'whole song', report: state.song.reportPath || '' };   // the render being heard
 		for (const k of ['bars', 'beats', 'time', 'tracks', 'notes']) if (r[k]) body[k] = r[k];
 		const res = await post(body);
 		if (res?.comments) { E.comments = res.comments; $d('#ed-text').value = ''; renderComments(); badge(); dirty(); }
@@ -597,13 +597,13 @@
 	}
 	function renderComments() {
 		if (!dlg) return;
-		const list = [...E.comments].sort((a, b) => (a.status === 'done') - (b.status === 'done') || (a.beats?.[0] ?? 0) - (b.beats?.[0] ?? 0));
+		const list = [...E.comments].sort((a, b) => (a.status === 'done') - (b.status === 'done') || (a.anchor?.beats?.[0] ?? 0) - (b.anchor?.beats?.[0] ?? 0));
 		const open = E.comments.filter(c => c.status !== 'done').length;
 		$d('#ed-count').textContent = E.comments.length ? `${open} open · ${E.comments.length - open} done` : '';
 		$d('#ed-list').innerHTML = list.map(c => `
 			<div class="ed-c ${c.status === 'done' ? 'done' : ''}" data-id="${esc(c.id)}">
-				<div class="ref">${esc(c.ref || 'whole song')}</div>
-				<p>${esc(c.text)}</p>${c.reply ? `<p style="border-left:2px solid var(--accent-2);padding-left:8px;color:var(--muted);font-size:12.5px">Agent: ${esc(c.reply)}</p>` : ''}
+				<div class="ref">${esc(c.anchor?.ref || 'whole song')}${c.anchor?.revision ? ` · r${esc(String(c.anchor.revision))}` : ''}${c.status !== 'done' && c.now?.outdated ? ` <span class="ed-changed" title="${esc((c.now.why || []).join('\n'))}">changed since</span>` : ''}</div>
+				<p>${esc(c.text)}</p>${(c.replies || []).map(rp => `<p class="ed-reply">${esc(rp.author?.name || 'Agent')}${rp.revision ? ` (r${esc(String(rp.revision))})` : ''}: ${esc(rp.text)}</p>`).join('')}
 				<div class="meta"><span>${new Date(c.created).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span><span class="sp"></span>
 					<button data-act="status">${c.status === 'done' ? 'Reopen' : 'Mark done'}</button><button data-act="delete">Delete</button></div>
 			</div>`).join('') || '<div class="ed-empty">No comments yet. Select something, write what should change, save.</div>';
