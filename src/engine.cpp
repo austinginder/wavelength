@@ -51,10 +51,15 @@ bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string 
         // not in the plugin's own library: a preset file in its preset folders, a cartridge voice, NKS
         files = filePresets(info);
         std::string fileErr;
-        if (!findPreset(files, q, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
+        // a factory preset the plugin lists but will not select ("Basses / Attacky" in Surge 1.x's Audio
+        // Unit) is often also a patch file ("Basses/Attacky")
+        std::string fq = q;
+        if (pluginErr.find(" did not load preset") != std::string::npos)
+            for (size_t i; (i = fq.find(" / ")) != std::string::npos;) fq.replace(i, 3, "/");
+        if (!findPreset(files, fq, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
             nksPresets(info, true);
             files = filePresets(info);
-            if (files.empty() || !findPreset(files, q, hit, fileErr)) {
+            if (files.empty() || !findPreset(files, fq, hit, fileErr)) {
                 // the plugin's own library had the name but would not load it: that is the error that matters
                 const bool known = pluginErr.find(" did not load preset") != std::string::npos;
                 err = files.empty() || known ? pluginErr : fileErr;

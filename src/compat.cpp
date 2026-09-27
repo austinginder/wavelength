@@ -26,7 +26,7 @@ namespace wl {
 namespace {
 
 constexpr double kLength = 3.0, kOn = 0.5, kLen = 1.0;
-constexpr int kTestVersion = 3;   // bump when the tests change: cached results of older tests are run again
+constexpr int kTestVersion = 4;   // bump when the tests change: cached results of older tests are run again
 
 double since(std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); }
 
@@ -34,7 +34,7 @@ bool isInstrument(const PluginInfo &p) { return std::find(p.features.begin(), p.
 
 // one render of the test: a C2-C5 chord for instruments (or the same notes one after another: some
 // instruments give keys other jobs, Microtonic's Audio Unit mutes on C3), a noise burst through effects
-struct Take { bool ok = false, silent = true, garbage = false; double lufs = -120, peakDb = -120, centroid = 0, ms = 0; double bands[6] = {}; std::string error; Audio audio; };
+struct Take { bool ok = false, silent = true, garbage = false; double lufs = -120, peakDb = -120, centroid = 0, ms = 0, midDb = -120, sideDb = -120; double bands[6] = {}; std::string error; Audio audio; };
 
 Take renderTest(OpenedPlugin &p, bool instrument, double warmup, const Audio &noise, bool arpeggio = false) {
     Take t;
@@ -64,6 +64,15 @@ Take renderTest(OpenedPlugin &p, bool instrument, double warmup, const Audio &no
     t.peakDb = a.peakDb;
     t.centroid = a.centroidHz;
     for (int i = 0; i < 6; ++i) t.bands[i] = a.bandsDb[i];
+    double mid = 0, side = 0;   // the stereo image: a panner's preset may change nothing else
+    for (size_t i = 0; i < t.audio.frames(); ++i) {
+        const double m = 0.5 * (t.audio.left[i] + t.audio.right[i]), d = 0.5 * (t.audio.left[i] - t.audio.right[i]);
+        mid += m * m;
+        side += d * d;
+    }
+    const double frames = (double)std::max<size_t>(1, t.audio.frames());
+    t.midDb = 10 * std::log10(mid / frames + 1e-12);
+    t.sideDb = 10 * std::log10(side / frames + 1e-12);
     return t;
 }
 
@@ -74,6 +83,7 @@ bool soundsDifferent(const Take &a, const Take &b) {
     if (std::fabs(a.lufs - b.lufs) > 0.5) return true;
     if (a.centroid > 0 && b.centroid > 0 && std::fabs(std::log(a.centroid / b.centroid)) > 0.05) return true;
     for (int i = 0; i < 6; ++i) if (a.bands[i] > -60 && std::fabs(a.bands[i] - b.bands[i]) > 1.5) return true;
+    if (std::max(a.sideDb, b.sideDb) > -80 && std::fabs((a.sideDb - a.midDb) - (b.sideDb - b.midDb)) > 3) return true;   // wider, narrower
     return false;
 }
 
@@ -97,6 +107,28 @@ long long bundleTime(const PluginInfo &p) { return p.bundlePath.empty() ? 0 : bu
 std::string specOf(const PluginInfo &p) { return p.format + ":" + p.id; }
 
 // Turn a worker's step lines into a record with a status and its issues
+// A Maize Sampler player (HERA-ONE, Subs) keeps its sounds in an .instruments folder its settings name:
+// when that folder is gone the plugin plays nothing. Returns the missing folder, or "".
+std::string missingMaizeContent(const PluginInfo &info) {
+    const char *appdata = std::getenv("APPDATA");
+    for (const fs::path &settings : {platform::homeDir() / "Library/Application Support/Maize Sampler Player/pluginsettings.xml",
+                                     fs::path(appdata ? appdata : "") / "Maize Sampler Player/pluginsettings.xml"}) {
+        std::ifstream in(settings);
+        if (!in) continue;
+        const std::string xml((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::string key = "name=\"" + info.vendor + ":" + info.name + ".instruments\" val=\"";
+        std::string lower = xml, lkey = key;
+        for (auto *t : {&lower, &lkey}) std::transform(t->begin(), t->end(), t->begin(), ::tolower);
+        const size_t at = lower.find(lkey);
+        if (at == std::string::npos) continue;
+        std::string path = xml.substr(at + key.size(), xml.find('"', at + key.size()) - (at + key.size()));
+        for (size_t i; (i = path.find("&amp;")) != std::string::npos;) path.replace(i, 5, "&");
+        std::error_code ec;
+        if (!path.empty() && !fs::exists(path, ec)) return path;
+    }
+    return "";
+}
+
 json summarize(const PluginInfo &info, const std::vector<json> &steps, const std::string &ended) {
     json rec = {{"name", info.name}, {"format", info.format}, {"id", info.id}, {"vendor", info.vendor}, {"version", info.version},
                 {"arch", info.arch}, {"instrument", isInstrument(info)}};
@@ -123,8 +155,12 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
             else if (s.value("garbage", false)) fails.push_back("outputs garbage (NaN or far over 0 dBFS)");
             else if (s.value("silent", false)) {
                 const bool inst = rec["instrument"].get<bool>(), empty = rec.value("presets", 0) == 0;
-                if (!inst) warns.push_back("outputs silence from a noise input");
-                else if (empty) warns.push_back("renders silence at its defaults and lists no presets (a sample player waiting for an instrument?)");
+                if (!inst) (presetSounds ? notes : warns).push_back(presetSounds ? "silent at its defaults; its presets pass audio" : "outputs silence from a noise input");
+                else if (empty) {
+                    const std::string gone = missingMaizeContent(info);
+                    warns.push_back(gone.empty() ? "renders silence at its defaults and lists no presets (a sample player waiting for an instrument?)"
+                                                 : "renders silence: its sounds are missing (Maize Sampler's settings point at " + gone + ", which is gone)");
+                }
                 else if (presetSounds) notes.push_back("silent at its defaults; its presets play");
                 else fails.push_back("renders silence (a C2-C5 chord, a 5 s warm-up, the notes one at a time), and so do the presets tried");
             }
@@ -142,8 +178,9 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
                 std::transform(l.begin(), l.end(), l.begin(), ::tolower);
                 const bool initial = l.find("init") != std::string::npos || l.find("default") != std::string::npos || l == "basic" || l == "empty";
                 const bool program = s.value("source", "") == "program";   // often the program the plugin starts with
-                (initial || program ? notes : warns).push_back("preset '" + n + "' changes neither parameters nor sound" +
-                                                               (initial ? " (an init preset)" : program ? " (a program: perhaps the one it starts with)" : ""));
+                const bool tool = std::find(info.features.begin(), info.features.end(), "tools") != info.features.end();   // analyzers: views, not sound
+                (initial || program || tool ? notes : warns).push_back("preset '" + n + "' changes neither parameters nor sound" +
+                    (initial ? " (an init preset)" : program ? " (a program: perhaps the one it starts with)" : tool ? " (a tool: its presets may set only its display)" : ""));
             }
         } else if (step == "state") {
             rec["state"] = s;
@@ -220,7 +257,7 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
                 for (auto &v : j["values"]) { ParamInfo pi{}; pi.id = v[0]; pi.value = v[1]; pi.min = 0; pi.max = v[2]; params0.push_back(pi); }
             if (j.value("step", "") == "render") {
                 base.ok = j.value("ok", false); base.silent = j.value("silent", true); base.lufs = j.value("lufs", -120.0);
-                base.centroid = j.value("centroid", 0.0); warmedUp = j.value("warmedUp", false);
+                base.centroid = j.value("centroid", 0.0); base.midDb = j.value("midDb", -120.0); base.sideDb = j.value("sideDb", -120.0); warmedUp = j.value("warmedUp", false);
                 arpeggio = j.value("arpeggio", false);
                 if (j.contains("bands")) for (int b = 0; b < 6; ++b) base.bands[b] = j["bands"][b];
             }
@@ -263,7 +300,8 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
         json r = {{"step", "render"}, {"ok", base.ok}, {"error", base.error}, {"silent", base.silent}, {"garbage", base.garbage},
                   {"lufs", std::round(base.lufs * 10) / 10}, {"peakDb", std::round(base.peakDb * 10) / 10}, {"ms", std::round(base.ms)},
                   {"realtime", std::round(std::max(0.0, base.ms - warm * 1000) / 1000 / kLength * 100) / 100}, {"warmedUp", warmedUp},
-                  {"arpeggio", arpeggio}, {"centroid", std::round(base.centroid)}, {"bands", bands}};
+                  {"arpeggio", arpeggio}, {"centroid", std::round(base.centroid)}, {"bands", bands},
+                  {"midDb", std::round(base.midDb * 10) / 10}, {"sideDb", std::round(base.sideDb * 10) / 10}};
         if (!instrument && base.ok) r["passthrough"] = sameAudio(base.audio, noise);
         emit(r);
 
