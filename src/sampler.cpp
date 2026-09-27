@@ -128,7 +128,8 @@ struct Zone {
     int selLow = 0, selHigh = 127;
     double start = 0, stop = -1;             // frames; stop < 0 = end of file
     enum Loop { Off, Always, Sustain } loop = Off;
-    double loopStart = 0, loopStop = 0, loopFade = 0;
+    double loopStart = 0, loopStop = 0, loopFade = 0;   // loopFade: share of the loop (multisample)
+    double loopFadeSec = 0;                             // SFZ loop_crossfade, seconds
     bool reverse = false, roundRobin = false;
     double pan = 0;                          // kit map entries only
     double startSec = 0;                     // extra start offset (sampler "start"), seconds
@@ -137,6 +138,8 @@ struct Zone {
     bool loopFromFile = false;               // loop on the file's own loop points (WAV smpl) when it has them
     bool oneShot = false;                    // plays to the end whatever the note length
     double velTrack = 1;                     // amp_veltrack / 100
+    std::vector<std::pair<int, double>> velCurve;   // amp_velcurve_N points (velocity, gain 0..1); replaces velTrack
+    double ampKeyTrackDb = 0; int ampKeyCenter = 60;   // amp_keytrack (dB per key from amp_keycenter)
     double attack = -1, hold = 0, decay = 0, sustain = 1, release = -1;   // ampeg_*; < 0 = the sampler's
     int sw = -1;                             // keyswitch that selects this zone (sw_last), -1 = always
     int seq = 0;                             // round-robin order (seq_position, lorand)
@@ -203,7 +206,7 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
               std::vector<std::string> &warnings, std::string &err) {
     static const std::set<std::string> handled = {
         "sample", "lokey", "hikey", "pitch_keycenter", "pitch_keytrack", "lovel", "hivel", "tune", "transpose",
-        "volume", "amplitude", "pan", "offset", "end", "loop_mode", "loop_start", "loop_end", "trigger",
+        "volume", "amplitude", "pan", "offset", "end", "loop_mode", "loop_start", "loop_end", "loop_crossfade", "trigger", "amp_keytrack", "amp_keycenter",
         "xfin_lovel", "xfin_hivel", "xfout_lovel", "xfout_hivel", "amp_veltrack", "ampeg_attack", "ampeg_hold",
         "ampeg_decay", "ampeg_sustain", "ampeg_release", "seq_length", "seq_position", "lorand", "hirand",
         "sw_lokey", "sw_hikey", "sw_last", "sw_default", "group", "off_by", "direction", "note_polyphony",
@@ -270,6 +273,7 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         if (file[0] == '*') { z.loop = Zone::Always; z.loopFromFile = true; }   // a generator is one cycle: it always loops
         else if (mode == "loop_continuous" || mode == "loop_sustain" || (mode.empty() && hasPoints)) {
             z.loop = mode == "loop_sustain" ? Zone::Sustain : Zone::Always;
+            z.loopFadeSec = std::max(0.0, r.num("loop_crossfade", 0));
             if (hasPoints) { z.loopStart = r.num("loop_start", 0); z.loopStop = r.num("loop_end", 0) + 1; }
             else z.loopFromFile = true;
         } else if (mode.empty()) {   // SFZ: loops that the file defines play unless told otherwise
@@ -277,6 +281,15 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
             z.loopFromFile = true;
         }
         z.velTrack = r.num("amp_veltrack", 100) / 100;
+        for (auto &[k, v] : r.op)
+            if (k.rfind("amp_velcurve_", 0) == 0) z.velCurve.push_back({std::clamp(std::atoi(k.c_str() + 13), 0, 127), std::clamp(std::atof(v.c_str()), 0.0, 1.0)});
+        if (!z.velCurve.empty()) {   // the curve runs from 0 at velocity 0 to 1 at 127 unless its points say otherwise
+            std::sort(z.velCurve.begin(), z.velCurve.end());
+            if (z.velCurve.front().first > 0) z.velCurve.insert(z.velCurve.begin(), {0, 0.0});
+            if (z.velCurve.back().first < 127) z.velCurve.push_back({127, 1.0});
+        }
+        z.ampKeyTrackDb = r.num("amp_keytrack", 0);
+        z.ampKeyCenter = r.key("amp_keycenter", 60);
         if (r.has("ampeg_attack")) z.attack = r.num("ampeg_attack", 0);
         if (r.has("ampeg_release")) z.release = r.num("ampeg_release", 0);
         z.hold = r.num("ampeg_hold", 0);
@@ -551,7 +564,7 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
     if (z.loopFromFile && s.loopEnd > s.loopStart && s.loopStart >= 0) { loopStart = s.loopStart; loopStop = s.loopEnd; }
     const double loopLen = loopStop - loopStart;
     const bool canLoop = z.loop != Zone::Off && loopLen > 16 && loopStop <= stop && !z.reverse;
-    const double fadeLen = canLoop ? std::min(z.loopFade * loopLen, loopStart) : 0;
+    const double fadeLen = canLoop ? std::min(std::min(std::max(z.loopFade * loopLen, z.loopFadeSec * s.rate), loopLen * 0.5), loopStart) : 0;
     dsp::Biquad fl, fr;
     const bool filtered = z.filter && v.cutoffHz > 0;
     const auto ftype = z.filter == 2 ? dsp::Biquad::HighPass : z.filter == 3 ? dsp::Biquad::BandPass : dsp::Biquad::LowPass;
@@ -740,6 +753,17 @@ std::vector<std::string> sampleRoots() {
     roots.insert(roots.end(), versions.begin(), versions.end());
     const fs::path userLib = fs::path(home()) / "Documents/Bitwig Studio/Library";
     if (fs::exists(userLib, ec)) roots.push_back(userLib.string());
+    // Serum 2's multisamples are plain SFZ instruments (FLAC samples beside them)
+#if defined(__APPLE__)
+    for (const fs::path &dir : {fs::path("/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Multisamples"),
+                                fs::path(home()) / "Library/Audio/Presets/Xfer Records/Serum 2 Presets/Multisamples"})
+#elif defined(_WIN32)
+    for (const fs::path &dir : {fs::path(getenv("PUBLIC") ? getenv("PUBLIC") : "C:\\Users\\Public") / "Documents/Xfer/Serum 2 Presets/Multisamples",
+                                fs::path(home()) / "Documents/Xfer/Serum 2 Presets/Multisamples"})
+#else
+    for (const fs::path &dir : std::vector<fs::path>{})
+#endif
+        if (fs::is_directory(dir, ec)) roots.push_back(dir.string());
     return roots;
 }
 
@@ -751,6 +775,7 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
         for (auto &root : sampleRoots()) {
             std::error_code ec;
             std::map<std::string, std::vector<std::string>> dirWavs;
+            std::set<std::string> sfzSampleDirs;   // folders an SFZ plays from: its samples, not a kit of their own
             for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
                  it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 if (ec) break;
@@ -783,11 +808,24 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                     SampleLibraryEntry e{"sfz", p.stem().string(), p.string(), p.parent_path().filename().string(), 0};
                     for (size_t q = 0; (q = text.find("<region>", q)) != std::string::npos; ++q) ++e.count;
                     lib.push_back(e);
+                    for (const char *op : {"default_path=", "sample="})
+                        for (size_t q = 0; (q = text.find(op, q)) != std::string::npos; ++q) {
+                            std::string v = text.substr(q + std::strlen(op), text.find_first_of("\r\n", q) - q - std::strlen(op));
+                            std::replace(v.begin(), v.end(), '\\', '/');
+                            if (op[0] == 'd') { while (!v.empty() && (v.back() == ' ' || v.back() == '/')) v.pop_back(); v += '/'; }   // default_path is the folder
+                            const size_t slash = v.rfind('/');
+                            if (slash == std::string::npos) continue;
+                            std::error_code ec2;
+                            const fs::path dir = fs::weakly_canonical(p.parent_path() / v.substr(0, slash), ec2);
+                            if (!ec2) sfzSampleDirs.insert(dir.string());
+                        }
                 } else if (isAudioFileName(p.string())) {
                     dirWavs[p.parent_path().string()].push_back(p.string());
                 }
             }
             for (auto &[dir, wavs] : dirWavs) {
+                std::error_code ec2;
+                if (sfzSampleDirs.count(fs::weakly_canonical(dir, ec2).string())) continue;
                 std::sort(wavs.begin(), wavs.end());
                 size_t loops = 0;
                 for (auto &w : wavs) loops += looksLikeLoop(w);
@@ -1151,7 +1189,20 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             double w = 1;
             if (z->velLowFade > 0 && vel127 < z->velLow + z->velLowFade) w *= (vel127 - z->velLow + 1.0) / (z->velLowFade + 1.0);
             if (z->velHighFade > 0 && vel127 > z->velHigh - z->velHighFade) w *= (z->velHigh - vel127 + 1.0) / (z->velHighFade + 1.0);
-            v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velDb * z->velTrack + extraDb) / 20);
+            double velGainDb = velDb * z->velTrack;
+            if (!z->velCurve.empty()) {   // SFZ amp_velcurve: linear gain at this velocity, scaled by the track's sensitivity
+                const auto &c = z->velCurve;
+                double g = c.back().second;
+                for (size_t k = 1; k < c.size(); ++k)
+                    if (vel127 <= c[k].first) {
+                        const double span = std::max(1, c[k].first - c[k - 1].first);
+                        g = c[k - 1].second + (c[k].second - c[k - 1].second) * (vel127 - c[k - 1].first) / span;
+                        break;
+                    }
+                velGainDb = velSens * 20 * std::log10(std::max(g, 1e-4));
+            }
+            velGainDb += z->ampKeyTrackDb * (n.key - z->ampKeyCenter);
+            v.amp = w * std::pow(10.0, (z->gainDb + gainDb + velGainDb + extraDb) / 20);
             v.key = keyAt;
             v.semisOffset = z->tune + transpose + tempoSemis;
             v.startFrame = (size_t)std::llround((from + z->delay) * sr);

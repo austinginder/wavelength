@@ -15,7 +15,7 @@
 //               explicit {"key": "file"} map.
 //  sample       one sample played chromatically from a root key.
 //
-// Names are searched in $WAVELENGTH_SAMPLES_PATH and the Bitwig Studio package folders.
+// Names are searched in $WAVELENGTH_SAMPLES_PATH, the Bitwig Studio package folders and Serum 2's Multisamples.
 #include "job.hpp"
 #include "wav.hpp"
 
