@@ -4,6 +4,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- The plugin scan finds VST3 bundles installed into a VST 2 folder, and no longer looks inside other formats' bundles. A plugin that ends the scan process while loading (V-Pan) gets an error that says so instead of a JSON parse error.
+
 ## [0.4.0] - 2026-09-27
 
 Highlights: agents can see what they render (`render --png`, mix checks that name a problem and its fix) and work on a machine with no plugins (`builtin:synth`, `wavelength kit`, track `fallback`s with `fallbacks --suggest`); `wavelength mcp`, the docs built into the binary and a Claude Code plugin; an open song format with revisions, undo, a musical diff, comments pinned to what was heard and `.wavelength` files to share; `render --loop` for games; Bitwig projects import without an export; `wavelength upgrade` to update itself; and help, colour, tables and a progress line for people at a terminal (pipes and `--json` stay plain).

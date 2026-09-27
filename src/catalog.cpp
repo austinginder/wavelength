@@ -44,7 +44,8 @@ std::string lower(std::string s) {
 
 std::vector<std::string> envPaths(const char *var) { return platform::envPathList(var); }
 
-// bundles are directories: collect them without descending into their contents
+// bundles are directories: collect them without descending into their contents (nor into
+// another format's bundles: a .vst3 left in the VST folder is found, a .vst bundle's insides are skipped)
 std::vector<fs::path> findBundles(const std::string &dir, const char *ext) {
     std::vector<fs::path> bundles;
     std::error_code ec;
@@ -52,7 +53,9 @@ std::vector<fs::path> findBundles(const std::string &dir, const char *ext) {
     for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) break;
-        if (it->path().extension() == ext) { bundles.push_back(it->path()); it.disable_recursion_pending(); }
+        const std::string e = it->path().extension().string();
+        if (e == ext) { bundles.push_back(it->path()); it.disable_recursion_pending(); }
+        else if (e == ".vst" || e == ".vst3" || e == ".clap" || e == ".component") it.disable_recursion_pending();
     }
     std::sort(bundles.begin(), bundles.end());
     return bundles;
@@ -84,6 +87,10 @@ bool scanInChild(const char *command, const std::string &bundle, std::vector<Plu
     while (!platform::finished(proc, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (timedOut) { err = "timed out loading " + bundle; return false; }
     if (!crash.empty()) { err = "crashed while loading " + bundle + " (" + crash + ")"; return false; }
+    if (output.find_first_not_of(" \t\r\n") == std::string::npos) {   // e.g. V-Pan calls exit() while its module loads
+        err = "the plugin ended the scan process without a result while loading " + bundle + " (it may need its installer, a licence or an authorisation)";
+        return false;
+    }
     try {
         const json j = json::parse(output);
         if (!j.value("ok", false)) { err = j.value("error", "scan failed"); return false; }
@@ -222,6 +229,10 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     const char *vst2Ext = ".so";
 #endif
     for (const auto &dir : vst2SearchPaths()) for (const auto &b : findBundles(dir, vst2Ext)) childScanned.push_back(b);
+    // VST3 bundles installed into a VST 2 folder by mistake (installers and people do it) still load
+    for (const auto &dir : vst2SearchPaths()) for (const auto &b : findBundles(dir, ".vst3")) childScanned.push_back(b);
+    std::sort(childScanned.begin(), childScanned.end());
+    childScanned.erase(std::unique(childScanned.begin(), childScanned.end()), childScanned.end());
     for (const auto &b : childScanned) {
             const std::string key = b.string();
             const long long mt = mtimeOf(b);
