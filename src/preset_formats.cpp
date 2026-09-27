@@ -929,7 +929,7 @@ bool obxdBankXml(const std::vector<uint8_t> &fxb, std::string &xml) {
     if (168 + (size_t)n > fxb.size()) return false;
     xml.assign(fxb.begin() + 168, fxb.begin() + 168 + n);
     while (!xml.empty() && xml.back() == 0) xml.pop_back();
-    return xml.find("<discoDSP") != std::string::npos;
+    return obxdRoot(xml) != std::string::npos;
 }
 std::string xmlUnescape(std::string s) {
     for (const auto &[from, to] : std::vector<std::pair<std::string, std::string>>{{"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&amp;", "&"}})
@@ -956,7 +956,7 @@ std::vector<std::string> obxdBankPrograms(const std::vector<uint8_t> &fxb) {
 bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err) {
     std::string xml;
     if (!obxdBankXml(fxb, xml)) { err = "is not an OB-Xd bank"; return false; }
-    const size_t root = xml.find("<discoDSP");
+    const size_t root = obxdRoot(xml);
     const size_t cp = xml.find("currentProgram=\"", root);
     if (cp == std::string::npos || cp > xml.find('>', root)) { err = "OB-Xd bank without a current program"; return false; }
     const size_t v = cp + 16;
@@ -966,3 +966,8 @@ bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uin
 }
 
 } // namespace wl
+// the root element of an OB-Xd bank: <discoDSP>, or <Datsounds> in banks saved by the original 2DaT Obxd
+size_t obxdRoot(const std::string &xml) {
+    const size_t a = xml.find("<discoDSP"), b = xml.find("<Datsounds");
+    return std::min(a, b);
+}

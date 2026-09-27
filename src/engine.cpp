@@ -29,22 +29,33 @@ bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err) {
 
 bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,
                       std::string &stateFormat, std::string &err, std::vector<std::string> *warnings) {
-    std::string pluginErr;
-    if (plugin.loadPreset(query, loadedName, pluginErr)) return true;
-    // not in the plugin's own library: a preset file in its preset folders, a cartridge voice, NKS
-    auto files = filePresets(info);
-    PresetInfo hit;
-    std::string fileErr, q = query, suffix;
+    std::string pluginErr, q = query, suffix;
     const size_t hash = query.rfind('#');   // "AC BD Back#3": a Microtonic drum on channel 3
     if (hash != std::string::npos && hash + 1 < query.size() && std::isdigit((unsigned char)query[hash + 1])) {
         q = query.substr(0, hash);
         suffix = query.substr(hash);
     }
-    if (!findPreset(files, q, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
-        nksPresets(info, true);
+    const auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), ::tolower); return s; };
+    PresetInfo hit;
+    std::vector<PresetInfo> files;
+    if (plugin.loadPreset(query, loadedName, pluginErr)) {
+        if (lower(loadedName) == lower(query)) return true;
+        // the plugin's library matched only part of the name: a preset file with exactly that name wins
+        // ("Sawyer Bass" is a program in an OB-Xd bank, not the factory "Rush Sawyer Bass OB-Xd")
         files = filePresets(info);
+        const auto exact = std::find_if(files.begin(), files.end(), [&](const PresetInfo &p) { return lower(p.name) == lower(q); });
+        if (exact == files.end()) return true;
+        hit = *exact;
+    } else {
+        // not in the plugin's own library: a preset file in its preset folders, a cartridge voice, NKS
+        files = filePresets(info);
+        std::string fileErr;
+        if (!findPreset(files, q, hit, fileErr)) {   // maybe new NKS files: rebuild that index once
+            nksPresets(info, true);
+            files = filePresets(info);
+            if (files.empty() || !findPreset(files, q, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
+        }
     }
-    if (files.empty() || !findPreset(files, q, hit, fileErr)) { err = files.empty() ? pluginErr : fileErr; return false; }
     if (!suffix.empty()) hit.location += suffix;
     StateFile sf;
     if (!readStateFile(hit.location, "auto", sf, err) || !loadStateInto(plugin, sf, err)) return false;
