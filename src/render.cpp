@@ -961,7 +961,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         // the mix as mixed and keep the section contrast; "loudnessGain": "start" puts it before
         // everything. Limiters compress, so the output moves less than the input; a few passes converge.
         size_t split = 0;
-        auto typeAt = [&](size_t k) { return job.masterFx[k].is_object() ? job.masterFx[k].value("type", "") : std::string(); };
+        auto typeAt = [&](size_t k) { return k < job.masterFx.size() && job.masterFx[k].is_object() ? job.masterFx[k].value("type", "") : std::string(); };
         if (job.loudnessGain != "start")
             for (size_t k = 0; k < job.masterFx.size(); ++k)
                 if (typeAt(k) == "limiter") split = k;
