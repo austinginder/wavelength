@@ -39,6 +39,7 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | Odin2 and free sample sets in the kit (piano, orchestra, drums) | later | |
 | A notarized macOS binary | later | needs a Developer ID certificate |
 | Audio Unit hosting | later | |
+| Preset capture (`wavelength capture <plugin>`): open a plugin's own window and save each preset loaded there as a named state | idea | for presets that only load through the plugin's window. Kontakt library instruments need a state saved by a host: an `.nki` or a saved `.nkm` multi can't become one without decrypting it, and Komplete Kontrol restores the Kontakt state it embeds, not the preset path it records. Stepping through presets in Komplete Kontrol's window would capture a whole library, saved for Komplete Kontrol and for Kontakt. Needs plugin editor hosting, VST3 on macOS first |
 | SoundFont and SFZ LFOs (vibrato, tremolo) and pitch envelopes | later | |
 
 ## 3. Agents find it
