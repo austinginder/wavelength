@@ -37,6 +37,8 @@
 #include "vst3_plugin.hpp"
 #include "job.hpp"
 #include "picture.hpp"
+#include "docs.hpp"
+#include "mcp.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
 
@@ -155,6 +157,13 @@ Usage:
       curves, built-in eq/compressor/limiter as the standard devices. Built-in instruments are
       printed (rendered dry to audio on the track, notes kept; --no-print: notes only); lists what
       has no counterpart.
+  wavelength docs [agents | job-format | effects] [--section TEXT] [--json]
+      The docs that match this binary, built in: the operating guide for agents (read it first), the
+      job format and the effects reference. --section prints one part (a heading or part of one).
+  wavelength mcp
+      Runs a Model Context Protocol server on stdin/stdout for MCP clients (Claude Desktop, Claude Code,
+      Cursor): tools to read the guide, list instruments, presets, samples and parameters, lint, render
+      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject.
   wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
       Draws the arrangement before rendering: sections, bars and a lane per track with its notes
       (default: arrangement.png next to the job). render --png draws the full picture with levels.
@@ -1259,6 +1268,32 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
 }
 
 // ---- timeline: bars and markers -> song time, from the tempo map ------------------------------
+// wavelength docs [name] [--section TEXT]: the agent docs built into this binary
+int cmdDocs(const Args &a) {
+    if (a.positional.size() < 2) {
+        const auto docs = listDocs();
+        if (a.has("--json")) {
+            json list = json::array();
+            for (auto &d : docs) list.push_back({{"name", d.name}, {"title", d.title}, {"bytes", d.size}, {"sections", d.headings}});
+            emit(json{{"ok", true}, {"docs", list}}.dump(2));
+            return 0;
+        }
+        for (auto &d : docs) {
+            std::fprintf(OUT, "%-11s %s (%zu KB)\n", d.name.c_str(), d.title.c_str(), (d.size + 512) / 1024);
+            std::string heads;
+            for (auto &h : d.headings) heads += (heads.empty() ? "" : " | ") + h;
+            std::fprintf(OUT, "            %s\n", heads.c_str());
+        }
+        std::fprintf(OUT, "\nwavelength docs agents (the operating guide; read it in full first), docs job-format, docs effects; --section TEXT prints one section.\n");
+        return 0;
+    }
+    std::string text, err;
+    if (!docText(a.positional[1], a.get("--section"), text, err)) return fail(a, err);
+    if (a.has("--json")) emit(json{{"ok", true}, {"doc", a.positional[1]}, {"text", text}}.dump(2));
+    else std::fputs(text.c_str(), OUT);
+    return 0;
+}
+
 // wavelength picture job.json: the arrangement as an image before rendering (render --png draws the full one)
 int cmdPicture(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]");
@@ -1642,6 +1677,8 @@ int run(int argc, char **argv) {
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
             {"timeline", {"--every", "--json"}},
             {"picture", {"--out", "--width", "--json"}},
+            {"docs", {"--section", "--json"}},
+            {"mcp", {}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
         if (it != known.end())
@@ -1679,6 +1716,8 @@ int run(int argc, char **argv) {
         }
         if (cmd == "timeline") return cmdTimeline(a);
         if (cmd == "picture") return cmdPicture(a);
+        if (cmd == "docs") return cmdDocs(a);
+        if (cmd == "mcp") return runMcp(OUT);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {
         return fail(a, e.what());

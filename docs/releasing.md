@@ -4,7 +4,8 @@ Releases are cut by hand on a Mac; binaries are built locally, not in CI.
 
 1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` (add an empty
    `## [Unreleased]` above it).
-2. In `CMakeLists.txt`, set `project(... VERSION x.y.z)` and clear `WAVELENGTH_VERSION_SUFFIX`.
+2. In `CMakeLists.txt`, set `project(... VERSION x.y.z)` and clear `WAVELENGTH_VERSION_SUFFIX`;
+   set the same version in `.claude-plugin/plugin.json` (Claude Code updates plugins by it).
 3. `scripts/check.sh` must pass.
 4. Commit `🚀 RELEASE: vx.y.z`, tag `vx.y.z`, push the commit and the tag.
 5. `gh release create vx.y.z --title vx.y.z --notes-file <the version's changelog section>`.
@@ -20,7 +21,8 @@ Releases are cut by hand on a Mac; binaries are built locally, not in CI.
    Archive names carry no version, so `releases/latest/download/<name>` links always fetch the
    newest release. The build needs about 2 GB of free disk; each target's build folder is
    deleted after packaging. `--only <target>` rebuilds one target.
-7. Bump to the next `-dev` version (`VERSION` + `WAVELENGTH_VERSION_SUFFIX "-dev"`) and push.
+7. Bump to the next `-dev` version (`VERSION` + `WAVELENGTH_VERSION_SUFFIX "-dev"`, and
+   `.claude-plugin/plugin.json`) and push.
 
 The macOS binary is not notarized (there is no Developer ID certificate yet); the README tells
 browser downloads to clear the quarantine flag.

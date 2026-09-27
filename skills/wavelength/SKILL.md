@@ -28,7 +28,8 @@ docs describe exactly what this version can do. If a step below needs a command 
 the binary doesn't know, run the installer with `--update` (newest release) or `--source`
 (latest main), or do that step the way the docs you have describe.
 
-**Before writing anything, read `$WAVELENGTH_DOCS/AGENTS.md` in full.** It is the operating
+**Before writing anything, read `$WAVELENGTH_DOCS/AGENTS.md` in full** (engines from 0.4.0 carry the
+same docs inside: `"$WAVELENGTH" docs agents`, `docs job-format`, `docs effects`, `--section` for one part). It is the operating
 guide: choosing sounds, the mixing playbook, orchestral libraries, reading the report,
 mastering. `docs/job-format.md` and `docs/effects.md` are the reference; `examples/` has jobs
 that render.

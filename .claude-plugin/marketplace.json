@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "wavelength",
+  "description": "Wavelength, the headless music engine for AI agents",
+  "owner": {
+    "name": "Austin Ginder",
+    "url": "https://wavelength.run"
+  },
+  "plugins": [
+    {
+      "name": "wavelength",
+      "source": "./",
+      "description": "Compose, arrange, mix and master music through the synths installed on this computer (or Wavelength's built-in synth). A skill for the whole workflow and an MCP server whose renders come back with loudness reports and a picture of the song.",
+      "homepage": "https://wavelength.run",
+      "license": "MIT",
+      "category": "design"
+    }
+  ]
+}

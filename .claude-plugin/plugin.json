@@ -1,0 +1,19 @@
+{
+  "name": "wavelength",
+  "version": "0.4.0-dev",
+  "description": "Compose, arrange, mix and master music with Wavelength, the headless music engine for AI agents: JSON jobs rendered through the synths and sample libraries installed on this computer (or its built-in synth), with loudness reports and a picture of every render. A skill and an MCP server.",
+  "author": {
+    "name": "Austin Ginder",
+    "url": "https://wavelength.run"
+  },
+  "homepage": "https://wavelength.run",
+  "repository": "https://github.com/austinginder/wavelength",
+  "license": "MIT",
+  "keywords": ["music", "audio", "synthesizer", "clap", "vst3", "mixing", "mastering", "composition", "midi", "mcp"],
+  "mcpServers": {
+    "wavelength": {
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/skills/wavelength/scripts/mcp.sh"]
+    }
+  }
+}

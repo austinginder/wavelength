@@ -1,0 +1,21 @@
+# Turns the agent docs (AGENTS.md and docs/*.md) into a C++ source, so `wavelength docs` and the MCP
+# server carry the guide that matches the binary. Run by the build whenever one of them changes.
+# -DROOT=<repo> -DOUT=<file.cpp> -DDOCS="name=path,name=path"
+set(out "// generated from the docs by cmake/embed-docs.cmake; do not edit\n#include <cstddef>\nnamespace wl {\nstruct DocAsset { const char *name; const char *text; size_t size; };\n")
+set(table "")
+string(REPLACE "," ";" DOCS "${DOCS}")
+set(i 0)
+foreach(pair ${DOCS})
+  string(REPLACE "=" ";" parts "${pair}")
+  list(GET parts 0 name)
+  list(GET parts 1 path)
+  file(READ "${ROOT}/${path}" hex HEX)
+  string(LENGTH "${hex}" n)
+  math(EXPR size "${n} / 2")
+  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
+  string(APPEND out "static const unsigned char d${i}[] = {${bytes}0};\n")
+  string(APPEND table "  {\"${name}\", (const char *)d${i}, ${size}},\n")
+  math(EXPR i "${i} + 1")
+endforeach()
+string(APPEND out "extern const DocAsset kDocs[] = {\n${table}  {nullptr, nullptr, 0}};\nextern const size_t kDocCount = ${i};\n} // namespace wl\n")
+file(WRITE "${OUT}" "${out}")

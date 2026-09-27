@@ -27,6 +27,17 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   at its hits: duck it or split the range), a track wide below 120 Hz that carries a real share of the low
   end, a track out of phase (left/right correlation below -0.1), and 32 bars or more where every track
   repeats the same 1-8 bar block with no automation moving. Window renders skip them.
+- `wavelength mcp`: a Model Context Protocol server on stdin/stdout for Claude Desktop, Claude Code,
+  Cursor and other MCP clients. Tools: `guide` (the built-in docs), `list_instruments`, `list_presets`,
+  `list_samples`, `plugin_params`, `lint`, `render` (the report's summary, warnings and the song picture
+  as an image), `picture`, `analyze`, `timeline` and `import`. Each tool runs the engine in a child
+  process, so a crashing plugin never takes the server down; long renders send progress and can be
+  cancelled.
+- `wavelength docs [agents | job-format | effects] [--section TEXT]`: the operating guide and the
+  references, built into the binary so they always match it.
+- The repository is a Claude Code plugin marketplace: `/plugin marketplace add austinginder/wavelength`,
+  then `/plugin install wavelength@wavelength` installs the skill and the MCP server (whose launcher
+  installs the engine on first use).
 - `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 

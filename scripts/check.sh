@@ -159,6 +159,30 @@ sys.exit(0 if struct.unpack(">II", d[16:24]) == (1000, p["height"]) and p["heigh
 else
   echo "ok   picture: render --png and the arrangement picture"
 fi
+# mcp: initialize, the tool list, the built-in guide, and a render that answers with its summary and picture
+if python3 - "./$build/wavelength" "out/check/mcp/$build" <<'PY'
+import base64, json, subprocess, sys
+p = subprocess.Popen([sys.argv[1], "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+def call(i, method, params):
+    p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n"); p.stdin.flush()
+    while True:
+        m = json.loads(p.stdout.readline())
+        if m.get("id") == i: return m
+init = call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "check", "version": "1"}})["result"]
+names = [t["name"] for t in call(2, "tools/list", {})["result"]["tools"]]
+guide = call(3, "tools/call", {"name": "guide", "arguments": {"section": "The loop"}})["result"]
+r = call(4, "tools/call", {"name": "render", "arguments": {"job": "examples/sfz-tour.json", "out": sys.argv[2]}})["result"]
+png = base64.b64decode(r["content"][1]["data"])[:8]
+p.stdin.close(); p.wait(timeout=10)
+ok = (init["protocolVersion"] == "2025-06-18" and {"guide", "render", "list_presets"} <= set(names) and "## The loop" in guide["content"][0]["text"]
+      and not r["isError"] and r["content"][0]["text"].startswith("ok") and png == b"\x89PNG\r\n\x1a\n")
+sys.exit(0 if ok else 1)
+PY
+then
+  echo "ok   mcp: initialize, tools, guide, render with picture"
+else
+  echo "FAIL mcp"; fail=1
+fi
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
 "./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
 spid=$!

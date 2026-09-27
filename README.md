@@ -64,6 +64,30 @@ https://wavelength.run
 - **Measure:** BS.1770 loudness per track, bus, marker section and mix (it matches
   `ffmpeg -af ebur128`), per-track loudness per section, true peak and per-track render time.
 
+## Use it from an agent
+
+**Claude Code plugin** (a skill for the whole workflow plus the MCP server; the engine installs itself
+on first use):
+
+```
+/plugin marketplace add austinginder/wavelength
+/plugin install wavelength@wavelength
+```
+
+**Agent skill** for Claude Code, Codex, Cursor, Gemini CLI and other agents that read `SKILL.md`:
+`npx skills add austinginder/wavelength`, or copy `skills/wavelength/` into your agent's skills folder
+(`~/.claude/skills/` for Claude Code). It installs the engine (release build, else from source) and
+walks the agent through writing, mixing and mastering a song.
+
+**MCP server** for Claude Desktop, Cursor and any other MCP client: `wavelength mcp` speaks the Model
+Context Protocol on stdin/stdout. Tools read the guide, list instruments, presets, samples and
+parameters, lint, render (the reply carries the report's summary and the picture of the song), draw an
+arrangement, analyze audio, find bars and import MIDI, MusicXML and DAWproject files.
+
+```json
+{"mcpServers": {"wavelength": {"command": "/path/to/wavelength", "args": ["mcp"]}}}
+```
+
 ## Install
 
 Download the archive for your platform from the
@@ -179,9 +203,8 @@ A minimal job:
 | `master <mix.wav> --chain <chain \| job> [--loudness L] [--lead-in S] [--out DIR] [--deliver mp3,flac] [--json]` | Masters a finished mix: plays it through a master chain (an effect list, a master object, or a song's job with its markers; a file or inline JSON) and reports loudness and true peak before and after, per section. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 
-`skills/wavelength/` is a skill for Claude Code and other agents (`/wavelength`): it installs
-the engine (release build, else from source) and walks the agent through writing, mixing and
-mastering a song. Copy the folder into `~/.claude/skills/`.
+`docs [agents | job-format | effects]` prints the docs built into the binary (the operating guide and
+the references that match it; `--section` for one part), and `mcp` runs an MCP server (below).
 
 `scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin
 binaries, for example TAL-NoiseMaker and Relica 2, so `presets` can list them.
