@@ -410,20 +410,29 @@ void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
         for (size_t k = 1; k < pts.size(); ++k)
             if (pts[k].second != pts[k - 1].second) markBeats(job.tempo.secToBeat(pts[k - 1].first), job.tempo.secToBeat(pts[k].first));
     };
-    // effect settings written as curves inside an fx list: [[beat, value], ...], {"points": ...}, {"lfo": ...}
+    // effect settings that move: "automate" curves ([[beat, value], ...] or {"points": ..., "lfo": ...}) and
+    // an effect's "lfo" block; curves written straight on a setting count too
+    std::function<void(const nlohmann::json &)> markCurve = [&](const nlohmann::json &c) {
+        if (c.is_object()) {
+            if (c.contains("lfo")) markBeats(0, bars * bpb);
+            if (c.contains("points")) markCurve(c["points"]);
+            return;
+        }
+        if (!c.is_array()) return;
+        for (size_t i = 1; i < c.size(); ++i) {
+            const auto &a = c[i - 1], &b = c[i];
+            const bool pa = a.is_array() && a.size() >= 2 && a[0].is_number(), pb = b.is_array() && b.size() >= 2 && b[0].is_number();
+            if (pa && pb && a[1] != b[1]) markBeats(a[0].get<double>(), b[0].get<double>());
+        }
+    };
     std::function<void(const nlohmann::json &)> markFx = [&](const nlohmann::json &list) {
         for (const auto &fx : list) {
             if (!fx.is_object()) continue;
             for (auto &[k, v] : fx.items()) {
                 if (k == "loopFx" || k == "bands") { if (v.is_array()) markFx(v); continue; }
-                const nlohmann::json *pts = v.is_array() ? &v : v.is_object() && v.contains("points") ? &v["points"] : nullptr;
-                if (v.is_object() && v.contains("lfo")) markBeats(0, bars * bpb);
-                if (!pts || pts->size() < 2) continue;
-                for (size_t i = 1; i < pts->size(); ++i) {
-                    const auto &a = (*pts)[i - 1], &b = (*pts)[i];
-                    const bool pa = a.is_array() && a.size() >= 2 && a[0].is_number(), pb = b.is_array() && b.size() >= 2 && b[0].is_number();
-                    if (pa && pb && a[1] != b[1]) markBeats(a[0].get<double>(), b[0].get<double>());
-                }
+                if (k == "automate" && v.is_object()) { for (auto &[pk, pv] : v.items()) markCurve(pv); continue; }
+                if (k == "lfo" && v.is_object() && !v.empty()) { markBeats(0, bars * bpb); continue; }
+                markCurve(v);
             }
         }
     };
