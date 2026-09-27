@@ -366,6 +366,11 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             out.tempo.setOrigin(out.window.originBeat);
             out.window.trimSec = out.tempo.beatToSec(from);         // pre-roll rendered, then cut from every output file
             out.length = out.tempo.beatToSec(to);
+            if (w.value("loop", false)) {   // a seamless loop: only what starts inside it, rendered on past its end to fold the tail back in
+                out.window.loop = true;
+                out.window.loopSec = out.length - out.window.trimSec;
+                out.length += std::max(out.tail, 0.5);
+            }
             out.tail = 0;
             out.leadIn = 0;
         }
@@ -611,11 +616,13 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         if (out.window.on) {
             // sections belong to the whole song; in a window the report has none
             out.markers.clear();
-            // notes that end before the window are gone; notes already sounding start at 0 (the pre-roll's start)
+            // notes that end before the window are gone; notes already sounding start at 0 (the pre-roll's start).
+            // A loop keeps only the notes that start inside it: what sounds into its start is its own tail, folded back.
             for (auto &tr : out.tracks) {
                 std::vector<Note> kept;
                 kept.reserve(tr.notes.size());
                 for (auto &n : tr.notes) {
+                    if (out.window.loop && (n.start < out.window.trimSec - 1e-9 || n.start >= out.window.trimSec + out.window.loopSec - 1e-9)) continue;
                     if (n.start + n.length <= 1e-9) continue;
                     if (n.start < 0) {
                         const double cut = -n.start;

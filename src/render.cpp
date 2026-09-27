@@ -266,6 +266,16 @@ int renderTrackWorker(const std::string &jobPath, size_t index, const std::strin
 
 namespace {
 
+// render --loop: the render with what rings past the loop's end (reverbs, releases) added back onto its
+// start, exactly one loop long, so it plays seamlessly on repeat
+Audio foldLoop(const Audio &a, size_t loopFrames) {
+    Audio out;
+    out.resize(loopFrames);
+    if (loopFrames == 0) return out;
+    for (size_t i = 0; i < a.frames(); ++i) { out.left[i % loopFrames] += a.left[i]; out.right[i % loopFrames] += a.right[i]; }
+    return out;
+}
+
 // "bars 17-48" / "bar 17" of a stretch of render seconds
 std::string barsOf(const Job &job, double s0, double s1) {
     const double bpb = job.tsigNum * 4.0 / job.tsigDen;
@@ -491,6 +501,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     result.seconds = seconds;
     const size_t leadFrames = (size_t)std::llround(job.leadIn * job.sampleRate);
     const size_t trimFrames = job.window.on ? (size_t)std::llround(job.window.trimSec * job.sampleRate) : 0;   // render --from pre-roll
+    const size_t loopFrames = job.window.loop ? (size_t)std::llround(job.window.loopSec * job.sampleRate) : 0;   // render --loop
     result.leadIn = job.leadIn;
 
     // 0. build every effect chain first, so a typo fails in milliseconds, not after a long render
@@ -626,7 +637,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         std::snprintf(prefix, sizeof prefix, "%02d-", track.stemNumber > 0 ? track.stemNumber : (int)i + 1);
         if (job.stemBits && track.stem) {
             tr.file = (fs::path(outDir) / "stems" / (prefix + slug(track.name) + ".wav")).string();
-            if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames, trimFrames)) return false;
+            if (job.window.loop) { if (!writeWav(tr.file, foldLoop(audio, loopFrames), job.sampleRate, err, job.stemBits, 0, 0, true)) return false; }
+            else if (!writeWav(tr.file, audio, job.sampleRate, err, job.stemBits, leadFrames, trimFrames)) return false;
         }
         tr.levels = measure(audio);
         tr.lufs = integratedLufs(audio, job.sampleRate);
@@ -902,7 +914,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         for (size_t o = 0; o < job.buses.size(); ++o) if (job.buses[o].name == job.buses[b].output) dest = &buses[o];
         if (job.buses[b].stem && job.stemBits) {   // after its fx, before its fader: the same signal as its lufs
             br.file = (fs::path(outDir) / "stems" / ("bus-" + slug(br.name) + ".wav")).string();
-            if (!writeWav(br.file, buses[b], job.sampleRate, err, job.stemBits, leadFrames, trimFrames)) return false;
+            if (job.window.loop) { if (!writeWav(br.file, foldLoop(buses[b], loopFrames), job.sampleRate, err, job.stemBits, 0, 0, true)) return false; }
+            else if (!writeWav(br.file, buses[b], job.sampleRate, err, job.stemBits, leadFrames, trimFrames)) return false;
         } else if (job.buses[b].stem) result.warnings.push_back("bus '" + br.name + "': \"stem\": true, but \"stems\" is \"none\": no stem written");
         br.levels = measure(buses[b]);   // before the fader, like a track's stem: `gain` = target - lufs
         br.lufs = integratedLufs(buses[b], job.sampleRate);
@@ -1025,7 +1038,11 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         result.normalizeGainDb = gainDb;
     }
     result.mixFile = (fs::path(outDir) / "mix.wav").string();
-    if (!writeWav(result.mixFile, mix, job.sampleRate, err, 32, leadFrames, trimFrames)) return false;
+    if (job.window.loop) {   // from here on the song is the loop: files, measurements and the picture
+        mix = foldLoop(mix, loopFrames);
+        result.seconds = job.window.loopSec;
+    }
+    if (!writeWav(result.mixFile, mix, job.sampleRate, err, 32, leadFrames, trimFrames, job.window.loop)) return false;
     result.mix = measure(mix);
     result.truePeakDb = truePeakDb(mix);
     if (!job.deliver.empty() &&
@@ -1174,7 +1191,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                                 : (src.filename() == "job.json" ? src.parent_path().filename().string() : src.stem().string());
         pic.width = job.pictureWidth;
         pic.from = job.window.on ? job.window.trimSec : 0;
-        pic.seconds = seconds;
+        pic.seconds = job.window.loop ? job.window.loopSec : seconds;
         pic.mix = &mix;
         pic.mixLufs = result.mixLufs;
         pic.lra = result.mixLra;

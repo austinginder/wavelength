@@ -79,6 +79,8 @@ struct RenderWindow {
     double fromBeat = 0, toBeat = 0, originBeat = 0;
     double trimSec = 0;        // pre-roll at the start of the render, cut from every output file
     double songStartSec = 0;   // song time of the first sample written
+    bool loop = false;         // render --loop: the bars alone (no pre-roll), their tail folded back onto their start
+    double loopSec = 0;        // the loop's length (every output file is exactly this long)
 };
 
 struct KeyMark {

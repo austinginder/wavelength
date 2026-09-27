@@ -19,7 +19,9 @@ struct Levels {
 // bits: 32 = IEEE float (keeps overs above 0 dBFS), 24 or 16 = PCM (dithered 16, clipped at full scale)
 // leadFrames: silent frames written before the audio (a lead-in for streaming uploads)
 // `skipFrames`: leave out the start of `a` (a render window's pre-roll).
-bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits = 32, size_t leadFrames = 0, size_t skipFrames = 0);
+// loop: a `smpl` chunk marks the whole file (after the lead-in) as a forward loop (game engines, samplers)
+bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits = 32, size_t leadFrames = 0, size_t skipFrames = 0,
+              bool loop = false);
 Levels measure(const Audio &a);
 // Read a PCM (8/16/24/32-bit) or float (32/64-bit) WAV; mono files are duplicated to both channels.
 bool readWav(const std::string &path, Audio &out, int &sampleRate, std::string &err);

@@ -36,6 +36,19 @@ just those bars and the report's `window.songStart` says where they sit. Sample-
 full render for deterministic sounds; synths with free-running oscillators differ in phase from
 any render to the next, window or not.
 
+## Loops for games and apps: `render --loop`
+
+`wavelength render job.json --from 17 --to 25 --loop --stems 16` renders bars 17-24 as a seamless
+loop: only the notes that start inside those bars, rendered on past the end, with everything that
+rings past it (reverb tails, releases, delays) folded back onto the start, as it would ring into the
+next pass. Every file is exactly the loop's length (`window.loop.frames` in the report) and carries a
+`smpl` loop chunk, so Godot's WAV import (loop mode "Detect From WAV") and samplers loop it with no
+setup. With stems the tracks (and `"stem": true` buses) are layers of the same length for adaptive
+music: bring them in and out by intensity. Write the loop's bars so their last beat leads back into
+their first; notes that start before the loop don't sound in it. `--deliver flac` or `wav:16` for
+smaller files (MP3 pads the start and can't loop seamlessly). Stingers and one-shots are plain
+`--from/--to` renders of their own bars.
+
 ## Starting from a DAW project
 
 `wavelength import song.dawproject --out songs/x --json` writes `songs/x/job.json` and the plugin

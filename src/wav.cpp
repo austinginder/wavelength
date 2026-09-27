@@ -16,14 +16,15 @@ void u16(std::ofstream &o, uint16_t v) { o.put(char(v)); o.put(char(v >> 8)); }
 double db(double lin) { return lin > 1e-12 ? 20.0 * std::log10(lin) : -240.0; }
 } // namespace
 
-bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits, size_t leadFrames, size_t skipFrames) {
+bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::string &err, int bits, size_t leadFrames, size_t skipFrames, bool loop) {
     std::ofstream o(path, std::ios::binary);
     if (!o) { err = "cannot write " + path; return false; }
     if (bits != 16 && bits != 24) bits = 32;
     skipFrames = std::min(skipFrames, a.frames());
     const uint32_t bps = bits / 8, frames = (uint32_t)(a.frames() - skipFrames + leadFrames), channels = 2, bytes = frames * channels * bps;
     const bool isFloat = bits == 32;
-    o.write("RIFF", 4); u32(o, 4 + (8 + 18) + (isFloat ? 8 + 4 : 0) + (8 + bytes)); o.write("WAVE", 4);
+    const uint32_t smpl = loop ? 8 + 60 : 0;
+    o.write("RIFF", 4); u32(o, 4 + (8 + 18) + (isFloat ? 8 + 4 : 0) + (8 + bytes) + smpl); o.write("WAVE", 4);
     o.write("fmt ", 4); u32(o, 18); u16(o, isFloat ? 3 /* IEEE float */ : 1 /* PCM */); u16(o, channels); u32(o, sampleRate);
     u32(o, sampleRate * channels * bps); u16(o, (uint16_t)(channels * bps)); u16(o, (uint16_t)bits); u16(o, 0);
     if (isFloat) { o.write("fact", 4); u32(o, 4); u32(o, frames); }
@@ -47,6 +48,12 @@ bool writeWav(const std::string &path, const Audio &a, int sampleRate, std::stri
             if (bits == 24) buf.push_back((char)((q >> 16) & 0xff));
         }
     o.write(buf.data(), (std::streamsize)buf.size());
+    if (loop) {   // sampler chunk: one forward loop over the audio after the lead-in, played forever (end is inclusive)
+        o.write("smpl", 4); u32(o, 60);
+        u32(o, 0); u32(o, 0); u32(o, (uint32_t)(1e9 / sampleRate)); u32(o, 60); u32(o, 0); u32(o, 0); u32(o, 0);
+        u32(o, 1); u32(o, 0);
+        u32(o, 0); u32(o, 0); u32(o, (uint32_t)leadFrames); u32(o, frames > 0 ? frames - 1 : 0); u32(o, 0); u32(o, 0);
+    }
     if (!o) { err = "write failed for " + path + " (disk full?)"; return false; }
     return true;
 }

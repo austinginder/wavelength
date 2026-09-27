@@ -176,6 +176,29 @@ sys.exit(0 if r["ok"] and t["plugin"] == "builtin:synth" and not t["levels"]["si
 else
   echo "FAIL fallback"; fail=1
 fi
+# render --loop: every file exactly the loop's length (8 bars at 124 BPM) with a smpl loop over all of it
+if "./$build/wavelength" render examples/synth-tour.json --from 9 --to 17 --loop --stems 16 --out "out/check/loop/$build" --json > /dev/null 2>&1 &&
+   python3 - "out/check/loop/$build" <<'PY'
+import glob, struct, sys
+want = round(32 * 60 / 124 * 48000)
+ok = True
+for f in [sys.argv[1] + "/mix.wav"] + glob.glob(sys.argv[1] + "/stems/*.wav"):
+    d = open(f, "rb").read()
+    p, frames, loop = 12, None, None
+    while p + 8 <= len(d):
+        cid, n = d[p:p + 4], struct.unpack("<I", d[p + 4:p + 8])[0]
+        if cid == b"fmt ": bps = struct.unpack("<H", d[p + 22:p + 24])[0] // 8
+        if cid == b"data": frames = n // (2 * bps)
+        if cid == b"smpl": loop = struct.unpack("<II", d[p + 52:p + 60])
+        p += 8 + n + (n & 1)
+    ok &= frames == want and loop == (0, want - 1)
+sys.exit(0 if ok else 1)
+PY
+then
+  echo "ok   loop: render --loop files are the loop's length with a smpl loop"
+else
+  echo "FAIL loop"; fail=1
+fi
 # mcp: initialize, the tool list, the built-in guide, and a render that answers with its summary and picture
 if python3 - "./$build/wavelength" "out/check/mcp/$build" <<'PY'
 import base64, json, subprocess, sys

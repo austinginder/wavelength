@@ -43,6 +43,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   replaces the track's sound (its presets, params, articulations and plugin curves go; the fallback's
   keys, such as `gain` and its own `automation`, are set). The report lists every swap first in
   `warnings` and in `fallbacks`.
+- `render --from A --to B --loop`: the bars as a seamless loop for games and apps. Only the notes that
+  start inside the loop play; the render runs on past its end and folds that tail (reverbs, releases)
+  back onto the start. The mix, the stems (layers for adaptive music) and bus stems are all exactly the
+  loop's length and carry a `smpl` loop chunk (Godot's WAV import and samplers loop them). The report
+  gives `window.loop` (`seconds`, `frames`, `tailFolded`).
 - `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 

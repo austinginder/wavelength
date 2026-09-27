@@ -57,6 +57,9 @@ https://wavelength.run
 - **Master:** a master chain with a loudness target (`"loudness": -14` finds the gain into the
   limiter), `wavelength master` to master a finished mix without re-rendering, and `leadIn`
   silence before the song for streaming uploads.
+- **Loop for games:** `render --from 17 --to 25 --loop` renders bars as a seamless loop (the tail
+  folded back onto the start), every file exactly the loop's length with a `smpl` loop chunk that
+  Godot and samplers read; stems become layers of the same length for adaptive music.
 - **See it:** `render --png` draws the song as one image for agents that can read pictures but
   can't hear: sections and bars, the loudness contour with each section's level, a spectrogram of
   the mix, and every track's notes over its post-fader level. `picture job.json` draws the
