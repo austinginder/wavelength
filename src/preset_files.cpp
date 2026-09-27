@@ -368,9 +368,17 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             }
         }
     }
-    // MeldaProduction synths keep every preset in one bank file
-    if (p == "mpowersynth") {
-        const std::string bank = "/Library/Application Support/MeldaProduction/MSynthesizer.presets";
+    // MeldaProduction plugins keep their presets in one bank file each, "<plugin>.presets" (MPowerSynth:
+    // MSynthesizer), installed system-wide and copied to the user's folder, where saved presets go too
+    std::string meldaBank;
+    if (squash(plugin.vendor).find("melda") != std::string::npos || p == "mpowersynth") {
+        const std::string file = (p == "mpowersynth" ? std::string("MSynthesizer") : plugin.name) + ".presets";
+        std::error_code ec;
+        for (const fs::path &dir : {fs::path(home) / "Library/Application Support/MeldaProduction", fs::path("/Library/Application Support/MeldaProduction")})
+            if (fs::is_regular_file(dir / file, ec)) { meldaBank = (dir / file).string(); break; }
+    }
+    if (!meldaBank.empty()) {
+        const std::string &bank = meldaBank;
         std::vector<MeldaPreset> presets;
         std::string e;
         if (meldaPresets(bank, presets, e))

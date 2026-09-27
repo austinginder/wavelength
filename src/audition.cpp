@@ -128,10 +128,12 @@ std::vector<PresetInfo> listPresets(const PluginInfo &info, bool rescanNks, std:
         discoverPresets(info.bundlePath, info.id, presets, discoverErr);
     }
     if (rescanNks) nksPresets(info, true);
-    std::set<std::string> listed;   // a preset file with a program's name is the same sound: list it once
-    for (auto &p : presets) listed.insert(lower(p.name));
+    // a preset file with a program's name is the same sound: list it once. Files in different
+    // categories may share a name (a bank's "Init", a Melda preset filed twice) and all stay listed.
+    std::set<std::string> programs, files;
+    for (auto &p : presets) programs.insert(lower(p.name));
     for (auto &p : filePresets(info))
-        if (listed.insert(lower(p.name)).second) presets.push_back(p);
+        if (!programs.count(lower(p.name)) && files.insert(lower(p.category) + "\n" + lower(p.name)).second) presets.push_back(p);
     return presets;
 }
 

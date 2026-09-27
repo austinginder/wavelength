@@ -558,12 +558,40 @@ bool meldaPresets(const std::string &bankPath, std::vector<MeldaPreset> &out, st
             if (i >= b.size()) break;
             const char t = (char)b[i++];
             if (t == 's') stack.back().attrs[n] = cstr(i);
-            else {
+            else if (t == 'u') {   // u32 LE byte length + UTF-8, no NUL
+                if (i + 4 > b.size()) break;
+                const uint32_t len = le32(&b[i]);
+                if (i + 4 + len > b.size()) break;
+                stack.back().attrs[n].assign(b.begin() + (long)i + 4, b.begin() + (long)(i + 4 + len));
+                i += 4 + len;
+            } else {
                 const size_t w = t == '1' ? 1 : (t == '4' || t == 'f') ? 4 : 8;
+                if (i + w > b.size()) break;
                 if (t == '1') stack.back().attrs[n] = std::to_string(b[i]);
+                else if (t == '4') stack.back().attrs[n] = std::to_string((int32_t)le32(&b[i]));
                 i += w;
             }
         } else if (c == 'V') {
+            if (i >= b.size()) break;
+            if (b[i] == 's') {   // a NUL-terminated string: "$" + base64 (with '-' for '/') of the value
+                ++i;
+                const std::string text = cstr(i);
+                std::vector<uint8_t> &v = stack.back().value;
+                v.clear();
+                if (!text.empty() && text[0] == '$') {
+                    uint32_t acc = 0;
+                    int bits = 0;
+                    for (size_t k = 1; k < text.size(); ++k) {
+                        const char ch = text[k];
+                        const int d = ch >= 'A' && ch <= 'Z' ? ch - 'A' : ch >= 'a' && ch <= 'z' ? ch - 'a' + 26 : ch >= '0' && ch <= '9' ? ch - '0' + 52
+                                    : ch == '+' ? 62 : ch == '-' || ch == '/' ? 63 : -1;
+                        if (d < 0) continue;   // '=' padding
+                        acc = (acc << 6) | (uint32_t)d;
+                        if ((bits += 6) >= 8) { bits -= 8; v.push_back((uint8_t)(acc >> bits)); }
+                    }
+                } else v.assign(text.begin(), text.end());
+                continue;
+            }
             if (i + 5 > b.size()) break;
             const uint32_t n = le32(&b[i + 1]);
             if (i + 5 + n > b.size()) break;
