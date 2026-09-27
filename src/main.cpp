@@ -25,6 +25,7 @@
 #include "sf2.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
+#include "compat.hpp"
 #include "instance.hpp"
 #include "platform.hpp"
 #include "plugin.hpp"
@@ -458,6 +459,35 @@ int cmdAudition(const Args &a) {
     if (runAudition(info, jobs, limit, a.has("--rebuild"), a.has("--verbose"), err, summary)) return fail(a, err);
     if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"summary", summary}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "%s\n", summary.c_str());
+    return 0;
+}
+
+// ---- compat ----------------------------------------------------------------------------
+int cmdCompat(const Args &a) {
+    CompatOptions o;
+    o.plugins.assign(a.positional.begin() + 1, a.positional.end());
+    o.format = a.get("--format");
+    if (!o.format.empty() && o.format != "clap" && o.format != "vst3" && o.format != "vst2" && o.format != "au")
+        return fail(a, "--format is clap, vst3, vst2 or au");
+    o.jobs = std::atoi(a.get("--jobs", "1").c_str());
+    o.presets = std::atoi(a.get("--presets", "3").c_str());
+    o.timeoutSec = std::max(10, std::atoi(a.get("--timeout", "120").c_str()));
+    o.rebuild = a.has("--rebuild");
+    o.verbose = a.has("--verbose");
+    o.report = a.get("--report");
+    json result;
+    std::string err;
+    if (runCompat(o, result, err)) return fail(a, err);
+    if (a.has("--json")) { emit(result.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    std::fprintf(OUT, "%s\n", result["summary"].get<std::string>().c_str());
+    for (auto &r : result["plugins"]) {
+        const std::string status = r.value("status", "");
+        if (status != "fail" && status != "warn") continue;
+        std::string issues;
+        for (const char *k : {"fails", "warnings"}) for (auto &x : r[k]) issues += (issues.empty() ? "" : "; ") + x.get<std::string>();
+        std::fprintf(OUT, "  %-4s %-5s %s: %s\n", status.c_str(), r.value("format", std::string("")).c_str(), r.value("name", std::string("")).c_str(), issues.c_str());
+    }
+    if (result.contains("report")) std::fprintf(OUT, "report: %s\n", result["report"].get<std::string>().c_str());
     return 0;
 }
 
@@ -1720,6 +1750,7 @@ int run(int argc, char **argv) {
     const std::string cmd = a.positional[0];
     if (isSongCommand(cmd)) return runSongCommand(argc, argv, OUT);   // save, history, undo... (song_cli.cpp)
     if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
+    if (cmd == "__play" && a.positional.size() > 2) return playWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live notes
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
                                  std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));
@@ -1737,7 +1768,7 @@ int run(int argc, char **argv) {
 #if defined(__APPLE__)
     // commands that load one plugin in this process: an Intel-only plugin needs the whole command under
     // Rosetta, so run this same command again as x86_64 (a universal build has both)
-    if ((cmd == "params" || cmd == "presets" || cmd == "audition" || cmd == "state") && !std::getenv("WAVELENGTH_ARCH_REEXEC")) {
+    if ((cmd == "params" || cmd == "presets" || cmd == "audition" || cmd == "state" || cmd == "__compat") && !std::getenv("WAVELENGTH_ARCH_REEXEC")) {
         const size_t at = cmd == "state" ? 2 : 1;
         PluginInfo info;
         std::string e;
@@ -1757,6 +1788,8 @@ int run(int argc, char **argv) {
         }
     }
 #endif
+    // internal: one plugin of `compat`, after the Rosetta re-exec above (an Intel-only plugin's worker runs as x86_64)
+    if (cmd == "__compat" && a.positional.size() > 3) return compatWorker(a.positional[1], a.positional[2], std::atoi(a.positional[3].c_str()));
     if (cmd == "__scan-vst3" && a.positional.size() > 1) {   // internal: run by `plugins` in a child process
         std::vector<PluginInfo> plugins;
         std::string err;
@@ -1775,6 +1808,7 @@ int run(int argc, char **argv) {
             {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
+            {"compat", {"--format", "--jobs", "--presets", "--timeout", "--report", "--rebuild", "--json", "--verbose"}},
             {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop", "--keep", "--fallbacks"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
@@ -1807,6 +1841,7 @@ int run(int argc, char **argv) {
         if (cmd == "samples") return cmdSamples(a);
         if (cmd == "analyze") return cmdAnalyze(a);
         if (cmd == "audition") return cmdAudition(a);
+        if (cmd == "compat") return cmdCompat(a);
         if (cmd == "render") return cmdRender(a);
         if (cmd == "import") return cmdImport(a);
         if (cmd == "export") return cmdExport(a);

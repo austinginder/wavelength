@@ -173,6 +173,7 @@ add_executable(wavelength
   src/vst3_plugin.cpp
   src/vst2_plugin.cpp
   src/au_plugin.cpp
+  src/compat.cpp
   src/zip.cpp
   src/xml.cpp
   src/dawproject.cpp

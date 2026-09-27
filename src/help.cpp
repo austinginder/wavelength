@@ -32,6 +32,12 @@ Usage:
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
       (dark, bright, sub, pluck, slow attack, wide, self-playing, octave -1...) you can search.
+  wavelength compat [<plugin>...] [--format clap|vst3|vst2|au] [--jobs 1] [--presets 3] [--timeout 120] [--report FILE.md] [--rebuild] [--json]
+      Test every installed plugin (or the ones named), each in its own process: it opens, renders
+      (a C2-C5 chord, or noise through an effect), a few of its presets load and change it, and its
+      state saves and reloads. Crashes, hangs, silence, garbage, licence windows and presets that
+      change nothing are reported per plugin. Results are cached (bundle date + engine version), so
+      a rerun tests only new or updated plugins; --rebuild tests them all. --report writes Markdown.
   wavelength analyze <file.wav | render-dir> [--start S] [--end S] [--song-time] [--grid BPM [--div 4]] [--every S] [--peaks [--top N]] [--json]
       Measure what can't be heard: pitch, brightness, spectral balance, stereo width,
       onsets and envelope of a WAV (or a window of it). A render folder analyzes its mix,
@@ -227,6 +233,7 @@ const Summary kSummaries[] = {
     {"Find sounds", "presets", "A plugin's presets, to use by name"},
     {"Find sounds", "samples", "Sample libraries: multisamples, kits, SFZ, SoundFonts"},
     {"Find sounds", "audition", "Render every preset once and tag how it sounds"},
+    {"Find sounds", "compat", "Test every plugin: loads, renders, presets, state"},
     {"Find sounds", "params", "A plugin's parameters and their display text"},
     {"Find sounds", "state", "Save a preset from a state and parameter values"},
     {"Find sounds", "kit", "Free instruments for a machine without plugins"},
