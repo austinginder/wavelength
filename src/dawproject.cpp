@@ -131,7 +131,23 @@ bool mapDevice(Ctx &c, const xml::Node &d, const std::string &where, json &out) 
     if (tag == "Vst3Plugin") spec = "vst3:" + d.get("deviceID");
     else if (tag == "ClapPlugin") spec = "clap:" + d.get("deviceID");
     else if (tag == "Vst2Plugin") spec = "vst2:" + vst2::fourcc((int32_t)std::strtoll(d.get("deviceID").c_str(), nullptr, 10));
-    else if (tag == "AuPlugin") { c.res->notes.push_back(where + ": Audio Unit '" + name + "' can't be hosted yet; left out"); return false; }
+    else if (tag == "AuPlugin") {   // "aumu:dls :appl", or the three codes as decimal numbers
+        std::string id = d.get("deviceID");
+        std::vector<std::string> parts;
+        for (size_t at = 0; at <= id.size();) {
+            const size_t e = id.find(':', at);
+            parts.push_back(id.substr(at, e == std::string::npos ? std::string::npos : e - at));
+            if (e == std::string::npos) break;
+            at = e + 1;
+        }
+        if (parts.size() == 3 && std::all_of(parts.begin(), parts.end(), [](const std::string &x) { return !x.empty() && x.find_first_not_of("0123456789") == std::string::npos; })) {
+            std::string four;
+            for (auto &x : parts) { const uint32_t v = (uint32_t)std::strtoul(x.c_str(), nullptr, 10); four += (four.empty() ? "" : ":") + vst2::fourcc((int32_t)v); }
+            id = four;
+        }
+        if (id.size() == 14 && id[4] == ':' && id[9] == ':') spec = "au:" + id;
+        else { c.res->notes.push_back(where + ": Audio Unit '" + name + "' has an id Wavelength can't read (" + id + "); left out"); return false; }
+    }
     if (!spec.empty()) {
         out = {{"plugin", spec}};
         if (const xml::Node *st = d.child("State")) {

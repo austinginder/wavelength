@@ -172,6 +172,7 @@ add_executable(wavelength
   src/state_file.cpp
   src/vst3_plugin.cpp
   src/vst2_plugin.cpp
+  src/au_plugin.cpp
   src/zip.cpp
   src/xml.cpp
   src/dawproject.cpp
@@ -221,7 +222,7 @@ if(APPLE AND WAVELENGTH_SIGN_IDENTITY)
     COMMENT "Signing wavelength (${WAVELENGTH_SIGN_IDENTITY})" VERBATIM)
 endif()
 if(APPLE)
-  target_link_libraries(wavelength PRIVATE "-framework CoreFoundation" "-framework CoreGraphics")
+  target_link_libraries(wavelength PRIVATE "-framework CoreFoundation" "-framework CoreGraphics" "-framework AudioToolbox" "-framework CoreAudio")
 elseif(WIN32)
   # UTF-8 as the process code page (file names), and a self-contained .exe
   target_sources(wavelength PRIVATE src/wavelength.rc)

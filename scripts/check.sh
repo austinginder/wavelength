@@ -143,6 +143,24 @@ sys.exit(0 if ok else 1)' || { command -v flac > /dev/null && ! flac -s -t "$dl/
 else
   echo "ok   deliver: flac 24/16 and wav 24 decode back to the mix"
 fi
+# Audio Units (macOS): Apple's GM synth plays a GM program by name through a factory reverb preset and AUDelay
+if [ "$(uname)" = Darwin ]; then
+  mkdir -p out/check/au
+  cat > out/check/au/job.json <<'JOB'
+{"sampleRate": 48000, "tempo": 120, "tail": 1, "stems": "none",
+ "tracks": [{"name": "GM", "plugin": "au:DLSMusicDevice", "preset": "Violin", "notes": [{"beat": 0, "dur": 1, "key": "A4", "vel": 0.8}],
+             "fx": [{"plugin": "au:AUMatrixReverb", "preset": "Large Hall"}, {"plugin": "au:AUDelay", "params": {"Delay Time": 0.25}}]}]}
+JOB
+  if "./$build/wavelength" render out/check/au/job.json --out out/check/au/out --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d.get("ok") and d["tracks"][0].get("lufs", -120) > -60 else 1)'; then
+    echo "ok   au: DLSMusicDevice GM program, AUMatrixReverb preset, AUDelay"
+  else
+    echo "FAIL au: Apple's Audio Units did not render"; fail=1
+  fi
+fi
+
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)
 if ! "./$build/wavelength" render examples/synth-tour.json --out "out/check/picture/$build" --stems none --png --json 2>/dev/null | python3 -c '

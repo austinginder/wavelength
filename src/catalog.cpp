@@ -1,5 +1,7 @@
 #include "catalog.hpp"
 
+#include "au_plugin.hpp"
+
 #include "kit.hpp"
 #include "platform.hpp"
 
@@ -288,6 +290,9 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
         for (auto &t : pool) t.join();
     }
 
+    // Audio Units: the system's component registry lists them without running plugin code, so they
+    // are read fresh every time (nothing to cache)
+    for (auto &p : auPlugins()) all.push_back(p);
     std::sort(all.begin(), all.end(), [](const PluginInfo &a, const PluginInfo &b) {
         return lower(a.name) != lower(b.name) ? lower(a.name) < lower(b.name) : a.format < b.format;
     });
@@ -341,9 +346,9 @@ bool resolvePlugin(const std::string &spec, PluginInfo &out, std::string &err, b
 
 namespace {
 bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err) {
-    // optional format prefix: "vst3:Vital", "clap:Vital", "vst2:Reaktor 6"
+    // optional format prefix: "vst3:Vital", "clap:Vital", "vst2:Reaktor 6", "au:DLSMusicDevice"
     std::string spec = specIn, want;
-    for (const char *f : {"vst3", "vst2", "clap"})
+    for (const char *f : {"vst3", "vst2", "clap", "au"})
         if (spec.rfind(std::string(f) + ":", 0) == 0) { want = f; spec = spec.substr(std::string(f).size() + 1); }
 
     // explicit bundle path, optionally "#plugin id"
@@ -370,14 +375,14 @@ bool resolveAny(const std::string &specIn, PluginInfo &out, std::string &err) {
 
     std::vector<std::string> warnings;
     auto all = scanPlugins(false, warnings);
-    // a name that exists in several formats resolves to CLAP, then VST3, then VST2, unless a prefix says otherwise
-    auto rank = [](const PluginInfo &p) { return p.format == "clap" ? 0 : p.format == "vst3" ? 1 : 2; };
+    // a name that exists in several formats resolves to CLAP, then VST3, then VST2, then Audio Unit, unless a prefix says otherwise
+    auto rank = [](const PluginInfo &p) { return p.format == "clap" ? 0 : p.format == "vst3" ? 1 : p.format == "vst2" ? 2 : 3; };
     std::stable_sort(all.begin(), all.end(), [&](const PluginInfo &a, const PluginInfo &b) { return rank(a) < rank(b); });
     auto ok = [&](const PluginInfo &p) { return want.empty() || p.format == want; };
     for (auto &p : all) if (ok(p) && p.id == spec) { out = p; return true; }
     for (auto &p : all) if (ok(p) && lower(p.id) == lower(spec)) { out = p; return true; }
     for (auto &p : all) if (ok(p) && lower(p.name) == lower(spec)) { out = p; return true; }
-    err = "no installed " + (want.empty() ? std::string("CLAP, VST3 or VST2") : want) + " plugin matches '" + spec + "' (run `wavelength plugins`)";
+    err = "no installed " + (want.empty() ? std::string("CLAP, VST3, VST2 or Audio Unit") : want) + " plugin matches '" + spec + "' (run `wavelength plugins`)";
     return false;
 }
 } // namespace

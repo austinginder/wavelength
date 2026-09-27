@@ -108,7 +108,7 @@ json measure(const Audio &a, int sr, bool selfPlaying) {
 
 std::vector<PresetInfo> listPresets(const PluginInfo &info, bool rescanNks, std::string &err) {
     std::vector<PresetInfo> presets;
-    if (info.format == "vst3" || info.format == "vst2") {   // factory programs from the plugin's program list
+    if (info.format == "vst3" || info.format == "vst2" || info.format == "au") {   // factory programs from the plugin's program list
         std::string openErr;   // a plugin that can't open here (another architecture) still has its preset files
         auto plugin = createPlugin(info, openErr);
         if (!plugin) err = openErr;

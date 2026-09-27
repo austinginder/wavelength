@@ -86,7 +86,7 @@ Usage:
       --deliver (or the job's "deliver") writes MP3/FLAC/WAV files of the result, as for render.
   wavelength state save <plugin> --out FILE [--preset NAME | --state FILE [--format F]] [--set "Name=value"]... [--json]
       Load an optional starting preset or state, apply parameter values, save a preset
-      (.clap-preset for CLAP plugins, .vstpreset for VST3).
+      (.clap-preset for CLAP plugins, .vstpreset for VST3, .aupreset for Audio Units).
   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
       Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
@@ -201,7 +201,7 @@ Usage:
       build (-dev) is left alone unless --force.
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
-.clap/.vst3/.vst bundle. Prefix with clap:, vst3: or vst2: when a name exists in more than one format.
+.clap/.vst3/.vst bundle. Prefix with clap:, vst3:, vst2: or au: (Audio Units, macOS) when a name exists in more than one format.
 State formats: auto (default), clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree (.odin), h2p,
 dx7 (<cartridge>.syx#<voice>), synplant, cherry, ngrr, microtonic, soundbox, decentsampler,
 juce-string (.vital), raw.

@@ -112,7 +112,7 @@ int saveStateWorker(const std::string &jobPath, const std::string &where, const 
     if (!openPlugin(setup, where, p, err)) return fail(err);
     if (!p.initial.empty() && !p.plugin->commitParams(p.initial, job.sampleRate, (uint32_t)job.blockSize, err)) return fail(err);
     p.plugin->pump(100);
-    const std::string ext = p.format == "vst3" ? ".vstpreset" : p.format == "vst2" ? ".fxp" : ".clap-preset";
+    const std::string ext = p.format == "vst3" ? ".vstpreset" : p.format == "vst2" ? ".fxp" : p.format == "au" ? ".aupreset" : ".clap-preset";
     size_t bytes = 0;
     if (!p.plugin->saveStateFile(prefix + ext, bytes, err)) return fail(err);
     PluginInfo info;
@@ -212,6 +212,7 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
         ++res.plugins;
         std::string tag = "ClapPlugin", deviceId = s.id;
         if (s.format == "vst3") tag = "Vst3Plugin";
+        else if (s.format == "au") tag = "AuPlugin";   // deviceID "type:subtype:manufacturer", state an .aupreset
         else if (s.format == "vst2") {   // the four-character code as a decimal number
             tag = "Vst2Plugin";
             uint32_t v = 0;
