@@ -21,5 +21,9 @@ int serve(const ServeOptions &o);
 // and keeps it loaded. Each JSON line on stdin, {"notes": [{"key", "vel", "start", "dur"}] (seconds),
 // "seconds", "out": wav path}, renders those notes through it and answers one JSON line on `out`.
 int playWorker(const std::string &jobPath, const std::string &track, std::FILE *out);
+// `wavelength __live <job.json> <track>` (internal, started by serve): the track's instrument playing
+// continuously (CLAP and VST3). A JSON hello line, then 16-bit stereo PCM paced to the clock on `out`;
+// stdin lines {"on": 60, "vel": 0.8}, {"off": 60}, {"allOff": true}, {"stop": true}.
+int liveWorker(const std::string &jobPath, const std::string &track, std::FILE *out);
 
 } // namespace wl

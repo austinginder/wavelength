@@ -77,6 +77,9 @@ bool writeInput(Process &p, const std::string &data);
 // One line of the child's stdout (without the newline), waiting up to `timeoutMs`; false on a timeout or
 // when the child closed its stdout.
 bool readLine(Process &p, std::string &line, int timeoutMs);
+// Whatever the child wrote to stdout so far (what readLine left over first), waiting up to `timeoutMs` for
+// something; false once the child closed its stdout and nothing is left.
+bool readSome(Process &p, std::string &out, int timeoutMs);
 // Non-blocking: true once the process has ended. `crash` describes an abnormal end (a signal or
 // an exception code), empty for a normal exit.
 bool finished(Process &p, std::string &crash);

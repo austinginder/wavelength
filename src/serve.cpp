@@ -303,6 +303,19 @@ private:
     json play(const fs::path &jobPath, const std::string &track, const std::string &key, const json &in, std::string &wav);
     json playSong(const std::string &slug, const json &in, std::string &wav);
     json playInstrument(const json &in, std::string &wav);
+    fs::path playgroundJob(const std::string &plugin, const std::string &preset);
+    // live playing: a __live worker per page (its session id) streams the instrument's audio while keys
+    // turn notes on and off
+    struct LiveSession {
+        platform::Process proc;
+        std::mutex io;           // stdin writes
+        std::atomic<bool> streaming{false};
+        json info;
+    };
+    std::mutex liveMu_;
+    std::map<std::string, std::shared_ptr<LiveSession>> lives_;
+    json liveStart(const json &in);
+    void liveStop(const std::string &id);
     // the instrument lists the playground shows: `plugins --json` and `presets <plugin> --json`, run in child
     // processes (a plugin never loads in this one) and kept for 10 minutes
     std::mutex listMu_;
@@ -703,6 +716,10 @@ json Server::playSong(const std::string &slug, const json &in, std::string &wav)
 json Server::playInstrument(const json &in, std::string &wav) {
     const std::string plugin = in.value("plugin", std::string()), preset = in.value("preset", std::string());
     if (plugin.empty()) return {{"error", "which instrument?"}};
+    return play(playgroundJob(plugin, preset), "Play", "playground|" + plugin + "|" + preset, in, wav);
+}
+
+fs::path Server::playgroundJob(const std::string &plugin, const std::string &preset) {
     const fs::path dir = platform::cacheDir() / "playground" / fnv(plugin + "|" + preset);
     std::error_code ec;
     fs::create_directories(dir, ec);
@@ -710,7 +727,63 @@ json Server::playInstrument(const json &in, std::string &wav) {
     if (!preset.empty()) track["preset"] = preset;
     const json job = {{"tempo", 120}, {"tracks", json::array({track})}};
     std::ofstream(dir / "job.json") << job.dump(1);
-    return play(dir / "job.json", "Play", "playground|" + plugin + "|" + preset, in, wav);
+    return dir / "job.json";
+}
+
+// A live session: {id, plugin, preset} or {id, song, track}. Replaces the page's earlier session.
+json Server::liveStart(const json &in) {
+    const std::string id = in.value("id", std::string());
+    if (id.empty() || id.size() > 64) return {{"error", "a session id"}};
+    fs::path jobFile;
+    std::string track;
+    if (in.contains("song")) {
+        const std::string slug = in.value("song", std::string());
+        if (!songExists(slug)) return {{"error", "unknown song"}};
+        const std::string jp = pick(scanSong(songDir(slug)), "job.json", "job.json");
+        if (jp.empty()) return {{"error", "the song has no job.json yet"}};
+        jobFile = songDir(slug) / jp;
+        track = in.value("track", std::string());
+    } else {
+        if (in.value("plugin", std::string()).empty()) return {{"error", "which instrument?"}};
+        jobFile = playgroundJob(in.value("plugin", std::string()), in.value("preset", std::string()));
+        track = "Play";
+    }
+    liveStop(id);
+    {
+        std::lock_guard<std::mutex> lock(liveMu_);
+        while (lives_.size() >= 3) {   // three live instruments at most: stop the oldest
+            platform::kill(lives_.begin()->second->proc);
+            lives_.erase(lives_.begin());
+        }
+    }
+    auto ls = std::make_shared<LiveSession>();
+    if (!platform::spawn({platform::selfExecutable(), "__live", jobFile.string(), track}, ls->proc, true, true, true)) return {{"error", "could not start the instrument"}};
+    std::string hello;
+    if (!platform::readLine(ls->proc, hello, 90000)) { platform::kill(ls->proc); return {{"error", "the instrument did not load in 90 s"}}; }
+    try { ls->info = json::parse(hello); } catch (...) { platform::kill(ls->proc); return {{"error", "the instrument answered: " + hello.substr(0, 200)}}; }
+    if (ls->info.contains("error")) { platform::kill(ls->proc); return ls->info; }
+    {
+        std::lock_guard<std::mutex> lock(liveMu_);
+        lives_[id] = ls;
+    }
+    json o = ls->info;
+    o["ok"] = true;
+    return o;
+}
+
+void Server::liveStop(const std::string &id) {
+    std::shared_ptr<LiveSession> ls;
+    {
+        std::lock_guard<std::mutex> lock(liveMu_);
+        auto it = lives_.find(id);
+        if (it == lives_.end()) return;
+        ls = it->second;
+        lives_.erase(it);
+    }
+    std::lock_guard<std::mutex> lock(ls->io);
+    platform::writeInput(ls->proc, "{\"stop\":true}\n");
+    platform::terminate(ls->proc);   // the stream's reader reaps it
+    if (!ls->streaming) platform::kill(ls->proc);
 }
 
 json Server::play(const fs::path &jobFile, const std::string &track, const std::string &key, const json &in, std::string &wav) {
@@ -1186,6 +1259,72 @@ int Server::run() {
         sendJson(res, {{"bytes", bytes}, {"files", count}});
     });
 
+    // live playing: POST /api/live/start {id, plugin, preset | song, track} loads the instrument; GET
+    // /api/live/stream?id= is its audio (16-bit stereo PCM at the answer's sampleRate, as it plays);
+    // POST /api/live/event {id, on: key, vel} / {id, off: key} / {id, allOff: true}; POST /api/live/stop {id}
+    http_.Post("/api/live/start", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        const json r = liveStart(in);
+        sendJson(res, r, r.contains("error") ? (r.value("error", std::string()) == "live" ? 409 : 500) : 200);
+    });
+    http_.Get("/api/live/stream", [&](const httplib::Request &req, httplib::Response &res) {
+        const std::string id = req.get_param_value("id");
+        std::shared_ptr<LiveSession> ls;
+        {
+            std::lock_guard<std::mutex> lock(liveMu_);
+            auto it = lives_.find(id);
+            if (it != lives_.end()) ls = it->second;
+        }
+        if (!ls || ls->streaming.exchange(true)) return sendJson(res, {{"error", "no such live session"}}, 404);
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("X-Accel-Buffering", "no");
+        // text/event-stream: proxies (Caddy for *.localhost) pass it through unbuffered; the body is raw PCM
+        res.set_chunked_content_provider("text/event-stream", [this, ls, id](size_t, httplib::DataSink &sink) {
+            std::string chunk;
+            while (!stopping_) {
+                if (!platform::readSome(ls->proc, chunk, 200)) break;   // the worker ended
+                if (!chunk.empty() && !sink.write(chunk.data(), chunk.size())) break;   // the page went away
+            }
+            std::string crash;
+            platform::kill(ls->proc);
+            {
+                std::lock_guard<std::mutex> lock(liveMu_);
+                auto it = lives_.find(id);
+                if (it != lives_.end() && it->second == ls) lives_.erase(it);
+            }
+            sink.done();
+            return true;
+        });
+    });
+    http_.Post("/api/live/event", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        std::shared_ptr<LiveSession> ls;
+        {
+            std::lock_guard<std::mutex> lock(liveMu_);
+            auto it = lives_.find(in.value("id", std::string()));
+            if (it != lives_.end()) ls = it->second;
+        }
+        if (!ls) return sendJson(res, {{"error", "no such live session"}}, 404);
+        std::string lines;   // one event, or "events": [...] in order (a chord, a release and a new key)
+        for (const json &e : in.contains("events") && in["events"].is_array() ? in["events"] : json::array({in})) {
+            if (e.contains("on")) lines += json{{"on", std::clamp(e.value("on", 60), 0, 127)}, {"vel", std::clamp(e.value("vel", 0.8), 0.0, 1.0)}}.dump() + "\n";
+            else if (e.contains("off")) lines += json{{"off", std::clamp(e.value("off", 60), 0, 127)}}.dump() + "\n";
+            else if (e.value("allOff", false)) lines += "{\"allOff\":true}\n";
+        }
+        if (lines.empty()) return sendJson(res, {{"error", "on, off or allOff"}}, 400);
+        std::lock_guard<std::mutex> lock(ls->io);
+        if (!platform::writeInput(ls->proc, lines)) return sendJson(res, {{"error", "the instrument stopped"}}, 410);
+        sendJson(res, {{"ok", true}});
+    });
+    http_.Post("/api/live/stop", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        liveStop(in.value("id", std::string()));
+        sendJson(res, {{"ok", true}});
+    });
+
     // live notes: POST {song, track, notes: [{key, vel, start, dur}] (seconds), tail} answers audio/wav,
     // with the worker's details in the X-Wavelength-Play header
     http_.Post("/api/play", [&](const httplib::Request &req, httplib::Response &res) {
@@ -1288,6 +1427,11 @@ int Server::run() {
         for (auto &[k, w] : players_) platform::kill(w->proc);
         players_.clear();
     }
+    {
+        std::lock_guard<std::mutex> lock(liveMu_);
+        for (auto &[k, l] : lives_) platform::kill(l->proc);
+        lives_.clear();
+    }
     cv_.notify_all();
     worker.join();
     if (!ok) { std::fprintf(stderr, "error: could not listen on %s:%d (in use?)\n", opt_.host.c_str(), opt_.port); return 1; }
@@ -1299,6 +1443,87 @@ int Server::run() {
 int serve(const ServeOptions &o) {
     Server s(o);
     return s.run();
+}
+
+// `wavelength __live <job.json> <track>` (internal, started by serve): the track's instrument playing
+// continuously. After a JSON hello line, stdout is 16-bit stereo PCM paced to the clock (a little ahead);
+// stdin lines turn notes on and off: {"on": 60, "vel": 0.8}, {"off": 60}, {"allOff": true}, {"stop": true}.
+int liveWorker(const std::string &jobPath, const std::string &trackName, std::FILE *out) {
+    auto say = [&](const json &j) { std::fprintf(out, "%s\n", j.dump(-1, ' ', false, json::error_handler_t::replace).c_str()); std::fflush(out); };
+    json j;
+    if (!readJson(jobPath, j)) { say({{"error", "cannot read " + jobPath}}); return 1; }
+    Job job;
+    std::string err;
+    try {
+        if (!parseJob(j, fs::path(jobPath).parent_path().string(), job, err)) { say({{"error", err}}); return 1; }
+    } catch (const std::exception &e) { say({{"error", e.what()}}); return 1; }
+    const auto it = std::find_if(job.tracks.begin(), job.tracks.end(), [&](const Track &t) { return t.name == trackName; });
+    if (it == job.tracks.end()) { say({{"error", "no track named " + trackName}}); return 1; }
+    const Track track = *it;
+    if (isBuiltin(track.plugin)) { say({{"error", "live"}, {"why", "built-in instruments play note by note"}}); return 1; }
+    PluginSetup setup;
+    setup.spec = track.plugin;
+    setup.stateFile = track.stateFile;
+    setup.stateFormat = track.stateFormat;
+    setup.params = track.params;
+    setup.warmup = track.warmup;
+    setup.preset = track.preset;
+    OpenedPlugin p;
+    if (!openPlugin(setup, track.name, p, err)) { say({{"error", err}}); return 1; }
+    if (!p.plugin->canPlayLive()) { say({{"error", "live"}, {"why", std::string(p.plugin->format()) + " instruments play note by note"}}); return 1; }
+    Audio prime;   // settle it once with the full warmup (samples stream after activation)
+    prime.resize((size_t)(0.2 * job.sampleRate));
+    if (!runPlugin(job, p, {}, nullptr, prime, err)) { say({{"error", err}}); return 1; }
+    p.plugin->warmup = 0.02;
+
+    // key presses from stdin, on a thread of their own
+    std::mutex qm;
+    std::vector<TimedEvent> queue;
+    std::atomic<bool> stop{false};
+    std::thread reader([&] {
+        char buf[4096];
+        while (!stop && std::fgets(buf, sizeof buf, stdin)) {
+            json e;
+            try { e = json::parse(buf); } catch (...) { continue; }
+            std::lock_guard<std::mutex> lock(qm);
+            if (e.value("stop", false)) { stop = true; break; }
+            if (e.value("allOff", false)) {
+                for (int k = 0; k < 128; ++k) queue.push_back({0, false, k, 0, 0.0});
+            } else if (e.contains("on")) queue.push_back({0, true, e.value("on", 60), 0, e.value("vel", 0.8)});
+            else if (e.contains("off")) queue.push_back({0, false, e.value("off", 60), 0, 0.0});
+        }
+        stop = true;   // the server went away
+    });
+    reader.detach();   // blocked in fgets at exit; quickExit ends it
+
+    Job live = job;
+    live.blockSize = 128;   // 2.7 ms at 48 kHz: a key sounds within a block
+    const double sr = job.sampleRate, lead = 0.025;   // stay 25 ms ahead of the clock
+    const auto t0 = Clock::now();
+    int64_t written = 0;
+    std::vector<int16_t> pcm;
+    say({{"track", track.name}, {"plugin", p.name}, {"preset", p.preset}, {"sampleRate", job.sampleRate}, {"gainDb", track.gainDb}});
+    const float fader = (float)std::pow(10.0, std::min(track.gainDb, 12.0) / 20);
+    p.plugin->liveEvents = [&](int64_t pos, uint32_t, std::vector<TimedEvent> &evs) {
+        std::lock_guard<std::mutex> lock(qm);
+        for (auto &e : queue) { e.frame = pos; evs.push_back(e); }
+        queue.clear();
+    };
+    p.plugin->liveOutput = [&](const float *l, const float *r, uint32_t n) {
+        pcm.resize((size_t)n * 2);
+        for (uint32_t i = 0; i < n; ++i) {
+            pcm[2 * i] = (int16_t)std::lround(std::clamp(l[i] * fader, -1.f, 1.f) * 32767);
+            pcm[2 * i + 1] = (int16_t)std::lround(std::clamp(r[i] * fader, -1.f, 1.f) * 32767);
+        }
+        if (std::fwrite(pcm.data(), sizeof(int16_t), pcm.size(), out) != pcm.size() || std::fflush(out) != 0) return false;
+        written += n;
+        const auto due = t0 + std::chrono::duration<double>(written / sr - lead);
+        std::this_thread::sleep_until(std::chrono::time_point_cast<Clock::duration>(due));
+        return !stop.load();
+    };
+    Audio none;
+    if (!runPlugin(live, p, {}, nullptr, none, err)) { std::fprintf(stderr, "live: %s\n", err.c_str()); return 1; }
+    return 0;
 }
 
 int playWorker(const std::string &jobPath, const std::string &trackName, std::FILE *out) {

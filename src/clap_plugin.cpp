@@ -121,7 +121,10 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         std::vector<double> lastAuto(autos.size(), NAN);
         clap_event_transport_t transport{};
         bool first = true;
-        const int64_t end = total + lat;
+        const bool live = (bool)liveOutput;   // playing live: until liveOutput says stop
+        const int64_t end = live ? INT64_MAX / 4 : total + lat;
+        std::vector<TimedEvent> liveNow;
+        std::vector<const TimedEvent *> blockEvents;
         for (int64_t pos = -warm; pos < end && audioErr.empty();) {
             const uint32_t n = (uint32_t)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
             notes.clear(); midis.clear(); params.clear(); exprs.clear();
@@ -146,9 +149,15 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             if (pos >= 0) {
                 const size_t firstEv = next;
                 while (next < events.size() && events[next].frame < pos + n) ++next;
-                notes.reserve(next - firstEv); midis.reserve(next - firstEv); exprs.reserve(next - firstEv);
-                for (size_t i = firstEv; i < next; ++i) {
-                    const auto &e = events[i];
+                blockEvents.clear();
+                for (size_t i = firstEv; i < next; ++i) blockEvents.push_back(&events[i]);
+                liveNow.clear();
+                if (liveEvents) liveEvents(pos, n, liveNow);
+                for (const auto &e : liveNow) blockEvents.push_back(&e);
+                // reserved up front: in.ptrs points into these vectors
+                notes.reserve(blockEvents.size()); midis.reserve(blockEvents.size()); exprs.reserve(blockEvents.size());
+                for (const TimedEvent *ep : blockEvents) {
+                    const auto &e = *ep;
                     const uint32_t at = (uint32_t)std::max<int64_t>(0, e.frame - pos);
                     if (e.kind != TimedEvent::Note) {
                         if (midiCtl) {
@@ -242,7 +251,10 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             proc.in_events = &inEvents;
             proc.out_events = &outEvents;
             if (pl->process(pl, &proc) == CLAP_PROCESS_ERROR) { audioErr = "plugin returned an error from process()"; break; }
-            if (pos >= 0) {
+            if (pos >= 0 && live) {
+                const auto &mainOut = outStore[0];
+                if (!liveOutput(mainOut[0].data(), mainOut.size() > 1 ? mainOut[1].data() : mainOut[0].data(), n)) break;
+            } else if (pos >= 0) {
                 const auto &mainOut = outStore[0];
                 for (uint32_t i = 0; i < n; ++i) {
                     const int64_t at = pos + i - lat;

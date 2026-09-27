@@ -22,6 +22,7 @@ public:
     const std::string &id() const override { return id_; }
     const std::string &name() const override { return name_; }
     const char *format() const override { return "vst3"; }
+    bool canPlayLive() const override { return true; }
 
     bool loadState(const StateFile &sf, std::string &err) override;
     bool loadPreset(const std::string &query, std::string &loadedName, std::string &err) override;

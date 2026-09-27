@@ -662,7 +662,7 @@ function showView(v) {
 	document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('sel', a.dataset.view === v));
 	if (v !== 'song') { audio.pause(); document.querySelector('dialog.ed[open]')?.close(); }
 	if (v === 'home') { renderHome(); document.title = 'Wavelength'; }
-	if (v === 'play') WLPlay.show();
+	if (v === 'play') WLPlay.show(); else WLPlay.hide();
 	if (!es && v !== 'song') connect();   // the song list stays live everywhere
 	renderSongList();
 }

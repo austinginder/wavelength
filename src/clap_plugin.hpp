@@ -15,6 +15,7 @@ public:
     const std::string &id() const override { return id_; }
     const std::string &name() const override { return name_; }
     const char *format() const override { return "clap"; }
+    bool canPlayLive() const override { return true; }
 
     bool loadState(const StateFile &sf, std::string &err) override;
     bool saveStateFile(const std::string &path, size_t &bytes, std::string &err) override;

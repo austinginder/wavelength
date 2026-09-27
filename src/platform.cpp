@@ -506,6 +506,35 @@ bool readLine(Process &p, std::string &line, int timeoutMs) {
     }
 }
 
+bool readSome(Process &p, std::string &out, int timeoutMs) {
+    out.clear();
+    if (!p.pending.empty()) { out.swap(p.pending); return true; }
+    if (p.out == -1) return false;
+    char buf[65536];
+#ifdef _WIN32
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe((HANDLE)p.out, nullptr, 0, nullptr, &avail, nullptr)) return false;
+        if (avail) {
+            DWORD n = 0;
+            if (!ReadFile((HANDLE)p.out, buf, (DWORD)std::min<size_t>(avail, sizeof buf), &n, nullptr) || !n) return false;
+            out.assign(buf, n);
+            return true;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) return true;
+        Sleep(2);
+    }
+#else
+    pollfd pfd{(int)p.out, POLLIN, 0};
+    if (poll(&pfd, 1, timeoutMs) <= 0) return true;   // nothing yet
+    const ssize_t n = read((int)p.out, buf, sizeof buf);
+    if (n <= 0) return false;
+    out.assign(buf, (size_t)n);
+    return true;
+#endif
+}
+
 void terminate(const Process &p) {
     if (!p.handle) return;
 #ifdef _WIN32

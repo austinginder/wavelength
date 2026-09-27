@@ -7,6 +7,7 @@
 #include "wav.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -104,6 +105,14 @@ public:
 
     bool verbose = false;
     double warmup = -1;    // seconds to settle after activation; < 0 = the job's "warmup"
+
+    // Live playing (serve's playground, CLAP and VST3): with liveOutput set, render() runs until it returns
+    // false instead of filling `out`. Before each block, liveEvents(pos, frames, events) adds the notes that
+    // arrived (frame = pos: the block's start); after it, liveOutput(left, right, frames) takes the block's
+    // audio and may wait, which paces the render to the clock.
+    std::function<void(int64_t, uint32_t, std::vector<TimedEvent> &)> liveEvents;
+    std::function<bool(const float *, const float *, uint32_t)> liveOutput;
+    virtual bool canPlayLive() const { return false; }
 };
 
 // Creates the right implementation for a resolved plugin.

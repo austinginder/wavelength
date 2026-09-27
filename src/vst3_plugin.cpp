@@ -476,8 +476,10 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     latencySamples = (uint32_t)lat;
     std::thread worker([&] {
         im.processor->setProcessing(true);
-        const int64_t warm = (int64_t)(0.1 * sr), end = total + lat;
+        const bool live = (bool)liveOutput;   // playing live: until liveOutput says stop
+        const int64_t warm = (int64_t)(0.1 * sr), end = live ? INT64_MAX / 4 : total + lat;
         size_t next = 0;
+        std::vector<TimedEvent> liveNow;
         std::vector<float> lastAuto(autos.size(), NAN);
         bool firstBlock = true;
         for (int64_t pos = -warm; pos < end;) {
@@ -499,15 +501,14 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 const size_t b = (size_t)(pos / block);
                 for (size_t a = 0; a < autos.size(); ++a)
                     if (b < autoNorm[a].size() && autoNorm[a][b] != lastAuto[a]) { addParam(autos[a].id, autoNorm[a][b]); lastAuto[a] = autoNorm[a][b]; }
-                while (next < events.size() && events[next].frame < pos + n) {
-                    const auto &e = events[next++];
+                auto addEvent = [&](const TimedEvent &e) {
                     if (e.kind != TimedEvent::Note) {
                         const int ctl = e.kind == TimedEvent::CC ? e.number : e.kind == TimedEvent::PitchBend ? Vst::kPitchBend : Vst::kAfterTouch;
                         auto it = ctlMap.find({e.channel, ctl});
                         if (it != ctlMap.end())
                             addParam(it->second, e.kind == TimedEvent::PitchBend ? (e.value + 1) * 0.5 : e.value,
                                      (int32)std::max<int64_t>(0, e.frame - pos));
-                        continue;
+                        return;
                     }
                     Event ev{};
                     ev.busIndex = 0;
@@ -527,7 +528,11 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                         ev.noteOff.noteId = -1;
                     }
                     eventList.addEvent(ev);
-                }
+                };
+                while (next < events.size() && events[next].frame < pos + n) addEvent(events[next++]);
+                liveNow.clear();
+                if (liveEvents) liveEvents(pos, (uint32_t)n, liveNow);
+                for (const auto &e : liveNow) addEvent(e);
             }
             // transport
             const double sec = std::max<int64_t>(0, pos) / sr, beat = job.tempo.secToBeat(sec);
@@ -558,7 +563,12 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 for (int32 c = 0; c < data.outputs[b].numChannels; ++c) std::fill(data.outputs[b].channelBuffers32[c], data.outputs[b].channelBuffers32[c] + n, 0.f);
 
             if (im.processor->process(data) != kResultOk) ++failures;
-            if (pos >= 0) {
+            if (pos >= 0 && live) {
+                const auto &bus = data.outputs[0];
+                static const std::vector<float> silence(8192, 0.f);
+                const float *l = bus.numChannels > 0 ? bus.channelBuffers32[0] : silence.data(), *r = bus.numChannels > 1 ? bus.channelBuffers32[1] : l;
+                if (!liveOutput(l, r, (uint32_t)n)) break;
+            } else if (pos >= 0) {
                 const auto &bus = data.outputs[0];
                 if (bus.numChannels > 0) {
                     const float *l = bus.channelBuffers32[0], *r = bus.numChannels > 1 ? bus.channelBuffers32[1] : l;
