@@ -18,6 +18,12 @@ bool isXferJson(const std::vector<uint8_t> &d);
 bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> &processor,
                          std::vector<uint8_t> &controller, std::string &err);
 
+// HISE user presets (.preset, the XML of the interface's controls) -> a HISE plugin's state: its
+// ControlData tree with the preset's Content (and MIDI automation, MPE data) in place
+bool isHisePreset(const std::vector<uint8_t> &d);
+bool hiseWithPreset(const std::vector<uint8_t> &hiseState, const std::vector<uint8_t> &preset, const std::string &name,
+                    std::vector<uint8_t> &out, std::string &err);
+
 // Surge XT Effects .srgfx (one effect, Surge's plain parameter values in storage order) -> the plugin's
 // state: its effect type, normalized slot values and parameter features (tempo sync, deactivated, ...)
 bool isSurgeFxPreset(const std::vector<uint8_t> &d);

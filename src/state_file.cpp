@@ -132,7 +132,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     }
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : isSurgeFxPreset(data) ? "surgefx" : isSerumFxFile(data) ? "serumfx" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isEchobodePatch(data) ? "echobode" : isPermut8Bank(data) ? "permut8" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
+            : isFxp(data) ? "fxp" : isSurgeFxPreset(data) ? "surgefx" : isHisePreset(data) ? "hise" : isSerumFxFile(data) ? "serumfx" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isEchobodePatch(data) ? "echobode" : isPermut8Bank(data) ? "permut8" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
             : endsWith(path, ".sbset") ? "soundbox" : endsWith(path, ".dspreset") ? "decentsampler"
             : endsWith(path, ".odin") ? "juce-valuetree" : endsWith(path, ".ngrr") ? "ngrr" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
@@ -173,6 +173,13 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         }
     } else if (fmt == "serum") {
         if (!serumPresetToStates(data, out.state, out.controllerState, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "hise") {
+        if (!isHisePreset(data)) { err = path + " is not a HISE user preset"; return false; }
+        const std::string name = std::filesystem::absolute(path).string();   // HISE keeps the preset's file as its name
+        const auto preset = data;
+        out.transform = [preset, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return hiseWithPreset(current, preset, name, state, e);
+        };
     } else if (fmt == "surgefx") {
         if (!isSurgeFxPreset(data)) { err = path + " is not a Surge effect preset (.srgfx)"; return false; }
         const auto preset = data;
@@ -274,7 +281,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;

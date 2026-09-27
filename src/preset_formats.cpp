@@ -233,6 +233,121 @@ bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> 
     return true;
 }
 
+// ---- HISE user presets (.preset): the XML of the interface's controls ------------------------------
+namespace {
+// a JUCE ValueTree as ValueTree::writeToStream writes it; property values keep their var stream bytes
+struct VtVar { uint8_t type = 0; std::vector<uint8_t> data; };
+struct VtNode { std::string type; std::vector<std::pair<std::string, VtVar>> props; std::vector<VtNode> kids; };
+bool vtRead(Reader &r, VtNode &n, int depth) {
+    if (depth > 64) return false;
+    n.type = r.cstr();
+    const int64_t np = r.cint();
+    if (!r.ok || np < 0 || np > 100000) return false;
+    for (int64_t k = 0; k < np; ++k) {
+        std::string name = r.cstr();
+        const int64_t len = r.cint();
+        if (!r.ok || len < 1 || r.i + (size_t)len > r.b.size()) return false;
+        VtVar v;
+        v.type = r.b[r.i];
+        v.data.assign(r.b.begin() + (long)r.i + 1, r.b.begin() + (long)(r.i + (size_t)len));
+        r.i += (size_t)len;
+        n.props.push_back({name, v});
+    }
+    const int64_t nk = r.cint();
+    if (!r.ok || nk < 0 || nk > 1000000) return false;
+    n.kids.resize((size_t)nk);
+    for (auto &c : n.kids) if (!vtRead(r, c, depth + 1)) return false;
+    return r.ok;
+}
+void vtCint(std::vector<uint8_t> &o, int64_t v) {   // MemoryOutputStream::writeCompressedInt
+    uint64_t a = v < 0 ? (uint64_t)(-v) : (uint64_t)v;
+    uint8_t buf[8];
+    int n = 0;
+    while (a) { buf[n++] = (uint8_t)(a & 0xff); a >>= 8; }
+    o.push_back((uint8_t)(n | (v < 0 ? 0x80 : 0)));
+    o.insert(o.end(), buf, buf + n);
+}
+void vtCstr(std::vector<uint8_t> &o, const std::string &s) { o.insert(o.end(), s.begin(), s.end()); o.push_back(0); }
+void vtWrite(const VtNode &n, std::vector<uint8_t> &o) {
+    vtCstr(o, n.type);
+    vtCint(o, (int64_t)n.props.size());
+    for (auto &[k, v] : n.props) {
+        vtCstr(o, k);
+        vtCint(o, 1 + (int64_t)v.data.size());
+        o.push_back(v.type);
+        o.insert(o.end(), v.data.begin(), v.data.end());
+    }
+    vtCint(o, (int64_t)n.kids.size());
+    for (auto &c : n.kids) vtWrite(c, o);
+}
+VtVar vtString(const std::string &s) { VtVar v; v.type = 5; v.data.assign(s.begin(), s.end()); v.data.push_back(0); return v; }
+VtVar vtDouble(double d) { VtVar v; v.type = 4; v.data.resize(8); std::memcpy(v.data.data(), &d, 8); return v; }
+VtVar vtBool(bool b) { VtVar v; v.type = b ? 2 : 3; return v; }
+// a preset element as HISE keeps it in the plugin's state: control values are numbers, flags booleans
+VtNode vtFromXml(const xml::Node &e) {
+    VtNode n;
+    n.type = e.tag;
+    for (auto &[k, v] : e.attrs) {
+        char *end = nullptr;
+        const double d = std::strtod(v.c_str(), &end);
+        const bool number = !v.empty() && end && *end == 0;
+        if (k == "value" && number) n.props.push_back({k, vtDouble(d)});
+        else if (k == "Enabled" && (v == "0" || v == "1")) n.props.push_back({k, vtBool(v == "1")});
+        else n.props.push_back({k, vtString(v)});
+    }
+    for (auto &c : e.children) n.kids.push_back(vtFromXml(*c));
+    return n;
+}
+} // namespace
+
+bool isHisePreset(const std::vector<uint8_t> &d) {
+    const std::string head(d.begin(), d.begin() + (long)std::min<size_t>(d.size(), 512));
+    return head.find("<Preset") != std::string::npos && (head.find("<Content") != std::string::npos || head.find("<?xml") != std::string::npos);
+}
+
+bool hiseWithPreset(const std::vector<uint8_t> &current, const std::vector<uint8_t> &preset, const std::string &name,
+                    std::vector<uint8_t> &out, std::string &err) {
+    // a VST3 build keeps the VST 2 chunk in JUCE's "VstW" wrapper: header, FXB bank, chunk size at 172, chunk at 176
+    const bool wrapped = current.size() >= 176 && !std::memcmp(current.data(), "VstW", 4) && !std::memcmp(current.data() + 16, "CcnK", 4);
+    size_t at = 0, len = current.size();
+    if (wrapped) {
+        const uint8_t *q = current.data() + 172;
+        at = 176;
+        len = std::min<size_t>((size_t)q[0] << 24 | (size_t)q[1] << 16 | (size_t)q[2] << 8 | q[3], current.size() - 176);
+    }
+    const std::vector<uint8_t> chunk(current.begin() + (long)at, current.begin() + (long)(at + len));
+    Reader r{chunk};
+    VtNode root;
+    if (!vtRead(r, root, 0) || root.type != "ControlData") { err = "a HISE user preset loads into HISE plugins only (the state has no ControlData)"; return false; }
+    std::string perr;
+    auto doc = xml::parse(std::string(preset.begin(), preset.end()), perr);
+    if (!doc || doc->tag != "Preset") { err = "is not a HISE user preset" + (perr.empty() ? "" : " (" + perr + ")"); return false; }
+    auto replaceChild = [](VtNode &parent, VtNode child) {
+        for (auto &k : parent.kids) if (k.type == child.type) { k = std::move(child); return; }
+        parent.kids.push_back(std::move(child));
+    };
+    for (auto &c : doc->children) {
+        if (c->tag == "Content") {
+            VtNode *ui = nullptr;
+            for (auto &k : root.kids) if (k.type == "InterfaceData") ui = &k;
+            if (!ui) { root.kids.push_back(VtNode{"InterfaceData", {}, {}}); ui = &root.kids.back(); }
+            replaceChild(*ui, vtFromXml(*c));
+        } else if (c->tag == "MidiAutomation" || c->tag == "MPEData") replaceChild(root, vtFromXml(*c));
+    }
+    bool named = false;
+    for (auto &[k, v] : root.props) if (k == "UserPreset") { v = vtString(name); named = true; }
+    if (!named) root.props.push_back({"UserPreset", vtString(name)});
+    std::vector<uint8_t> body;
+    vtWrite(root, body);
+    if (!wrapped) { out = body; return true; }
+    out.assign(current.begin(), current.begin() + 176);
+    auto be = [&](size_t p, uint32_t v) { for (int i = 0; i < 4; ++i) out[p + (size_t)i] = (uint8_t)(v >> (8 * (3 - i))); };
+    be(20, (uint32_t)(176 - 24 + body.size()));
+    be(172, (uint32_t)body.size());
+    out.insert(out.end(), body.begin(), body.end());
+    return true;
+}
+
 // ---- Surge XT Effects .srgfx: one effect with Surge's own (storage) parameter values ------------
 namespace {
 struct SurgeFxParam { int isInt; float min, max; };

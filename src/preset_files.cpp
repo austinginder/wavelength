@@ -28,7 +28,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
                                            ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
-                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide", ".srgfx"};
+                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide", ".srgfx", ".preset"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -61,6 +61,13 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".echobode") return p == "echobode";
     if (ext == ".tide") return p == "pendulate";
     if (ext == ".srgfx") return p == "surgexteffects";
+    if (ext == ".preset") {   // HISE user presets (other plugins use .preset for their own formats)
+        std::ifstream in(file, std::ios::binary);
+        std::vector<uint8_t> head(512);
+        in.read(reinterpret_cast<char *>(head.data()), (std::streamsize)head.size());
+        head.resize((size_t)in.gcount());
+        return isHisePreset(head);
+    }
     if (ext == ".serumfx" || ext == ".serumfxrack") return p == "serum2fx";
     if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
         std::ifstream in(file, std::ios::binary);
@@ -308,6 +315,22 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     if (p == "vital") {   // Vital's own library: factory banks, packs and user presets
         dirs.push_back(fs::path(home) / "Music/Vital");
         dirs.push_back(fs::path(home) / "Documents/Vital");
+    }
+    // HISE plugins keep user presets in <app data>/<Company>/<Product>/User Presets
+    {
+#if defined(__APPLE__)
+        const fs::path appData = fs::path(home) / "Library/Application Support";
+#elif defined(_WIN32)
+        const fs::path appData = getenv("APPDATA") ? fs::path(getenv("APPDATA")) : fs::path(home);
+#else
+        const fs::path appData = fs::path(home) / ".config";
+#endif
+        std::error_code ec;
+        for (auto &company : fs::directory_iterator(appData, ec)) {
+            if (!company.is_directory(ec)) continue;
+            const fs::path presets = company.path() / plugin.name / "User Presets";
+            if (fs::is_directory(presets, ec)) dirs.push_back(presets);
+        }
     }
     if (p == "pendulate")   // Newfangled Audio: the preset (.tide) is the plugin's state JSON
         for (const char *d : {"Documents", "Music"}) dirs.push_back(fs::path(home) / d / "Newfangled Audio/Pendulate/Presets");
