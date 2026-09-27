@@ -15,7 +15,8 @@ namespace wl {
 struct PictureTrack {
     std::string name;
     bool muted = false, failed = false;
-    double lufs = -120;          // the stem's loudness; -120 = not rendered
+    double lufs = -120;          // the stem's loudness (before the fader); -120 = not rendered
+    double postLufs = -120;      // its loudness after its fader, rides and pan (before any bus), shown on the lane
     std::vector<float> level;    // post-fader mean square per `levelHop` seconds; empty = not rendered
 };
 
@@ -28,6 +29,7 @@ struct Picture {
     const Audio *mix = nullptr;         // the final mix (null: the arrangement alone)
     double mixLufs = -120, lra = 0, truePeak = -120;
     std::vector<double> sectionLufs;    // per marker, measured in the render (empty: not rendered)
+    std::vector<std::pair<double, double>> sectionChecks;   // per marker: the step the arrangement check needs there (0 = none) and the measured one
     std::vector<std::pair<double, double>> dropouts;   // render seconds
 };
 

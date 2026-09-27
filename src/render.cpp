@@ -673,7 +673,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             for (size_t b = 0; b < job.buses.size(); ++b) if (job.buses[b].name == track.output) dest = &buses[b];
             double g = dsp::dbToLin(track.gainDb);
             Audio post;   // what this track adds to its output, for per-section loudness
-            if (!job.markers.empty()) post.resize(frames);
+            if (!job.markers.empty() || job.picture) post.resize(frames);
             float postPeak = 0;
             const size_t levelHop = (size_t)std::llround(0.05 * sr);   // the picture's level lane
             if (job.picture) tr.levelTimeline.assign(frames / levelHop + 1, 0.f);
@@ -715,6 +715,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                     }
             }
             tr.postPeakDb = dsp::linToDb(postPeak);
+            if (!post.left.empty()) tr.postLufs = integratedLufs(post, job.sampleRate, 0, frames);
             for (auto &v : tr.levelTimeline) v /= (float)(2 * levelHop);
             for (size_t m = 0; m < job.markers.size(); ++m) {
                 const double a0 = job.markers[m].sec, b0 = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
@@ -1152,7 +1153,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         }
     }
     for (size_t m = 1; m < result.sections.size(); ++m) {
-        const auto &a = result.sections[m - 1], &b = result.sections[m];
+        const auto &a = result.sections[m - 1];
+        auto &b = result.sections[m];
         if (!b.checks || (a.lufs < -60 && !b.skippedSilence) || b.lufs < -60) continue;
         double jump = b.lufs - a.lufs;
         double need = 0;
@@ -1161,6 +1163,8 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         else if (payoff(a.name) && escalation(b.name)) need = 0.5;        // Final Act -> Climax: at least rise
         // a drop is heard at its boundary: compare the build's last 2 bars with the drop's first 4
         if (need >= 2.0 && b.tailBefore > -60 && b.head > -60) jump = b.head - b.tailBefore;
+        b.need = need;
+        b.jump = jump;
         if (need == 0 || jump >= need) continue;
         char buf[480], against[160] = "";
         if (need >= 2 && b.skippedSilence)
@@ -1196,13 +1200,14 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         pic.mixLufs = result.mixLufs;
         pic.lra = result.mixLra;
         pic.truePeak = result.truePeakDb;
-        for (auto &s : result.sections) pic.sectionLufs.push_back(s.lufs);
+        for (auto &s : result.sections) { pic.sectionLufs.push_back(s.lufs); pic.sectionChecks.push_back({s.need, s.jump}); }
         for (auto &d : result.dropouts) if (!d.intended) pic.dropouts.push_back({d.start, d.end});
         for (size_t i = 0; i < job.tracks.size() && i < result.tracks.size(); ++i) {
             const TrackResult &t = result.tracks[i];
             PictureTrack p;
             p.name = t.name;
             p.lufs = t.lufs;
+            p.postLufs = t.postLufs;
             p.level = t.levelTimeline;
             p.failed = std::find(result.failedTracks.begin(), result.failedTracks.end(), t.name) != result.failedTracks.end();
             pic.tracks.push_back(std::move(p));

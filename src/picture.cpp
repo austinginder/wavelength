@@ -27,7 +27,7 @@ struct Rgb { uint8_t r, g, b; };
 constexpr Rgb hex(uint32_t v) { return {(uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v}; }
 
 const Rgb kBg = hex(0x0e1014), kPanel = hex(0x151820), kPanelAlt = hex(0x12151b), kGrid = hex(0x2a303b), kText = hex(0xe4e8ef),
-          kDim = hex(0x8b94a4), kAmber = hex(0xf2b441), kRed = hex(0xe0525a), kMuted = hex(0x5a606b), kWhite = hex(0xffffff);
+          kDim = hex(0x8b94a4), kAmber = hex(0xf2b441), kRed = hex(0xe0525a), kGreen = hex(0x67c587), kMuted = hex(0x5a606b), kWhite = hex(0xffffff);
 const Rgb kSections[] = {hex(0x2d3f5e), hex(0x45305e), hex(0x2b5a4c), hex(0x5e4a2d), hex(0x5e2f40), hex(0x2c5260)};
 const Rgb kTracks[] = {hex(0x5ab0ff), hex(0xff8a5b), hex(0x7ddc7a), hex(0xd98cff), hex(0xffd35a), hex(0x4fd1c5), hex(0xff6fa8), hex(0xb5c46a)};
 
@@ -263,6 +263,19 @@ bool writePicture(const std::string &path, const Job &job, const Picture &pic, i
             const std::string t = fmt("%.1f", v);
             if (xb - xa > font.width(t, S(12)) + S(8)) font.draw(cv, xa + S(4), y - S(4), t, S(12), kText);
         }
+        // the arrangement check at each boundary it applies to: how far the section lands over the bars before it
+        for (size_t k = 1; k < secs.size() && k < pic.sectionChecks.size(); ++k) {
+            const auto [need, jump] = pic.sectionChecks[k];
+            if (need <= 0) continue;
+            const Rgb c = jump < need ? kRed : (need >= 2 && jump < 3) ? kAmber : kGreen;
+            const double x = X(secs[k].a);
+            cv.rect(x - 1, loudY, x + 2, loudY + loudH, c, 0.55);
+            const std::string t = fmt("%+.1f", jump), up = jump >= 0 ? "^" : "v";
+            const double w = font.width(t, S(12)), yb = loudY + loudH - S(8);
+            cv.rect(x + S(3), yb - S(13), x + S(3) + w + S(18), yb + S(4), kPanel, 0.85);
+            font.draw(cv, x + S(6), yb, up, S(12), c);
+            font.draw(cv, x + S(16), yb, t, S(12), c);
+        }
         font.draw(cv, S(10), loudY + S(18), "Loudness", S(15), kText);
         font.draw(cv, S(10), loudY + S(34), "LUFS, 3 s", S(11), kDim);
         font.draw(cv, S(10), loudY + S(48), "line = section", S(11), kDim);
@@ -363,14 +376,16 @@ bool writePicture(const std::string &path, const Job &job, const Picture &pic, i
         Rgb subCol = kDim;
         if (bad) { sub = "failed"; subCol = kRed; }
         else if (muted) sub = "muted";
-        else if (pt && pt->lufs > -70) sub = fmt("%.1f LUFS", pt->lufs);
+        const double inMix = pt ? (pt->postLufs > -70 ? pt->postLufs : pt->lufs) : -120;   // its level in the mix, not the raw stem
+        if (bad || muted) {}
+        else if (inMix > -70) sub = fmt("%.1f LUFS", inMix);
         else if (pt && rendered) sub = "silent";
         const double nameSize = S(laneH >= 30 ? 14 : 12);
         if (laneH >= S(34) && !sub.empty()) {
             font.draw(cv, S(12), y0 + laneH / 2.0 - S(2), ascii(font.fit(tr.name, nameSize, labelW - S(20))), nameSize, muted ? kDim : kText);
             font.draw(cv, S(12), y0 + laneH / 2.0 + S(13), sub, S(11), subCol);
         } else {
-            const std::string right = sub.empty() ? "" : " " + (bad ? std::string("failed") : muted ? std::string("muted") : pt && pt->lufs > -70 ? fmt("%.0f", pt->lufs) : "");
+            const std::string right = sub.empty() ? "" : " " + (bad ? std::string("failed") : muted ? std::string("muted") : inMix > -70 ? fmt("%.0f", inMix) : "");
             const double rw = font.width(right, S(11));
             font.draw(cv, S(12), y0 + laneH / 2.0 + S(5), ascii(font.fit(tr.name, nameSize, labelW - S(20) - rw)), nameSize, muted ? kDim : kText);
             if (!right.empty()) font.draw(cv, labelW - S(8) - rw, y0 + laneH / 2.0 + S(5), right, S(11), subCol);
@@ -387,7 +402,8 @@ bool writePicture(const std::string &path, const Job &job, const Picture &pic, i
     }
     font.draw(cv, S(10), axisY + S(18), "Time", S(11), kDim);
     font.draw(cv, S(10), H - S(8),
-              rendered ? "Lanes: notes over post-fader level. Spectrum: +3 dB/oct, 30 Hz-16 kHz. Red: dropouts."
+              rendered ? "Lanes: notes over post-fader level, LUFS after the track's fader. Spectrum: +3 dB/oct, 30 Hz-16 kHz. Red: dropouts. "
+                         "Arrows: drop/lift jumps (last 2 bars vs first 4), green 3+ dB, amber passes, red weak."
                        : "Lanes: notes (pitch within each track's range; drums a row per key).",
               S(11), kDim);
 

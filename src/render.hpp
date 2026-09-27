@@ -16,6 +16,7 @@ struct TrackResult {
     Levels levels{};
     double lufs = -120, seconds = 0;   // seconds: wall time to render this track
     double postPeakDb = -240;          // peak of what the track sends to its output, after fader and pan
+    double postLufs = -120;            // loudness of what the track sends to its output (after fader, rides, pan; before a bus)
     std::vector<double> sectionLufs;  // post-fader loudness in each marker section
     uint32_t latencySamples = 0;      // plugin processing delay removed from this track (instrument + effects)
     std::vector<std::string> warnings;
@@ -46,6 +47,7 @@ struct SectionResult {
     // bars of music before it instead; silenceLufs and the beats [silenceFrom, at) describe what was skipped
     bool skippedSilence = false;
     double silenceLufs = -120, silenceFrom = 0, tailFrom = 0, at = 0;
+    double need = 0, jump = 0;   // the arrangement check at this boundary: the step it needs (0 = not checked) and the one measured
 };
 
 struct RenderResult {

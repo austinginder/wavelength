@@ -5,6 +5,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `render --png`: each lane's LUFS is now its level after the track's fader (new report field
+  `tracks[].postFaderLufs`), not the raw stem, so a track with a big fader cut no longer looks like the
+  loudest part; the loudness panel marks each checked boundary with its drop jump (green 3+ dB, amber
+  passes, red weak).
 - `builtin:synth`: a virtual-analog polysynth, so melodic parts render with no plugin installed (CI, a
   fresh machine, an agent's cloud container). Band-limited saw and pulse, triangle, sine with FM, noise,
   unison with detune and stereo spread, a sub, a resonant 12/24 dB low/high/band-pass filter with key

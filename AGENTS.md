@@ -342,7 +342,12 @@ Claude Code, read the PNG). Top to bottom:
 - **Spectrum:** the mix from 30 Hz to 16 kHz, tilted +3 dB per octave so a balanced mix looks even
   from bass to air.
 - **One lane per track:** its notes (pitch within the track's own range; drums a row per key) over
-  its post-fader level, with the stem's LUFS beside its name.
+  its post-fader level, with its post-fader LUFS beside its name (`tracks[].postFaderLufs`: after its
+  fader, rides and pan, before any bus), so the lanes compare as they sit in the mix. The raw stem's
+  loudness, for gain staging, stays in `tracks[].lufs`.
+- **Drop marks:** at every boundary the arrangement check covers (a build into what follows it, a
+  payoff, an escalation), the jump from the last 2 bars before it to the first 4 after it: green
+  3 dB or more, amber when it passes the check but is under 3 dB, red when it's a weak drop.
 
 What to look for: the loudness line should draw the contour you planned (a drop steps up, a
 breakdown dips; a flat line is a flat arrangement). A lane lit where it should rest (a pad under
@@ -537,6 +542,8 @@ job.json` lines the sections up and keeps the lead-in.
   removed, so the track stays aligned. A plugin that doesn't report its delay isn't corrected
   (kHs Reverser's wet output lags by one chunk).
 - `mix.truePeakDb`, the reconstructed peak (what an MP3 encoder sees).
+- `tracks[].postFaderLufs`, the track's loudness after its fader, rides and pan (before any bus): how
+  loud it sits against the other tracks, where `lufs` is the raw stem you gain-stage from.
 - `tracks[].postFaderPeakDb`, the track's peak after its fader and pan, as it leaves the track
   (before any bus it feeds: a track into a limited bus can read hotter than what reaches the mix). When the master limiter
   works hard, a warning names the tracks whose peaks feed it; tame those (a `limiter` or
