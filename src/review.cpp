@@ -83,9 +83,11 @@ json status(const Song &song, const json &comment) {
     SongDiff d;
     if (!diffJobs(then, now, song.dir.string(), d, err)) return out;
     std::vector<std::string> tracks;
-    for (auto &t : a.value("tracks", json::array())) if (t.is_string()) tracks.push_back(t.get<std::string>());
+    const json anchorTracks = a.contains("tracks") && a["tracks"].is_array() ? a["tracks"] : json::array();
+    for (auto &t : anchorTracks) if (t.is_string()) tracks.push_back(t.get<std::string>());
     int b0 = 1, b1 = 1 << 20;
-    if (a.contains("bars") && a["bars"].is_array() && a["bars"].size() == 2) { b0 = a["bars"][0].get<int>(); b1 = a["bars"][1].get<int>(); }
+    const json bars = a.contains("bars") ? a["bars"] : json();
+    if (bars.is_array() && bars.size() == 2 && bars[0].is_number() && bars[1].is_number()) { b0 = (int)bars[0].get<double>(); b1 = (int)bars[1].get<double>(); }
     std::vector<std::string> why;
     if (diffTouches(d, tracks, b0, b1, why)) { out["outdated"] = true; out["why"] = why; }
     return out;

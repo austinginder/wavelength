@@ -23,6 +23,15 @@ const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sam
 bool available(const json &sound, const std::string &baseDir, std::string &why) {
     const std::string plugin = sound.value("plugin", "");
     if (plugin.empty()) { why = "no plugin"; return false; }
+    // a library's file by name ("lib:Legend 909/Kick.wav") has to be installed here
+    auto libMissing = [&](const json &v, const std::string &what) {
+        if (!v.is_string() || v.get<std::string>().rfind("lib:", 0) != 0 || !resolveLibraryFile(v.get<std::string>()).empty()) return false;
+        why = what + " '" + v.get<std::string>() + "' is not on this computer";
+        return true;
+    };
+    if (sound.contains("clips") && sound["clips"].is_array())
+        for (auto &c : sound["clips"])
+            if (c.is_object() && c.contains("file") && libMissing(c["file"], "clip")) return false;
     if (plugin == "builtin:sampler") {
         const json s = sound.value("sampler", json::object());
         for (const char *kind : {"multisample", "kit", "sfz", "soundfont"})
@@ -33,6 +42,11 @@ bool available(const json &sound, const std::string &baseDir, std::string &why) 
                     return false;
                 }
             }
+        if (s.contains("sample") && libMissing(s["sample"], "sample")) return false;
+        for (const char *k : {"map", "kit"})
+            if (s.contains(k) && s[k].is_object())
+                for (auto &[key, v] : s[k].items())
+                    if (libMissing(v.is_object() && v.contains("file") ? v["file"] : v, "kit sample")) return false;
         return true;
     }
     if (plugin.rfind("builtin:", 0) == 0) return true;

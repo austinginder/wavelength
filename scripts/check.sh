@@ -254,6 +254,17 @@ for f in out/check/fixtures/good out/check/fixtures/*.wavelength; do
   [ $c = $want ] && [ $p = $want ] || { echo "     $(basename "$f"): engine $c, python $p, want $want"; fixtures_ok=0; }
 done
 if [ $fixtures_ok = 1 ]; then echo "ok   song fixtures: engine and Python reader agree"; else echo "FAIL song fixtures"; fail=1; fi
+# a package is untrusted: rendering one whose job writes outside its output folder is refused; undo takes
+# back a file that was added (a restore makes the tracked files exactly the target's)
+rm -rf out/check/undo-add && cp -R out/check/song out/check/undo-add && rm -rf out/check/undo-add/history out/check/undo-add/wavelength.json
+if ! "$w" render out/check/fixtures/bad-deliver.wavelength --out out/check/escape >/dev/null 2>&1 &&
+   (cd out/check/undo-add && "$w" save -m base >/dev/null && mkdir -p media && echo x > media/added.txt &&
+    python3 -c 'import json;m=json.load(open("wavelength.json"));m["files"].append({"path":"media/added.txt","role":"media"});json.dump(m,open("wavelength.json","w"))' &&
+    "$w" save -m added >/dev/null && "$w" undo >/dev/null && [ ! -e media/added.txt ] && "$w" redo >/dev/null && [ -e media/added.txt ]); then
+  echo "ok   package render stays inside its song; undo removes an added file"
+else
+  echo "FAIL package safety or undo of an added file"; fail=1
+fi
 # upgrade: a pre-format folder (absolute paths inside it, a sample in scratch out/) gets a manifest,
 # relative paths (the scratch sample copied into media/), a revision, and still renders; both readers accept it
 up="$PWD/out/check/upgrade"

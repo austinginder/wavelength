@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://wavelength.run/schemas/review.schema.json",
+  "$id": "https://wavelength.run/schemas/1.0/review.schema.json",
   "title": "Wavelength comments (review.json)",
-  "description": "Comments on a Wavelength song, format version 1.0 (docs/song-format.md, Draft 1, section 7). Accepts both the current comment shape (anchor, replies, resolved) and comments written before the spec, whose anchor fields sit on the comment itself, whose render is a number and whose single reply is a string. Times written before the spec use a UTC offset without a colon (2026-09-26T21:23:40-0400), so comment times are not held to RFC 3339 here. CC0.",
+  "description": "Comments on a Wavelength song, format version 1.0 (docs/song-format.md, Draft 2, section 7). I-JSON: no key twice in an object. Comment ids are unique within the file (checked by validators). Accepts both the current comment shape (anchor, replies, resolved) and comments written before the spec, whose anchor fields sit on the comment itself, whose render is a number and whose single reply is a string. Times written before the spec use a UTC offset without a colon (2026-09-26T21:23:40-0400), so comment times are not held to RFC 3339 here. CC0.",
   "type": "object",
   "required": ["comments"],
   "properties": {
@@ -10,17 +10,21 @@
   },
   "additionalProperties": true,
   "$defs": {
-    "hashRef": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "hashRef": {
+      "type": "string",
+      "description": "\"sha256:\" and 64 lowercase hex digits, as writers write it. A value with another algorithm's prefix is unsupported, not invalid (section 6).",
+      "pattern": "^(?:sha256:[0-9a-f]{64}|(?!sha256:)[A-Za-z0-9][A-Za-z0-9+._-]*:.+)$"
+    },
     "person": {
       "type": "object",
       "required": ["name"],
       "properties": {
         "name": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["human", "ai"], "default": "human"}
+        "kind": {"type": "string", "minLength": 1, "default": "human", "description": "Known values: human (the default), ai. Readers read a kind they don't know as human."}
       }
     },
     "timeRange": {
-      "description": "[start, end] in seconds of the song.",
+      "description": "[start, end] in seconds of the rendered mix, its lead-in included.",
       "type": "array",
       "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}],
       "minItems": 2,
@@ -34,7 +38,7 @@
       "maxItems": 2
     },
     "beatRange": {
-      "description": "[start, end] in beats.",
+      "description": "[start, end] in beats, counted from the job's beat 0.",
       "type": "array",
       "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}],
       "minItems": 2,
@@ -104,7 +108,7 @@
         "id": {"type": "string", "minLength": 1},
         "created": {"type": "string"},
         "author": {"$ref": "#/$defs/person"},
-        "status": {"enum": ["open", "done"]},
+        "status": {"type": "string", "minLength": 1, "description": "Known values: open, done. Readers read a status they don't know as open."},
         "text": {"type": "string"},
         "anchor": {"$ref": "#/$defs/anchor"},
         "replies": {"type": "array", "items": {"$ref": "#/$defs/reply"}},

@@ -37,6 +37,16 @@ nlohmann::json newManifest(const std::filesystem::path &dir);
 
 // Section 2: a relative path inside the song, "/"-separated, no "..", no ".git"; `err` says what is wrong
 bool checkSongPath(const std::string &rel, std::string &err);
+// A path compared the way the format compares names (docs/song-format.md section 2): Unicode simple case
+// folding for Latin, Greek and Cyrillic.
+std::string foldName(const std::string &path);
+// JSON the format accepts (I-JSON): no byte order mark, no key twice in one object.
+bool parseJsonStrict(const std::string &text, nlohmann::json &out, std::string &err);
+// Whether this Wavelength can read a song with this manifest: format and minReaderVersion as numbers,
+// no required extension it doesn't know.
+bool readableFormat(const nlohmann::json &manifest, std::string &err);
+// Files the job writes (deliver[].file), {where, path}.
+std::vector<std::pair<std::string, std::string>> jobOutputRefs(const nlohmann::json &job);
 // The files a revision snapshots: the job and the files whose role is source, notes or media (those
 // that exist), sorted.
 std::vector<std::string> trackedFiles(const Song &song);

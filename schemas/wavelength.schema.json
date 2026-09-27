@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://wavelength.run/schemas/wavelength.schema.json",
+  "$id": "https://wavelength.run/schemas/1.0/wavelength.schema.json",
   "title": "Wavelength song manifest (wavelength.json)",
-  "description": "The manifest of a Wavelength song, format version 1.0 (docs/song-format.md, Draft 1, section 3). Readers ignore keys they do not know (section 10), so objects stay open. Rules a schema cannot express (NFC names, at most 255 bytes per path segment, case-insensitive uniqueness, files that exist and match their sha256) are checked by `wavelength validate` and scripts/wavelength_song.py. CC0.",
+  "description": "The manifest of a Wavelength song, format version 1.0 (docs/song-format.md, Draft 2, section 3). I-JSON: UTF-8 without a byte order mark, no key twice in an object. Readers ignore keys they do not know (section 10), so objects stay open, and value lists are open too: a reader reads a file role, author kind or requirement kind it doesn't know as the documented default. Rules a schema cannot express (NFC names, at most 255 bytes per path segment, uniqueness after case folding, files that exist and match their sha256, a files[] path that is the job) are checked by `wavelength validate` and scripts/wavelength_song.py. CC0.",
   "type": "object",
   "required": ["format", "formatVersion", "id", "title", "slug", "job"],
   "properties": {
     "format": {"const": "wavelength.song"},
-    "formatVersion": {"$ref": "#/$defs/version", "description": "The version of the spec the song follows. A 1.0 reader refuses any major version but 1."},
-    "minReaderVersion": {"$ref": "#/$defs/version", "description": "The oldest format version a reader must support to use the song correctly. Default: formatVersion's major, .0."},
+    "formatVersion": {"$ref": "#/$defs/version", "description": "The version of the spec the song follows, \"major.minor\", compared as two numbers (1.10 is newer than 1.9)."},
+    "minReaderVersion": {"$ref": "#/$defs/version", "description": "The oldest format version a reader must support to use the song correctly. Default: formatVersion's major, .0. A reader refuses a song whose minReaderVersion is newer than the newest version it supports."},
     "generator": {
       "type": "object",
       "description": "The program that last wrote the song.",
@@ -67,7 +67,7 @@
     },
     "extensionsRequired": {
       "type": "array",
-      "description": "Extensions a reader MUST refuse the song without. Each should also be a key of extensions.",
+      "description": "Extensions a reader MUST refuse the song without: a reader refuses a song that names one it doesn't know. Each should also be a key of extensions.",
       "items": {"$ref": "#/$defs/reverseDomain"},
       "uniqueItems": true
     },
@@ -79,7 +79,7 @@
   },
   "additionalProperties": true,
   "$defs": {
-    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$", "description": "\"major.minor\": two numbers."},
     "uuid": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -92,11 +92,15 @@
     },
     "path": {
       "type": "string",
-      "description": "Relative to the song folder, '/' separated (section 2): not absolute, no backslash, no empty, '.' or '..' segment, no segment named .git.",
-      "pattern": "^(?!/)(?!~(?:/|$))(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?\\.[Gg][Ii][Tt][ .]*(?:/|$))(?!(?:.*/)?[Gg][Ii][Tt]~1(?:/|$))[^\\\\\\u0000-\\u001f\\u007f]+$"
+      "description": "Relative to the song folder, '/' separated (section 2): not absolute (no leading '/', '~' or drive letter), no trailing '/', no empty, '.' or '..' segment. No segment has a control character or one of \\ < > : \" | ? *, ends with a space or '.', is a Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, any case, with or without an extension), .git (any case, ignoring trailing spaces and dots) or git~1.",
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))(?!.*[ .](?:/|$))(?!(?:.*/)?\\.[Gg][Ii][Tt][ .]*(?:/|$))(?!(?:.*/)?[Gg][Ii][Tt]~1(?:/|$))(?!(?:.*/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9]) *(?:\\.[^/]*)?(?:/|$))[^\\\\\\u0000-\\u001f\\u007f<>:\"|?*]+$"
     },
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "hashRef": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "hashRef": {
+      "type": "string",
+      "description": "\"sha256:\" and 64 lowercase hex digits, as writers write it. A value with another algorithm's prefix is unsupported, not invalid (section 6).",
+      "pattern": "^(?:sha256:[0-9a-f]{64}|(?!sha256:)[A-Za-z0-9][A-Za-z0-9+._-]*:.+)$"
+    },
     "reverseDomain": {
       "type": "string",
       "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
@@ -107,7 +111,7 @@
       "properties": {
         "name": {"type": "string", "minLength": 1},
         "role": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["human", "ai"], "default": "human"},
+        "kind": {"type": "string", "minLength": 1, "default": "human", "description": "Known values: human (the default), ai. Readers read a kind they don't know as human."},
         "url": {"type": "string", "format": "uri"}
       }
     },
@@ -115,8 +119,11 @@
       "type": "object",
       "required": ["path", "role"],
       "properties": {
-        "path": {"$ref": "#/$defs/path"},
-        "role": {"enum": ["source", "notes", "media", "render", "other"]},
+        "path": {
+          "allOf": [{"$ref": "#/$defs/path"}, {"not": {"pattern": "^(?:mimetype|wavelength\\.json|review\\.json|history/.*|out/.*)$"}}],
+          "description": "Not mimetype, wavelength.json, the job or review.json, and not under history/ or out/."
+        },
+        "role": {"type": "string", "minLength": 1, "description": "Known values: source, notes, media, render, other. Readers read a role they don't know as other."},
         "mediaType": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\\s*;.*)?$"
@@ -139,6 +146,7 @@
     },
     "requirement": {
       "type": "object",
+      "description": "One need of the song (section 4.3): a plugin (with an optional preset) or a library. Readers ignore an entry of a kind they don't know (neither plugin nor library, or a library kind they don't know).",
       "required": ["track", "fallback"],
       "properties": {
         "track": {"type": "string", "minLength": 1, "description": "The track's ID (its id, or its name when it has none)."},
@@ -150,6 +158,15 @@
             "format": {"type": "string"},
             "id": {"type": "string"},
             "version": {"type": "string"}
+          }
+        },
+        "library": {
+          "type": "object",
+          "description": "A sample library the track plays, by name.",
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {"type": "string", "minLength": 1, "description": "Known values: multisample, kit, soundfont, sfz, files (lib: files)."},
+            "name": {"type": "string", "minLength": 1}
           }
         },
         "preset": {"type": "string"},

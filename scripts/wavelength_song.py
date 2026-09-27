@@ -2,7 +2,7 @@
 """Read, validate and unpack Wavelength songs without the engine.
 
 A second, independent implementation of the Wavelength song format
-(docs/song-format.md, Draft 1, format version 1.0). Python 3.9+, standard
+(docs/song-format.md, Draft 2, format version 1.0). Python 3.9+, standard
 library only. It never runs, imports or executes anything a song contains.
 
 Commands:
@@ -16,6 +16,10 @@ Every problem has a severity (error or warning), the path it is about, a
 message and a short stable code (for example path-traversal, symlink,
 case-collision, object-hash, reader-version), so other implementations can be
 compared with this one. validate exits 1 when there are errors.
+
+In a song folder the rules of section 2 apply to the song's files (the manifest,
+the job, listed and referenced files, review.json, history/); other files such as
+scratch renders in out/ are not part of the song and are not checked.
 """
 
 from __future__ import annotations
@@ -42,10 +46,15 @@ REVIEW = "review.json"
 LOG = "history/log.jsonl"
 OBJECTS = "history/objects/"
 
+LOCK = "history/lock"
+
+# Open lists (section 10): a value this reader doesn't know is read as the default, with a warning.
 ROLES = ("source", "notes", "media", "render", "other")
 TRACKED_ROLES = ("source", "notes", "media")
 OPS = ("save", "render", "undo", "redo", "restore")
 KINDS = ("human", "ai")
+STATUSES = ("open", "done")
+LIBRARY_KINDS = ("multisample", "kit", "soundfont", "sfz", "files")
 LEGACY_FIELDS = ("ref", "bars", "beats", "time", "tracks", "notes", "render", "reply")
 NEW_FIELDS = ("anchor", "replies", "resolved")
 
@@ -56,10 +65,10 @@ MAX_ENTRIES = 100_000
 MAX_JSON = 64 * 1024 ** 2           # wavelength.json, the job, review.json, report.json
 MAX_LOG = 256 * 1024 ** 2
 
-AUDIO_EXT = (".wav", ".wave", ".aif", ".aiff", ".aifc", ".flac", ".mp3", ".ogg", ".oga",
-             ".opus", ".m4a", ".caf", ".w64")
 LIB_PREFIX = "lib:"
-SAMPLER_EXT = AUDIO_EXT + (".sfz", ".sf2", ".sf3", ".multisample")
+GENERATOR_PREFIX = "*"
+LIBRARY_FILE_EXT = (".multisample", ".sfz", ".sf2", ".sf3")   # a sampler library value ending so is a file
+BOM = b"\xef\xbb\xbf"
 
 # Patterns are matched with re.fullmatch (a bare "$" would accept a trailing newline).
 VERSION_RE = r"([0-9]+)\.([0-9]+)"
@@ -67,6 +76,9 @@ SLUG_RE = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 SHA256_RE = r"[0-9a-f]{64}"
 HASHREF_RE = r"sha256:[0-9a-f]{64}"
+OTHER_HASH_RE = r"(?!sha256:)[A-Za-z0-9][A-Za-z0-9+._-]*:.+"   # another algorithm: unsupported, not corrupt
+DEVICE_RE = r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]"
+WINDOWS_CHARS = '<>:"|?*'
 RFC3339_RE = (r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?"
               r"(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))")
 REVERSE_DOMAIN_RE = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+"
@@ -224,16 +236,26 @@ def path_problems(p):
 
     if "\\" in p:
         add("path-backslash", "contains a backslash; the separator is '/'")
-    if p.startswith("/") or re.match(r"[A-Za-z]:", p) or p == "~" or p.startswith("~/"):
+    if p.startswith(("/", "~")) or re.match(r"[A-Za-z]:", p):
         add("path-absolute", "is absolute; paths are relative to the song folder")
     segments = p.split("/")
     if p.startswith("/"):
         segments = segments[1:]
+    if len(p) > 1 and p.endswith("/"):
+        add("path-trailing-slash", "ends with '/'")
+        segments = segments[:-1]
     for seg in segments:
         if seg == "..":
             add("path-traversal", "has a '..' segment")
         elif seg in ("", "."):
             add("path-segment", "has an empty or '.' segment")
+        else:
+            if any(c in WINDOWS_CHARS for c in seg):
+                add("path-char", 'has a name with one of < > : " | ? *')
+            if seg.endswith((" ", ".")):
+                add("path-trailing", "has a name that ends with a space or '.'")
+            if re.fullmatch(DEVICE_RE, seg.split(".")[0].rstrip(" "), re.I | re.A):
+                add("path-device", "has a Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)")
         if seg.rstrip(" .").casefold() == ".git" or seg.casefold() == "git~1":
             add("path-git", "has a segment named .git")
         if len(seg.encode("utf-8")) > 255:
@@ -245,19 +267,28 @@ def path_problems(p):
     return found
 
 
+def hash_ref(v):
+    """"ok" for sha256:<64 lowercase hex>, "unsupported" for another algorithm's prefix, else "invalid"."""
+    if matches(HASHREF_RE, v):
+        return "ok"
+    return "unsupported" if matches(OTHER_HASH_RE, v) else "invalid"
+
+
 # ---------------------------------------------------------------------------
 # JSON
 
 
 class JsonProblem(ValueError):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def _pairs(pairs):
     obj = {}
     for k, v in pairs:
         if k in obj:
-            raise JsonProblem("has the key %r twice" % k)
+            raise JsonProblem("has the key %r twice (I-JSON)" % k, "json-duplicate-key")
         obj[k] = v
     return obj
 
@@ -267,10 +298,10 @@ def _constant(name):
 
 
 def parse_json(data):
-    """Strict JSON: UTF-8 without a BOM, no NaN/Infinity, no duplicate keys."""
+    """I-JSON (RFC 7493): UTF-8 without a BOM, no NaN/Infinity, no duplicate keys."""
     if isinstance(data, bytes):
-        if data.startswith(b"\xef\xbb\xbf"):
-            raise JsonProblem("starts with a byte order mark")
+        if data.startswith(BOM):
+            raise JsonProblem("starts with a byte order mark (I-JSON)", "json-bom")
         try:
             data = data.decode("utf-8")
         except UnicodeDecodeError as e:
@@ -292,8 +323,10 @@ class FolderTree:
 
     kind = "folder"
 
-    def __init__(self, root, files):
+    def __init__(self, root, files, issues=()):
         self.root = root
+        self.issues = list(issues)      # section 2 problems, reported for the song's files only
+        self.digests = {}
         self.names = set(files)
         self.by_fold = {fold(f): f for f in files}
         self.dirs = {posixpath.dirname(f) for f in files}
@@ -337,10 +370,12 @@ class ZipTree:
 
     kind = "package"
 
-    def __init__(self, zf, entries, dir_entries):
+    def __init__(self, zf, entries, dir_entries, digests=None):
         self.zf = zf
         self.entries = entries          # name -> ZipInfo, regular files only
         self.dir_entries = dir_entries  # explicit directory entries (names without the slash)
+        self.digests = digests or {}    # name -> (sha256 hex, size), from the CRC-32 pass
+        self.issues = []
         self.by_fold = {fold(n): n for n in entries}
         self.dirs = set(dir_entries)
         for n in entries:
@@ -389,6 +424,8 @@ def read_bytes(tree, rel, limit):
 
 def hash_file(tree, rel):
     """SHA-256 and size of a file, read in chunks."""
+    if rel in tree.digests:
+        return tree.digests[rel]
     h = hashlib.sha256()
     n = 0
     try:
@@ -401,16 +438,19 @@ def hash_file(tree, rel):
                 n += len(chunk)
     except (zipfile.BadZipFile, OSError, zlib.error, EOFError) as e:
         raise ReadProblem("can't be read: %s" % e)
-    return h.hexdigest(), n
+    tree.digests[rel] = (h.hexdigest(), n)
+    return tree.digests[rel]
 
 
 def load_json_file(tree, rel, problems, code, limit=MAX_JSON):
     """Read and parse a JSON file, reporting problems under code. None on failure."""
     try:
         return parse_json(read_bytes(tree, rel, limit))
-    except (ReadProblem, JsonProblem) as e:
+    except JsonProblem as e:
+        problems.error(rel, str(e), e.code or code)
+    except ReadProblem as e:
         problems.error(rel, str(e), code)
-        return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -418,12 +458,14 @@ def load_json_file(tree, rel, problems, code, limit=MAX_JSON):
 
 
 def scan_folder(root, problems):
-    """Walk a song folder without following links; apply section 2 to every entry.
+    """Walk a song folder without following links, noting where entries break section 2.
 
-    Returns the relative paths of the regular files (symbolic links and .git
-    are reported and left out).
+    Returns (files, issues): the relative paths of the regular files (symbolic
+    links and .git are left out), and (path, code, message, other path) for each
+    problem. Issues are reported by report_folder_issues, for the song's files only.
     """
     files = []
+    issues = []
     seen = {}
     collided = set()
 
@@ -438,16 +480,16 @@ def scan_folder(root, problems):
         for e in entries:
             rel = rel_dir + "/" + e.name if rel_dir else e.name
             for code, message in path_problems(rel):
-                problems.error(rel, message, code)
+                issues.append((rel, code, message, None))
             key = fold(rel)
             if key in seen:
                 if fold(rel_dir) not in collided:
-                    problems.error(rel, "collides with %s when case is ignored" % seen[key], "case-collision")
+                    issues.append((rel, "case-collision", "collides with %s when case is ignored" % seen[key], seen[key]))
                 collided.add(key)
             else:
                 seen[key] = rel
             if e.is_symlink():
-                problems.error(rel, "is a symbolic link", "symlink")
+                issues.append((rel, "symlink", "is a symbolic link", None))
                 continue
             if e.name.rstrip(" .").casefold() == ".git":
                 continue
@@ -456,10 +498,39 @@ def scan_folder(root, problems):
             elif e.is_file(follow_symlinks=False):
                 files.append(rel)
             else:
-                problems.error(rel, "is not a regular file or folder", "special-file")
+                issues.append((rel, "special-file", "is not a regular file or folder", None))
 
     walk("")
-    return files
+    return files, issues
+
+
+def report_folder_issues(tree, song_paths, problems):
+    """Report a folder's section 2 problems for the song's files and the folders that hold them.
+
+    song_paths None reports everything (the manifest couldn't be read). A symbolic
+    link or .git elsewhere in the folder is a warning; other files are not the song's.
+    """
+    if not tree.issues:
+        return
+    keys = None
+    if song_paths is not None:
+        keys = set()
+        for p in song_paths:
+            k = fold(p).rstrip("/")
+            while k:
+                keys.add(k)
+                k = posixpath.dirname(k)
+
+    def mine(rel):
+        k = fold(rel)
+        return keys is None or k in keys or k == "history" or k.startswith("history/")
+
+    for rel, code, message, other in tree.issues:
+        if mine(rel) or (other is not None and mine(other)):
+            problems.error(rel, message, code)
+        elif code in ("symlink", "path-git"):
+            problems.warn(rel, message + " (not one of the song's files)", code)
+    tree.issues = []
 
 
 def local_header(fp, offset):
@@ -469,12 +540,49 @@ def local_header(fp, offset):
     if len(raw) < 30 or raw[:4] != b"PK\x03\x04":
         return None
     _, _, flags, method, _, _, _, _, _, name_len, extra_len = struct.unpack("<4sHHHHHIIIHH", raw)
-    return {"flags": flags, "method": method, "name": fp.read(name_len), "extra_len": extra_len}
+    name = fp.read(name_len)
+    return {"flags": flags, "method": method, "name": name, "extra": fp.read(extra_len)}
+
+
+def extra_ids(extra):
+    """The header IDs in a ZIP extra field."""
+    ids, i = set(), 0
+    while i + 4 <= len(extra):
+        hid, size = struct.unpack("<HH", extra[i:i + 4])
+        ids.add(hid)
+        i += 4 + size
+    return ids
+
+
+def has_zip64_end(fp):
+    """True when the archive ends with a ZIP64 end of central directory locator."""
+    fp.seek(0, 2)
+    size = fp.tell()
+    n = min(size, 0xFFFF + 22 + 20)
+    fp.seek(size - n)
+    tail = fp.read(n)
+    at = tail.rfind(b"PK\x05\x06")
+    return at >= 20 and tail[at - 20:at - 16] == b"PK\x06\x07"
+
+
+def local_name_problem(info, lh):
+    """Why the local header doesn't name the central directory's file, or None."""
+    if lh is None:
+        return "has no local file header where the central directory says"
+    try:
+        local = lh["name"].decode("utf-8" if info.flag_bits & 0x800 else "cp437")
+    except UnicodeDecodeError:
+        local = None
+    if local != info.orig_filename:
+        return "is named %r in its local header" % (local if local is not None else lh["name"])
+    return None
 
 
 def scan_package(path, problems, max_total=DEFAULT_MAX_TOTAL, max_ratio=DEFAULT_MAX_RATIO):
     """Apply the entry rules of section 5 to a package.
 
+    Names and sizes come from the central directory. Every file entry that
+    passes is read once to check its CRC-32 (its SHA-256 is kept for later).
     Returns a ZipTree of the entries that passed, or None when the package
     can't be read safely at all (not a ZIP, encrypted, too large, a zip bomb).
     """
@@ -491,33 +599,40 @@ def scan_package(path, problems, max_total=DEFAULT_MAX_TOTAL, max_ratio=DEFAULT_
         problems.error(label, "has %d entries (limit %d)" % (len(infos), MAX_ENTRIES), "zip-too-large")
         zf.close()
         return None
+    headers = {id(i): local_header(zf.fp, i.header_offset) for i in infos}
+    zip64 = has_zip64_end(zf.fp) or any(0x0001 in extra_ids(i.extra) or
+                                        (headers[id(i)] and 0x0001 in extra_ids(headers[id(i)]["extra"]))
+                                        for i in infos)
+    if zip64:
+        problems.warn(label, "uses ZIP64; format 1.0 packages don't", "zip64")
 
-    # The mimetype entry.
-    mimetype = [i for i in infos if i.filename == "mimetype"]
+    # The mimetype entry: readers identify a package by wavelength.json, so problems here are warnings.
+    mimetype = [i for i in infos if i.orig_filename == "mimetype"]
     if not mimetype:
         problems.warn("mimetype", "is missing; the package is identified by wavelength.json", "mimetype-missing")
     else:
         m = mimetype[0]
         if m is not infos[0] or m.header_offset != 0:
             problems.warn("mimetype", "is not the first entry", "mimetype-not-first")
-        lh = local_header(zf.fp, m.header_offset)
+        lh = headers[id(m)]
         if m.compress_type != zipfile.ZIP_STORED or (lh and lh["method"] != 0):
-            problems.error("mimetype", "is compressed; it must be stored", "mimetype-compressed")
-        if m.extra or (lh and lh["extra_len"]):
-            problems.error("mimetype", "has an extra field", "mimetype-extra")
+            problems.warn("mimetype", "is compressed; it should be stored", "mimetype-compressed")
+        if m.extra or (lh and lh["extra"]):
+            problems.warn("mimetype", "has an extra field", "mimetype-extra")
         if m.file_size > 256:
             problems.error("mimetype", "is not %s" % PACKAGE_MEDIA_TYPE, "mimetype-content")
-        elif not m.flag_bits & 0x41:
+        elif not m.flag_bits & 0x41 and not local_name_problem(m, lh):
             try:
-                content = zf.read(m)
-            except (zipfile.BadZipFile, OSError, zlib.error, NotImplementedError) as e:
+                content = zf.read(m)   # read whole, so its CRC-32 is checked
+            except (zipfile.BadZipFile, OSError, zlib.error, NotImplementedError, EOFError) as e:
                 content = None
-                problems.error("mimetype", "can't be read: %s" % e, "read-failed")
+                problems.error("mimetype", "can't be read: %s" % e, "zip-crc" if "CRC" in str(e) else "read-failed")
             if content is not None and content != PACKAGE_MEDIA_TYPE.encode("ascii"):
                 problems.error("mimetype", "holds %r, not %s" % (content[:80], PACKAGE_MEDIA_TYPE),
                                "mimetype-content")
-        if m is infos[0] and len(infos) > 1 and infos[1].filename != MANIFEST:
-            problems.warn(infos[1].filename, "is the second entry; wavelength.json should be", "manifest-not-second")
+        if m is infos[0] and len(infos) > 1 and infos[1].orig_filename != MANIFEST:
+            problems.warn(infos[1].orig_filename, "is the second entry; wavelength.json should be",
+                          "manifest-not-second")
 
     entries = {}
     dir_entries = set()
@@ -525,15 +640,27 @@ def scan_package(path, problems, max_total=DEFAULT_MAX_TOTAL, max_ratio=DEFAULT_
     seen_fold = {}
     total = 0
     for info in infos:
-        name = info.filename
+        name = info.orig_filename   # the central directory's name, before zipfile's clean-up
         total += info.file_size
         if info.flag_bits & 0x2041:
             problems.error(name, "is encrypted", "encrypted")
             fatal = True
             continue
+        bad = False
+        why = local_name_problem(info, headers[id(info)])
+        if why:
+            problems.error(name, why, "zip-local-name")
+            bad = True
+        if info.filename != name:
+            problems.error(name, "has a second name, %r (a Unicode path extra field or a NUL byte)" % info.filename,
+                           "zip-name")
+            bad = True
+        if name in seen_exact:
+            problems.error(name, "appears twice", "duplicate-entry")
+            bad = True
+        seen_exact.add(name)
         if name == "mimetype":
             continue
-        bad = False
         is_dir = name.endswith("/")
         rel = name[:-1] if is_dir else name
         if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
@@ -553,10 +680,6 @@ def scan_package(path, problems, max_total=DEFAULT_MAX_TOTAL, max_ratio=DEFAULT_
         elif mode not in (0, 0o040000 if is_dir else 0o100000):
             problems.error(name, "is not a regular file or folder", "special-file")
             bad = True
-        if name in seen_exact:
-            problems.error(name, "appears twice", "duplicate-entry")
-            bad = True
-        seen_exact.add(name)
         if not bad:
             key = fold(rel)
             if key in seen_fold and seen_fold[key] != rel:
@@ -594,13 +717,30 @@ def scan_package(path, problems, max_total=DEFAULT_MAX_TOTAL, max_ratio=DEFAULT_
     if fatal:
         zf.close()
         return None
-    return ZipTree(zf, entries, dir_entries)
+
+    # Read every file entry to its end: zipfile checks the CRC-32 there.
+    digests = {}
+    for rel, info in sorted(entries.items()):
+        h = hashlib.sha256()
+        n = 0
+        try:
+            with zf.open(info) as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+                    n += len(chunk)
+        except (zipfile.BadZipFile, OSError, zlib.error, EOFError, RuntimeError, NotImplementedError) as e:
+            problems.error(rel, "can't be read: %s" % e, "zip-crc" if "CRC" in str(e) else "read-failed")
+            del entries[rel]
+            continue
+        digests[rel] = (h.hexdigest(), n)
+    return ZipTree(zf, entries, dir_entries, digests)
 
 
 def open_song(path, problems, max_total=DEFAULT_MAX_TOTAL, max_ratio=DEFAULT_MAX_RATIO):
     """A tree for a song folder or a package, after the folder or entry rules."""
     if os.path.isdir(path):
-        return FolderTree(path, scan_folder(path, problems))
+        files, issues = scan_folder(path, problems)
+        return FolderTree(path, files, issues)
     if os.path.isfile(path):
         return scan_package(path, problems, max_total, max_ratio)
     problems.error(path, "is neither a song folder nor a package", "not-found")
@@ -680,13 +820,30 @@ class Fields:
             return None
         return obj[key]
 
-    def enum(self, obj, key, values, where="", required=False, code=None):
+    def known(self, obj, key, values, default, where="", required=False, code=None):
+        """A value from an open list (section 10): one this reader doesn't know is read as default."""
         if not self._get(obj, key, where, required):
             return None
-        if obj[key] not in values or not isinstance(obj[key], str):
-            self.err(self.at(where, key), "%r is not one of %s" % (obj[key], ", ".join(values)), code)
+        v = obj[key]
+        if not isinstance(v, str) or not v:
+            self.err(self.at(where, key), "must be a non-empty string", code)
             return None
-        return obj[key]
+        if v not in values:
+            self.warn(self.at(where, key), "%r is not one of %s; read as %s" % (v, ", ".join(values), default), code)
+            return default
+        return v
+
+    def hashref(self, obj, key, where="", required=False):
+        """A "sha256:<64 hex>" value; another algorithm's prefix is unsupported (a warning), not corrupt."""
+        v = self.string(obj, key, where, required)
+        if v is None:
+            return None
+        kind = hash_ref(v)
+        if kind == "unsupported":
+            self.warn(self.at(where, key), "%r uses a hash this reader doesn't support" % v, "hash-unsupported")
+        elif kind == "invalid":
+            self.err(self.at(where, key), "%r is not \"sha256:\" and 64 lowercase hex digits" % v)
+        return v if kind == "ok" else None
 
     def obj(self, obj, key, where="", required=False):
         if not self._get(obj, key, where, required):
@@ -727,7 +884,7 @@ class Fields:
             self.string(p, "name", w, required=True, nonempty=True)
             if role:
                 self.string(p, "role", w, required=True, nonempty=True)
-            self.enum(p, "kind", KINDS, w, required=kind_required)
+            self.known(p, "kind", KINDS, "human", w, required=kind_required, code="author-kind")
             self.string(p, "url", w)
         return p
 
@@ -751,7 +908,12 @@ class Fields:
 
 
 def check_version(manifest, problems):
-    """Refuse songs this 1.0 reader must not guess at (sections 3 and 10)."""
+    """Refuse songs this 1.0 reader must not guess at (sections 3 and 10).
+
+    Versions are compared as two numbers. The song is refused when its
+    minReaderVersion (default: formatVersion's major, .0) is newer than 1.0, or
+    when it requires an extension (this reader knows none).
+    """
     f = Fields(problems, MANIFEST)
     fmt = manifest.get("format")
     if fmt != FORMAT:
@@ -770,12 +932,9 @@ def check_version(manifest, problems):
     else:
         mr = (fv[0], 0)
     if mr > READER_VERSION:
-        f.err("minReaderVersion", "is %d.%d; this reader supports %d.%d, so it refuses the song"
+        where = "minReaderVersion" if "minReaderVersion" in manifest else "formatVersion"
+        f.err(where, "needs a %d.%d reader; this reader supports %d.%d, so it refuses the song"
               % (mr + READER_VERSION), "reader-version")
-        raise Refused()
-    if fv[0] != READER_VERSION[0]:
-        f.err("formatVersion", "is %d.%d; this reader supports major version %d only"
-              % (fv + (READER_VERSION[0],)), "format-version")
         raise Refused()
     required = manifest.get("extensionsRequired")
     if isinstance(required, list) and required:
@@ -785,7 +944,16 @@ def check_version(manifest, problems):
     return fv
 
 
-def check_manifest(m, problems, format_version):
+def known_requirement(r):
+    """False for a requires entry of a kind this reader doesn't know, which it ignores (section 10)."""
+    if not isinstance(r, dict) or ("plugin" not in r and "library" not in r):
+        return False
+    lib = r.get("library")
+    return "plugin" in r or not (isinstance(lib, dict) and isinstance(lib.get("kind"), str)
+                                 and lib["kind"] not in LIBRARY_KINDS)
+
+
+def check_manifest(m, problems):
     """The schema rules of wavelength.schema.json, in code."""
     f = Fields(problems, MANIFEST)
     f.string(m, "id", required=True, pattern=UUID_RE, what="a lowercase UUID")
@@ -812,7 +980,7 @@ def check_manifest(m, problems, format_version):
         w = "authors[%d]" % i
         f.string(a, "name", w, required=True, nonempty=True)
         f.string(a, "role", w, required=True, nonempty=True)
-        f.enum(a, "kind", KINDS, w)
+        f.known(a, "kind", KINDS, "human", w, code="author-kind")
         f.string(a, "url", w)
     for key in ("prompt", "summary", "description"):
         f.string(m, key)
@@ -835,16 +1003,7 @@ def check_manifest(m, problems, format_version):
             f.err(w, "must be an object")
             continue
         p = f.path(entry, "path", w, required=True)
-        role = entry.get("role")
-        if "role" not in entry:
-            f.err(w + ".role", "is required")
-        elif role not in ROLES:
-            # A minor version may add roles (section 10), so only a 1.0 song must use the five.
-            msg = "%r is not one of %s" % (role, ", ".join(ROLES))
-            if format_version[1] == 0 or not isinstance(role, str):
-                f.err(w + ".role", msg, "file-role")
-            else:
-                f.warn(w + ".role", msg + " (a newer minor version?)", "file-role")
+        role = f.known(entry, "role", ROLES, "other", w, required=True, code="file-role")
         f.string(entry, "mediaType", w, pattern=MEDIA_TYPE_RE, what="a media type")
         f.integer(entry, "size", w, minimum=0)
         f.string(entry, "sha256", w, pattern=SHA256_RE, what="64 lowercase hex digits")
@@ -854,21 +1013,21 @@ def check_manifest(m, problems, format_version):
         if key in seen:
             f.err(w + ".path", "%r is listed twice (as %r)" % (p, seen[key]), "file-duplicate")
         seen[key] = p
-        if p in (MANIFEST, "mimetype"):
-            f.err(w + ".path", "%r is reserved" % p, "file-reserved")
-        elif p == m.get("job") or p == REVIEW:
-            f.warn(w + ".path", "%r is implied and need not be listed" % p, "file-implied")
-        elif p.startswith("history/") or p == "history":
+        job = m.get("job")
+        if key in (fold(MANIFEST), "mimetype", fold(REVIEW)) or (isinstance(job, str) and key == fold(job)):
+            f.err(w + ".path", "%r is the manifest, the job, review.json or mimetype, which files may not list" % p,
+                  "file-reserved")
+        elif key.startswith("history/"):
             f.err(w + ".path", "%r is inside history/, which is reserved for revisions" % p, "file-reserved")
-        elif p.startswith("out/") or p == "out":
-            f.warn(w + ".path", "%r is inside out/, which is scratch and never packed" % p, "file-reserved")
+        elif key.startswith("out/"):
+            f.err(w + ".path", "%r is inside out/, which is scratch and never part of the song" % p, "file-reserved")
         elif role == "media" and not p.startswith("media/"):
             f.warn(w + ".path", "%r has role media but is not under media/" % p, "file-media-folder")
 
     render = f.obj(m, "render")
     if render is not None:
         f.integer(render, "revision", "render", minimum=1)
-        f.string(render, "job", "render", pattern=HASHREF_RE, what="\"sha256:\" and 64 lowercase hex digits")
+        f.hashref(render, "job", "render")
         f.path(render, "mix", "render", required=True)
         f.path(render, "picture", "render")
         f.path(render, "report", "render")
@@ -879,12 +1038,20 @@ def check_manifest(m, problems, format_version):
         if not isinstance(r, dict):
             f.err(w, "must be an object")
             continue
+        if not known_requirement(r):
+            continue
         f.string(r, "track", w, required=True, nonempty=True)
         plugin = f.obj(r, "plugin", w)
         if plugin is not None:
             f.string(plugin, "name", w + ".plugin", required=True, nonempty=True)
             for k in ("format", "id", "version"):
                 f.string(plugin, k, w + ".plugin")
+        library = f.obj(r, "library", w)
+        if library is not None:
+            f.string(library, "kind", w + ".library", required=True, nonempty=True)
+            f.string(library, "name", w + ".library", required=True, nonempty=True)
+        if plugin is not None and library is not None:
+            f.warn(w, "has both a plugin and a library; an entry names one need")
         f.string(r, "preset", w)
         f.boolean(r, "fallback", w, required=True)
 
@@ -957,39 +1124,30 @@ def check_manifest_files(tree, manifest, problems):
 # The job (section 4)
 
 
-def looks_like_path(v, extensions):
-    return "/" in v or "\\" in v or v.lower().endswith(extensions)
-
-
 def job_references(job):
-    """Every file reference in a job: (where, value, kind); kind is "file" or "output"."""
+    """Every reference in a job, a file or a name decided by its key alone (section 4.2).
+
+    Returns (where, value, kind, path): kind is "file" (path is the song file it
+    reads), "output" (a deliver file), "lib" (one file of a library, by name) or
+    "name" (a library, or a file inside a named kit); path is None for the last two.
+    """
     refs = []
 
-    def state(sound, base):
-        st = sound.get("state")
-        if isinstance(st, str):
-            refs.append((base + ".state", st, "file"))
-        elif isinstance(st, dict) and isinstance(st.get("file"), str):
-            refs.append((base + ".state.file", st["file"], "file"))
+    def file_or_lib(where, v):
+        """sampler sample, clip file, kit map values: files unless lib: or a * generator."""
+        if v.startswith(LIB_PREFIX):
+            refs.append((where, v, "lib", None))
+        elif not v.startswith(GENERATOR_PREFIX):
+            refs.append((where, v, "file", v))
 
-    def sound(s, base):
-        state(s, base)
-        sampler = s.get("sampler")
-        if isinstance(sampler, dict):
-            for key in ("sample", "sfz", "soundfont", "multisample"):
-                v = sampler.get(key)
-                if isinstance(v, str) and looks_like_path(v, SAMPLER_EXT):
-                    refs.append(("%s.sampler.%s" % (base, key), v, "file"))
-            kit = sampler.get("kit")
-            if isinstance(kit, str) and ("/" in kit or "\\" in kit):
-                refs.append((base + ".sampler.kit", kit, "file"))
-            for key in ("map", "kit"):   # key -> file: names inside a named kit's folder, else the song's files
-                m = sampler.get(key)
-                if isinstance(m, dict):
-                    for k, v in m.items():
-                        f = v.get("file") if isinstance(v, dict) else v
-                        if isinstance(f, str) and (not isinstance(kit, str) or "/" in f):
-                            refs.append(("%s.sampler.%s.%s" % (base, key, k), f, "file"))
+    def state(o, base):
+        st = o.get("state")
+        if isinstance(st, dict):
+            st, base = st.get("file"), base + ".state.file"
+        else:
+            base += ".state"
+        if isinstance(st, str):
+            refs.append((base, st, "file", re.sub(r"#[0-9]+$", "", st)))   # "cart.syx#3": a program of the file
 
     def fx(chain, base):
         if isinstance(chain, list):
@@ -997,21 +1155,53 @@ def job_references(job):
                 if isinstance(e, dict):
                     state(e, "%s[%d]" % (base, i))
 
+    def sound(s, base):
+        state(s, base)
+        fx(s.get("fx"), base + ".fx")
+        sampler = s.get("sampler")
+        if not isinstance(sampler, dict):
+            return
+        sb = base + ".sampler"
+        if isinstance(sampler.get("sample"), str):
+            file_or_lib(sb + ".sample", sampler["sample"])
+        for key in ("multisample", "sfz", "soundfont", "kit"):
+            v = sampler.get(key)
+            if isinstance(v, str):
+                is_file = "/" in v or (key != "kit" and v.lower().endswith(LIBRARY_FILE_EXT))
+                refs.append(("%s.%s" % (sb, key), v, "file" if is_file else "name", v if is_file else None))
+        kit = sampler.get("kit")
+        named_kit = isinstance(kit, str)   # a library name or a folder in the song: bare map values are inside it
+        for key in ("map", "kit"):   # key -> file (or {"file": ...}); "kit" as an object is a map of its own
+            m = sampler.get(key)
+            if not isinstance(m, dict):
+                continue
+            for k, v in m.items():
+                f = v.get("file") if isinstance(v, dict) else v
+                if not isinstance(f, str):
+                    continue
+                w = "%s.%s.%s" % (sb, key, k)
+                if key == "map" and named_kit and "/" not in f:
+                    refs.append((w, f, "name", None))   # a file inside the kit's folder
+                else:
+                    file_or_lib(w, f)
+
     for ti, t in enumerate(job.get("tracks") or []):
         if not isinstance(t, dict):
             continue
         base = "tracks[%d]" % ti
         sound(t, base)
-        fx(t.get("fx"), base + ".fx")
         clips = t.get("clips") if isinstance(t.get("clips"), list) else []
         for ci, c in enumerate(clips):
-            if isinstance(c, dict) and isinstance(c.get("file"), str):
-                refs.append(("%s.clips[%d].file" % (base, ci), c["file"], "file"))
+            if not isinstance(c, dict):
+                continue
+            if isinstance(c.get("file"), str):
+                file_or_lib("%s.clips[%d].file" % (base, ci), c["file"])
+            elif isinstance(c.get("file"), dict):   # the song's own audio, with its own effects
+                fx(c["file"].get("fx"), "%s.clips[%d].file.fx" % (base, ci))
         fb = t.get("fallback")
         for fi, s in enumerate(fb if isinstance(fb, list) else [fb]):
             if isinstance(s, dict):
-                sound(s, "%s.fallback[%d]" % (base, fi))
-                fx(s.get("fx"), "%s.fallback[%d].fx" % (base, fi))
+                sound(s, "%s.fallback[%d]" % (base, fi) if isinstance(fb, list) else base + ".fallback")
     buses = job.get("buses") if isinstance(job.get("buses"), list) else []
     for bi, b in enumerate(buses):
         if isinstance(b, dict):
@@ -1021,7 +1211,7 @@ def job_references(job):
     deliver = job.get("deliver")
     for di, d in enumerate(deliver if isinstance(deliver, list) else [deliver]):
         if isinstance(d, dict) and isinstance(d.get("file"), str):
-            refs.append(("deliver[%d].file" % di, d["file"], "output"))
+            refs.append(("deliver[%d].file" % di, d["file"], "output", d["file"]))
     return refs
 
 
@@ -1085,37 +1275,31 @@ def check_job(tree, manifest, problems):
     check_ids(job, jp, problems)
 
     listed = listed_files(manifest)
-    job_dir = posixpath.dirname(jp)
-    for where, value, kind in job_references(job):
-        if value.startswith(LIB_PREFIX):   # a sample library's file, by name (section 4.2)
+    for where, value, kind, target in job_references(job):
+        if kind == "lib":   # one file of a sample library, by name
             if any(seg in ("", ".", "..") for seg in value[len(LIB_PREFIX):].split("/")):
                 problems.error(jp, "%s %r has an empty, '.' or '..' segment" % (where, value), "path-traversal")
             continue
-        bad = path_problems(value)
+        if kind == "name":   # a library by name: never a path, so never a way out
+            if ".." in re.split(r"[/\\]", value):
+                problems.error(jp, "%s %r has a '..' segment" % (where, value), "path-traversal")
+            continue
+        ref = "%s %r" % (where, value) if target == value else "%s %r (file %r)" % (where, value, target)
+        bad = path_problems(target)
         for code, message in bad:
-            problems.error(jp, "%s %r %s" % (where, value, message), code)
+            problems.error(jp, "%s %s" % (ref, message), code)
         if bad or kind == "output":
             continue
-        target = value
-        if not (tree.exists(target) or tree.is_dir(target)) and re.search(r"#[0-9]+$", value):
-            target = value.rsplit("#", 1)[0]     # "<cart>.syx#3", "<kit>.mtdrum#2"
         if tree.exists(target) or tree.is_dir(target):
             if tree.exists(target):
                 entry = listed.get(target)
                 if entry is None:
-                    problems.warn(jp, "%s %r is not listed in the manifest's files (pack lists it)"
-                                  % (where, value), "unlisted-file")
+                    problems.warn(jp, "%s is not listed in the manifest's files (pack lists it)" % ref, "unlisted-file")
                 elif entry.get("role") != "media":
-                    problems.warn(jp, "%s %r is listed with role %r, not media" % (where, value, entry.get("role")),
-                                  "file-role")
-            continue
-        alt = posixpath.join(job_dir, target) if job_dir else None
-        if alt and (tree.exists(alt) or tree.is_dir(alt)):
-            problems.warn(jp, "%s %r exists only relative to the job's folder (%s), not the song folder"
-                          % (where, value, alt), "job-ref-base")
+                    problems.warn(jp, "%s is listed with role %r, not media" % (ref, entry.get("role")), "file-role")
             continue
         variant = tree.case_variant(target)
-        problems.error(jp, "%s %r is not in the song%s" % (where, value, " (it has %s)" % variant if variant else ""),
+        problems.error(jp, "%s is not in the song%s" % (ref, " (it has %s)" % variant if variant else ""),
                        "job-ref-missing")
 
     # requires is a summary of the job; its tracks should exist.
@@ -1126,7 +1310,7 @@ def check_job(tree, manifest, problems):
             if isinstance(eid, str):
                 ids.add(eid)
     for i, r in enumerate(manifest.get("requires") or []):
-        if isinstance(r, dict) and isinstance(r.get("track"), str) and r["track"] not in ids:
+        if known_requirement(r) and isinstance(r.get("track"), str) and r["track"] not in ids:
             problems.warn(MANIFEST, "requires[%d].track %r is not a track ID in the job" % (i, r["track"]),
                           "requires-track")
     return job
@@ -1137,7 +1321,11 @@ def check_job(tree, manifest, problems):
 
 
 def read_log(tree, problems):
-    """Parse history/log.jsonl into [(line number, entry)], tolerating a cut-off last line."""
+    """Parse history/log.jsonl into [(line number, entry)] (section 6).
+
+    Empty lines are skipped; a CR before the LF is tolerated. A last line with
+    no LF is an interrupted write: kept with a warning when it parses, else ignored.
+    """
     if not tree.exists(LOG):
         return None
     try:
@@ -1145,6 +1333,9 @@ def read_log(tree, problems):
     except ReadProblem as e:
         problems.error(LOG, str(e), "read-failed")
         return []
+    if raw.startswith(BOM):
+        problems.error(LOG, "starts with a byte order mark (I-JSON)", "json-bom")
+        raw = raw[len(BOM):]
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as e:
@@ -1156,18 +1347,20 @@ def read_log(tree, problems):
         lines.pop()
     out = []
     for n, line in enumerate(lines, 1):
-        last = n == len(lines)
+        cut = n == len(lines) and not ends_with_newline
         if not line.strip():
-            problems.error(LOG, "line %d is blank" % n, "log-json")
             continue
         try:
             entry = parse_json(line)
         except JsonProblem as e:
-            if last and not ends_with_newline:
-                problems.warn(LOG, "line %d is cut off (an interrupted write?) and is ignored" % n, "log-truncated")
+            if cut:
+                problems.warn(LOG, "line %d has no line ending and isn't JSON (an interrupted write?); ignored" % n,
+                              "log-truncated")
             else:
-                problems.error(LOG, "line %d %s" % (n, e), "log-json")
+                problems.error(LOG, "line %d %s" % (n, e), e.code or "log-json")
             continue
+        if cut:
+            problems.warn(LOG, "line %d has no line ending (an interrupted write?)" % n, "log-truncated")
         out.append((n, entry))
     return out
 
@@ -1181,24 +1374,31 @@ def check_entry(entry, n, problems):
         return False
     ok = f.integer(entry, "rev", w, required=True, minimum=1) is not None
     f.time(entry, "time", w, required=True)
-    op = f.enum(entry, "op", OPS, w, required=True)
+    op = f.known(entry, "op", OPS, "save", w, required=True, code="log-op")
     ok = f.integer(entry, "parent", w, required=True, minimum=0) is not None and ok
     by = f.obj(entry, "by", w, required=True)
     if by is not None:
         f.string(by, "name", w + " by", required=True, nonempty=True)
-        f.enum(by, "kind", KINDS, w + " by", required=True)
+        f.known(by, "kind", KINDS, "human", w + " by", required=True, code="author-kind")
     message = f.string(entry, "message", w)
     named = f.boolean(entry, "named", w)
     files = f.obj(entry, "files", w, required=True)
+    folded = {}
     for p, h in (files or {}).items():
         for code, msg in path_problems(p):
             f.err(w, "files key %r %s" % (p, msg), code)
-        if not matches(HASHREF_RE, h):
+        if isinstance(p, str) and fold(p) in folded:
+            f.err(w, "files keys %r and %r collide when case is ignored" % (folded[fold(p)], p), "case-collision")
+        folded.setdefault(fold(p), p)
+        kind = hash_ref(h)
+        if kind == "unsupported":
+            f.warn(w, "files[%r] uses a hash this reader doesn't support: %r" % (p, h), "hash-unsupported")
+        elif kind == "invalid":
             f.err(w, "files[%r] must be \"sha256:\" and 64 lowercase hex digits" % p)
     render = f.obj(entry, "render", w)
     if render is not None:
         for k in ("report", "mix"):
-            f.string(render, k, w + " render", pattern=HASHREF_RE, what="\"sha256:\" and 64 lowercase hex digits")
+            f.hashref(render, k, w + " render")
         for k in ("lufs", "lra", "truePeak"):
             f.number(render, k, w + " render")
         f.number(render, "seconds", w + " render", minimum=0)
@@ -1219,11 +1419,16 @@ def check_entry(entry, n, problems):
     return ok and files is not None
 
 
+def entry_op(e):
+    """The op as this reader reads it: one it doesn't know is a save (section 10)."""
+    return e.get("op") if e.get("op") in OPS else "save"
+
+
 def verify_object(tree, rel, expected, limit, keep=False):
     """Decompress one object and compare the SHA-256 of its content with its name.
 
     Output is produced in bounded steps and capped at limit bytes (zlib bombs).
-    Returns (content when keep else None, problem code or None, message).
+    Returns (content when keep else None, problem code or None, message, bytes decompressed).
     """
     step = 1 << 20
     d = zlib.decompressobj()
@@ -1240,7 +1445,7 @@ def verify_object(tree, rel, expected, limit, keep=False):
                     out = d.decompress(buf, step)
                     total += len(out)
                     if total > limit:
-                        return None, "object-too-large", "decompresses to more than %d bytes" % limit
+                        return None, "object-too-large", "decompresses to more than %d bytes" % limit, total
                     h.update(out)
                     if keep:
                         parts.append(out)
@@ -1249,30 +1454,51 @@ def verify_object(tree, rel, expected, limit, keep=False):
                         break
             trailing = d.unused_data or f.read(1)
     except zlib.error as e:
-        return None, "object-zlib", "is not valid zlib data (%s)" % e
+        return None, "object-zlib", "is not valid zlib data (%s)" % e, total
     except (ReadProblem, zipfile.BadZipFile, OSError, EOFError) as e:
-        return None, "read-failed", "can't be read: %s" % e
+        return None, "read-failed", "can't be read: %s" % e, total
     if not d.eof:
-        return None, "object-zlib", "is a cut-off zlib stream"
+        return None, "object-zlib", "is a cut-off zlib stream", total
     if trailing:
-        return None, "object-zlib", "has data after its zlib stream"
+        return None, "object-zlib", "has data after its zlib stream", total
     digest = h.hexdigest()
     if digest != expected:
-        return None, "object-hash", "content hashes to %s, not its name" % digest
-    return b"".join(parts), None, ""
+        return None, "object-hash", "content hashes to %s, not its name" % digest, total
+    return b"".join(parts), None, "", total
 
 
-def file_sha256(tree, rel, cache):
-    """SHA-256 (hex) of a file in the song, or None when there is none; cached by path."""
-    if rel not in cache:
-        cache[rel] = None
-        if not path_problems(rel) and tree.exists(rel):
-            h = hashlib.sha256()
-            with tree.open(rel) as f:
-                for buf in iter(lambda: f.read(1 << 20), b""):
-                    h.update(buf)
-            cache[rel] = h.hexdigest()
-    return cache[rel]
+def file_sha256(tree, rel):
+    """SHA-256 (hex) of a file in the song, or None when there is none."""
+    if path_problems(rel) or not tree.exists(rel):
+        return None
+    try:
+        return hash_file(tree, rel)[0]
+    except ReadProblem:
+        return None
+
+
+def check_stacks(numbered, problems):
+    """Undo and redo targets against the two stacks of section 6 (warnings; skipped for a pruned log)."""
+    revs = [int(e["rev"]) for _, e in numbered]
+    if any(b != a + 1 for a, b in zip(revs, revs[1:])):
+        return
+    undo, redo, before = [], [], None
+    for n, e in numbered:
+        op, rev = entry_op(e), int(e["rev"])
+        target = int(e["target"]) if is_int(e.get("target")) else None
+        if op in ("undo", "redo"):
+            # undo restores the revision below the top of undo; redo restores the top of redo
+            want = (undo[-2] if len(undo) > 1 else None) if op == "undo" else (redo[-1] if redo else None)
+            if target is not None and target != want:
+                problems.warn(LOG, "line %d: %s restores rev %d; reading the log, it %s" % (
+                    n, op, target, "should restore rev %d" % want if want else "has nothing to " + op), "log-stack")
+            src, dst = (undo, redo) if op == "undo" else (redo, undo)
+            if src:
+                dst.append(src.pop())
+        elif op == "restore" or before is None or e["files"] != before:
+            undo.append(rev)
+            redo = []
+        before = e["files"]
 
 
 def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
@@ -1280,6 +1506,10 @@ def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
     objects = {}
     for n in tree.list():
         if not n.startswith("history/") or n == LOG:
+            continue
+        if n == LOCK:   # a writer's lock: readers ignore it (section 6)
+            if tree.kind == "package":
+                problems.warn(n, "is a writer's lock, which packages never carry; ignored", "package-lock")
             continue
         m = re.fullmatch(OBJECT_RE, n)
         base = posixpath.basename(n)
@@ -1301,23 +1531,26 @@ def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
         return []
 
     entries = []
+    numbered = []
     revs = {}
     prev = 0
     used = set()
-    hashes = {}
     for n, e in lines:
         if not check_entry(e, n, problems):
             continue
         rev, parent = int(e["rev"]), int(e["parent"])
         w = "line %d:" % n
         if rev <= prev:
-            problems.error(LOG, "%s rev %d does not follow rev %d" % (w, rev, prev), "log-order")
+            problems.error(LOG, "%s rev %d is not greater than rev %d before it" % (w, rev, prev), "log-order")
         if parent >= rev:
             problems.error(LOG, "%s parent %d is not before rev %d" % (w, parent, rev), "log-parent")
         elif parent == 0 and entries:
             problems.error(LOG, "%s parent is 0 but this is not the first revision" % w, "log-parent")
-        elif parent and parent not in revs:
+        elif parent and parent not in revs and parent > prev:
             problems.warn(LOG, "%s parent %d is not in the log (pruned?)" % (w, parent), "log-parent")
+        elif parent and entries and parent != prev:
+            problems.warn(LOG, "%s parent %d is not the revision before this one in the log (%d)" % (w, parent, prev),
+                          "log-parent")
         if is_int(e.get("target")):
             v = int(e["target"])
             if v >= rev:
@@ -1329,20 +1562,27 @@ def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
             if target is not None and target.get("files") != e.get("files"):
                 problems.warn(LOG, "%s files differ from those of the target, rev %s" % (w, e["target"]), "log-target")
         for p, h in e["files"].items():
-            if not matches(HASHREF_RE, h):
+            if hash_ref(h) != "ok":
                 continue
             hexd = h[7:]
             used.add(hexd)
-            if hexd not in objects and not (tree.kind == "package" and file_sha256(tree, p, hashes) == hexd):
+            if hexd not in objects and not (tree.kind == "package" and file_sha256(tree, p) == hexd):
                 # a package may leave out an object that is the same bytes as its file at that path (section 5)
                 problems.error(LOG, "%s %s is %s, which is not in history/objects/" % (w, p, h[:19] + "..."),
                                "object-missing")
         revs[rev] = e
         prev = max(prev, rev)
         entries.append(e)
+        numbered.append((n, e))
+    check_stacks(numbered, problems)
 
+    budget = max_total   # all objects together, decompressed (section 5: history objects included)
     for hexd, rel in sorted(objects.items()):
-        _, code, message = verify_object(tree, rel, hexd, max_total)
+        _, code, message, size = verify_object(tree, rel, hexd, budget)
+        budget -= size
+        if code == "object-too-large":
+            problems.error(rel, "takes the history's objects past %d bytes decompressed (the limit)" % max_total, code)
+            break
         if code:
             problems.error(rel, message, code)
         elif hexd not in used:
@@ -1388,7 +1628,7 @@ def check_review(tree, revs, problems):
             if cid in ids:
                 f.err(w + ".id", "%r is used twice" % cid, "review-id")
             ids.add(cid)
-        status = f.enum(c, "status", ("open", "done"), w, required=True)
+        status = f.known(c, "status", STATUSES, "open", w, required=True, code="review-status")
         f.string(c, "text", w, required=True)
         new = any(k in c for k in NEW_FIELDS)
         legacy = any(k in c for k in LEGACY_FIELDS)
@@ -1411,7 +1651,7 @@ def check_review(tree, revs, problems):
                 f.warn(a + ".revision", "is missing (a comment from before the format?)", "review-legacy")
             elif rev is not None and revs is not None and rev not in revs:
                 f.warn(a + ".revision", "%d is not in the history (pruned?)" % rev, "review-revision")
-            f.string(anchor, "render", a, pattern=HASHREF_RE, what="\"sha256:\" and 64 lowercase hex digits")
+            f.hashref(anchor, "render", a)
             f.pair(anchor, "time", a)
             f.pair(anchor, "bars", a, integer=True, minimum=1)
             f.pair(anchor, "beats", a)
@@ -1493,29 +1733,52 @@ def check_package_contents(tree, manifest, problems):
                       "package-extra")
 
 
+def song_paths(manifest, job):
+    """The song's own files (section 2), history/ aside.
+
+    The manifest, the job, review.json and every listed, rendered or referenced file.
+    """
+    paths = {MANIFEST, REVIEW}
+    if isinstance(manifest.get("job"), str):
+        paths.add(manifest["job"])
+    for entry in manifest.get("files") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            paths.add(entry["path"])
+    render = manifest.get("render")
+    if isinstance(render, dict):
+        paths.update(v for k, v in render.items() if k in ("mix", "picture", "report") and isinstance(v, str))
+    if isinstance(job, dict):
+        paths.update(target for _, _, kind, target in job_references(job) if kind == "file" and target)
+    return paths
+
+
 def validate_song(tree, problems, max_total=DEFAULT_MAX_TOTAL):
     """Check a song's contents (folder or package).
 
     Returns {"manifest", "job", "history", "review"} with what could be read,
     or None when the manifest is missing, unreadable or refused.
     """
+    manifest = None
     if not tree.exists(MANIFEST):
         variant = tree.case_variant(MANIFEST)
         problems.error(MANIFEST, "is missing" + (" (the song has %s)" % variant if variant else ""), "manifest-missing")
-        return None
-    manifest = load_json_file(tree, MANIFEST, problems, "manifest-json")
+    else:
+        manifest = load_json_file(tree, MANIFEST, problems, "manifest-json")
+        if manifest is not None and not isinstance(manifest, dict):
+            problems.error(MANIFEST, "is not a JSON object", "manifest-json")
+            manifest = None
+    if manifest is not None:
+        try:
+            check_version(manifest, problems)
+        except Refused:
+            manifest = None
     if manifest is None:
+        report_folder_issues(tree, None, problems)
         return None
-    if not isinstance(manifest, dict):
-        problems.error(MANIFEST, "is not a JSON object", "manifest-json")
-        return None
-    try:
-        format_version = check_version(manifest, problems)
-    except Refused:
-        return None
-    check_manifest(manifest, problems, format_version)
+    check_manifest(manifest, problems)
     check_manifest_files(tree, manifest, problems)
     job = check_job(tree, manifest, problems)
+    report_folder_issues(tree, song_paths(manifest, job), problems)
     history = check_history(tree, manifest, problems, max_total)
     revs = {int(e["rev"]) for e in history} if tree.exists(LOG) else None
     review = check_review(tree, revs, problems)
@@ -1582,6 +1845,8 @@ def extract(tree, dest):
     for d in sorted(tree.dir_entries):
         safe_makedirs(dest, d)
     for rel in tree.list():
+        if rel == LOCK:   # a stale writer's lock would block the unpacked song's writers
+            continue
         parent = safe_makedirs(dest, posixpath.dirname(rel))
         target = os.path.join(parent, posixpath.basename(rel))
         if os.path.islink(target):
@@ -1683,20 +1948,24 @@ def summary(song, problems, tree):
     roles = {}
     for entry in m.get("files") or []:
         if isinstance(entry, dict):
-            roles[str(entry.get("role"))] = roles.get(str(entry.get("role")), 0) + 1
+            role = entry.get("role") if entry.get("role") in ROLES else "other"
+            roles[role] = roles.get(role, 0) + 1
     history = song["history"] or []
     latest = history[-1] if history else None
     comments = (song["review"] or {}).get("comments") if isinstance(song["review"], dict) else None
     counts = {"open": 0, "done": 0}
     for c in comments or []:
-        if isinstance(c, dict) and c.get("status") in counts:
-            counts[c["status"]] += 1
+        if isinstance(c, dict):
+            counts["done" if c.get("status") == "done" else "open"] += 1
     requires = []
     for r in m.get("requires") or []:
-        if isinstance(r, dict):
+        if known_requirement(r):
             plugin = r.get("plugin") if isinstance(r.get("plugin"), dict) else {}
+            library = r.get("library") if isinstance(r.get("library"), dict) else {}
             requires.append({"track": r.get("track"), "plugin": plugin.get("name"), "format": plugin.get("format"),
-                             "version": plugin.get("version"), "preset": r.get("preset"), "fallback": r.get("fallback")})
+                             "version": plugin.get("version"), "preset": r.get("preset"),
+                             "library": {"kind": library.get("kind"), "name": library.get("name")} if library else None,
+                             "fallback": r.get("fallback")})
     render = m.get("render") if isinstance(m.get("render"), dict) else None
     current = None
     if render and isinstance(m.get("job"), str) and tree.exists(m["job"]):
@@ -1741,7 +2010,9 @@ def cmd_info(args):
             if h["revisions"] else "none")
     reqs = []
     for r in s["requires"]:
-        plugin = " ".join(str(x) for x in (r["plugin"], r["format"], r["version"]) if x) or "a library"
+        lib = r["library"]
+        plugin = " ".join(str(x) for x in (r["plugin"], r["format"], r["version"]) if x) or (
+            "%s %s" % (lib["kind"], lib["name"]) if lib else "?")
         preset = ", preset %s" % r["preset"] if r["preset"] else ""
         reqs.append("%s: %s%s, fallback %s" % (r["track"], plugin, preset, "yes" if r["fallback"] else "no"))
     reqs = "; ".join(reqs) or "none"
@@ -1776,7 +2047,7 @@ def cmd_history(args):
         render = e.get("render") if isinstance(e.get("render"), dict) else {}
         rows.append({"rev": e.get("rev"), "time": e.get("time"), "op": e.get("op"),
                      "by": (e.get("by") or {}).get("name"), "message": e.get("message"),
-                     "target": e.get("target"), "from": e.get("from"), "lufs": render.get("lufs"),
+                     "target": e.get("target"), "parent": e.get("parent"), "lufs": render.get("lufs"),
                      "files": len(e.get("files") or {})})
     if args.json:
         emit_json(rows)
@@ -1787,7 +2058,7 @@ def cmd_history(args):
     for r in rows:
         extra = ""
         if r["target"] is not None:
-            extra += " (r%s from r%s)" % (r["target"], r["from"])
+            extra += " (r%s, from r%s)" % (r["target"], r["parent"])
         if r["lufs"] is not None:
             extra += " [%.1f LUFS]" % r["lufs"]
         print(printable("r%-4s %-25s %-8s %-20s %s%s" % (r["rev"], r["time"], r["op"], r["by"], r["message"] or "", extra)))
@@ -1812,12 +2083,16 @@ def cmd_cat(args):
         files = entry.get("files") if isinstance(entry.get("files"), dict) else {}
         path = args.path if args.path in files else posixpath.normpath(args.path)
         h = files.get(path)
-        if not matches(HASHREF_RE, h):
+        if hash_ref(h) == "unsupported":
+            sys.stderr.write("r%d tracks %s with a hash this reader doesn't support: %s\n"
+                             % (args.rev, printable(args.path), printable(h)))
+            return 1
+        if hash_ref(h) != "ok":
             sys.stderr.write("r%d does not track %s\n" % (args.rev, printable(args.path)))
             return 1
         rel = OBJECTS + h[7:9] + "/" + h[7:]
         if not tree.exists(rel):
-            if tree.kind == "package" and file_sha256(tree, path, {}) == h[7:]:   # left out: it is the file (section 5)
+            if tree.kind == "package" and file_sha256(tree, path) == h[7:]:   # left out: it is the file (section 5)
                 with tree.open(path) as f:
                     content = f.read()
                 sys.stdout.buffer.write(content)
@@ -1825,7 +2100,7 @@ def cmd_cat(args):
                 return 0
             sys.stderr.write("object %s is missing\n" % h)
             return 1
-        content, code, message = verify_object(tree, rel, h[7:], MAX_LOG, keep=True)
+        content, code, message, _ = verify_object(tree, rel, h[7:], MAX_LOG, keep=True)
         if code:
             sys.stderr.write("%s: %s [%s]\n" % (rel, message, code))
             return 1

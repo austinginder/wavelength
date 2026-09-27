@@ -30,7 +30,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/src" && git archive "$tag" | tar x -C "$work/src"
 
 want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
-docs="LICENSE THIRD_PARTY.md README.md CHANGELOG.md AGENTS.md docs examples"
+docs="LICENSE THIRD_PARTY.md README.md CHANGELOG.md AGENTS.md docs examples schemas"
 
 # package <target> <binary> [licenses dir]: wavelength-<target>/ with the binary, the docs and
 # the licences of anything linked in statically. Names carry no version, so

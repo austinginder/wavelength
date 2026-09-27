@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 
@@ -101,7 +102,8 @@ bool checkEntries(Zip &z, json &problems) {
         std::vector<uint8_t> mt;
         std::string err;
         if (entries[0].method != 0) problem("warning", "mimetype", "`mimetype` should be stored uncompressed");
-        if (z.read("mimetype", mt, err) && std::string(mt.begin(), mt.end()) != kSongMediaType)
+        if (!z.read("mimetype", mt, err)) { problem("error", "mimetype", err); ok = false; }
+        else if (std::string(mt.begin(), mt.end()) != kSongMediaType)
             { problem("error", "mimetype", "`mimetype` must hold " + std::string(kSongMediaType)); ok = false; }
     }
     std::set<std::string> seen;
@@ -112,7 +114,7 @@ bool checkEntries(Zip &z, json &problems) {
         if (!checkSongPath(name, why)) { problem("error", e.name, why); ok = false; continue; }
         if (e.flags & 1) { problem("error", e.name, "encrypted entries are not allowed"); ok = false; }
         if (((e.externalAttr >> 16) & 0170000) == 0120000) { problem("error", e.name, "symbolic links are not allowed"); ok = false; }
-        if (!seen.insert(lower(name)).second) { problem("error", e.name, "two entries with the same name, compared case-insensitively"); ok = false; }
+        if (!seen.insert(foldName(name)).second) { problem("error", e.name, "two entries with the same name, compared case-insensitively"); ok = false; }
         total += e.size;
         if (e.size > (1u << 20) && e.compSize > 0 && (double)e.size / e.compSize > kMaxRatio) { problem("error", e.name, "compressed too far (a zip bomb?)"); ok = false; }
     }
@@ -148,63 +150,119 @@ void validateFolder(const fs::path &dir, json &problems) {
     auto problem = [&](const std::string &sev, const std::string &path, const std::string &msg) {
         problems.push_back({{"severity", sev}, {"path", path}, {"message", msg}});
     };
+    auto str = [](const json &o, const char *k) { return o.is_object() && o.contains(k) && o[k].is_string() ? o[k].get<std::string>() : std::string(); };
     Song song;
     std::string err;
     if (!openSong(dir.string(), song, err)) { problem("error", "", err); return; }
     if (!song.hasManifest()) { problem("error", "wavelength.json", "no manifest (wavelength upgrade makes one)"); return; }
     const json &m = song.manifest;
     for (const char *k : {"formatVersion", "id", "title", "slug", "job"})
-        if (!m.contains(k) || !m[k].is_string() || m[k].get<std::string>().empty()) problem("error", "wavelength.json", std::string("missing \"") + k + "\"");
+        if (str(m, k).empty()) problem("error", "wavelength.json", std::string("missing \"") + k + "\"");
     std::string why;
+    std::error_code ec;
     if (!checkSongPath(song.jobFile(), why)) problem("error", "wavelength.json", "job: " + why);
+    if (fs::is_symlink(song.jobPath(), ec)) problem("error", song.jobFile(), "a symbolic link");
     if (m.contains("authors")) {
         if (!m["authors"].is_array()) problem("error", "wavelength.json", "authors must be a list");
         else for (auto &a : m["authors"])
-            if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) { problem("error", "wavelength.json", "each author is an object with a name"); break; }
+            if (str(a, "name").empty()) { problem("error", "wavelength.json", "each author is an object with a name"); break; }
     }
-    if (m.contains("files") && !m["files"].is_array()) problem("error", "wavelength.json", "files must be a list");
-    std::error_code ec;
-    for (auto &f : m.value("files", json::array())) {
-        const std::string p = f.value("path", std::string());
-        if (!checkSongPath(p, why)) { problem("error", p, why); continue; }
+    // the manifest's files: allowed paths, once each (compared the way case-insensitive file systems do), known roles
+    std::set<std::string> seen = {foldName(song.jobFile()), "wavelength.json", "mimetype", "review.json"};
+    const json files = m.contains("files") ? m["files"] : json::array();
+    if (!files.is_array()) problem("error", "wavelength.json", "files must be a list");
+    for (auto &f : files.is_array() ? files : json::array()) {
+        const std::string p = str(f, "path"), role = str(f, "role");
+        if (!checkSongPath(p, why)) { problem("error", p.empty() ? "wavelength.json" : p, p.empty() ? "a file without a path" : why); continue; }
+        if (p.rfind("history/", 0) == 0 || p.rfind("out/", 0) == 0) { problem("error", p, "history/ and out/ can't be listed as files of the song"); continue; }
+        if (!seen.insert(foldName(p)).second) { problem("error", p, "listed twice, or the same name as another file when case is ignored"); continue; }
+        static const std::set<std::string> roles = {"source", "notes", "media", "render", "other"};
+        if (!roles.count(role)) problem("warning", p, "role '" + role + "' isn't one this Wavelength knows; read as other");
         const fs::path full = song.dir / fs::u8path(p);
         if (fs::is_symlink(full, ec)) { problem("error", p, "a symbolic link"); continue; }
-        if (!fs::exists(full, ec)) { if (f.value("role", std::string()) != "render") problem("warning", p, "listed in the manifest but missing"); continue; }
-        if (f.contains("sha256") && sha256File(full.string()) != f["sha256"].get<std::string>()) problem("error", p, "does not match its sha256");
-        if (f.contains("size") && (uint64_t)fs::file_size(full, ec) != f["size"].get<uint64_t>()) problem("error", p, "does not match its size");
+        if (!fs::exists(full, ec)) { if (role != "render") problem("warning", p, "listed in the manifest but missing"); continue; }
+        if (f.contains("sha256") && (!f["sha256"].is_string() || sha256File(full.string()) != f["sha256"].get<std::string>())) problem("error", p, "does not match its sha256");
+        if (f.contains("size") && (!f["size"].is_number_unsigned() || (uint64_t)fs::file_size(full, ec) != f["size"].get<uint64_t>())) problem("error", p, "does not match its size");
     }
+    // the job: strict JSON, every path it reads inside the song, every path it writes inside its output folder
     json job;
-    try { job = json::parse(readText(song.jobPath())); } catch (const std::exception &e) { problem("error", song.jobFile(), std::string("not valid JSON: ") + e.what()); return; }
+    if (!parseJsonStrict(readText(song.jobPath()), job, why)) { problem("error", song.jobFile(), why); return; }
     Job parsed;
     if (!parseJob(job, song.dir.string(), parsed, err, false)) problem("error", song.jobFile(), err);
     for (auto &[where, path] : jobFileRefs(job)) {
         if (!checkSongPath(path, why)) { problem("error", song.jobFile(), where + ": " + why + " (files the job uses belong in the song, e.g. media/; name outside sounds instead)"); continue; }
-        if (!fs::exists(song.dir / fs::u8path(path), ec)) { problem("error", song.jobFile(), where + ": " + path + " is missing"); continue; }
+        const fs::path full = song.dir / fs::u8path(path);
+        if (fs::is_symlink(full, ec)) { problem("error", path, "a symbolic link"); continue; }
+        if (!fs::exists(full, ec)) { problem("error", song.jobFile(), where + ": " + path + " is missing"); continue; }
         bool listed = false;
-        for (auto &f : m.value("files", json::array())) listed |= f.value("path", std::string()) == path;
-        if (!listed) problem("warning", path, "used by the job (" + where + ") but not listed in the manifest's files (pack lists it)");
+        for (auto &f : files.is_array() ? files : json::array()) listed |= str(f, "path") == path;
+        if (!listed && !fs::is_directory(full, ec)) problem("warning", path, "used by the job (" + where + ") but not listed in the manifest's files (pack lists it)");
     }
+    for (auto &[where, path] : jobOutputRefs(job))
+        if (!checkSongPath(path, why)) problem("error", song.jobFile(), where + ": " + why + " (a render writes only inside its output folder)");
+    // the log: revisions in order, their references, their objects
     std::vector<json> entries;
     std::string warning;
     if (!history::read(song, entries, err, &warning)) problem("error", "history/log.jsonl", err);
     if (!warning.empty()) problem("warning", "history/log.jsonl", warning);
+    std::set<int> revs;
+    int last = 0;
     std::set<std::string> checked;
     for (auto &e : entries) {
-        const json files = e.value("files", json::object());
-        for (auto &[path, ref] : files.items()) {
+        const int rev = e.value("rev", 0);
+        const std::string w = "revision " + std::to_string(rev);
+        if (rev <= last) problem("error", "history/log.jsonl", w + " doesn't come after revision " + std::to_string(last));
+        const std::string op = str(e, "op");
+        if (!e.contains("parent") || !e["parent"].is_number_integer()) problem("error", "history/log.jsonl", w + " has no parent");
+        else {
+            const int parent = e["parent"].get<int>();
+            if (parent >= rev || (parent == 0 && !revs.empty())) problem("error", "history/log.jsonl", w + ": parent " + std::to_string(parent) + " isn't the revision before it");
+            else if (parent && !revs.count(parent)) problem("warning", "history/log.jsonl", w + ": parent " + std::to_string(parent) + " isn't in the log (pruned?)");
+        }
+        if (op == "undo" || op == "redo" || op == "restore") {
+            if (!e.contains("target") || !e["target"].is_number_integer() || e["target"].get<int>() >= rev)
+                problem("error", "history/log.jsonl", w + ": " + op + " needs a target revision before it");
+            else if (!revs.count(e["target"].get<int>())) problem("warning", "history/log.jsonl", w + ": target " + e["target"].dump() + " isn't in the log (pruned?)");
+        } else if (op != "save" && op != "render") problem("warning", "history/log.jsonl", w + ": op '" + op + "' isn't one this Wavelength knows; read as save");
+        revs.insert(rev);
+        last = std::max(last, rev);
+        if (!e.contains("files") || !e["files"].is_object()) { problem("error", "history/log.jsonl", w + " has no files"); continue; }
+        for (auto &[path, ref] : e["files"].items()) {
+            if (!checkSongPath(path, why)) { problem("error", "history/log.jsonl", w + ": " + why); continue; }
+            if (!ref.is_string()) { problem("error", "history/log.jsonl", w + ": " + path + " has no hash"); continue; }
             const std::string h = ref.get<std::string>();
             if (!checked.insert(h).second) continue;
             std::string content, oerr;
-            if (!history::readObject(song, h, content, oerr)) problem("error", "history/objects", "revision " + e["rev"].dump() + " " + path + ": " + oerr);
+            if (!history::readObject(song, h, content, oerr)) problem(h.rfind("sha256:", 0) == 0 ? "error" : "warning", "history/objects", w + " " + path + ": " + oerr);
         }
     }
+    // comments: ids once each, text, anchors in the units the spec gives
     if (fs::exists(song.dir / "review.json", ec)) {
-        try {
-            const json r = json::parse(readText(song.dir / "review.json"));
-            if (!r.is_object() || !r.contains("comments") || !r["comments"].is_array()) problem("error", "review.json", "no comments list");
-            else for (auto &c : r["comments"])
-                if (!c.is_object() || !c.contains("id") || !c.contains("text")) { problem("error", "review.json", "a comment without an id or text"); break; }
-        } catch (...) { problem("error", "review.json", "not valid JSON"); }
+        json r;
+        if (!parseJsonStrict(readText(song.dir / "review.json"), r, why)) problem("error", "review.json", why);
+        else if (!r.is_object() || !r.contains("comments") || !r["comments"].is_array()) problem("error", "review.json", "no comments list");
+        else {
+            std::set<std::string> ids;
+            for (auto &c : r["comments"]) {
+                const std::string id = str(c, "id");
+                if (id.empty() || !c.contains("text") || !c["text"].is_string()) { problem("error", "review.json", "a comment without an id or text"); continue; }
+                if (!ids.insert(id).second) problem("error", "review.json", "comment id " + id + " is used twice");
+                const std::string status = str(c, "status");
+                if (status != "open" && status != "done") problem("warning", "review.json", "comment " + id + ": status '" + status + "' is read as open");
+                const json a = c.contains("anchor") && c["anchor"].is_object() ? c["anchor"] : json::object();
+                auto pair = [&](const char *k, bool integers) {
+                    if (!a.contains(k)) return;
+                    const json &v = a[k];
+                    if (!v.is_array() || v.size() != 2 || !v[0].is_number() || !v[1].is_number() || (integers && (!v[0].is_number_integer() || !v[1].is_number_integer() || v[0].get<int>() < 1)))
+                        problem("error", "review.json", "comment " + id + ": anchor." + k + " must be two " + (integers ? "bar numbers from 1" : "numbers"));
+                };
+                pair("bars", true);
+                pair("beats", false);
+                pair("time", false);
+                if (a.contains("revision") && (!a["revision"].is_number_integer() || !revs.count(a["revision"].get<int>())))
+                    problem("warning", "review.json", "comment " + id + ": anchor.revision " + a["revision"].dump() + " isn't in the history");
+            }
+        }
     }
 }
 
@@ -267,9 +325,11 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
 
     ZipWriter z;
     json listed = json::array();
+    std::string linked;
     auto addFile = [&](const std::string &rel) {
         const fs::path full = song.dir / fs::u8path(rel);
-        if (!fs::is_regular_file(full, ec) || fs::is_symlink(full, ec)) return;
+        if (fs::is_symlink(full, ec)) { linked += "\n  " + rel; return; }   // never follow a link out of the song
+        if (!fs::is_regular_file(full, ec)) return;
         z.add(rel, bytes(full), storeAsIs(rel));
         listed.push_back(rel);
     };
@@ -299,6 +359,7 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
         for (auto &h : fromFiles) objs.erase(h);
         for (auto &h : objs) addFile("history/objects/" + h.substr(0, 2) + "/" + h);
     }
+    if (!linked.empty()) { err = "a song can't contain symbolic links (copy the files in instead):" + linked; return false; }
     if (out.empty()) out = m.value("slug", song.dir.filename().string()) + ".wavelength";
     if (!z.write(out, err)) return false;
     result = {{"ok", true}, {"file", out}, {"bytes", (uint64_t)fs::file_size(out, ec)}, {"entries", listed.size() + 1}, {"requires", m["requires"]}};
@@ -317,10 +378,10 @@ bool unpack(const std::string &file, std::string outDir, bool force, json &resul
     {
         std::vector<uint8_t> mj;
         if (!z.read("wavelength.json", mj, err)) return false;
-        try { manifest = json::parse(std::string(mj.begin(), mj.end())); } catch (...) { err = "the package's wavelength.json is not valid JSON"; return false; }
+        std::string why;
+        if (!parseJsonStrict(std::string(mj.begin(), mj.end()), manifest, why)) { err = "the package's wavelength.json " + why; return false; }
+        if (!manifest.is_object() || !readableFormat(manifest, why)) { err = "the song " + (manifest.is_object() ? why : std::string("has no manifest object")); return false; }
     }
-    const std::string minv = manifest.value("minReaderVersion", std::string("1.0"));
-    if (!minv.empty() && minv[0] != '1') { err = "the song needs a reader for format " + minv + "; this Wavelength reads format 1"; return false; }
     checkListed(z, manifest, problems);
     std::error_code ec;
     if (outDir.empty()) {
@@ -390,7 +451,19 @@ bool keepRender(Song &song, const std::string &outDir, const json &report, int r
     const bool picture = !png.empty() && fs::is_regular_file(png, ec);
     if (picture) fs::copy_file(png, dir / "song.png", fs::copy_options::overwrite_existing, ec);
     else fs::remove(dir / "song.png", ec);   // an older picture no longer shows this render
-    if (!writeText(dir / "report.json", report.dump(2, ' ', false, json::error_handler_t::replace) + "\n", err)) return false;
+    // the report travels with the song: file paths in it relative to the song, never this computer's folders
+    json kept = report;
+    const fs::path songDir = song.dir.lexically_normal();
+    std::function<void(json &)> relative = [&](json &v) {
+        if (v.is_object() || v.is_array()) { for (auto &x : v) relative(x); return; }
+        if (!v.is_string()) return;
+        const fs::path p = fs::u8path(v.get<std::string>());
+        if (!p.is_absolute()) return;
+        const fs::path rel = p.lexically_normal().lexically_relative(songDir);
+        v = !rel.empty() && *rel.begin() != ".." ? rel.generic_u8string() : p.filename().u8string();
+    };
+    relative(kept);
+    if (!writeText(dir / "report.json", kept.dump(2, ' ', false, json::error_handler_t::replace) + "\n", err)) return false;
     json &m = song.manifest;
     json r = {{"revision", rev}, {"mix", "render/mix.mp3"}, {"report", "render/report.json"}};
     if (picture) r["picture"] = "render/song.png";

@@ -45,7 +45,9 @@ bool ZipWriter::write(const std::string &path, std::string &err) const {
     std::vector<uint8_t> out, central;
     auto u16 = [](std::vector<uint8_t> &v, uint16_t x) { v.push_back((uint8_t)x); v.push_back((uint8_t)(x >> 8)); };
     auto u32 = [](std::vector<uint8_t> &v, uint32_t x) { for (int i = 0; i < 4; ++i) v.push_back((uint8_t)(x >> (8 * i))); };
+    if (files_.size() >= 0xFFFF) { err = "too many files for a zip without zip64 (" + std::to_string(files_.size()) + ")"; return false; }
     for (const auto &f : files_) {
+        if (out.size() + f.data.size() + f.name.size() + 30 > 0xFFFFFFFFull) { err = "the archive would pass 4 GiB, which needs zip64"; return false; }
         std::vector<uint8_t> comp;
         uint16_t method = 8;
         if (f.store || !zipdetail::deflateRaw(f.data, comp) || comp.size() >= f.data.size()) { comp = f.data; method = 0; }   // store what doesn't shrink

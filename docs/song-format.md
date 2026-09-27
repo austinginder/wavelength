@@ -1,10 +1,14 @@
 # Wavelength song format
 
-**Draft 1** (2026-09-27), for review. Format version `1.0`. This document is licensed CC BY 4.0; the JSON
+**Draft 2** (2026-09-27), for review. Format version `1.0`. This document is licensed CC BY 4.0; the JSON
 Schemas it names are CC0. Anyone may read and write Wavelength songs without asking, paying or
 using Wavelength's code.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
+
+All JSON in a song (the manifest, the job, the history log and `review.json`) is I-JSON (RFC 7493):
+UTF-8 without a byte order mark, and no object with the same key twice. Readers MUST refuse a
+manifest, log line or `review.json` with a duplicate key rather than pick one of the values.
 
 ## 1. Overview
 
@@ -15,8 +19,9 @@ folder; packing that folder again gives the same package.
 
 Goals, in order:
 
-1. **Open.** JSON and plain text inside, a published spec and schema, no opaque blobs required to
-   read or render a song, nothing in the format that only one program can interpret.
+1. **Open.** JSON and plain text inside, a published spec and schema, nothing in the format that only
+   one program can interpret. The one exception is a plugin's own state file, which only that
+   plugin reads; a song can always name a preset instead.
 2. **Safe to open.** A song is data. Opening, validating or rendering one never runs code it
    contains, and a package cannot write outside the folder it unpacks into.
 3. **Portable.** Paths are relative and stay inside the song. Everything else a song needs (plugins,
@@ -46,10 +51,19 @@ the song's files (the job, the files the manifest lists, the files the job refer
 and `history/`), and a package carries those and nothing else.
 
 **Names and paths.** Every path in a song is relative to the song folder and uses `/` as the
-separator. Paths MUST NOT be absolute, MUST NOT contain empty, `.` or `..` segments and MUST
-resolve inside the folder. Names are UTF-8 in Unicode NFC, at most 255 bytes per segment, and unique when compared
-case-insensitively (the folder has to survive case-insensitive file systems). Entries MUST NOT be
-symbolic links, and nothing in a song may be named `.git`.
+separator. A path MUST NOT be absolute (start with `/`, a drive letter such as `C:` or `~`), MUST
+NOT end with `/`, and MUST NOT contain empty, `.` or `..` segments, so it always resolves inside the
+folder. Each segment (a folder or file name):
+
+- is UTF-8 in Unicode NFC, at most 255 bytes, with no control characters (U+0000 to U+001F, U+007F);
+- contains none of `\ < > : " | ? *`, and doesn't end with a space or `.`;
+- isn't a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, in any
+  case, with or without an extension);
+- isn't `.git` (compared case-insensitively, ignoring trailing spaces and dots) or `git~1`.
+
+Paths MUST be unique when compared after Unicode simple case folding, so a song survives
+case-insensitive file systems. Songs MUST NOT contain symbolic links, and writers MUST NOT follow one
+into a song's files, history or package.
 
 ## 3. The manifest: `wavelength.json`
 
@@ -107,7 +121,7 @@ symbolic links, and nothing in a song may be named `.git`.
 | `license` | optional | An SPDX license expression (`"CC-BY-4.0"`, `"MIT"`). Missing means all rights reserved. |
 | `tags` | optional | Free words. |
 | `job` | required | File name of the job, at the top of the folder (section 4). |
-| `files` | optional | Every other file that belongs to the song (the job, `review.json` and `history/` are implied), each `{path, role, mediaType?, size?, sha256?}`. |
+| `files` | optional | Every other file that belongs to the song (the job, `review.json` and `history/` are implied), each `{path, role, mediaType?, size?, sha256?}`. No path in it may be `mimetype`, `wavelength.json`, the job or `review.json`, or lie under `history/` or `out/`. |
 | `render` | optional | The render that goes with the song (section 8). |
 | `requires` | optional | What the song needs from the computer that renders it (section 4.3). Written by `pack`; readers treat it as a summary of the job, never as its source. |
 | `extensions`, `extensionsRequired`, `metadata` | optional | Section 10. |
@@ -136,12 +150,25 @@ their track, start beat and key; they carry no IDs.
 
 ### 4.2 References
 
-Every file reference in the job (a `state` file, a sampler `sample`, `sfz` or `soundfont` path, a
-clip `file`) MUST be a relative path inside the song folder, normally under `media/`. Anything the
-song uses from outside the folder is referred to **by name**: a plugin, a preset (`"preset"`), a
-sample library (`"multisample"`, `"kit"`, `"soundfont"` names) or one file of a library
-(`"lib:Legend 909/Kick Legend 909 01 accent.wav"`: a `lib:` name is never a file of the song), so
-the song does not depend on where another computer keeps it.
+Every file the job reads is a path inside the song folder that follows section 2, normally under
+`media/`. Anything the song uses from outside the folder is referred to **by name**: a plugin, a
+preset (`"preset"`), a sample library (`"multisample"`, `"kit"`, `"soundfont"`, `"sfz"` names) or one
+file of a library (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`), so the song does not depend on
+where another computer keeps it.
+
+Whether a value is a file or a name is decided by its key alone:
+
+| Key (on a track, a fallback or an effect) | Is |
+|---|---|
+| `state` (or `state.file`) | a file; a `#<n>` suffix (`cart.syx#3`) picks a program inside it |
+| sampler `sample`, clip `file`, kit `map` values | a file, unless it starts with `lib:` (a library file) or `*` (a built-in generator); a `map` value with no `/` is a name inside the kit's folder when the track has a `kit` (a library or a folder in the song) |
+| sampler `multisample`, `sfz`, `soundfont` | a library name, unless it contains `/` or ends with `.multisample`, `.sfz`, `.sf2` or `.sf3`, then a file |
+| sampler `kit` | a library name, unless it contains `/`, then a folder in the song |
+| `deliver[].file` | a file the render writes: a path under section 2, relative to the render's output folder |
+
+A renderer MUST check every path the job reads or writes against section 2 before opening it when
+it renders a song from a package, and MUST refuse to render a job that would read or write outside
+the song and its output folder.
 
 A song SHOULD NOT copy third-party files into `media/` (factory presets, commercial samples) unless
 their licence allows redistribution. Name them instead.
@@ -150,9 +177,10 @@ their licence allows redistribution. Name them instead.
 
 A track that plays a plugin or a named library SHOULD have a `fallback` (a stand-in sound that ends,
 ideally, with a built-in instrument), so the song renders on computers without the original.
-`wavelength pack` lists every such requirement in the manifest's `requires`: the track, the plugin's
-identity (`name`, `format`, `id`, `version` of the one that rendered it), the preset or library, and
-whether a fallback exists.
+`wavelength pack` lists every such requirement in the manifest's `requires`, one entry per need:
+`track` (its ID), `fallback` (whether it has one), and either `plugin` (`{name, format?, id?, version?}`
+of the one that rendered it) with an optional `preset`, or `library` (`{kind, name}`: `kind` is
+`multisample`, `kit`, `soundfont`, `sfz` or `files` for `lib:` files, `name` the library).
 
 ## 5. The package: `.wavelength`
 
@@ -163,7 +191,9 @@ A package is a ZIP file (APPNOTE 6.3.x), named `<slug>.wavelength`, media type
   `application/vnd.wavelength.song+zip` in ASCII with no line ending. The second SHOULD be
   `wavelength.json`.
 - Entries are stored or deflated. Text (JSON, Markdown, scripts) SHOULD be deflated; audio, images
-  and other compressed data SHOULD be stored. ZIP64 MAY be used. Entry names are UTF-8 (flag bit 11).
+  and other compressed data SHOULD be stored. Entry names are UTF-8, with flag bit 11 set when a
+  name isn't ASCII. Entries MAY use data descriptors. Format 1.0 packages don't use ZIP64: a package
+  is under 4 GiB with fewer than 65,535 entries, and a writer MUST fail rather than go past either.
 - A package contains `wavelength.json`, the job, the files listed in `files`, `review.json` and
   `history/`, each at its path in the folder, and nothing else. `review.json`, `history/` and
   `render` files MAY be left out (`pack --no-review`, `--no-history`, `--no-render`); the manifest
@@ -176,11 +206,13 @@ A package is a ZIP file (APPNOTE 6.3.x), named `<slug>.wavelength`, media type
   package for it.
 - Encryption, multi-disk archives and entries outside the rules of section 2 are not allowed.
 
-**Readers** MUST refuse entries with absolute paths, `..` segments, symbolic links, names that
-collide case-insensitively, or any path segment named `.git`. They SHOULD limit the total unpacked
-size and the compression ratio (zip bombs). They SHOULD accept a package whose `mimetype` entry is
-missing or not first, identifying it by `wavelength.json`. Unpacking and rendering a package MUST NOT
-execute anything inside it.
+**Readers** MUST refuse entries whose names break section 2 (absolute paths, `..` segments, names
+that collide after case folding, `.git`), symbolic links and encrypted entries. They take each
+entry's name and sizes from the central directory, MUST refuse an entry whose local header names a
+different file, and MUST check each entry's CRC-32. They MUST limit the total unpacked size (history
+objects included) and the compression ratio (zip bombs). They SHOULD accept a package whose
+`mimetype` entry is missing, compressed or not first, identifying it by `wavelength.json`. Unpacking
+and rendering a package MUST NOT execute anything inside it.
 
 ## 6. History
 
@@ -196,7 +228,16 @@ history/
 ```
 
 **Objects.** `objects/<first two hex digits>/<64 hex digits>` holds the file's bytes compressed with
-zlib (RFC 1950). The name is the SHA-256 of the uncompressed bytes; readers MUST check it.
+zlib (RFC 1950) as a single stream with nothing after it. The name is the SHA-256 of the uncompressed
+bytes; readers MUST check it and MUST cap how much they decompress. Hashes are written
+`"sha256:<64 lowercase hex digits>"` everywhere in a song; a reader that meets another prefix treats
+the value as unsupported, not as corrupt.
+
+**The log file.** `log.jsonl` is UTF-8 with one JSON object per line, lines ending in LF (a CR
+before it is tolerated). Readers skip empty lines, and MAY ignore a last line with no LF (a write that
+was interrupted) with a warning. One program writes the log at a time: a writer creates
+`history/lock` exclusively before it appends or writes objects and removes it after; readers ignore
+that file and packages never carry it.
 
 **The log.** Each line is one JSON object:
 
@@ -210,20 +251,27 @@ zlib (RFC 1950). The name is the SHA-256 of the uncompressed bytes; readers MUST
 
 | Field | Meaning |
 |---|---|
-| `rev` | 1, 2, 3...: the revision number, one more than the line before. |
+| `rev` | The revision number: 1 for the first, and greater than the line before (writers add one; pruning leaves gaps). |
 | `time`, `by`, `message` | When, who (`{name, kind}`) and why. |
-| `op` | `save` (a save point someone made; `named`: true when it has a message), `render` (a render: its files as they were rendered), `undo`, `redo`, `restore`. |
+| `op` | `save` (a save point someone made; `named`: true when it has a message), `render` (a render: its files as they were rendered), `undo`, `redo`, `restore`. Readers treat an op they don't know like `save`. |
 | `parent` | The revision before this one in the log (0 for the first), so the log is one line of history. |
 | `files` | The full snapshot: every tracked path and its content hash. Reading a revision needs only its line and objects. |
-| `render` | For `render` entries: hashes of the report and mix that were made, and their loudness summary. |
+| `render` | For `render` entries: the hashes of the report and of the mix file the render wrote (not necessarily the file later kept in `render/`), and their loudness summary. |
 | `target` | For `undo`, `redo` and `restore`: the revision whose files were restored (the one that was current is `parent`). |
 
-**Operations.** Undo, redo and restore never remove anything: each writes the target revision's files
-into the folder and appends an entry, so it can itself be undone. They follow the song's changes the
-way an editor does: a `save` or `render` whose files differ from the previous state is a change (one
-that changed nothing is not), and a `restore` is one. Undo returns to the state before the latest
-change; redo reapplies what undo took back, until the next change. Unsaved edits in the folder are
-saved as a revision before any of them runs.
+**Operations.** Undo, redo and restore never lose a revision: each makes the folder's tracked files
+exactly the target revision's (writing its files and deleting tracked files the target doesn't have)
+and appends an entry, so it can itself be undone. Unsaved edits in the folder are saved as a revision
+before any of them runs. They follow the song's changes the way an editor does. Reading the log in
+order with two stacks, `undo` and `redo`:
+
+- an `undo` entry moves the top of `undo` to `redo`;
+- a `redo` entry moves the top of `redo` back to `undo`;
+- a `restore`, or any other entry whose files differ from the entry before it, is a change: its
+  `rev` goes on `undo` and `redo` is cleared (the first entry is always a change);
+- anything else (a `save` or `render` that changed nothing) leaves both stacks alone.
+
+Undo restores the revision below the top of `undo`; redo restores the top of `redo`.
 Every render appends a `render` entry, even when the files are unchanged (it costs one line: the
 objects are already there), so each render a person listens to has a revision of its own. Content
 that appears in many revisions is stored once.
@@ -232,11 +280,12 @@ that appears in many revisions is stored once.
 points at, rewriting the log with their `rev` numbers kept (gaps are allowed) and deleting objects
 no remaining revision uses.
 
-**Git.** A song never contains a git repository. Each revision maps to one git commit: its tree is
-the revision's files, its parent the commit of `parent`, author and committer `by.name` with an empty
-e-mail, both dates `time`, and its message `message` followed by a blank line and
-`Wavelength-Revision: <rev>`. The mapping is deterministic, so `wavelength history --to-git` (a
-repository) and `--bundle` (a git bundle) give the same commits on every computer.
+**Git** (informative). A song never contains a git repository. `wavelength history --to-git` (a
+repository) and `--bundle` (a git bundle) map each revision to one git commit: its tree is the
+revision's files, its parent the commit of `parent` (none when that revision was pruned), author and
+committer `by.name` with an empty e-mail, both dates `time`, and its message `message` (or the
+operation, when there is none) followed by a blank line and `Wavelength-Revision: <rev>`. The same log
+gives the same commits on every computer.
 
 ## 7. Comments: `review.json`
 
@@ -271,13 +320,16 @@ repository) and `--bundle` (a git bundle) give the same commits on every compute
 
 - A comment's `anchor` records what was heard: the revision and render (report hash) that were
   playing, the song time, bars and beats selected, and the tracks and notes picked. The anchor is
-  never rewritten.
+  never rewritten. `time` is `[start, end]` in seconds of the rendered mix (its lead-in included),
+  `beats` `[start, end]` counted from the job's beat 0, `bars` the first and last bar, from 1.
+  `tracks` and notes' `track` are track IDs (section 4.1). A reply's `time`, like `created`, is
+  when it was written.
 - Whether a comment is **outdated** (the anchored tracks or bars changed after `anchor.revision`) is
   computed by comparing that revision with the current one; it is not stored.
-- `status` is `open` or `done`; `resolved` says which revision addressed it. Replies may come from
-  people or agents.
+- `status` is `open` or `done` (readers treat a status they don't know as `open`); `resolved` says
+  which revision addressed it. Replies may come from people or agents.
 - Comments are not part of history: writing one never makes a revision.
-- `id`, `status` and `text` are required. Tools SHOULD write `created`, `author` and
+- `id`, `status` and `text` are required, and ids are unique within the file. Tools SHOULD write `created`, `author` and
   `anchor.revision` on a comment and `author` on a reply.
 - Readers MUST accept comments written before this spec: their anchor fields sit on the comment itself,
   their single `reply` is a string, and they have no author or revision.
@@ -310,10 +362,14 @@ A song is untrusted input. Implementations:
 
 ## 10. Versions and extensions
 
-- A minor version only adds optional fields and file roles. Readers MUST ignore object keys they
-  don't know and SHOULD keep them when they rewrite a file.
-- A major version may change meaning. A reader that doesn't support `minReaderVersion` MUST refuse
-  the song rather than guess.
+- Versions are `"major.minor"`, compared as two numbers (`1.10` is newer than `1.9`).
+- A minor version only adds optional fields and new values of open lists. Readers MUST ignore object
+  keys they don't know and SHOULD keep them when they rewrite a file. These lists are open, and a
+  reader treats a value it doesn't know as shown: file `role` (`other`), history `op` (`save`),
+  comment `status` (`open`), author `kind` (`human`), `requires` entries of a kind it doesn't know
+  (ignored).
+- A major version may change meaning. A reader refuses a song whose `minReaderVersion` (by default
+  `formatVersion`'s major with `.0`) is newer than the newest version it supports, rather than guess.
 - Tools put their own data in `metadata` under reverse-domain keys (`"run.wavelength.site"`,
   `"com.example.daw"`). An extension that changes how a song must be read goes in `extensions` under
   the same kind of key, and in `extensionsRequired` when a reader that doesn't know it MUST refuse
@@ -321,16 +377,23 @@ A song is untrusted input. Implementations:
 
 ## 11. Conformance
 
-- `wavelength validate <song | package>` checks a song against this spec: paths, the manifest's JSON
-  Schema, the job, object hashes, and the package's entry rules.
+- `wavelength validate <song | package>` checks a song against this spec: paths, the manifest, the
+  job's paths, the log's order, object hashes, comments, and the package's entry rules.
 - JSON Schemas: `schemas/wavelength.schema.json` (manifest), `schemas/review.schema.json`,
   `schemas/history-entry.schema.json`.
 - Test songs from `scripts/make-song-fixtures.py`: a valid folder and package, packages every reader
   must refuse (path traversal, absolute paths, symbolic links, `.git`, a bad hash, names that collide
-  by case, a newer format) and one it must accept with a warning.
+  by case, newer formats, an unknown required extension, a duplicate key, a job that writes outside
+  its folder) and ones it must accept (with objects left out as files, with a warning).
 - A second, independent reader (Python, in `scripts/wavelength_song.py`) validates and unpacks
   packages without the engine, so the spec never depends on one implementation.
 
 ## Changes
 
+- Draft 2 (2026-09-27): after an independent review. Stricter, portable names (no Windows-reserved
+  names, case folding, no trailing `/`); files versus names decided by key; `deliver` paths and
+  render-time path checks; I-JSON; ZIP details (no ZIP64 in 1.0, central-directory names, CRC-32);
+  log file rules and a lock; undo and redo written as an algorithm, and restoring deletes files the
+  target doesn't have; open value lists; numeric versions; comment anchor units; git mapping
+  informative.
 - Draft 1 (2026-09-27): first draft for review.

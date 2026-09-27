@@ -45,6 +45,7 @@
 #include "kit.hpp"
 #include "history.hpp"
 #include "package.hpp"
+#include "song.hpp"
 #include "song_cli.hpp"
 #include "mcp.hpp"
 #include "render.hpp"
@@ -81,15 +82,16 @@ const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https
 
 Usage:
   wavelength plugins [--rescan] [--json] | plugins --block <plugin> [--reason TEXT] | --unblock <plugin>
-      List installed CLAP and VST3 plugins and the built-in instruments (cached; --rescan
+      List installed CLAP, VST3 and VST2 plugins and the built-in instruments (cached; --rescan
       reloads every bundle). A blocked plugin (one that opens a licence window on every load,
       or crashes) is never loaded: render, params, presets and audition refuse it by name.
   wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
-  wavelength samples [--search TEXT] [--kit NAME] [--json]
-      List sample libraries for builtin:sampler (Bitwig multisamples and drum kit folders);
-      --kit shows the General MIDI key each of a kit's files is mapped to.
+  wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--install-soundfont [--force]] [--json]
+      List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ and
+      SoundFonts); --kit shows the General MIDI key each of a kit's files is mapped to, --soundfont
+      a SoundFont's presets. --install-soundfont downloads MuseScore General (MIT), the General MIDI set.
   wavelength audition <plugin> [--jobs 4] [--limit N] [--rebuild] [--json] | audition --retag
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
@@ -146,8 +148,8 @@ Usage:
       loudness before and after. A mix with a lead-in (read from the render's report.json, or
       --input-lead-in) is lined up with the markers and keeps its lead-in unless --lead-in.
       --deliver (or the job's "deliver") writes MP3/FLAC/WAV files of the result, as for render.
-  wavelength state save <plugin> --out FILE [--state FILE] [--set "Name=value"]...
-      Load an optional starting state, apply parameter values, save a preset
+  wavelength state save <plugin> --out FILE [--preset NAME | --state FILE [--format F]] [--set "Name=value"]... [--json]
+      Load an optional starting preset or state, apply parameter values, save a preset
       (.clap-preset for CLAP plugins, .vstpreset for VST3).
   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
       Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
@@ -185,13 +187,13 @@ Usage:
       MIDI SoundFont. They go into Wavelength's own folder, never the system's plugin folders. Without
       a subcommand it lists them with their licence, size and status; an entry whose plugin is already
       installed elsewhere is skipped unless --force.
-  wavelength docs [agents | job-format | effects] [--section TEXT] [--json]
+  wavelength docs [agents | job-format | effects | song-format] [--section TEXT] [--json]
       The docs that match this binary, built in: the operating guide for agents (read it first), the
       job format and the effects reference. --section prints one part (a heading or part of one).
   wavelength mcp
       Runs a Model Context Protocol server on stdin/stdout for MCP clients (Claude Desktop, Claude Code,
       Cursor): tools to read the guide, list instruments, presets, samples and parameters, lint, render
-      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject;
+      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject/Bitwig projects;
       for songs: save, history, undo, diff, comments and replies, fallbacks, pack.
   wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
       Draws the arrangement before rendering: sections, bars and a lane per track with its notes
@@ -237,9 +239,14 @@ Usage:
       render and serve open a .wavelength file directly.
   wavelength validate <song | file.wavelength> [--json]
       A song folder or package against the format spec.
+  wavelength fallbacks [song | job.json] [--suggest [--write] [--no-measure]] [--json]
+      What each track plays on this computer: its own plugin or library, or which fallback. --suggest
+      proposes a built-in stand-in (a synth patch, the drum kit, a General MIDI program) for every
+      track without one, each level-matched to the song's last render in out/ or render/ (one child
+      render per fallback position; --no-measure skips that); --write puts them in the job.
   wavelength upgrade [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy] [--json]
       Brings a song folder made before the format up to it: writes wavelength.json (from site.json when
-      there is one), makes paths inside the song relative, moves files the job uses out of out/ into
+      there is one), makes paths inside the song relative, copies files the job uses out of out/ into
       media/, names library samples ("lib:Legend 909/Kick.wav") and preset files (by preset name), copies
       other outside files into media/ (--no-copy: only reports them), updates review.json, keeps the last
       render when it matches the job, and saves a revision. Lists what it could not fix.
@@ -252,7 +259,7 @@ Usage:
   wavelength version
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
-.clap/.vst3 bundle. Prefix with vst3: or clap: when a name exists in both formats.
+.clap/.vst3/.vst bundle. Prefix with clap:, vst3: or vst2: when a name exists in more than one format.
 State formats: auto (default), clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree (.odin), h2p,
 dx7 (<cartridge>.syx#<voice>), synplant, cherry, ngrr, microtonic, soundbox, decentsampler,
 juce-string (.vital), raw.
@@ -339,7 +346,7 @@ int cmdPlugins(const Args &a) {
                       (blocked.contains(p.id) ? "  BLOCKED" : "")).c_str());
     }
     for (auto &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
-    std::fprintf(OUT, "\n%zu plugins (CLAP, VST3 and built-in). Use \"vst3:Name\" or \"clap:Name\" when a name exists in both formats.\n", all.size());
+    std::fprintf(OUT, "\n%zu plugins (CLAP, VST3, VST2 and built-in). Use \"clap:Name\", \"vst3:Name\" or \"vst2:Name\" when a name exists in more than one format.\n", all.size());
     return 0;
 }
 
@@ -1036,6 +1043,15 @@ int cmdRender(const Args &a) {
         Song song;
         if (!openSong(dir, song, err)) return fail(a, err);
         path = song.jobPath().string();
+        // a package is untrusted: its job reads only files of the song and writes only into the output folder
+        nlohmann::json pj;
+        if (!parseJsonStrict(readText(path), pj, err)) return fail(a, "the song's job " + err);
+        std::string outside, why;
+        for (auto &[where, ref] : jobFileRefs(pj))
+            if (!checkSongPath(ref, why) || fs::is_symlink(fs::path(dir) / fs::u8path(ref))) outside += "\n  " + where + ": " + ref;
+        for (auto &[where, ref] : jobOutputRefs(pj))
+            if (!checkSongPath(ref, why)) outside += "\n  " + where + ": " + ref;
+        if (!outside.empty()) return fail(a, "not rendering this package: its job reads or writes outside the song" + outside);
     }
     if (const std::string ext = fs::path(path).extension().string(); ext == ".mid" || ext == ".midi") {   // import, then render
         const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
@@ -1401,7 +1417,7 @@ int cmdDocs(const Args &a) {
             for (auto &h : d.headings) heads += (heads.empty() ? "" : " | ") + h;
             std::fprintf(OUT, "            %s\n", heads.c_str());
         }
-        std::fprintf(OUT, "\nwavelength docs agents (the operating guide; read it in full first), docs job-format, docs effects; --section TEXT prints one section.\n");
+        std::fprintf(OUT, "\nwavelength docs agents (the operating guide; read it in full first), docs job-format, docs effects, docs song-format; --section TEXT prints one section.\n");
         return 0;
     }
     std::string text, err;
@@ -1838,7 +1854,11 @@ int run(int argc, char **argv) {
         if (cmd == "docs") return cmdDocs(a);
         if (cmd == "kit") return cmdKit(a);
         if (cmd == "mcp") return runMcp(OUT);
-        if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
+        if (cmd == "version") {
+            if (a.has("--json")) emit(json{{"ok", true}, {"name", "wavelength"}, {"version", WAVELENGTH_VERSION}, {"songFormat", kSongFormatVersion}}.dump(2));
+            else std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION);
+            return 0;
+        }
     } catch (const std::exception &e) {
         return fail(a, e.what());
     }

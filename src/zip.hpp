@@ -9,7 +9,7 @@
 
 namespace wl {
 
-struct ZipEntry { std::string name; uint16_t method; uint32_t compSize, size, localOffset; uint16_t flags = 0; uint32_t externalAttr = 0; };
+struct ZipEntry { std::string name; uint16_t method; uint32_t compSize, size, localOffset; uint16_t flags = 0; uint32_t externalAttr = 0; uint32_t crc = 0; };
 
 namespace zipdetail {
 inline uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -62,6 +62,7 @@ public:
             ZipEntry e;
             e.flags = zipdetail::u16(&cd[p + 8]);
             e.method = zipdetail::u16(&cd[p + 10]);
+            e.crc = zipdetail::u32(&cd[p + 16]);
             e.externalAttr = zipdetail::u32(&cd[p + 38]);
             e.compSize = zipdetail::u32(&cd[p + 20]);
             e.size = zipdetail::u32(&cd[p + 24]);
@@ -82,13 +83,21 @@ public:
         f_.seekg((std::streamoff)(base_ + e->localOffset));
         f_.read(reinterpret_cast<char *>(lh), 30);
         if (zipdetail::u32(lh) != 0x04034b50) { err = "bad zip entry header for " + name; return false; }
+        // the local header must name the same file as the central directory (readers disagree otherwise)
+        std::string localName(zipdetail::u16(lh + 26), '\0');
+        f_.read(localName.data(), (std::streamsize)localName.size());
+        if (localName != e->name) { err = "zip entry '" + e->name + "' is named '" + localName + "' in its local header"; return false; }
         f_.seekg((std::streamoff)(base_ + e->localOffset + 30 + zipdetail::u16(lh + 26) + zipdetail::u16(lh + 28)));
         std::vector<uint8_t> comp(e->compSize);
         f_.read(reinterpret_cast<char *>(comp.data()), e->compSize);
-        if (e->method == 0) { out = std::move(comp); return true; }
-        if (e->method != 8) { err = name + ": unsupported zip compression " + std::to_string(e->method); return false; }
-        out.resize(e->size);
-        if (!zipdetail::inflateRaw(comp, out)) { err = name + ": corrupt deflate data"; return false; }
+        if (!f_) { err = name + ": the zip ends inside this entry"; return false; }
+        if (e->method == 0) out = std::move(comp);
+        else if (e->method != 8) { err = name + ": unsupported zip compression " + std::to_string(e->method); return false; }
+        else {
+            out.resize(e->size);
+            if (!zipdetail::inflateRaw(comp, out)) { err = name + ": corrupt deflate data"; return false; }
+        }
+        if (zipdetail::crc32(out) != e->crc) { err = name + ": its CRC-32 doesn't match (a damaged zip)"; return false; }
         return true;
     }
 private:

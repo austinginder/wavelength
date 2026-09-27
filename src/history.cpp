@@ -6,12 +6,14 @@
 #include <zlib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -33,7 +35,9 @@ bool deflateZlib(const std::string &in, std::string &out) {
     return true;
 }
 
-bool inflateZlib(const std::string &in, std::string &out) {
+// one zlib stream with nothing after it, at most `limit` bytes out (a zlib bomb stops there)
+constexpr size_t kMaxObject = (size_t)2 << 30;
+bool inflateZlib(const std::string &in, std::string &out, size_t limit = kMaxObject) {
     z_stream zs{};
     if (inflateInit(&zs) != Z_OK) return false;
     zs.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(in.data()));
@@ -45,12 +49,35 @@ bool inflateZlib(const std::string &in, std::string &out) {
         zs.next_out = reinterpret_cast<Bytef *>(buf);
         zs.avail_out = sizeof buf;
         rc = inflate(&zs, Z_NO_FLUSH);
-        if (rc != Z_OK && rc != Z_STREAM_END) { inflateEnd(&zs); return false; }
+        if ((rc != Z_OK && rc != Z_STREAM_END) || (rc == Z_OK && zs.avail_in == 0 && zs.avail_out != 0)) { inflateEnd(&zs); return false; }
         out.append(buf, sizeof buf - zs.avail_out);
+        if (out.size() > limit) { inflateEnd(&zs); return false; }
     } while (rc != Z_STREAM_END);
+    const bool trailing = zs.avail_in != 0;
     inflateEnd(&zs);
-    return true;
+    return !trailing;
 }
+
+// history/lock, created exclusively while this program writes the log or objects (a folder: creating
+// one is atomic everywhere); a lock older than a minute was left by a program that died
+struct Lock {
+    fs::path dir;
+    bool held = false;
+    bool take(const Song &song, std::string &err) {
+        dir = song.dir / "history" / "lock";
+        std::error_code ec;
+        fs::create_directories(dir.parent_path(), ec);
+        for (int i = 0; i < 100; ++i) {
+            if (fs::create_directory(dir, ec)) return held = true;
+            const auto age = fs::file_time_type::clock::now() - fs::last_write_time(dir, ec);
+            if (!ec && age > std::chrono::minutes(1)) { fs::remove(dir, ec); continue; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        err = "another program is writing this song's history (" + dir.string() + "); try again";
+        return false;
+    }
+    ~Lock() { std::error_code ec; if (held) fs::remove(dir, ec); }
+};
 
 bool storeObject(const Song &song, const std::string &content, std::string &hex, std::string &err) {
     hex = sha256Hex(content);
@@ -62,8 +89,11 @@ bool storeObject(const Song &song, const std::string &content, std::string &hex,
     return writeText(p, z, err);
 }
 
-// the entry's files written back into the folder
+// the entry's files written back into the folder, and tracked files it doesn't have deleted
 bool writeFiles(const Song &song, const json &files, std::string &err) {
+    std::error_code ec;
+    for (const auto &path : trackedFiles(song))
+        if (!files.contains(path) && !fs::is_symlink(song.dir / fs::u8path(path), ec)) fs::remove(song.dir / fs::u8path(path), ec);
     for (auto &[path, ref] : files.items()) {
         if (!checkSongPath(path, err)) return false;
         std::string content;
@@ -170,8 +200,10 @@ bool read(const Song &song, std::vector<json> &entries, std::string &err, std::s
         ++n;
         if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
         try {
-            json e = json::parse(line);
-            if (!e.is_object() || !e.contains("rev")) throw std::runtime_error("not a revision");
+            json e;
+            std::string why;
+            if (!parseJsonStrict(line, e, why)) throw std::runtime_error(why);
+            if (!e.is_object() || !e.contains("rev") || !e["rev"].is_number_integer()) throw std::runtime_error("not a revision");
             entries.push_back(std::move(e));
         } catch (const std::exception &) {
             if (in.peek() == EOF) { if (warning) *warning = "history/log.jsonl line " + std::to_string(n) + " is incomplete and was skipped"; break; }
@@ -192,7 +224,12 @@ const json *find(const std::vector<json> &entries, int rev) {
 
 bool snapshot(const Song &song, json &files, std::string &err) {
     files = json::object();
+    std::error_code ec;
     for (const auto &path : trackedFiles(song)) {
+        if (fs::is_symlink(song.dir / fs::u8path(path), ec)) {   // never follow a link out of the song
+            err = path + " is a symbolic link; a song can't contain links (copy the file in instead)";
+            return false;
+        }
         std::string hex;
         if (!storeObject(song, readText(song.dir / path), hex, err)) return false;
         files[path] = "sha256:" + hex;
@@ -215,6 +252,8 @@ int append(const Song &song, std::vector<json> &entries, json entry, std::string
 }
 
 int save(const Song &song, const std::string &message, const json &by, bool always, std::string &err) {
+    Lock lock;
+    if (!lock.take(song, err)) return 0;
     std::vector<json> entries;
     if (!read(song, entries, err)) return 0;
     json files;
@@ -226,6 +265,8 @@ int save(const Song &song, const std::string &message, const json &by, bool alwa
 }
 
 int undo(const Song &song, const json &by, std::string &err) {
+    Lock lock;
+    if (!lock.take(song, err)) return 0;
     std::vector<json> entries;
     if (!read(song, entries, err)) return 0;
     if (!saveUnsaved(song, entries, by, err)) return 0;
@@ -235,6 +276,8 @@ int undo(const Song &song, const json &by, std::string &err) {
 }
 
 int redo(const Song &song, const json &by, std::string &err) {
+    Lock lock;
+    if (!lock.take(song, err)) return 0;
     std::vector<json> entries;
     if (!read(song, entries, err)) return 0;
     const Stacks s = stacks(entries);
@@ -246,6 +289,8 @@ int redo(const Song &song, const json &by, std::string &err) {
 }
 
 int restore(const Song &song, int target, const json &by, std::string &err) {
+    Lock lock;
+    if (!lock.take(song, err)) return 0;
     std::vector<json> entries;
     if (!read(song, entries, err)) return 0;
     if (!find(entries, target)) { err = "no revision " + std::to_string(target) + " in the history"; return 0; }
@@ -256,6 +301,8 @@ int restore(const Song &song, int target, const json &by, std::string &err) {
 int recordRender(const std::string &jobPath, const std::string &outDir, json &report, std::string &err) {
     Song song;
     if (!songOfJob(jobPath, song)) return 0;
+    Lock lock;
+    if (!lock.take(song, err)) return 0;
     std::vector<json> entries;
     if (!read(song, entries, err)) return 0;
     json files;
@@ -279,6 +326,7 @@ int recordRender(const std::string &jobPath, const std::string &outDir, json &re
 }
 
 bool readObject(const Song &song, const std::string &hash, std::string &out, std::string &err) {
+    if (hash.rfind("sha256:", 0) != 0) { err = "unsupported hash '" + hash.substr(0, 24) + "' (this Wavelength reads sha256)"; return false; }
     const std::string hex = hexOf(hash);
     if (hex.size() != 64 || hex.find_first_not_of("0123456789abcdef") != std::string::npos) { err = "bad object name '" + hash + "'"; return false; }
     std::ifstream in(objectPath(song, hex), std::ios::binary);
@@ -362,7 +410,7 @@ bool exportGit(const Song &song, const std::string &target, bool bundle, std::st
             const std::string h = hexOf(ref.get<std::string>());
             if (!blobs.count(h)) {
                 std::string content;
-                if (!readObject(song, h, content, err)) return false;
+                if (!readObject(song, ref.get<std::string>(), content, err)) return false;
                 const fs::path f = tmp / "blob";
                 if (!writeText(f, content, err)) return false;
                 if (!git({"-C", R, "hash-object", "-w", f.string()}, out, err) || out.size() < 40) { err = "git hash-object failed"; return false; }
