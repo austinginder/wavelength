@@ -72,15 +72,23 @@ bool readXfer(const std::vector<uint8_t> &d, json &header, json &payload, std::s
     if (!isXferJson(d) || d.size() < 17) { err = "not an Xfer (Serum 2) file"; return false; }
     const uint64_t n = le64(&d[9]);
     if (17 + n + 8 > d.size()) { err = "truncated Xfer header"; return false; }
-    header = json::parse(d.begin() + 17, d.begin() + 17 + (long)n, nullptr, false);
+    size_t hn = (size_t)n;
+    while (hn > 0 && d[17 + hn - 1] == 0) --hn;   // older files count a trailing NUL
+    header = json::parse(d.begin() + 17, d.begin() + 17 + (long)hn, nullptr, false);
     if (header.is_discarded()) { err = "Xfer header is not JSON"; return false; }
     const size_t at = 17 + n;
     const uint32_t size = le32(&d[at]), version = le32(&d[at + 4]);
-    if (version != 2) { err = "unsupported Xfer payload version " + std::to_string(version); return false; }
+    if (version != 2 && version != 0) { err = "unsupported Xfer payload version " + std::to_string(version); return false; }
     std::vector<uint8_t> raw(size);
-    const size_t got = ZSTD_decompress(raw.data(), raw.size(), d.data() + at + 8, d.size() - at - 8);
-    if (ZSTD_isError(got) || got != size) { err = "Xfer payload does not decompress"; return false; }
-    payload = json::from_cbor(raw, true, false);
+    if (version == 2) {   // zstd(CBOR)
+        const size_t got = ZSTD_decompress(raw.data(), raw.size(), d.data() + at + 8, d.size() - at - 8);
+        if (ZSTD_isError(got) || got != size) { err = "Xfer payload does not decompress"; return false; }
+        payload = json::from_cbor(raw, true, false);
+    } else {   // older Serum 2 builds: zlib(UBJSON)
+        uLongf got = size;
+        if (uncompress(raw.data(), &got, d.data() + at + 8, (uLong)(d.size() - at - 8)) != Z_OK || got != size) { err = "Xfer payload does not decompress"; return false; }
+        payload = json::from_ubjson(raw, true, false);
+    }
     if (payload.is_discarded() || !payload.is_object()) { err = "Xfer payload is not a CBOR map"; return false; }
     return true;
 }
@@ -220,6 +228,44 @@ bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> 
     for (const char *k : {"presetName", "presetAuthor", "presetDescription"}) ch[k] = header.value(k, "");
     processor = writeXfer(ph, proc);
     controller = writeXfer(ch, ctl);
+    return true;
+}
+
+bool isSerumFxFile(const std::vector<uint8_t> &d) {
+    if (!isXferJson(d) || d.size() < 17) return false;
+    const uint64_t n = le64(&d[9]);
+    if (17 + n > d.size()) return false;
+    size_t hn = (size_t)n;
+    while (hn > 0 && d[17 + hn - 1] == 0) --hn;
+    const json h = json::parse(d.begin() + 17, d.begin() + 17 + (long)hn, nullptr, false);
+    const std::string t = h.is_object() ? h.value("fileType", "") : "";
+    return t == "SerumFX" || t == "SerumFXRack";
+}
+
+bool serumFxWithFile(const std::vector<uint8_t> &current, const std::vector<uint8_t> &file, std::vector<uint8_t> &out, std::string &err) {
+    json fh, fp, ch, cp;
+    if (!readXfer(file, fh, fp, err)) return false;
+    if (!readXfer(current, ch, cp, err)) { err = "a Serum FX file loads into Serum 2 FX only (" + err + ")"; return false; }
+    if (ch.value("component", "") != "processor" || !cp.contains("FXRack0")) { err = "a Serum FX file loads into Serum 2 FX only"; return false; }
+    const std::string type = fh.value("fileType", fp.value("fileType", ""));
+    json rack;
+    if (type == "SerumFXRack") {
+        if (!fp.contains("FXRack") || !fp["FXRack"].is_object()) { err = "the rack file has no FXRack"; return false; }
+        rack = fp["FXRack"];
+    } else if (type == "SerumFX") {   // one module: the file's map without its metadata
+        json entry = json::object();
+        for (auto &[k, v] : fp.items())
+            if (!std::set<std::string>{"fileType", "fxType", "product", "productVersion", "url", "vendor", "version", "hash"}.count(k)) entry[k] = v;
+        rack = {{"FX", json::array({entry})}};
+    } else { err = "is not a Serum FX or FX rack file"; return false; }
+    // the file's modules replace the plugin's rack; the rack's own settings are kept unless the file has some
+    json &target = cp["FXRack0"];
+    if (!target.is_object()) target = json::object();
+    target["FX"] = rack.value("FX", json::array());
+    if (rack.contains("plainParams") && rack["plainParams"] != "default") target["plainParams"] = rack["plainParams"];
+    if (rack.contains("parameters")) target["parameters"] = rack["parameters"];
+    ch.erase("hash");
+    out = writeXfer(ch, cp);
     return true;
 }
 

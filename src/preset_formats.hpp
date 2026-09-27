@@ -18,6 +18,12 @@ bool isXferJson(const std::vector<uint8_t> &d);
 bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> &processor,
                          std::vector<uint8_t> &controller, std::string &err);
 
+// Serum 2 .SerumFX (one effect module) / .SerumFXRack (a rack): the Serum 2 FX plugin's processor state
+// with its rack replaced by the file's modules
+bool isSerumFxFile(const std::vector<uint8_t> &d);
+bool serumFxWithFile(const std::vector<uint8_t> &serumFxState, const std::vector<uint8_t> &file, std::vector<uint8_t> &out,
+                     std::string &err);
+
 bool valueTreeToJuceXml(const std::vector<uint8_t> &file, std::vector<uint8_t> &state, std::string &err);
 
 // DX7 32-voice bulk dump (.syx, 4104 bytes) + voice index -> patch Dexed's own state: the

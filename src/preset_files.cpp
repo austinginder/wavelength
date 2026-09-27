@@ -28,7 +28,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
                                            ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
-                                           ".hxp", ".echobode"};
+                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -59,6 +59,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".dspreset") return p == "decentsampler";
     if (ext == ".hxp") return p == "helix";
     if (ext == ".echobode") return p == "echobode";
+    if (ext == ".serumfx" || ext == ".serumfxrack") return p == "serum2fx";
     if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
         std::ifstream in(file, std::ios::binary);
         char head[20] = {};
@@ -295,6 +296,9 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         dirs.push_back(fs::path(home) / "Music/Vital");
         dirs.push_back(fs::path(home) / "Documents/Vital");
     }
+    if (p == "serum2fx")   // Serum 2's effect presets and racks
+        for (const fs::path &root : {fs::path("/Library/Audio/Presets"), fs::path(home) / "Library/Audio/Presets"})
+            dirs.push_back(root / "Xfer Records/Serum 2 Presets/Effect Chains");
     if (p == "helix") {   // audjoo Helix: factory patches beside the plugin, user patches in Application Support
         for (const char *d : {"/Library/Audio/Plug-Ins/VST/audjoo_helix_data/patches", "/Library/Audio/Plug-Ins/VST3/audjoo_helix_data/patches"})
             dirs.push_back(d);
@@ -325,6 +329,8 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             PresetInfo pi;
             pi.name = it->path().stem().string();
             pi.category = it->path().parent_path().filename().string();
+            if ((ext == ".serumfx" || ext == ".serumfxrack") && (pi.category == "Factory" || pi.category == "User"))
+                pi.category = it->path().parent_path().parent_path().filename().string();   // Effect Chains/<Delay>/Factory/
             if (ext == ".ngrr") {   // Guitar Rig: category from the rack's own tags, licence status in the description
                 std::ifstream in(it->path(), std::ios::binary);
                 const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
