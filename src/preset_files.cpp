@@ -28,7 +28,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
                                            ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
-                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack"};
+                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -59,6 +59,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".dspreset") return p == "decentsampler";
     if (ext == ".hxp") return p == "helix";
     if (ext == ".echobode") return p == "echobode";
+    if (ext == ".tide") return p == "pendulate";
     if (ext == ".serumfx" || ext == ".serumfxrack") return p == "serum2fx";
     if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
         std::ifstream in(file, std::ios::binary);
@@ -296,6 +297,8 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         dirs.push_back(fs::path(home) / "Music/Vital");
         dirs.push_back(fs::path(home) / "Documents/Vital");
     }
+    if (p == "pendulate")   // Newfangled Audio: the preset (.tide) is the plugin's state JSON
+        for (const char *d : {"Documents", "Music"}) dirs.push_back(fs::path(home) / d / "Newfangled Audio/Pendulate/Presets");
     if (p == "serum2fx")   // Serum 2's effect presets and racks
         for (const fs::path &root : {fs::path("/Library/Audio/Presets"), fs::path(home) / "Library/Audio/Presets"})
             dirs.push_back(root / "Xfer Records/Serum 2 Presets/Effect Chains");
