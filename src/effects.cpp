@@ -564,18 +564,28 @@ struct Chorus : Effect {
 // --------------------------------------------------------------------------------- width
 struct Width : Effect {
     Envelope amount;
-    Width(const json &j, const Job &job) { label = "width"; amount = param(j, "amount", 1, job.tempo); checkKeys(j, {"amount"}, *this); }
+    double monoBelow = 0;   // Hz: the side signal is high-passed here, so the low end is mono (0 = off)
+    Width(const json &j, const Job &job) {
+        label = "width";
+        amount = param(j, "amount", 1, job.tempo);
+        monoBelow = std::clamp(j.value("monoBelow", 0.0), 0.0, 1000.0);
+        checkKeys(j, {"amount", "monoBelow"}, *this);
+    }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
+        dsp::Biquad h1, h2;   // 24 dB/oct on the side signal
+        if (monoBelow > 0) { h1.set(dsp::Biquad::HighPass, monoBelow, 0.7071, 0, sr); h2 = h1; }
         // energy in and out per 0.25 s: narrowing toward mono removes the side signal, and a wide or
         // anti-phase input (a stereo reverb reads correlation < 0) then mostly vanishes
         const size_t hop = (size_t)(0.25 * sr);
         std::vector<double> ein((a.frames() + hop - 1) / hop, 0), eout(ein.size(), 0);
         for (size_t i = 0; i < a.frames(); ++i) {
             ein[i / hop] += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
-            const double w = amount.at(i / sr), m = (a.left[i] + a.right[i]) * 0.5, s = (a.left[i] - a.right[i]) * 0.5 * w;
+            const double w = amount.at(i / sr), m = (a.left[i] + a.right[i]) * 0.5;
+            double s = (a.left[i] - a.right[i]) * 0.5 * w;
+            eout[i / hop] += 2 * (m * m + s * s);   // what narrowing leaves; the low side monoBelow removes is meant to go
+            if (monoBelow > 0) s = h2.process(h1.process(s));
             a.left[i] = (float)(m + s); a.right[i] = (float)(m - s);
-            eout[i / hop] += (double)a.left[i] * a.left[i] + (double)a.right[i] * a.right[i];
         }
         // 1 s windows where the input sounds (above -60 dBFS) and narrowing takes 3 dB or more (half the energy,
         // so more side than mid came in) away; overlapping windows merge into one stretch

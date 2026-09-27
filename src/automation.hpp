@@ -203,6 +203,7 @@ public:
         return e;
     }
     bool constant() const { return pts_.size() <= 1 && !lfo_; }
+    bool hasLfo() const { return (bool)lfo_; }
 
     double at(double sec) const {
         if (pts_.empty()) return 0;

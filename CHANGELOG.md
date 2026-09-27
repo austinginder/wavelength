@@ -22,6 +22,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   (30 Hz-16 kHz, +3 dB/oct), and a lane per track with its notes over its post-fader level and its
   loudness. The report names it (`picture.file`, `width`, `height`). `wavelength picture job.json`
   draws the arrangement (sections, bars, notes) before rendering.
+- Mix checks in the render's warnings, measured on what each track sends to the mix (after its effects
+  and fader), each with its fix: a kick with no room below 120 Hz (another part less than 3 dB under it
+  at its hits: duck it or split the range), a track wide below 120 Hz that carries a real share of the low
+  end, a track out of phase (left/right correlation below -0.1), and 32 bars or more where every track
+  repeats the same 1-8 bar block with no automation moving. Window renders skip them.
+- `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
+  width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 
 ## [0.3.0] - 2026-09-26
 

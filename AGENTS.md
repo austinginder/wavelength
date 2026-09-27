@@ -479,6 +479,18 @@ job.json` lines the sections up and keeps the lead-in.
   measures the boundary itself: the last 2 bars before it, the first 4 after it and the jump (a
   whole-section average can read +3 dB while the drop itself lands +1.5). Across a near-silence
   it compares with the music before the silence (`skippedSilence`: `bars`, `lufs`, `lastBarsFrom`). See "Arranging".
+- Mix checks in `warnings`, each with its fix. They measure what every track sends to the mix
+  (after its effects and fader), so a part that already ducks or is already mono passes:
+  - **the kick has no room below 120 Hz**: at a drum track's kick hits another part is less than
+    3 dB under it there (a sub or bass that doesn't make way). Duck that part from the kick or give
+    each its own range.
+  - **wide below 120 Hz**: a track that carries a real share of the song's low end with much of it
+    in the side signal (unison supersaw basses, stereo-widened pads, wide samples). Add
+    `{"type": "width", "monoBelow": 120}` at the end of its fx.
+  - **out of phase**: a track whose left and right cancel when summed to mono (correlation below -0.1).
+  - **the same bars over and over**: 32 bars or more where every track repeats a 1-, 2-, 4- or 8-bar
+    block and no automation moves. Change something every 8 bars or so. Mark the section
+    `"checks": false` when it is meant (a hypnotic loop you then fix with a ride).
 - `mix.lra`, the loudness range in LU (EBU Tech 3342, equal to ffmpeg's `ebur128` LRA): how far
   quiet and loud passages sit apart. `analyze` and `master` report it too.
 - `failedTracks`, tracks whose plugin crashed on every attempt (a crashed worker is started

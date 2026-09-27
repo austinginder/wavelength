@@ -21,6 +21,10 @@ struct TrackResult {
     std::vector<std::string> warnings;
     nlohmann::json automation = nlohmann::json::array();   // per automated setting: where it moves (activeBeats), its range
     std::vector<float> levelTimeline;   // post-fader mean square per 50 ms (job.picture only)
+    // for the mix checks (not in the report): post-fader energy below 120 Hz per 50 ms, of the mid and
+    // of the side signal, and the sums behind the left/right correlation
+    std::vector<float> lowMid, lowSide;
+    double sumLR = 0, sumLL = 0, sumRR = 0;
 };
 
 struct BusResult {

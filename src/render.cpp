@@ -264,6 +264,212 @@ int renderTrackWorker(const std::string &jobPath, size_t index, const std::strin
 }
 
 
+namespace {
+
+// "bars 17-48" / "bar 17" of a stretch of render seconds
+std::string barsOf(const Job &job, double s0, double s1) {
+    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+    const int b0 = (int)std::floor(job.tempo.secToBeat(s0) / bpb + 1e-9) + 1, b1 = (int)std::floor(job.tempo.secToBeat(std::max(s0, s1 - 1e-6)) / bpb + 1e-9) + 1;
+    return b0 == b1 ? "bar " + std::to_string(b0) : "bars " + std::to_string(b0) + "-" + std::to_string(b1);
+}
+
+// a track that plays drums (a kick among them): kits, the built-in drums, names like Kick / Drums / BD
+bool drumTrack(const Track &t) {
+    std::string n = t.name;
+    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+    if (t.plugin == "builtin:drums") return true;
+    if (t.plugin == "builtin:sampler" && t.sampler.is_object() && t.sampler.contains("kit")) return true;
+    for (const char *w : {"kick", "drum", "bd", "909", "808", "707", "kit", "beat"})
+        if (n.find(w) != std::string::npos) return true;
+    return false;
+}
+
+// Mix checks on what each track sends to the mix (after its effects and fader): a kick buried under
+// another part below 120 Hz, a low end spread wide in stereo, and left/right out of phase.
+void mixChecks(const Job &job, const std::vector<TrackResult> &tracks, double seconds, std::vector<std::string> &warnings) {
+    const double hop = 0.05;
+    double mixLow = 0, mixAll = 0;
+    for (size_t i = 0; i < tracks.size() && i < job.tracks.size(); ++i) {
+        if (job.tracks[i].mute) continue;
+        for (size_t k = 0; k < tracks[i].lowMid.size(); ++k) mixLow += tracks[i].lowMid[k] + tracks[i].lowSide[k];
+        mixAll += tracks[i].sumLL + tracks[i].sumRR;
+    }
+    if (mixLow <= 0 || mixAll <= 0) return;
+    auto sectionsOf = [&](const std::vector<size_t> &frames) {   // the marker sections those 50 ms frames fall in
+        std::string out;
+        std::vector<bool> seen(job.markers.size(), false);
+        for (size_t k : frames)
+            for (size_t m = 0; m < job.markers.size(); ++m) {
+                const double a = job.markers[m].sec, b = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;
+                if (k * hop >= a && k * hop < b && !seen[m]) { seen[m] = true; out += (out.empty() ? "" : ", ") + job.markers[m].name; }
+            }
+        return out;
+    };
+    for (size_t i = 0; i < tracks.size() && i < job.tracks.size(); ++i) {
+        const Track &t = job.tracks[i];
+        const TrackResult &r = tracks[i];
+        if (t.mute || r.lowMid.empty()) continue;
+        double mid = 0, side = 0;
+        for (size_t k = 0; k < r.lowMid.size(); ++k) { mid += r.lowMid[k]; side += r.lowSide[k]; }
+        // a wide low end: a song with a real low end, the track carries a real share of it (and it is a real part of the
+        // track, not a pad's leak through the filter), and much of it is side signal
+        const double own = r.sumLL + r.sumRR;
+        if (mixLow >= 0.02 * mixAll && (mid + side) >= 0.1 * mixLow && (mid + side) >= 0.05 * own && side >= 0.25 * mid) {
+            const double db = 10 * std::log10(mid / std::max(side, 1e-30));
+            char buf[460], rel[48];
+            if (db >= 0) std::snprintf(rel, sizeof rel, "only %.1f dB under its mid", db);
+            else std::snprintf(rel, sizeof rel, "%.1f dB over its mid", -db);
+            std::snprintf(buf, sizeof buf, "track '%s' is wide below 120 Hz (its side signal is %s there, and it carries %.0f%% of the song's low end): "
+                          "a wide low end smears and thins out in mono (clubs, phones, one speaker); keep it centred with "
+                          "{\"type\": \"width\", \"monoBelow\": 120} at the end of its fx", t.name.c_str(), rel, 100 * (mid + side) / mixLow);
+            warnings.push_back(buf);
+        }
+        // out of phase: left and right cancel when summed to mono
+        const double corr = r.sumLR / std::sqrt(std::max(r.sumLL * r.sumRR, 1e-30));
+        if ((r.sumLL + r.sumRR) >= 0.03 * mixAll && corr < -0.1) {
+            char buf[360];
+            std::snprintf(buf, sizeof buf, "track '%s' is out of phase (left/right correlation %.2f): it cancels when the song plays in mono; look for a "
+                          "width amount above 1, a phase-inverting stereo effect or a sample whose channels are opposed", t.name.c_str(), corr);
+            warnings.push_back(buf);
+        }
+    }
+    // the kick buried: at a drum track's loudest low-end moments (its kick hits), another part is nearly as
+    // loud below 120 Hz. Measured after effects, so a part that already ducks from the kick passes.
+    for (size_t i = 0; i < tracks.size() && i < job.tracks.size(); ++i) {
+        const Track &kt = job.tracks[i];
+        const TrackResult &k = tracks[i];
+        if (kt.mute || !drumTrack(kt) || k.lowMid.empty()) continue;
+        std::vector<float> sounding;
+        for (float e : k.lowMid) if (e > 1e-9) sounding.push_back(e);
+        if (sounding.size() < 20) continue;
+        std::sort(sounding.begin(), sounding.end());
+        const float p50 = sounding[sounding.size() / 2], p90 = sounding[sounding.size() * 9 / 10];
+        if (p90 < 4 * p50) continue;   // no punches in its low end (6 dB over its median): not a kick
+        std::vector<size_t> hits;
+        for (size_t f = 0; f < k.lowMid.size(); ++f) if (k.lowMid[f] >= p90) hits.push_back(f);
+        double kSum = 0;
+        for (size_t f : hits) kSum += k.lowMid[f];
+        if (kSum < 0.03 * mixLow) continue;   // a kick too quiet to matter
+        for (size_t j = 0; j < tracks.size() && j < job.tracks.size(); ++j) {
+            const Track &bt = job.tracks[j];
+            const TrackResult &b = tracks[j];
+            if (j == i || bt.mute || drumTrack(bt) || b.lowMid.empty()) continue;
+            double bSum = 0;
+            std::vector<size_t> buried;
+            for (size_t f : hits)
+                if (f < b.lowMid.size()) {
+                    bSum += b.lowMid[f];
+                    if (b.lowMid[f] > 0.5 * k.lowMid[f]) buried.push_back(f);
+                }
+            const double margin = 10 * std::log10(kSum / std::max(bSum, 1e-30));
+            if (margin >= 3 || buried.size() < hits.size() / 3) continue;
+            const std::string where = job.markers.empty() ? barsOf(job, buried.front() * hop, (buried.back() + 1) * hop) : sectionsOf(buried);
+            const bool kit = kt.plugin == "builtin:drums" || (kt.plugin == "builtin:sampler" && kt.sampler.is_object() && kt.sampler.contains("kit"));
+            char buf[640], rel[48];
+            if (margin >= 0) std::snprintf(rel, sizeof rel, "only %.1f dB under it", margin);
+            else std::snprintf(rel, sizeof rel, "%.1f dB louder than it", -margin);
+            std::snprintf(buf, sizeof buf, "the kick in '%s' has no room below 120 Hz: at its hits '%s' is %s there%s%s%s; duck it from the "
+                          "kick ({\"type\": \"duck\", \"trigger\": \"%s\"%s} on '%s'), or give each its own range (cut '%s' below 50-60 Hz, or the kick's boom)",
+                          kt.name.c_str(), bt.name.c_str(), rel, where.empty() ? "" : " (", where.c_str(), where.empty() ? "" : ")", kt.name.c_str(),
+                          kit ? ", \"keys\": [35, 36]" : "", bt.name.c_str(), bt.name.c_str());
+            warnings.push_back(buf);
+        }
+    }
+}
+
+// The same bars over and over: a stretch of 32 bars or more where every track plays the same 1-, 2-, 4- or
+// 8-bar block again and nothing moves (no automation turns inside it). Listeners stop hearing it.
+void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
+    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+    double lastBeat = 0;
+    for (const auto &t : job.tracks)
+        for (const auto &n : t.notes) lastBeat = std::max(lastBeat, job.tempo.secToBeat(n.start + n.length));
+    const int bars = (int)std::ceil(lastBeat / bpb - 1e-9);
+    if (bars < 32) return;
+    // each bar's content: every note that starts in it (track, key, position and length to 1/24 beat)
+    std::vector<std::vector<long>> sig((size_t)bars);
+    for (size_t ti = 0; ti < job.tracks.size(); ++ti) {
+        if (job.tracks[ti].mute) continue;
+        for (const auto &n : job.tracks[ti].notes) {
+            const double b = job.tempo.secToBeat(n.start), e = job.tempo.secToBeat(n.start + n.length);
+            const int bar = (int)std::floor(b / bpb + 1e-9);
+            if (bar < 0 || bar >= bars) continue;
+            sig[(size_t)bar].push_back((((long)ti * 128 + n.key) * 4096 + std::lround((b - bar * bpb) * 24)) * 8192 + std::lround((e - b) * 24));
+        }
+    }
+    for (auto &s : sig) std::sort(s.begin(), s.end());
+    // bars where something is moving: any automation corner (track, bus, master) makes the stretch vary
+    std::vector<bool> moving((size_t)bars + 1, false);
+    auto markBeats = [&](double beat0, double beat1) {
+        const int b0 = (int)std::floor(beat0 / bpb), b1 = (int)std::floor(beat1 / bpb);
+        for (int b = std::max(0, b0); b <= std::min(bars, b1); ++b) moving[(size_t)b] = true;
+    };
+    auto mark = [&](const Envelope &e) {
+        if (e.hasLfo()) { markBeats(0, bars * bpb); return; }   // an LFO moves all the time
+        const auto &pts = e.corners();
+        for (size_t k = 1; k < pts.size(); ++k)
+            if (pts[k].second != pts[k - 1].second) markBeats(job.tempo.secToBeat(pts[k - 1].first), job.tempo.secToBeat(pts[k].first));
+    };
+    // effect settings written as curves inside an fx list: [[beat, value], ...], {"points": ...}, {"lfo": ...}
+    std::function<void(const nlohmann::json &)> markFx = [&](const nlohmann::json &list) {
+        for (const auto &fx : list) {
+            if (!fx.is_object()) continue;
+            for (auto &[k, v] : fx.items()) {
+                if (k == "loopFx" || k == "bands") { if (v.is_array()) markFx(v); continue; }
+                const nlohmann::json *pts = v.is_array() ? &v : v.is_object() && v.contains("points") ? &v["points"] : nullptr;
+                if (v.is_object() && v.contains("lfo")) markBeats(0, bars * bpb);
+                if (!pts || pts->size() < 2) continue;
+                for (size_t i = 1; i < pts->size(); ++i) {
+                    const auto &a = (*pts)[i - 1], &b = (*pts)[i];
+                    const bool pa = a.is_array() && a.size() >= 2 && a[0].is_number(), pb = b.is_array() && b.size() >= 2 && b[0].is_number();
+                    if (pa && pb && a[1] != b[1]) markBeats(a[0].get<double>(), b[0].get<double>());
+                }
+            }
+        }
+    };
+    for (const auto &t : job.tracks) {
+        for (const auto &c : t.gainAutomation.parts) mark(c);
+        mark(t.panAutomation);
+        for (const auto &[n, e] : t.paramAutomation) mark(e);
+        for (const auto &[n, e] : t.ccAutomation) mark(e);
+        for (const auto &[n, e] : t.sendAutomation) mark(e);
+        mark(t.bendAutomation);
+        markFx(t.fx);
+    }
+    for (const auto &b : job.buses) { for (const auto &c : b.gainAutomation.parts) mark(c); markFx(b.fx); }
+    for (const auto &c : job.masterGainAutomation.parts) mark(c);
+    markFx(job.masterFx);
+    auto quiet = [&](int b) {   // inside a section marked "checks": false
+        const double s = job.tempo.beatToSec(b * bpb);
+        for (size_t m = 0; m < job.markers.size(); ++m) {
+            const double a = job.markers[m].sec, e = m + 1 < job.markers.size() ? job.markers[m + 1].sec : 1e18;
+            if (s >= a && s < e) return !job.markers[m].checks;
+        }
+        return false;
+    };
+    std::vector<bool> reported((size_t)bars, false);
+    for (int p : {1, 2, 4, 8}) {
+        for (int b = p; b < bars;) {
+            if (sig[(size_t)b].empty() || sig[(size_t)b] != sig[(size_t)(b - p)] || moving[(size_t)b] || quiet(b)) { ++b; continue; }
+            int e = b;
+            while (e < bars && !sig[(size_t)e].empty() && sig[(size_t)e] == sig[(size_t)(e - p)] && !moving[(size_t)e] && !quiet(e)) ++e;
+            const int from = b - p, len = e - from;   // bars [from, e): the block and its repeats
+            if (len >= 32 && !reported[(size_t)from]) {
+                for (int x = from; x < e; ++x) reported[(size_t)x] = true;
+                char buf[420];
+                std::snprintf(buf, sizeof buf, "bars %d-%d repeat the same %d bar%s %d times with nothing added, taken away or moving: listeners stop hearing "
+                              "it. Change something every 8 bars or so (a part in or out, a fill, a filter or level ride, a variation of the lead), or "
+                              "shorten it (mark the section \"checks\": false if it is meant this way)",
+                              from + 1, e, p, p == 1 ? "" : "s", len / p);
+                warnings.push_back(buf);
+            }
+            b = e + 1;
+        }
+    }
+}
+
+} // namespace
+
 bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderResult &result, std::string &err) {
     const auto t0 = std::chrono::steady_clock::now();
     double end = 0;
@@ -450,6 +656,15 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             float postPeak = 0;
             const size_t levelHop = (size_t)std::llround(0.05 * sr);   // the picture's level lane
             if (job.picture) tr.levelTimeline.assign(frames / levelHop + 1, 0.f);
+            // mix checks: the low end (below 120 Hz) of mid and side per 50 ms. 8-sample averages first, so the
+            // 4th-order low-pass runs at an eighth of the rate (the average's nulls sit on the folding frequencies).
+            const size_t dec = 8;
+            dsp::Biquad lm1, lm2, ls1, ls2;
+            lm1.set(dsp::Biquad::LowPass, 120, 0.7071, 0, sr / dec);
+            lm2 = lm1; ls1 = lm1; ls2 = lm1;
+            tr.lowMid.assign(frames / levelHop + 1, 0.f);
+            tr.lowSide.assign(frames / levelHop + 1, 0.f);
+            double accM = 0, accS = 0;
             for (size_t f = 0; f < frames; ++f) {
                 if (automated && f % 32 == 0) g = dsp::dbToLin(track.gainDb + track.gainAutomation.at(f / sr));
                 if (f % 32 == 0) for (auto &s : sends) if (s.env) s.amt = dsp::dbToLin(s.env->at(f / sr));
@@ -462,6 +677,14 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 postPeak = std::max({postPeak, std::fabs(l), std::fabs(r)});
                 if (!post.left.empty()) { post.left[f] = l; post.right[f] = r; }
                 if (!tr.levelTimeline.empty()) tr.levelTimeline[f / levelHop] += l * l + r * r;
+                tr.sumLR += (double)l * r; tr.sumLL += (double)l * l; tr.sumRR += (double)r * r;
+                accM += l + r; accS += l - r;
+                if ((f + 1) % dec == 0) {
+                    const double m = lm2.process(lm1.process(accM / (2.0 * dec))), s = ls2.process(ls1.process(accS / (2.0 * dec)));
+                    tr.lowMid[f / levelHop] += (float)(m * m * dec);
+                    tr.lowSide[f / levelHop] += (float)(s * s * dec);
+                    accM = accS = 0;
+                }
                 for (auto &s : sends) { s.bus->left[f] += (float)(l * s.amt); s.bus->right[f] += (float)(r * s.amt); }
                 for (auto *c : caps)
                     if (f >= c->f0 && f < c->f1) {
@@ -641,6 +864,10 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     cleanup();
     if (failed) return false;
     for (auto &tr : trackResults) result.tracks.push_back(std::move(tr));
+    if (!job.window.on) {   // a window is too short to judge the mix or the arrangement
+        mixChecks(job, result.tracks, seconds, result.warnings);
+        repetitionChecks(job, result.warnings);
+    }
 
     // 2. buses (reverbs, delays, groups) run after every bus that feeds them, then return into
     //    their output bus or the mix
