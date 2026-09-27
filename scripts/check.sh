@@ -344,8 +344,9 @@ else
   echo "FAIL fallbacks"; fail=1
 fi
 # help: the grouped list, one command's details by `help <command>` and by `--help`, plain in a pipe
-if "./$build/wavelength" help | grep -q "^Make music" && "./$build/wavelength" help render | grep -q -- "--loop" &&
-   "./$build/wavelength" render --help | head -1 | grep -q "^wavelength render" && "./$build/wavelength" help all | grep -q "^Usage:" &&
+# (grep reads the whole output: `grep -q` stops at the first match, and pipefail counts the writer's SIGPIPE)
+if "./$build/wavelength" help | grep "^Make music" >/dev/null && "./$build/wavelength" help render | grep -- "--loop" >/dev/null &&
+   "./$build/wavelength" render --help | sed -n 1p | grep "^wavelength render" >/dev/null && "./$build/wavelength" help all | grep "^Usage:" >/dev/null &&
    ! "./$build/wavelength" help | grep -q $'\x1b'; then
   echo "ok   help: grouped list, per command, plain in a pipe"
 else
