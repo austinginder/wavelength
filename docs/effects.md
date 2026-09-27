@@ -1,7 +1,6 @@
 # Effects, buses and automation
 
-Effects run offline over a whole track, bus or the master, in the order listed.
-They are deterministic: the same job renders the same audio every time.
+Effects run offline over a whole track, bus or the master, in the order listed. They are deterministic: the same job renders the same audio every time.
 
 ## Where effects go
 
@@ -21,73 +20,27 @@ They are deterministic: the same job renders the same audio every time.
 }
 ```
 
-Signal flow per track: **instrument → `fx` → stem file → fader (`gain` + `automation.gain`, `pan`) → mix**
-(or the bus named in the track's `output`), and post-fader **sends** (dB) into buses. Buses run their own
-`fx` (use `"mix": 1` for reverbs and delays there) and return to the mix or to their `output` bus, after
-every bus that feeds them. Then `master.gain` (+ `master.automation.gain`), `master.fx`, and optional
-`normalize`.
+Signal flow per track: **instrument → `fx` → stem file → fader (`gain` + `automation.gain`, `pan`) → mix** (or the bus named in the track's `output`), and post-fader **sends** (dB) into buses. Buses run their own `fx` (use `"mix": 1` for reverbs and delays there) and return to the mix or to their `output` bus, after every bus that feeds them. Then `master.gain` (+ `master.automation.gain`), `master.fx`, and optional `normalize`.
 
 `markers` split the report into sections with their own loudness (LUFS).
 
-Any effect can be skipped with `"bypass": true`. `"intended": true` on an effect says its distortion or
-heavy gain reduction is meant (a destroyed arp, a crushed room compressor): the `clip`, `compressor` and
-`limiter` warnings about working too hard are left out for that effect. Warnings about mistakes
-(unknown settings, late curves, a plugin that did nothing) still appear.
+Any effect can be skipped with `"bypass": true`. `"intended": true` on an effect says its distortion or heavy gain reduction is meant (a destroyed arp, a crushed room compressor): the `clip`, `compressor` and `limiter` warnings about working too hard are left out for that effect. Warnings about mistakes (unknown settings, late curves, a plugin that did nothing) still appear.
 
 ## Automation
 
 - **Fader:** `automation.gain`, dB added to the track's `gain` over time.
 - **Plugin parameters:** `automation.params`, plain values over time, sent sample-block accurately.
-- **Built-in effect settings** marked *automatable* below: put the curve under `"automate"` on the
-  effect: `{"type": "filter", "cutoff": 800, "automate": {"cutoff": [[0, 300], [16, 8000]]}}`.
+- **Built-in effect settings** marked *automatable* below: put the curve under `"automate"` on the effect: `{"type": "filter", "cutoff": 800, "automate": {"cutoff": [[0, 300], [16, 8000]]}}`.
 
-Curves are `[[beat, value], ...]`; values are held before the first point and after the last,
-so a curve that starts late holds its first value from the top of the song: the report warns when that
-value differs from the static one and something already sounds through it (track, bus and master
-`gain` and `rides`, track `pan` and plugin parameters, and effect `automate` curves on tracks, buses and
-the master; a bus hears its earliest feeding track, by output, send or another bus). Values are
-interpolated linearly between points (exponentially for `cutoff`). A third element
-`"step"` (`[56, -3, "step"]`) holds the previous value until that beat and then jumps; `"switch"`
-(`[56, 1, "switch"]`) holds too, then moves to the new value over a short ramp (5 ms, click-free), so
-on/off switching (a filter `mix`, a mute, a throw) takes one point per switch. The object
-form `{"points": [...], "curve": "linear" | "exp" | "step" | "switch", "ramp": 5, "lfo": {...}}` sets the
-curve for all points (`ramp`: the switch ramp in ms), and `{"value": 0.5, "lfo": {...}}` is a steady
-value with an LFO on it.
+Curves are `[[beat, value], ...]`; values are held before the first point and after the last, so a curve that starts late holds its first value from the top of the song: the report warns when that value differs from the static one and something already sounds through it (track, bus and master `gain` and `rides`, track `pan` and plugin parameters, and effect `automate` curves on tracks, buses and the master; a bus hears its earliest feeding track, by output, send or another bus). Values are interpolated linearly between points (exponentially for `cutoff`). A third element `"step"` (`[56, -3, "step"]`) holds the previous value until that beat and then jumps; `"switch"` (`[56, 1, "switch"]`) holds too, then moves to the new value over a short ramp (5 ms, click-free), so on/off switching (a filter `mix`, a mute, a throw) takes one point per switch. The object form `{"points": [...], "curve": "linear" | "exp" | "step" | "switch", "ramp": 5, "lfo": {...}}` sets the curve for all points (`ramp`: the switch ramp in ms), and `{"value": 0.5, "lfo": {...}}` is a steady value with an LFO on it.
 
-**Values as text.** A point's value may be a string: a note name (`"C#4"` = 277.18 Hz, for any
-frequency) or a number with its unit. Built-in settings read `Hz`, `kHz`, `dB`, `ms`, `s`, `st` and `%`
-(`"50%"` = 0.5), in curves and as static values (`"cutoff": "A3"`). Plugin parameters (`automate` on a
-plugin effect, `automation.params` on a track) hand the text to the plugin, as static `params` do, so a
-Melda frequency that is log 0..1 underneath takes `[[0, "C#4"], [32, "880 Hz", "switch"]]`; note names
-reach the plugin as Hz. `"scale": "display"` on the curve object reads plain numbers as display values
-(`{"scale": "display", "points": [[0, 800], [16, 2400]]}` for a frequency in Hz). Each distinct text is
-read once, before the render; the curve then moves in the parameter's own values, so a log-scaled
-frequency sweeps evenly in pitch between two points. A text the plugin can't read fails the render.
+**Values as text.** A point's value may be a string: a note name (`"C#4"` = 277.18 Hz, for any frequency) or a number with its unit. Built-in settings read `Hz`, `kHz`, `dB`, `ms`, `s`, `st` and `%` (`"50%"` = 0.5), in curves and as static values (`"cutoff": "A3"`). Plugin parameters (`automate` on a plugin effect, `automation.params` on a track) hand the text to the plugin, as static `params` do, so a Melda frequency that is log 0..1 underneath takes `[[0, "C#4"], [32, "880 Hz", "switch"]]`; note names reach the plugin as Hz. `"scale": "display"` on the curve object reads plain numbers as display values (`{"scale": "display", "points": [[0, 800], [16, 2400]]}` for a frequency in Hz). Each distinct text is read once, before the render; the curve then moves in the parameter's own values, so a log-scaled frequency sweeps evenly in pitch between two points. A text the plugin can't read fails the render.
 
-**Curves that follow the chords.** In place of a curve, `{"follow": "root", "octave": 4}` gives a step
-curve that retunes on every chord of the job's `chords` list (or the chords read from the notes):
-`follow` is `root`, `third`, `fifth` or `seventh` (a tone the chord doesn't have, the third of a power
-chord or the seventh of a triad, falls back to the root); `octave` puts the tone in that octave (C4-B4 for
-4, the default), or `"from": "A2"` takes the lowest such note at or above A2; `transpose` adds semitones.
-The values are note names by default, so a built-in cutoff gets Hz and a plugin parameter gets the note's
-frequency as display text (`"C#4"` -> `"277.18 Hz"`); `"as": "midi"` gives MIDI note numbers (a
-resonator's Pitch in semitones) and `"as": "hz"` plain Hz numbers. The curve switches at each chord
-(`"curve": "switch"`, 5 ms, `"ramp"` sets it; `"step"` jumps), and keeps `lfo`/`scale` keys:
-`"automate": {"cutoff": {"follow": "root", "octave": 3}}` tunes a band-pass to the chords,
-`"automate": {"Pitch": {"follow": "root", "from": 33, "as": "midi"}}` a resonator.
+**Curves that follow the chords.** In place of a curve, `{"follow": "root", "octave": 4}` gives a step curve that retunes on every chord of the job's `chords` list (or the chords read from the notes): `follow` is `root`, `third`, `fifth` or `seventh` (a tone the chord doesn't have, the third of a power chord or the seventh of a triad, falls back to the root); `octave` puts the tone in that octave (C4-B4 for 4, the default), or `"from": "A2"` takes the lowest such note at or above A2; `transpose` adds semitones. The values are note names by default, so a built-in cutoff gets Hz and a plugin parameter gets the note's frequency as display text (`"C#4"` -> `"277.18 Hz"`); `"as": "midi"` gives MIDI note numbers (a resonator's Pitch in semitones) and `"as": "hz"` plain Hz numbers. The curve switches at each chord (`"curve": "switch"`, 5 ms, `"ramp"` sets it; `"step"` jumps), and keeps `lfo`/`scale` keys: `"automate": {"cutoff": {"follow": "root", "octave": 3}}` tunes a band-pass to the chords, `"automate": {"Pitch": {"follow": "root", "from": 33, "as": "midi"}}` a resonator.
 
-**LFOs** add a wave on top of any automatable value: on a built-in effect with
-`"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5, "shape": "sine"}}` (next to `automate`), or inside
-any curve's object form (plugin parameters, fader, pan, sends). `rate` is Hz or a tempo-synced
-note value (`"1/4"`, `"1/8T"` triplet, `"1/16D"` dotted, `"2/1"` two bars); `shape` sine, triangle,
-square, saw (falling), ramp (rising), random (sample and hold); `phase` 0-1; `depth` in the value's
-units (octaves for cutoff), or a curve `[[beat, depth], ...]` to fade the LFO in and out.
+**LFOs** add a wave on top of any automatable value: on a built-in effect with `"lfo": {"cutoff": {"rate": "1/8", "depth": 1.5, "shape": "sine"}}` (next to `automate`), or inside any curve's object form (plugin parameters, fader, pan, sends). `rate` is Hz or a tempo-synced note value (`"1/4"`, `"1/8T"` triplet, `"1/16D"` dotted, `"2/1"` two bars); `shape` sine, triangle, square, saw (falling), ramp (rising), random (sample and hold); `phase` 0-1; `depth` in the value's units (octaves for cutoff), or a curve `[[beat, depth], ...]` to fade the LFO in and out.
 
-Also automatable: bus and master `automation.gain` (whole-mix fades, bus throws), send levels
-(`"sends": {"Echo": [[0, -40], [31.5, -6, "switch"], [32, -40, "switch"]]}`, or the throw shorthand
-`"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], [63.5, 0.5, -4]]}}`: beat, length in beats,
-dB), track `pan`,
-and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
+Also automatable: bus and master `automation.gain` (whole-mix fades, bus throws), send levels (`"sends": {"Echo": [[0, -40], [31.5, -6, "switch"], [32, -40, "switch"]]}`, or the throw shorthand `"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], [63.5, 0.5, -4]]}}`: beat, length in beats, dB), track `pan`, and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 
 ## Built-in effects
 
@@ -120,62 +73,22 @@ and MIDI `cc` / `pitchbend` / `pressure` for plugins (`job-format.md`).
 
 ### Effects inside a delay's feedback loop (`loopFx`)
 
-`"loopFx": [...]` on a `delay` runs any effect chain (built-in or plugin) on every echo before it goes
-round again: a frequency shifter makes a barber-pole spiral (each repeat a step higher), a pitch shifter
-a shimmer, a band-pass or a bitcrush a dub echo that darkens or degrades as it repeats. Order per pass:
-`loopFx`, then the loop's `highpass`/`lowpass`, then `feedback`. The echoes are rendered one repeat at a
-time over the whole timeline until they fall 80 dB under the first (at most 256 repeats; a loop that
-grows 24 dB over the first echo stops with a warning), so a plugin in `loopFx` runs once per repeat:
-feedback 0.75 at 1/16 is about 30 passes. This equals a real feedback loop for linear effects (filters,
-EQ, frequency and pitch shifters); distortion shapes each echo on its own, not their sum.
-`{"type": "delay", "time": 0.25, "feedback": 0.75, "pingpong": false, "mix": 1, "loopFx": [{"plugin": "MFreqShifter", "params": {"Shift": "38 Hz", "Dry/Wet": 1}}]}`
+`"loopFx": [...]` on a `delay` runs any effect chain (built-in or plugin) on every echo before it goes round again: a frequency shifter makes a barber-pole spiral (each repeat a step higher), a pitch shifter a shimmer, a band-pass or a bitcrush a dub echo that darkens or degrades as it repeats. Order per pass: `loopFx`, then the loop's `highpass`/`lowpass`, then `feedback`. The echoes are rendered one repeat at a time over the whole timeline until they fall 80 dB under the first (at most 256 repeats; a loop that grows 24 dB over the first echo stops with a warning), so a plugin in `loopFx` runs once per repeat: feedback 0.75 at 1/16 is about 30 passes. This equals a real feedback loop for linear effects (filters, EQ, frequency and pitch shifters); distortion shapes each echo on its own, not their sum. `{"type": "delay", "time": 0.25, "feedback": 0.75, "pingpong": false, "mix": 1, "loopFx": [{"plugin": "MFreqShifter", "params": {"Shift": "38 Hz", "Dry/Wet": 1}}]}`
 
 ### Level match (`"match"`, any effect)
 
-`"match": true` on any effect, built-in or plugin, holds its output at the input's loudness over time:
-K-weighted input and output power, smoothed over `matchMs` (300 ms, zero phase), set a gain after the
-effect (limited to +12 / -40 dB). Driven `saturate`, `clip` or `bitcrush`, a resonator that adds 12-16 dB
-(kHs Resonator), a comb or flanger freeze whose level depends on where it froze: each changes the tone and
-not the balance, without pumping on transients. Where the input is near silence (45 dB under its loud
-parts) the gain holds, so a ring or tail the effect adds is not pulled down; raise `matchMs` (1000-3000)
-for effects whose tails outlast the notes. `"match": "static"` uses one gain for the whole timeline
-(the overall loudness), so heavily driven bars still come out louder. Match suits inline effects; a
-reverb or delay at `"mix": 1` on a bus is a return, set its level with the bus `gain` instead.
-`{"plugin": "kHs Resonator", "params": {"Intensity": 0.8}, "match": true}`
+`"match": true` on any effect, built-in or plugin, holds its output at the input's loudness over time: K-weighted input and output power, smoothed over `matchMs` (300 ms, zero phase), set a gain after the effect (limited to +12 / -40 dB). Driven `saturate`, `clip` or `bitcrush`, a resonator that adds 12-16 dB (kHs Resonator), a comb or flanger freeze whose level depends on where it froze: each changes the tone and not the balance, without pumping on transients. Where the input is near silence (45 dB under its loud parts) the gain holds, so a ring or tail the effect adds is not pulled down; raise `matchMs` (1000-3000) for effects whose tails outlast the notes. `"match": "static"` uses one gain for the whole timeline (the overall loudness), so heavily driven bars still come out louder. Match suits inline effects; a reverb or delay at `"mix": 1` on a bus is a return, set its level with the bus `gain` instead. `{"plugin": "kHs Resonator", "params": {"Intensity": 0.8}, "match": true}`
 
 ## Plugin effects (CLAP, VST3 and VST2)
 
-`{"plugin": "<id or name>", "state": "...", "preset": "...", "params": {...}, "automate": {"Param": [[b, v], ...]}, "mix": 1}`
-runs an installed CLAP, VST3 or VST2 audio effect over the track, bus or master, with the same state, preset,
-parameter and automation support as instruments (`mix` is automatable too). `"sidechain": "Kick"` feeds
-that track's audio (after its effects, before its fader) into the plugin's sidechain input; many plugins
-also need their own sidechain switch set in `params` (e.g. MTurboComp `"Side-chain input (Detector)": 1`).
-A warning says when the plugin has no sidechain input. An effect whose output is
-only a level-scaled copy of its input gets a warning (unlicensed or demo mode, bypass, an ignored preset).
+`{"plugin": "<id or name>", "state": "...", "preset": "...", "params": {...}, "automate": {"Param": [[b, v], ...]}, "mix": 1}` runs an installed CLAP, VST3 or VST2 audio effect over the track, bus or master, with the same state, preset, parameter and automation support as instruments (`mix` is automatable too). `"sidechain": "Kick"` feeds that track's audio (after its effects, before its fader) into the plugin's sidechain input; many plugins also need their own sidechain switch set in `params` (e.g. MTurboComp `"Side-chain input (Detector)": 1`). A warning says when the plugin has no sidechain input. An effect whose output is only a level-scaled copy of its input gets a warning (unlicensed or demo mode, bypass, an ignored preset).
 
-**`mix` vs the plugin's own `Mix`.** Plugin parameter names otherwise match case-insensitively, but in
-`automate` the lowercase key `"mix"` is always the host's dry/wet crossfade, and any other spelling
-(`"Mix"`, `"MIX"`) is the plugin's parameter. Many plugins have their own `Mix`: both work, and the two
-multiply (host `mix` 0.5 over a plugin `Mix` of 50% leaves 75% dry). A render warns when `"mix"` is
-automated on a plugin that has its own `Mix`, and an unknown `"Mix"` on a plugin without one points at
-the lowercase key.
+**`mix` vs the plugin's own `Mix`.** Plugin parameter names otherwise match case-insensitively, but in `automate` the lowercase key `"mix"` is always the host's dry/wet crossfade, and any other spelling (`"Mix"`, `"MIX"`) is the plugin's parameter. Many plugins have their own `Mix`: both work, and the two multiply (host `mix` 0.5 over a plugin `Mix` of 50% leaves 75% dry). A render warns when `"mix"` is automated on a plugin that has its own `Mix`, and an unknown `"Mix"` on a plugin without one points at the lowercase key.
 
-**Latency.** A plugin's reported processing delay is removed (`tracks[].latencyCompensatedMs`), so its
-output stays aligned. A plugin that doesn't report its delay isn't corrected: kHs Reverser's wet output
-lags by one chunk (its delay time), and look-ahead plugins that report 0 arrive late by their look-ahead.
-With the host `mix` at 0 the dry path stays aligned; shift the notes (or the curves) earlier by the lag
-when the wet timing matters.
+**Latency.** A plugin's reported processing delay is removed (`tracks[].latencyCompensatedMs`), so its output stays aligned. A plugin that doesn't report its delay isn't corrected: kHs Reverser's wet output lags by one chunk (its delay time), and look-ahead plugins that report 0 arrive late by their look-ahead. With the host `mix` at 0 the dry path stays aligned; shift the notes (or the curves) earlier by the lag when the wet timing matters.
 
 ## Built-in instruments
 
-- `builtin:drums`, synthesized kit on the General MIDI map: 35/36 kick, 37 rim, 38/40 snare,
-  42/44 closed hat, 46 open hat, 49/57 crash, 51 ride, 41/43 low tom, 45/47 mid tom, 48/50 high tom.
-  `"drum": "snare"` on the track plays that one drum for every note, whatever its key (`kick`, `rim`,
-  `snare`, `hat`, `open hat`, `crash`, `ride`, `low tom`, `mid tom`, `high tom`): a stand-in for a
-  one-sound track, such as a snare roll written as pitches.
-- `builtin:fx`, 48 (C3) impact, 50 (D3) riser lasting the note's length, 52 (E3) reverse swell
-  ending when the note ends, 53 (F3) sub drop, 55 (G3) Shepard rise and 57 (A3) Shepard fall lasting
-  the note's length, at 0.15 octaves per second (a `builtin:shepard` track defaults to 0.1 and
-  takes its own rate curve).
-- `builtin:shepard`, a Shepard-Risset glissando for each note's length: it rises (or falls) forever and
-  never arrives. See `job-format.md`.
+- `builtin:drums`, synthesized kit on the General MIDI map: 35/36 kick, 37 rim, 38/40 snare, 42/44 closed hat, 46 open hat, 49/57 crash, 51 ride, 41/43 low tom, 45/47 mid tom, 48/50 high tom. `"drum": "snare"` on the track plays that one drum for every note, whatever its key (`kick`, `rim`, `snare`, `hat`, `open hat`, `crash`, `ride`, `low tom`, `mid tom`, `high tom`): a stand-in for a one-sound track, such as a snare roll written as pitches.
+- `builtin:fx`, 48 (C3) impact, 50 (D3) riser lasting the note's length, 52 (E3) reverse swell ending when the note ends, 53 (F3) sub drop, 55 (G3) Shepard rise and 57 (A3) Shepard fall lasting the note's length, at 0.15 octaves per second (a `builtin:shepard` track defaults to 0.1 and takes its own rate curve).
+- `builtin:shepard`, a Shepard-Risset glissando for each note's length: it rises (or falls) forever and never arrives. See `job-format.md`.

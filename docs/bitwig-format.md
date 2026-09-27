@@ -1,12 +1,6 @@
 # Bitwig project files (.bwproject)
 
-Bitwig's own project format is private and undocumented. Wavelength reads it (`src/bitwig.cpp`) for
-the settings of Bitwig's own devices, the plugins inside them (Drum Machine pads, Chain, Multiband FX-3
-bands) and those plugins' saved states, which a DAWproject export leaves out, and for the arrangement
-itself (tempo, mixer, note clips, automation), so `wavelength import song.bwproject` needs no export.
-This page records the layout as observed in 745 projects saved by Bitwig 4 to 6, so the reader can be
-extended. The arrangement fields were checked against a DAWproject export of the same song (the two
-imports give the same job, note for note).
+Bitwig's own project format is private and undocumented. Wavelength reads it (`src/bitwig.cpp`) for the settings of Bitwig's own devices, the plugins inside them (Drum Machine pads, Chain, Multiband FX-3 bands) and those plugins' saved states, which a DAWproject export leaves out, and for the arrangement itself (tempo, mixer, note clips, automation), so `wavelength import song.bwproject` needs no export. This page records the layout as observed in 745 projects saved by Bitwig 4 to 6, so the reader can be extended. The arrangement fields were checked against a DAWproject export of the same song (the two imports give the same job, note for note).
 
 ## File
 
@@ -22,8 +16,7 @@ imports give the same job, note for note).
 
 ## Body
 
-Big-endian throughout. An object is a u32 class id followed by fields, each a u32 field id, a u8
-type and a value, until a u32 `0`. Field ids are stable across versions.
+Big-endian throughout. An object is a u32 class id followed by fields, each a u32 field id, a u8 type and a value, until a u32 `0`. Field ids are stable across versions.
 
 | Type | Value |
 |---|---|
@@ -43,22 +36,11 @@ type and a value, until a u32 `0`. Field ids are stable across versions.
 | 0x17, 0x19 | u32 count + that many floats / u32s |
 | 0x1a | object + a string key (the key of a shared object) |
 
-Class id `1` in place of an object is a reference: u32 object number. Objects are numbered from 1
-in the order they start (each type-0x14 value also takes a number), and an object shared by several
-owners is written in full at its first appearance, which is often somewhere unexpected (a track's
-device can first appear inside a remote-control mapping). Always resolve references.
+Class id `1` in place of an object is a reference: u32 object number. Objects are numbered from 1 in the order they start (each type-0x14 value also takes a number), and an object shared by several owners is written in full at its first appearance, which is often somewhere unexpected (a track's device can first appear inside a remote-control mapping). Always resolve references.
 
-Some classes write a second group of fields after the first `0` (their base class): the first `0`
-is then followed by one `0x00` byte, the second group, and another `0`. A few classes have the extra
-byte without a second group. Nothing in the stream marks these classes, so `bitwig.cpp` keeps a table
-per format (`kTable5`, `kTable6`: Bitwig 6 gives the project itself and three more classes a second
-group and takes the clip class's away), learned by parsing the corpus and checking every change
-against files that already read. One project needs the project-info class (477) as two groups; the
-reader retries with that when the first pass fails.
+Some classes write a second group of fields after the first `0` (their base class): the first `0` is then followed by one `0x00` byte, the second group, and another `0`. A few classes have the extra byte without a second group. Nothing in the stream marks these classes, so `bitwig.cpp` keeps a table per format (`kTable5`, `kTable6`: Bitwig 6 gives the project itself and three more classes a second group and takes the clip class's away), learned by parsing the corpus and checking every change against files that already read. One project needs the project-info class (477) as two groups; the reader retries with that when the first pass fails.
 
-A read only counts when the body ends where the plugin-state zip begins (within a few KB of the
-offset in the header): a wrong table rule can otherwise close the project object early and "succeed"
-with no tracks. All 745 projects pass that check.
+A read only counts when the body ends where the plugin-state zip begins (within a few KB of the offset in the header): a wrong table rule can otherwise close the project object early and "succeed" with no tracks. All 745 projects pass that check.
 
 ## Where things are
 
@@ -73,11 +55,7 @@ with no tracks. All 745 projects pass that check.
 | Drum Machine `DRUM_PADS` `0x8e0` | pads: `0x8e5` key, `0x349` chain, `0x825` mixer (`0x821` volume, `0x822` pan, `0x823` mute) |
 | Sampler `SAMPLE` | `0x74c` zone -> `0x748` -> `0x129e` file -> `0xcd4` package path (`Vendor/Package:ver/samples/...`); zone `0x75c` root key; a multisample has `0xfb3` name and `0x76d` zones |
 
-Units: frequencies are MIDI pitch (69 = 440 Hz); faders and pad volumes store amplitude^(1/3)
-(1.26 = +6 dB); compressor attack and release are log10 seconds, ratio is 1 - 1/ratio; EQ+ gains are
-dB and Q is log10. EQ+ band types seen: 3 and 5 bell, 1 and 10 low cut, 0 and 14 high cut, 6 and 15
-high shelf, 16 and 17 low shelf, 13 off (the cut and shelf numbers were inferred from their
-frequencies and gains).
+Units: frequencies are MIDI pitch (69 = 440 Hz); faders and pad volumes store amplitude^(1/3) (1.26 = +6 dB); compressor attack and release are log10 seconds, ratio is 1 - 1/ratio; EQ+ gains are dB and Q is log10. EQ+ band types seen: 3 and 5 bell, 1 and 10 low cut, 0 and 14 high cut, 6 and 15 high shelf, 16 and 17 low shelf, 13 off (the cut and shelf numbers were inferred from their frequencies and gains).
 
 ## The arrangement
 
@@ -95,7 +73,4 @@ frequencies and gains).
 | Bitwig 6 automation | track `0x2dc9` -> `0x4ba` lanes (class 573): `0x2a3` target, `0x2d8c` body -> `0x35ac` curve -> `0x21f` points; the body's `0x21f` holds automation clips (not read yet) |
 | target (class 101) | `0x133b` device name, `0x133a` parameter name, `0xed` path: `.../PID<hex id>` a CLAP or VST3 parameter, `.../PARAM<index>` a VST2 one, a path with `:` a device inside a chain, empty with device `Mixer` the track's `Volume` or `Pan` |
 
-Values follow the clip semantics of DAWproject: content time `playStart` sounds at the clip's position,
-a looping clip then repeats the loop region until the clip ends, and notes past the clip's end are cut.
-Automation values are stored like the parameters they move: volume as amplitude^(1/3), pan -1..1,
-plugin parameters normalized. A track's name is often empty; Bitwig then shows its instrument's.
+Values follow the clip semantics of DAWproject: content time `playStart` sounds at the clip's position, a looping clip then repeats the loop region until the clip ends, and notes past the clip's end are cut. Automation values are stored like the parameters they move: volume as amplitude^(1/3), pan -1..1, plugin parameters normalized. A track's name is often empty; Bitwig then shows its instrument's.

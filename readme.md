@@ -1,25 +1,14 @@
 # Wavelength
 
-A headless music engine for AI agents. Wavelength plays notes through real, installed
-CLAP, VST3 and VST2 instruments (Vital, Serum 2, Surge XT, OB-Xf, Dexed, BBC Symphony Orchestra, Reaktor, …)
-and sample libraries, offline, with no DAW and no screen. It mixes them with built-in
-effects, buses and automation, and returns WAV stems, a mixdown and a machine-readable
-report with loudness per track and section.
+A headless music engine for AI agents. Wavelength plays notes through real, installed CLAP, VST3 and VST2 instruments (Vital, Serum 2, Surge XT, OB-Xf, Dexed, BBC Symphony Orchestra, Reaktor, …) and sample libraries, offline, with no DAW and no screen. It mixes them with built-in effects, buses and automation, and returns WAV stems, a mixdown and a machine-readable report with loudness per track and section.
 
-It is built for agents: jobs are JSON, every command except `serve` and `mcp` has `--json`
-output with actionable errors, and plugin output never pollutes stdout. See **[AGENTS.md](AGENTS.md)** for the
-operating guide and mixing playbook, **[docs/job-format.md](docs/job-format.md)** for the job
-schema and **[docs/effects.md](docs/effects.md)** for effects, buses, automation and the
-built-in instruments.
+It is built for agents: jobs are JSON, every command except `serve` and `mcp` has `--json` output with actionable errors, and plugin output never pollutes stdout. See **[AGENTS.md](AGENTS.md)** for the operating guide and mixing playbook, **[docs/job-format.md](docs/job-format.md)** for the job schema and **[docs/effects.md](docs/effects.md)** for effects, buses, automation and the built-in instruments.
 
 https://wavelength.run
 
 ## What it can do
 
-- **Host plugins:** CLAP, VST3 and VST2 instruments and effects, found by name, id or bundle path.
-  VST3 and VST2 bundles are scanned in child processes so a crashing plugin can't take the scan down.
-  On Apple silicon, Intel-only plugins (Reaktor 6, Synth1, older VST2s) run in render workers under
-  Rosetta: macOS builds are universal for this.
+- **Host plugins:** CLAP, VST3 and VST2 instruments and effects, found by name, id or bundle path. VST3 and VST2 bundles are scanned in child processes so a crashing plugin can't take the scan down. On Apple silicon, Intel-only plugins (Reaktor 6, Synth1, older VST2s) run in render workers under Rosetta: macOS builds are universal for this.
 - **Load sounds by name:** about 17,000 presets across 33 installed plugins. Sources include:
   - CLAP preset discovery and VST3 program lists
   - preset files in each plugin's preset folders
@@ -33,67 +22,35 @@ https://wavelength.run
   - Synplant, Cherry Audio (DCO-106, MG-1, SEM, Voltage Modular), Guitar Rig racks
   - Microtonic kits and drums, Analog Lab V, AAS Player, MPowerSynth, Soundbox, DecentSampler
   - Vital `.vital`, `.vstpreset`, Bitwig `.clap-preset`
-- **Set parameters** by value or by the plugin's own display text (`"Cutoff": "800 Hz"`), and
-  automate them with breakpoints, steps and LFOs.
-- **Play synths without a plugin:** `builtin:synth` is a virtual-analog polysynth (band-limited
-  saw and pulse, unison, FM, sub and noise, a resonant 12/24 dB filter with its own envelope, LFOs,
-  glide) with 27 named patches for basses, leads, pads, plucks, keys and brass, so a song renders on a
-  machine with no plugins at all. Deterministic: the same job renders the same samples.
-- **Play samples without a plugin:** `builtin:sampler` plays Bitwig `.multisample`
-  instruments (pianos, organs, guitars, basses, orchestral), SFZ instruments, SoundFonts (`.sf2`/`.sf3`, matched against FluidSynth), drum-machine kit folders mapped
-  to General MIDI (Legend 707/808/909, …), loops and single samples (WAV, AIFF, FLAC, MP3, Ogg Vorbis). It supports glide, per-note
-  pitch bend, slices and reverse.
-- **Play expressively:** swing and humanize (`groove`), strummed chords, tempo ramps, MIDI CC,
-  pitch bend and pressure.
-- **Write for orchestral libraries:** per-note articulations that send their own keyswitches,
-  playable-range warnings, and velocity driving a controller such as BBC SO's Dynamics.
-- **Mix:** per-track effect chains, sends, group buses, bus and master automation (fades),
-  and 22 built-in effects:
-  - dynamics: compressor, multiband (a chain per band), true-peak limiter, soft clipper, sidechain
-    duck, gate
+- **Set parameters** by value or by the plugin's own display text (`"Cutoff": "800 Hz"`), and automate them with breakpoints, steps and LFOs.
+- **Play synths without a plugin:** `builtin:synth` is a virtual-analog polysynth (band-limited saw and pulse, unison, FM, sub and noise, a resonant 12/24 dB filter with its own envelope, LFOs, glide) with 27 named patches for basses, leads, pads, plucks, keys and brass, so a song renders on a machine with no plugins at all. Deterministic: the same job renders the same samples.
+- **Play samples without a plugin:** `builtin:sampler` plays Bitwig `.multisample` instruments (pianos, organs, guitars, basses, orchestral), SFZ instruments, SoundFonts (`.sf2`/`.sf3`, matched against FluidSynth), drum-machine kit folders mapped to General MIDI (Legend 707/808/909, …), loops and single samples (WAV, AIFF, FLAC, MP3, Ogg Vorbis). It supports glide, per-note pitch bend, slices and reverse.
+- **Play expressively:** swing and humanize (`groove`), strummed chords, tempo ramps, MIDI CC, pitch bend and pressure.
+- **Write for orchestral libraries:** per-note articulations that send their own keyswitches, playable-range warnings, and velocity driving a controller such as BBC SO's Dynamics.
+- **Mix:** per-track effect chains, sends, group buses, bus and master automation (fades), and 22 built-in effects:
+  - dynamics: compressor, multiband (a chain per band), true-peak limiter, soft clipper, sidechain duck, gate
   - gain, EQ, filter and saturation
   - space: reverb, delay, chorus, width
   - modulation: tremolo, pan, Leslie rotary, auto-wah, vibrato
   - bitcrush, tape stop and beat repeat
-- **Master:** a master chain with a loudness target (`"loudness": -14` finds the gain into the
-  limiter), `wavelength master` to master a finished mix without re-rendering, and `leadIn`
-  silence before the song for streaming uploads.
-- **Loop for games:** `render --from 17 --to 25 --loop` renders bars as a seamless loop (the tail
-  folded back onto the start), every file exactly the loop's length with a `smpl` loop chunk that
-  Godot and samplers read; stems become layers of the same length for adaptive music.
-- **See it:** `render --png` draws the song as one image for agents that can read pictures but
-  can't hear: sections and bars, the loudness contour with each section's level, a spectrogram of
-  the mix, and every track's notes over its post-fader level. `picture job.json` draws the
-  arrangement before rendering.
-- **Measure:** BS.1770 loudness per track, bus, marker section and mix (it matches
-  `ffmpeg -af ebur128`), per-track loudness per section, true peak and per-track render time.
-- **Keep and share songs:** an open [song format](docs/song-format.md): a folder with a manifest,
-  revisions (`save`, `undo`, `redo`, `restore`, `diff` by track and bar, git export), comments pinned
-  to the revision and render they were made on, and `.wavelength` files (a ZIP) to share, checked
-  before anything is unpacked. `fallbacks --suggest` gives every track a built-in stand-in at its own
-  level, so a shared song plays on a machine without the plugins.
+- **Master:** a master chain with a loudness target (`"loudness": -14` finds the gain into the limiter), `wavelength master` to master a finished mix without re-rendering, and `leadIn` silence before the song for streaming uploads.
+- **Loop for games:** `render --from 17 --to 25 --loop` renders bars as a seamless loop (the tail folded back onto the start), every file exactly the loop's length with a `smpl` loop chunk that Godot and samplers read; stems become layers of the same length for adaptive music.
+- **See it:** `render --png` draws the song as one image for agents that can read pictures but can't hear: sections and bars, the loudness contour with each section's level, a spectrogram of the mix, and every track's notes over its post-fader level. `picture job.json` draws the arrangement before rendering.
+- **Measure:** BS.1770 loudness per track, bus, marker section and mix (it matches `ffmpeg -af ebur128`), per-track loudness per section, true peak and per-track render time.
+- **Keep and share songs:** an open [song format](docs/song-format.md): a folder with a manifest, revisions (`save`, `undo`, `redo`, `restore`, `diff` by track and bar, git export), comments pinned to the revision and render they were made on, and `.wavelength` files (a ZIP) to share, checked before anything is unpacked. `fallbacks --suggest` gives every track a built-in stand-in at its own level, so a shared song plays on a machine without the plugins.
 
 ## Use it from an agent
 
-**Claude Code plugin** (a skill for the whole workflow plus the MCP server; the engine installs itself
-on first use):
+**Claude Code plugin** (a skill for the whole workflow plus the MCP server; the engine installs itself on first use):
 
 ```
 /plugin marketplace add austinginder/wavelength
 /plugin install wavelength@wavelength
 ```
 
-**Agent skill** for Claude Code, Codex, Cursor, Gemini CLI and other agents that read `SKILL.md`:
-`npx skills add austinginder/wavelength`, or copy `skills/wavelength/` into your agent's skills folder
-(`~/.claude/skills/` for Claude Code). It installs the engine (release build, else from source) and
-walks the agent through writing, mixing and mastering a song.
+**Agent skill** for Claude Code, Codex, Cursor, Gemini CLI and other agents that read `SKILL.md`: `npx skills add austinginder/wavelength`, or copy `skills/wavelength/` into your agent's skills folder (`~/.claude/skills/` for Claude Code). It installs the engine (release build, else from source) and walks the agent through writing, mixing and mastering a song.
 
-**MCP server** for Claude Desktop, Cursor and any other MCP client: `wavelength mcp` speaks the Model
-Context Protocol on stdin/stdout. Tools read the guide, list instruments, presets, samples and
-parameters, lint, render (the reply carries the report's summary and the picture of the song), draw an
-arrangement, analyze audio, find bars and import MIDI, MusicXML, DAWproject and Bitwig project files;
-for songs: save, history, undo/redo/restore, diff, read and answer review comments, suggest
-fallbacks and pack.
+**MCP server** for Claude Desktop, Cursor and any other MCP client: `wavelength mcp` speaks the Model Context Protocol on stdin/stdout. Tools read the guide, list instruments, presets, samples and parameters, lint, render (the reply carries the report's summary and the picture of the song), draw an arrangement, analyze audio, find bars and import MIDI, MusicXML, DAWproject and Bitwig project files; for songs: save, history, undo/redo/restore, diff, read and answer review comments, suggest fallbacks and pack.
 
 ```json
 {"mcpServers": {"wavelength": {"command": "/path/to/wavelength", "args": ["mcp"]}}}
@@ -101,15 +58,9 @@ fallbacks and pack.
 
 ## Install
 
-**No plugins yet?** `wavelength kit install` downloads free instruments from their own releases into
-Wavelength's folder (not the system's plugin folders): Surge XT, OB-Xf and Dexed (GPL-3.0, with their
-factory patches) and the MuseScore General SoundFont (MIT). With the built-in synth, drums and FX that
-is enough for whole songs on a fresh machine or in a Linux container.
+**No plugins yet?** `wavelength kit install` downloads free instruments from their own releases into Wavelength's folder (not the system's plugin folders): Surge XT, OB-Xf and Dexed (GPL-3.0, with their factory patches) and the MuseScore General SoundFont (MIT). With the built-in synth, drums and FX that is enough for whole songs on a fresh machine or in a Linux container.
 
-Download the archive for your platform from the
-[latest release](https://github.com/austinginder/wavelength/releases/latest). Each has the
-`wavelength` binary plus the docs and examples (the names carry no version, so the links below always
-fetch the newest release):
+Download the archive for your platform from the [latest release](https://github.com/austinginder/wavelength/releases/latest). Each has the `wavelength` binary plus the docs and examples (the names carry no version, so the links below always fetch the newest release):
 
 | Platform | Archive |
 |---|---|
@@ -122,12 +73,9 @@ curl -L https://github.com/austinginder/wavelength/releases/latest/download/wave
 ./wavelength-macos-universal/wavelength plugins
 ```
 
-The macOS binary isn't notarized. `curl` downloads run as-is; if you download it in a browser,
-clear the quarantine flag first: `xattr -d com.apple.quarantine wavelength`. `SHA256SUMS.txt` on
-each release has the checksums.
+The macOS binary isn't notarized. `curl` downloads run as-is; if you download it in a browser, clear the quarantine flag first: `xattr -d com.apple.quarantine wavelength`. `SHA256SUMS.txt` on each release has the checksums.
 
-Wavelength finds plugins in each platform's standard folders, plus `$WAVELENGTH_CLAP_PATH` and
-`$WAVELENGTH_VST3_PATH` and `$WAVELENGTH_VST2_PATH` (lists separated by `:`, or `;` on Windows):
+Wavelength finds plugins in each platform's standard folders, plus `$WAVELENGTH_CLAP_PATH` and `$WAVELENGTH_VST3_PATH` and `$WAVELENGTH_VST2_PATH` (lists separated by `:`, or `;` on Windows):
 
 | | CLAP | VST3 | VST2 |
 |---|---|---|---|
@@ -145,8 +93,7 @@ Wavelength finds plugins in each platform's standard folders, plus `$WAVELENGTH_
 
 ## Build
 
-Requires CMake 3.20+ and a C++17 compiler: the Xcode command line tools on macOS, g++ or clang
-on Linux, llvm-mingw for Windows. CMake fetches these at configure time:
+Requires CMake 3.20+ and a C++17 compiler: the Xcode command line tools on macOS, g++ or clang on Linux, llvm-mingw for Windows. CMake fetches these at configure time:
 - the CLAP headers
 - the VST3 SDK (hosting sources only)
 - nlohmann/json
@@ -162,10 +109,7 @@ cmake --build build -j
 scripts/check.sh              # build + render the examples; fails on errors, silence or clipping
 ```
 
-`scripts/build-release.sh <tag>` builds the release archives for all four targets from a git tag
-on one Mac: macOS natively, Linux in Docker, Windows cross-compiled with llvm-mingw and
-smoke-tested under Wine. `--upload` attaches them to the GitHub release. The whole release checklist is in
-[docs/releasing.md](docs/releasing.md).
+`scripts/build-release.sh <tag>` builds the release archives for all four targets from a git tag on one Mac: macOS natively, Linux in Docker, Windows cross-compiled with llvm-mingw and smoke-tested under Wine. `--upload` attaches them to the GitHub release. The whole release checklist is in [docs/releasing.md](docs/releasing.md).
 
 ## Try it
 
@@ -229,37 +173,23 @@ A minimal job:
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
 | `version [--json]` | Prints the engine's version. |
 
-`docs [agents | job-format | effects | song-format]` prints the docs built into the binary (the operating
-guide and the references that match it; `--section` for one part), and `mcp` runs an MCP server (below).
+`docs [agents | job-format | effects | song-format]` prints the docs built into the binary (the operating guide and the references that match it; `--section` for one part), and `mcp` runs an MCP server (below).
 
-Two helper scripts are in the source checkout (release archives don't include `scripts/`).
-`scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin
-binaries, for example TAL-NoiseMaker and Relica 2, so `presets` can list them.
-`scripts/stage-gains.py <song> [render dir]` sets a song's faders from its target loudness and a
-render's stem loudness (`<song>/out` by default).
+Two helper scripts are in the source checkout (release archives don't include `scripts/`). `scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin binaries, for example TAL-NoiseMaker and Relica 2, so `presets` can list them. `scripts/stage-gains.py <song> [render dir]` sets a song's faders from its target loudness and a render's stem loudness (`<song>/out` by default).
 
 ## How it works
 
 **Plugin hosting**
-- `src/platform.*` holds everything that differs between macOS, Linux and Windows: folders,
-  worker processes, loading plugin libraries, the main-thread event loop.
-- `src/bundle.*` and `src/instance.*` host CLAP plugins, following CLAP's threading rules:
-  lifecycle and state on the main thread, `process()` on a dedicated audio thread.
-- `src/vst2_plugin.*` hosts VST2 plugins on Wavelength's own declaration of the VST 2 binary
-  interface (`src/vst2_abi.hpp`; Steinberg's VST 2 SDK is not used): MIDI events, transport,
-  `.fxp`/`.fxb` chunks and parameter lists, programs.
-- `src/vst3_plugin.*` hosts VST3 plugins with the SDK's hosting helpers, including
-  IMidiMapping for MIDI controllers.
-- `src/engine.*` opens a plugin (preset, state, parameters, automation) and renders it over
-  the timeline: sample-accurate notes and controllers, a tempo-mapped transport, and audio
-  input for effects.
+- `src/platform.*` holds everything that differs between macOS, Linux and Windows: folders, worker processes, loading plugin libraries, the main-thread event loop.
+- `src/bundle.*` and `src/instance.*` host CLAP plugins, following CLAP's threading rules: lifecycle and state on the main thread, `process()` on a dedicated audio thread.
+- `src/vst2_plugin.*` hosts VST2 plugins on Wavelength's own declaration of the VST 2 binary interface (`src/vst2_abi.hpp`; Steinberg's VST 2 SDK is not used): MIDI events, transport, `.fxp`/`.fxb` chunks and parameter lists, programs.
+- `src/vst3_plugin.*` hosts VST3 plugins with the SDK's hosting helpers, including IMidiMapping for MIDI controllers.
+- `src/engine.*` opens a plugin (preset, state, parameters, automation) and renders it over the timeline: sample-accurate notes and controllers, a tempo-mapped transport, and audio input for effects.
 
 **Presets and state**
 - `src/state_file.*` reads state containers.
-- `src/preset_formats.*` and `src/microtonic.*` convert plugins' own preset files into the
-  state bytes each plugin loads.
-- `src/preset_files.*` finds preset files and NKS presets per plugin; `src/presets.*` runs
-  CLAP preset discovery.
+- `src/preset_formats.*` and `src/microtonic.*` convert plugins' own preset files into the state bytes each plugin loads.
+- `src/preset_files.*` finds preset files and NKS presets per plugin; `src/presets.*` runs CLAP preset discovery.
 
 **Sound and mixing**
 - `src/sampler.*` is the built-in sampler; `src/builtins.*` holds the drum and FX instruments.
@@ -269,15 +199,8 @@ render's stem loudness (`<song>/out` by default).
 
 ## Roadmap
 
-1. Per-note pitch and level tracking in `analyze`; gain-reduction readouts for compressors and limiters.
-2. Auditions inside each instrument's range, and an envelope-depth measure for rhythmic patches.
-3. DAWproject import: automation of plugin effects and of Bitwig's own devices, launcher clips, more
-   Bitwig devices (Mid-Side Split, Polymer, Phase-4). Bitwig project import: audio clips and Bitwig 6
-   automation clips.
-4. SoundFont and SFZ LFOs (vibrato, tremolo) and pitch envelopes.
-5. A local service with a web UI and live playback through the speakers; Audio Unit hosting.
+[roadmap.md](roadmap.md) tracks what's planned and what's missing, and why; `changelog.md` records what shipped. Next after 0.4.0: comparing a render with a reference track, a tempo map from a video's hit times, a Docker image with the kit, package-manager installs, and listings in the plugin and MCP directories.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Third-party libraries compiled into the binary are listed with their
-licences in [THIRD_PARTY.md](THIRD_PARTY.md).
+MIT, see [license](license). Third-party libraries compiled into the binary are listed with their licences in [third_party.md](third_party.md).

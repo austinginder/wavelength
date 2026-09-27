@@ -1,8 +1,6 @@
 # Third-party software
 
-Wavelength is MIT-licensed (see `LICENSE`). CMake fetches these libraries at configure time and they
-are compiled into the `wavelength` binary. zlib comes from the operating system on macOS and Linux;
-the Windows build compiles it in.
+Wavelength is MIT-licensed (see `license`). CMake fetches these libraries at configure time and they are compiled into the `wavelength` binary. zlib comes from the operating system on macOS and Linux; the Windows build compiles it in.
 
 | Library | Version | Licence | Used for |
 |---|---|---|---|
@@ -18,26 +16,13 @@ the Windows build compiles it in.
 | [stb_image_write, stb_truetype](https://github.com/nothings/stb) | 2c980bb (1.16, 1.26) | public domain (Unlicense) or MIT | the song picture (`render --png`): PNG files and its text |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
-`wavelength kit install` downloads [Surge XT](https://github.com/surge-synthesizer/surge),
-[OB-Xf](https://github.com/surge-synthesizer/OB-Xf) and [Dexed](https://github.com/asb2m10/dexed) (each
-GPL-3.0) from their projects' own GitHub releases into Wavelength's settings folder, unmodified, and runs
-them as plugins in their own processes. They are separate programs under their own licences: not part of
-Wavelength's source or binaries, and not distributed by it.
+`wavelength kit install` downloads [Surge XT](https://github.com/surge-synthesizer/surge), [OB-Xf](https://github.com/surge-synthesizer/OB-Xf) and [Dexed](https://github.com/asb2m10/dexed) (each GPL-3.0) from their projects' own GitHub releases into Wavelength's settings folder, unmodified, and runs them as plugins in their own processes. They are separate programs under their own licences: not part of Wavelength's source or binaries, and not distributed by it.
 
-`wavelength samples --install-soundfont` downloads [MuseScore General](https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/)
-(MIT; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, adapted by S. Christian Collins) with its
-licence file into the settings folder. It is not part of Wavelength's source or binaries.
+`wavelength samples --install-soundfont` downloads [MuseScore General](https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/) (MIT; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, adapted by S. Christian Collins) with its licence file into the settings folder. It is not part of Wavelength's source or binaries.
 
-MP3 deliveries use [LAME](https://lame.sourceforge.io) (LGPL) when it is installed: Wavelength loads
-the system's `libmp3lame` at run time and neither includes nor distributes it (or runs `ffmpeg`
-when there is no LAME).
+MP3 deliveries use [LAME](https://lame.sourceforge.io) (LGPL) when it is installed: Wavelength loads the system's `libmp3lame` at run time and neither includes nor distributes it (or runs `ffmpeg` when there is no LAME).
 
-Linux builds link libstdc++ and libgcc statically (GCC Runtime Library Exception: no notice
-needed). The Windows `.exe` is linked statically with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw):
-LLVM's libc++ and libunwind (Apache-2.0 with LLVM exception) and the MinGW-w64 runtime and
-winpthreads, whose licences ask for their notices in binary distributions. The Windows archive
-carries those files, copied from the toolchain that built it, in `licenses/`
-(`COPYING.MinGW-w64-runtime.txt`, `COPYING.winpthreads.txt`, `LLVM-LICENSE.txt`, `zlib-LICENSE.txt`).
+Linux builds link libstdc++ and libgcc statically (GCC Runtime Library Exception: no notice needed). The Windows `.exe` is linked statically with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw): LLVM's libc++ and libunwind (Apache-2.0 with LLVM exception) and the MinGW-w64 runtime and winpthreads, whose licences ask for their notices in binary distributions. The Windows archive carries those files, copied from the toolchain that built it, in `licenses/` (`COPYING.MinGW-w64-runtime.txt`, `COPYING.winpthreads.txt`, `LLVM-LICENSE.txt`, `zlib-LICENSE.txt`).
 
 ## CLAP
 
@@ -278,15 +263,8 @@ SOFTWARE.
 
 ## Fonts in the web UI
 
-`wavelength serve` carries three fonts in `ui/fonts/` (built into the binary): Anybody (Etcetera Type
-Co), Instrument Sans (Instrument) and JetBrains Mono (JetBrains), each under the SIL Open Font
-License 1.1, whose full text ships beside them (`Anybody-OFL.txt`, `InstrumentSans-OFL.txt`,
-`JetBrainsMono-OFL.txt`). `jetbrains-mono-ascii.ttf` is JetBrains Mono Regular cut to printable ASCII
-(fontTools `pyftsubset`, no hinting); the song picture (`render --png`) draws its text with it.
+`wavelength serve` carries three fonts in `ui/fonts/` (built into the binary): Anybody (Etcetera Type Co), Instrument Sans (Instrument) and JetBrains Mono (JetBrains), each under the SIL Open Font License 1.1, whose full text ships beside them (`Anybody-OFL.txt`, `InstrumentSans-OFL.txt`, `JetBrainsMono-OFL.txt`). `jetbrains-mono-ascii.ttf` is JetBrains Mono Regular cut to printable ASCII (fontTools `pyftsubset`, no hinting); the song picture (`render --png`) draws its text with it.
 
 ## Formats read, not code used
 
-Wavelength reads preset and state files of third-party plugins (Serum 2, Odin2, u-he, Synplant,
-Cherry Audio, Guitar Rig, Microtonic, NKS, DX7 and others) with its own code, written from the
-files' observed layouts and, for open-source plugins, their published behaviour. No plugin code
-is included. It hosts plugins the user has installed and licensed; it does not bypass licence checks.
+Wavelength reads preset and state files of third-party plugins (Serum 2, Odin2, u-he, Synplant, Cherry Audio, Guitar Rig, Microtonic, NKS, DX7 and others) with its own code, written from the files' observed layouts and, for open-source plugins, their published behaviour. No plugin code is included. It hosts plugins the user has installed and licensed; it does not bypass licence checks.

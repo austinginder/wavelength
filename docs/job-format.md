@@ -80,16 +80,11 @@ A job is one JSON object. Unknown fields are ignored.
 | `velocityTo` | none | Drive a controller from note velocities, one point per onset, ramping between them: `{"param": "Dynamics", "min": 0.1, "max": 1}` or `{"cc": 1, "min": 10, "max": 127}`. For libraries whose long notes take loudness from a controller instead of velocity. Explicit automation of the same target wins. |
 | `automation` | none | `gain` (dB), `rides` (dB added on top of `gain`: one curve, or named curves `{"sections": curve, "fills": curve}` that all add up, so section rides never overwrite the written fader curve), `pan` (-1..1), `params` (`{"Name": curve}` or `{"#id": curve}`, plain values; a curve object with `"scale": "normalized"` gives 0..1 of the parameter's range, as DAWs store automation; point values may be the plugin's display text, `[[0, "800 Hz"], [16, "2.4 kHz"]]`, or note names, `"C#4"` = its frequency, each read by the plugin once before the render; `"scale": "display"` reads plain numbers as display values too), `cc` (`{"1": curve, "64": curve}`, MIDI CC values 0-127), `pitchbend` (semitones, see `bendRange`), `pressure` (0-127). CC, pitch bend and pressure reach CLAP plugins as MIDI (or note expressions) and VST3 plugins through the parameters they map those controllers to (a warning names any they don't map). Curves are described in `effects.md` (points, steps, LFOs). |
 
-`plugin` may also be `builtin:synth`, `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`,
-`builtin:audio`, or `builtin:shepard`.
+`plugin` may also be `builtin:synth`, `builtin:drums` or `builtin:fx` (see `effects.md`), `builtin:sampler`, `builtin:audio`, or `builtin:shepard`.
 
 ### builtin:synth
 
-A virtual-analog polysynth inside Wavelength: melodic parts render with no plugin installed (a CI
-runner, a fresh laptop, an agent's cloud container). Pick a patch with `preset`, change any part of it
-with a `synth` object (merged over the preset: objects merge key by key, `osc` and `lfo` lists
-replace), and set or automate its parameters by name with `params` and `automation.params`. Renders
-are deterministic: the same job gives the same samples.
+A virtual-analog polysynth inside Wavelength: melodic parts render with no plugin installed (a CI runner, a fresh laptop, an agent's cloud container). Pick a patch with `preset`, change any part of it with a `synth` object (merged over the preset: objects merge key by key, `osc` and `lfo` lists replace), and set or automate its parameters by name with `params` and `automation.params`. Renders are deterministic: the same job gives the same samples.
 
 ```json
 {"name": "Acid", "plugin": "builtin:synth", "preset": "BA Acid", "params": {"resonance": 0.65},
@@ -97,11 +92,7 @@ are deterministic: the same job gives the same samples.
  "notes": [{"beat": 32, "dur": 0.2, "key": "A2", "vel": 1}]}
 ```
 
-`wavelength presets builtin:synth` lists the patches (Init, `BA` bass, `LD` lead, `PD` pad, `PL`
-pluck, `KY` keys, `BR` brass, `FX`); each plays about -18 LUFS on a typical phrase at velocity 0.8
-and sounds at the written pitch. `wavelength params builtin:synth` lists the parameters:
-`cutoff` (Hz, sweeps exponentially), `resonance`, `drive`, `env`, `keytrack`, `detune`, `spread`, `pw`,
-`fm`, `lfo`, `sub`, `noise`, `glide`, `level`. Values may be text: `"800 Hz"`, `"2.4 kHz"`, a note name.
+`wavelength presets builtin:synth` lists the patches (Init, `BA` bass, `LD` lead, `PD` pad, `PL` pluck, `KY` keys, `BR` brass, `FX`); each plays about -18 LUFS on a typical phrase at velocity 0.8 and sounds at the written pitch. `wavelength params builtin:synth` lists the parameters: `cutoff` (Hz, sweeps exponentially), `resonance`, `drive`, `env`, `keytrack`, `detune`, `spread`, `pw`, `fm`, `lfo`, `sub`, `noise`, `glide`, `level`. Values may be text: `"800 Hz"`, `"2.4 kHz"`, a note name.
 
 The `synth` object:
 
@@ -117,15 +108,11 @@ The `synth` object:
 | `mono`, `legato`, `glide` | false, true, 0 | `mono`: one voice. A note that starts while another is held slides to it without a new attack (`legato`), gliding over `glide` seconds; back-to-back notes attack again. |
 | `level` | 0 | dB. |
 
-Per-note `bend` and `vibrato` play on builtin:synth tracks as on the sampler, and `automation.pitchbend`
-(semitones) bends every voice. MIDI CC and pressure automation do nothing here: automate parameters by name.
+Per-note `bend` and `vibrato` play on builtin:synth tracks as on the sampler, and `automation.pitchbend` (semitones) bends every voice. MIDI CC and pressure automation do nothing here: automate parameters by name.
 
 ### builtin:shepard
 
-An endless riser (or faller): octave-spaced partials glide together under a bell curve over
-log-frequency, so each fades in at one end and out at the other and the sum climbs without arriving.
-Each note plays it for its length (the key doesn't matter; velocity sets the level). The stair's
-position runs from the start of the song, so back-to-back notes carry on where it is.
+An endless riser (or faller): octave-spaced partials glide together under a bell curve over log-frequency, so each fades in at one end and out at the other and the sum climbs without arriving. Each note plays it for its length (the key doesn't matter; velocity sets the level). The stair's position runs from the start of the song, so back-to-back notes carry on where it is.
 
 ```json
 {"name": "Stair", "plugin": "builtin:shepard", "shepard": {"rate": [[0, 0.1], [32, 0.6]], "direction": "up", "centre": "A5"},
@@ -165,9 +152,7 @@ Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
 | `reverse` | false | Play the trimmed audio backwards. |
 | `gain`, `fadeIn`, `fadeOut` | 0 dB, 2 ms, 5 ms | Level and edge fades (ms). |
 
-**The song's own audio as a clip.** `file` can be `{"render": [fromBeat, toBeat], "tracks": [...], "tail": 3, "fx": [...]}`:
-those beats of the song, rendered inside the same render, become the clip's audio. A reverse swell of the
-drop with no pre-render:
+**The song's own audio as a clip.** `file` can be `{"render": [fromBeat, toBeat], "tracks": [...], "tail": 3, "fx": [...]}`: those beats of the song, rendered inside the same render, become the clip's audio. A reverse swell of the drop with no pre-render:
 
 ```json
 {"name": "Drop Swell", "plugin": "builtin:audio", "clips": [
@@ -176,35 +161,17 @@ drop with no pre-render:
    "reverse": true, "endAt": 256, "fadeIn": 400}]}
 ```
 
-- What is captured: each listed track (default: every track except ones that play rendered clips
-  themselves) after its effects, fader, automation and pan, as it enters the mix; not buses, sends or
-  the master. Muted tracks add nothing. The range is cut with 5 ms fades.
-- Then `tail` seconds of silence (0-60, default 0) are added and the clip's own `fx` run over it (a
-  reverb there rings into the tail), and the result is the "file": `start`, `length`, `reverse`, `pitch`,
-  `endAt` and the rest apply to it as to a WAV.
-- Ordering: the listed tracks render first (the audio track waits for them, as for a sidechain
-  source). A track that plays rendered clips can't be a source for another one, so it can't recurse.
-  The clip may play before its range (a swell ending on the drop it was made from).
+- What is captured: each listed track (default: every track except ones that play rendered clips themselves) after its effects, fader, automation and pan, as it enters the mix; not buses, sends or the master. Muted tracks add nothing. The range is cut with 5 ms fades.
+- Then `tail` seconds of silence (0-60, default 0) are added and the clip's own `fx` run over it (a reverb there rings into the tail), and the result is the "file": `start`, `length`, `reverse`, `pitch`, `endAt` and the rest apply to it as to a WAV.
+- Ordering: the listed tracks render first (the audio track waits for them, as for a sidechain source). A track that plays rendered clips can't be a source for another one, so it can't recurse. The clip may play before its range (a swell ending on the drop it was made from).
 
 ### builtin:sampler
 
-Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the open zip + XML
-format of Bitwig's Sampler: pianos, organs, guitars, basses, keys, orchestral), SFZ instruments
-(the open text format most free and many commercial sample libraries ship in), folders of
-drum samples, or a single sample. Samples can be WAV, AIFF/AIFC, FLAC, MP3 (encoder delay
-removed) or Ogg Vorbis. List what is installed with `wavelength samples [--search text]`.
-Names are searched in `$WAVELENGTH_SAMPLES_PATH` (colon-separated folders) and the Bitwig
-Studio package folders; paths work too (relative to the job).
+Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the open zip + XML format of Bitwig's Sampler: pianos, organs, guitars, basses, keys, orchestral), SFZ instruments (the open text format most free and many commercial sample libraries ship in), folders of drum samples, or a single sample. Samples can be WAV, AIFF/AIFC, FLAC, MP3 (encoder delay removed) or Ogg Vorbis. List what is installed with `wavelength samples [--search text]`. Names are searched in `$WAVELENGTH_SAMPLES_PATH` (colon-separated folders) and the Bitwig Studio package folders; paths work too (relative to the job).
 
 #### Library files: `lib:`
 
-One file of an installed sample library, by name, so a job never depends on where a computer keeps
-it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists
-it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum
-Machines/Legend 909/..."`), or `"lib:<path under a sample root>"`
-(`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit
-`map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in
-the manifest's `requires`, and `wavelength upgrade` turns absolute library paths into `lib:` names.
+One file of an installed sample library, by name, so a job never depends on where a computer keeps it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum Machines/Legend 909/..."`), or `"lib:<path under a sample root>"` (`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit `map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in the manifest's `requires`, and `wavelength upgrade` turns absolute library paths into `lib:` names.
 
 ```json
 {"name": "Keys", "plugin": "builtin:sampler", "sampler": {"multisample": "Grand Piano", "release": 0.4}, "notes": [...]}
@@ -236,46 +203,22 @@ the manifest's `requires`, and `wavelength upgrade` turns absolute library paths
 
 #### SFZ
 
-`"sampler": {"sfz": "Splendid Grand Piano"}` (a name from `wavelength samples --search`, or a path)
-reads the file's `<control>`, `<global>`, `<master>`, `<group>` and `<region>` headers, `#define`
-and `#include`. What plays:
+`"sampler": {"sfz": "Splendid Grand Piano"}` (a name from `wavelength samples --search`, or a path) reads the file's `<control>`, `<global>`, `<master>`, `<group>` and `<region>` headers, `#define` and `#include`. What plays:
 
-- Mapping: `sample` (relative to the file and `default_path`), `lokey`/`hikey`/`key` (numbers or
-  note names, `c4` = 60), `pitch_keycenter`, `pitch_keytrack`, `lovel`/`hivel`, `note_offset`,
-  `octave_offset`. Keys outside every region stay silent (unlike a multisample).
-- Level and pitch: `volume`, `group_volume`/`master_volume`/`global_volume`, `amplitude`, `pan`,
-  `tune` (cents), `transpose`, `amp_veltrack`, velocity crossfades `xfin_lovel`/`xfin_hivel`/`xfout_lovel`/`xfout_hivel`.
-- Envelope: `ampeg_attack`, `ampeg_hold`, `ampeg_decay`, `ampeg_sustain`, `ampeg_release`
-  (these replace the sampler's `attack`/`release` for that region).
-- Playback: `offset`, `end`, `direction=reverse`, `loop_mode` (`no_loop`, `one_shot`, `loop_continuous`,
-  `loop_sustain`), `loop_start`/`loop_end`, or the WAV's own loop (`smpl` chunk) when the region
-  gives no points. A file whose regions are all `one_shot` plays like a kit.
-- Round robins (`seq_length`/`seq_position`, `lorand`/`hirand` cycled in order), keyswitches
-  (`sw_lokey`/`sw_hikey`/`sw_last`/`sw_default`: a note in the switch range picks the articulation
-  and makes no sound), choke groups (`group`/`off_by`), `note_polyphony=1` (a repeated key cuts the
-  previous note; set `"retrigger"` to override).
-- Controllers stay at their `set_ccN` values (0 when unset): regions gated by `locc`/`hicc` play only
-  if that holds (a piano's pedal-down resonance regions are left out), and `*cc*` modulation is ignored.
+- Mapping: `sample` (relative to the file and `default_path`), `lokey`/`hikey`/`key` (numbers or note names, `c4` = 60), `pitch_keycenter`, `pitch_keytrack`, `lovel`/`hivel`, `note_offset`, `octave_offset`. Keys outside every region stay silent (unlike a multisample).
+- Level and pitch: `volume`, `group_volume`/`master_volume`/`global_volume`, `amplitude`, `pan`, `tune` (cents), `transpose`, `amp_veltrack`, velocity crossfades `xfin_lovel`/`xfin_hivel`/`xfout_lovel`/`xfout_hivel`.
+- Envelope: `ampeg_attack`, `ampeg_hold`, `ampeg_decay`, `ampeg_sustain`, `ampeg_release` (these replace the sampler's `attack`/`release` for that region).
+- Playback: `offset`, `end`, `direction=reverse`, `loop_mode` (`no_loop`, `one_shot`, `loop_continuous`, `loop_sustain`), `loop_start`/`loop_end`, or the WAV's own loop (`smpl` chunk) when the region gives no points. A file whose regions are all `one_shot` plays like a kit.
+- Round robins (`seq_length`/`seq_position`, `lorand`/`hirand` cycled in order), keyswitches (`sw_lokey`/`sw_hikey`/`sw_last`/`sw_default`: a note in the switch range picks the articulation and makes no sound), choke groups (`group`/`off_by`), `note_polyphony=1` (a repeated key cuts the previous note; set `"retrigger"` to override).
+- Controllers stay at their `set_ccN` values (0 when unset): regions gated by `locc`/`hicc` play only if that holds (a piano's pedal-down resonance regions are left out), and `*cc*` modulation is ignored.
 - Generators `*sine`, `*saw`, `*square`, `*triangle`, `*noise`, `*silence` (one cycle at `pitch_keycenter`, looped).
-- Filters: `cutoff`, `resonance`, `fil_type` (low-, high- and band-pass), `fil_veltrack`, `fil_keytrack`,
-  `fil_keycenter`. Release triggers (`trigger=release`: key-up sounds when the note ends, `rt_decay` dB
-  quieter per second held), `delay` / `ampeg_delay`.
+- Filters: `cutoff`, `resonance`, `fil_type` (low-, high- and band-pass), `fil_veltrack`, `fil_keytrack`, `fil_keycenter`. Release triggers (`trigger=release`: key-up sounds when the note ends, `rt_decay` dB quieter per second held), `delay` / `ampeg_delay`.
 
-Not played: filter and pitch envelopes, LFOs, `<curve>` and `<effect>`. The render warns once, naming
-the opcodes it skipped. `examples/sfz-tour.json` plays `examples/sfz/tour.sfz`, built from generators only.
+Not played: filter and pitch envelopes, LFOs, `<curve>` and `<effect>`. The render warns once, naming the opcodes it skipped. `examples/sfz-tour.json` plays `examples/sfz/tour.sfz`, built from generators only.
 
 #### SoundFonts
 
-`"sampler": {"soundfont": "MuseScore_General", "program": 40}` plays a preset of a SoundFont the way
-FluidSynth does: its zones (key and velocity ranges, stereo pairs), tuning, loops, the volume
-envelope (decay and release falling in dB, key-scaled hold and decay), the low-pass filter with its
-resonance and the modulation envelope that opens it, exclusive classes (a closed hat cuts the open
-one) and the modulators that follow velocity and key (level, filter, envelope times, pan, tuning).
-Controller modulators are read at their resting positions (volume 100, expression 127, pedals up).
-Checked against FluidSynth 2.6 on MuseScore General: levels within 0.5 dB, brightness within 2%.
-Not played: LFOs (vibrato, tremolo), reverb and chorus sends. SoundFonts are found in the sample roots
-and in Wavelength's settings folder under `soundfonts/` (where `--install-soundfont` puts them);
-`$WAVELENGTH_SOUNDFONT` names the one MIDI and MusicXML imports use.
+`"sampler": {"soundfont": "MuseScore_General", "program": 40}` plays a preset of a SoundFont the way FluidSynth does: its zones (key and velocity ranges, stereo pairs), tuning, loops, the volume envelope (decay and release falling in dB, key-scaled hold and decay), the low-pass filter with its resonance and the modulation envelope that opens it, exclusive classes (a closed hat cuts the open one) and the modulators that follow velocity and key (level, filter, envelope times, pan, tuning). Controller modulators are read at their resting positions (volume 100, expression 127, pedals up). Checked against FluidSynth 2.6 on MuseScore General: levels within 0.5 dB, brightness within 2%. Not played: LFOs (vibrato, tremolo), reverb and chorus sends. SoundFonts are found in the sample roots and in Wavelength's settings folder under `soundfonts/` (where `--install-soundfont` puts them); `$WAVELENGTH_SOUNDFONT` names the one MIDI and MusicXML imports use.
 
 ## Buses, master, markers
 
