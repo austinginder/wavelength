@@ -118,6 +118,11 @@ In order of preference:
    object and move `cutoff`, `resonance`, `detune`... with `automation.params` (names from
    `wavelength params builtin:synth`; details in `docs/job-format.md`). With `builtin:drums`,
    `builtin:fx` and `samples --install-soundfont` (General MIDI), a whole song renders anywhere.
+   For more sounds, `wavelength kit install` downloads free synthesizers from their own releases
+   into Wavelength's folder (never the system's plugin folders): Surge XT with about 3,300 patches,
+   OB-Xf with 488, Dexed with the DX7 cartridges, and the General MIDI SoundFont (`wavelength kit`
+   lists them with licence, size and status; about 550 MB in all on Linux). On Linux a plugin that
+   won't load is listed with the system library it misses and the packages to install.
 4. **Save what you built** so it is reusable and can be wired into a DAW project:
    `wavelength state save <plugin> --state base.vital --set "Filter 1 Cutoff=0.4" --out lead.clap-preset`.
 

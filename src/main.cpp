@@ -39,6 +39,7 @@
 #include "picture.hpp"
 #include "docs.hpp"
 #include "fallback.hpp"
+#include "kit.hpp"
 #include "mcp.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
@@ -162,6 +163,12 @@ Usage:
       curves, built-in eq/compressor/limiter as the standard devices. Built-in instruments are
       printed (rendered dry to audio on the track, notes kept; --no-print: notes only); lists what
       has no counterpart.
+  wavelength kit [install [names...] [--force] | remove NAME] [--json]
+      Free instruments for a machine without plugins (a cloud container, CI): Surge XT (with its
+      factory patches), OB-Xf (with its patches) and Dexed from their own releases, and the General
+      MIDI SoundFont. They go into Wavelength's own folder, never the system's plugin folders. Without
+      a subcommand it lists them with their licence, size and status; an entry whose plugin is already
+      installed elsewhere is skipped unless --force.
   wavelength docs [agents | job-format | effects] [--section TEXT] [--json]
       The docs that match this binary, built in: the operating guide for agents (read it first), the
       job format and the effects reference. --section prints one part (a heading or part of one).
@@ -382,28 +389,8 @@ int cmdPresets(const Args &a) {
 int cmdSamples(const Args &a) {
     std::string err;
     if (a.has("--install-soundfont")) {   // MuseScore General (MIT, 40 MB): the General MIDI fallback for imports
-        const std::string curl = platform::findProgram("curl");
-        if (curl.empty()) return fail(a, "--install-soundfont needs curl on the PATH");
-        const fs::path dir = soundFontDir();
-        std::error_code ec;
-        fs::create_directories(dir, ec);
-        const std::string base = "https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/";
-        for (const std::string name : {"MuseScore_General_License.md", "MuseScore_General.sf3"}) {
-            const fs::path to = dir / name, part = dir / (name + ".part");
-            if (fs::exists(to, ec) && !a.has("--force")) continue;
-            std::fprintf(stderr, "downloading %s%s\n", base.c_str(), name.c_str());
-            platform::Process p;
-            if (!platform::spawn({curl, "-fsSL", "-o", part.string(), base + name}, p, false, false)) return fail(a, "cannot start curl");
-            std::string crash;
-            while (!platform::finished(p, crash)) platform::pumpEvents(50);
-            SoundFont check;
-            if (!fs::exists(part, ec) || fs::file_size(part, ec) == 0 || (name.size() > 4 && name.substr(name.size() - 4) == ".sf3" && !check.open(part.string(), err))) {
-                fs::remove(part, ec);
-                return fail(a, "download of " + name + " failed" + (err.empty() ? "" : ": " + err));
-            }
-            fs::rename(part, to, ec);
-        }
-        const std::string path = (dir / "MuseScore_General.sf3").string();
+        std::string path;
+        if (!installSoundFont(a.has("--force"), path, err)) return fail(a, err);
         if (a.has("--json")) emit(json{{"ok", true}, {"soundfont", path}}.dump(2));
         else std::fprintf(OUT, "%s\nMIDI and MusicXML imports now fall back on it; use it in a job as \"sampler\": {\"soundfont\": \"MuseScore_General\", \"program\": 0}.\n", path.c_str());
         return 0;
@@ -1286,6 +1273,41 @@ int lintHarmony(const Args &a, const Job &job, const std::vector<size_t> &tracks
 }
 
 // ---- timeline: bars and markers -> song time, from the tempo map ------------------------------
+// wavelength kit [install [names...] | remove NAME]: free instruments into Wavelength's own folder
+int cmdKit(const Args &a) {
+    const std::string sub = a.positional.size() > 1 ? a.positional[1] : "";
+    std::string err;
+    if (sub.empty() || sub == "list") {
+        const json list = kitList();
+        if (a.has("--json")) { emit(json{{"ok", true}, {"folder", kitDir().string()}, {"kit", list}}.dump(2)); return 0; }
+        for (auto &e : list)
+            std::fprintf(OUT, "%-10s %-18s %-7s %-17s %4d MB  %s\n            %s\n", e["name"].get<std::string>().c_str(), e["title"].get<std::string>().c_str(),
+                         e["version"].get<std::string>().c_str(), e["license"].get<std::string>().c_str(), e["downloadMB"].get<int>(),
+                         e["status"].get<std::string>().c_str(), e["about"].get<std::string>().c_str());
+        std::fprintf(OUT, "\nwavelength kit install [names] downloads them from their own releases into %s (never the system's plugin folders).\n",
+                     kitDir().string().c_str());
+        return 0;
+    }
+    if (sub == "install") {
+        json r;
+        if (!kitInstall(std::vector<std::string>(a.positional.begin() + 2, a.positional.end()), a.has("--force"), r, err)) return fail(a, err);
+        if (a.has("--json")) { r["ok"] = true; emit(r.dump(2)); return 0; }
+        for (auto &i : r["installed"]) std::fprintf(OUT, "installed %s %s in %s\n", i["name"].get<std::string>().c_str(), i["version"].get<std::string>().c_str(), i["folder"].get<std::string>().c_str());
+        for (auto &s : r["skipped"]) std::fprintf(OUT, "skipped   %s: %s\n", s["name"].get<std::string>().c_str(), s["why"].get<std::string>().c_str());
+        for (auto &p : r["problems"]) std::fprintf(OUT, "! %s does not load: %s\n", p["plugin"].get<std::string>().c_str(), p["error"].get<std::string>().c_str());
+        if (r.contains("fix")) std::fprintf(OUT, "  fix: %s\n", r["fix"].get<std::string>().c_str());
+        return 0;
+    }
+    if (sub == "remove") {
+        if (a.positional.size() < 3) return fail(a, "usage: wavelength kit remove <name>");
+        if (!kitRemove(a.positional[2], err)) return fail(a, err);
+        if (a.has("--json")) emit(json{{"ok", true}, {"removed", a.positional[2]}}.dump(2));
+        else std::fprintf(OUT, "removed %s\n", a.positional[2].c_str());
+        return 0;
+    }
+    return fail(a, "usage: wavelength kit [list | install [names...] [--force] | remove <name>]");
+}
+
 // wavelength docs [name] [--section TEXT]: the agent docs built into this binary
 int cmdDocs(const Args &a) {
     if (a.positional.size() < 2) {
@@ -1696,6 +1718,7 @@ int run(int argc, char **argv) {
             {"timeline", {"--every", "--json"}},
             {"picture", {"--out", "--width", "--json"}},
             {"docs", {"--section", "--json"}},
+            {"kit", {"--force", "--json"}},
             {"mcp", {}},
             {"version", {"--json"}}};
         auto it = known.find(cmd);
@@ -1735,6 +1758,7 @@ int run(int argc, char **argv) {
         if (cmd == "timeline") return cmdTimeline(a);
         if (cmd == "picture") return cmdPicture(a);
         if (cmd == "docs") return cmdDocs(a);
+        if (cmd == "kit") return cmdKit(a);
         if (cmd == "mcp") return runMcp(OUT);
         if (cmd == "version") { std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION); return 0; }
     } catch (const std::exception &e) {

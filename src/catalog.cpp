@@ -1,5 +1,6 @@
 #include "catalog.hpp"
 
+#include "kit.hpp"
 #include "platform.hpp"
 
 #include "vst3_plugin.hpp"
@@ -130,6 +131,7 @@ std::vector<std::string> clapSearchPaths() {
     paths.push_back("/usr/local/lib/clap");
     paths.push_back("/usr/lib/clap");
 #endif
+    for (auto &k : kitPluginFolders()) paths.push_back(k);   // `wavelength kit`, after the system's own
     return paths;
 }
 
@@ -147,6 +149,7 @@ std::vector<std::string> vst3SearchPaths() {
     paths.push_back("/usr/local/lib/vst3");
     paths.push_back("/usr/lib/vst3");
 #endif
+    for (auto &k : kitPluginFolders()) paths.push_back(k);
     return paths;
 }
 

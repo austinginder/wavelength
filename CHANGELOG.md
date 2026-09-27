@@ -52,6 +52,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   back onto the start. The mix, the stems (layers for adaptive music) and bus stems are all exactly the
   loop's length and carry a `smpl` loop chunk (Godot's WAV import and samplers loop them). The report
   gives `window.loop` (`seconds`, `frames`, `tailFolded`).
+- `wavelength kit [install [names] | remove NAME]`: free instruments for machines without plugins (a
+  cloud container, CI). Surge XT with its factory and third-party patches, OB-Xf with its patches and Dexed
+  come from their own releases (GPL-3.0) and the MuseScore General SoundFont (MIT); all go into
+  Wavelength's own folder, which the plugin scan and the preset lists read, never into the system's
+  plugin folders. An entry whose plugin is already installed elsewhere is skipped unless `--force`; on
+  Linux a plugin that won't load is reported with the library it misses. `samples --install-soundfont`
+  now shares its download.
 - `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 

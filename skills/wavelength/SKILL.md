@@ -63,7 +63,9 @@ Never guess plugin or preset names. List them:
 ```
 
 On a machine with few or no plugins (a cloud container, CI), build the song from `builtin:synth`
-patches, `builtin:drums` and `builtin:fx`; `samples --install-soundfont` adds General MIDI sounds.
+patches, `builtin:drums` and `builtin:fx`; `samples --install-soundfont` adds General MIDI sounds, and
+`"$WAVELENGTH" kit install` adds free synthesizers with their factory patches (Surge XT, OB-Xf, Dexed)
+into Wavelength's own folder. On Linux, install the system libraries it names for any plugin that won't load.
 
 Prefer factory presets by name. Transpose presets tagged `octave -1`. **Check every melodic
 preset over the range you will write for it** before committing (AGENTS.md explains how):

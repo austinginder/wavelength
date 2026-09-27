@@ -1,5 +1,6 @@
 #include "preset_files.hpp"
 
+#include "kit.hpp"
 #include "platform.hpp"
 
 #include "preset_formats.hpp"
@@ -230,6 +231,8 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
 #endif
         dirs.push_back(surge / "patches_factory");
         dirs.push_back(surge / "patches_3rdparty");
+        dirs.push_back(kitDir() / "surge-xt" / "SurgeXTData" / "patches_factory");   // `wavelength kit`
+        dirs.push_back(kitDir() / "surge-xt" / "SurgeXTData" / "patches_3rdparty");
     }
     if (p == "surgext") dirs.push_back(fs::path(home) / "Documents/Surge XT/Patches");
     // presets Wavelength extracted itself (scripts/extract-embedded-presets.py)
@@ -253,6 +256,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     if (p == "obxf") {
         dirs.push_back("/Library/Application Support/Surge Synth Team/OB-Xf/Patches");
         dirs.push_back(fs::path(home) / "Documents/Surge Synth Team/OB-Xf/Patches");
+        dirs.push_back(kitDir() / "ob-xf" / "OB-Xf" / "Patches");   // `wavelength kit`
     }
 
     std::vector<PresetInfo> out;
@@ -350,8 +354,16 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     // Dexed: every voice of every DX7 cartridge (.syx, 32 voices) is a preset: "<file>.syx#<n>"
     if (p == "dexed") {
         std::error_code ec;
-        for (auto it = fs::recursive_directory_iterator(fs::path(home) / "Library/Application Support/DigitalSuburban/Dexed/Cartridges",
-                                                        fs::directory_options::skip_permission_denied, ec);
+        // where Dexed unpacks its cartridges on first load (JUCE's user data folder)
+#if defined(__APPLE__)
+        const fs::path carts = fs::path(home) / "Library/Application Support/DigitalSuburban/Dexed/Cartridges";
+#elif defined(_WIN32)
+        const fs::path carts = fs::path(getenv("APPDATA") ? getenv("APPDATA") : home) / "DigitalSuburban/Dexed/Cartridges";
+#else
+        const fs::path carts = (getenv("XDG_DATA_HOME") && *getenv("XDG_DATA_HOME") ? fs::path(getenv("XDG_DATA_HOME")) : fs::path(home) / ".local/share") /
+                               "DigitalSuburban/Dexed/Cartridges";
+#endif
+        for (auto it = fs::recursive_directory_iterator(carts, fs::directory_options::skip_permission_denied, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec)) {
             if (ec) break;
             std::string ext = it->path().extension().string();

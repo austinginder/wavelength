@@ -18,6 +18,12 @@ the Windows build compiles it in.
 | [stb_image_write, stb_truetype](https://github.com/nothings/stb) | 2c980bb (1.16, 1.26) | public domain (Unlicense) or MIT | the song picture (`render --png`): PNG files and its text |
 | [zlib](https://zlib.net) | 1.3.1 (Windows build only) | zlib | Bitwig multisamples (zip), MeldaProduction preset banks, Synplant patches |
 
+`wavelength kit install` downloads [Surge XT](https://github.com/surge-synthesizer/surge),
+[OB-Xf](https://github.com/surge-synthesizer/OB-Xf) and [Dexed](https://github.com/asb2m10/dexed) (each
+GPL-3.0) from their projects' own GitHub releases into Wavelength's settings folder, unmodified, and runs
+them as plugins in their own processes. They are separate programs under their own licences: not part of
+Wavelength's source or binaries, and not distributed by it.
+
 `wavelength samples --install-soundfont` downloads [MuseScore General](https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/)
 (MIT; FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, adapted by S. Christian Collins) with its
 licence file into the settings folder. It is not part of Wavelength's source or binaries.
