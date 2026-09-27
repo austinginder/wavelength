@@ -21,6 +21,11 @@ Releases are cut by hand on a Mac; binaries are built locally, not in CI.
    Archive names carry no version, so `releases/latest/download/<name>` links always fetch the
    newest release. The build needs about 2 GB of free disk; each target's build folder is
    deleted after packaging. `--only <target>` rebuilds one target.
+   Then `scripts/release-test.sh vx.y.z` runs `scripts/release-test.py` against every archive
+   (macOS arm64 and x86_64 natively, Linux in Docker, Windows under Wine): the song workflow, the
+   format fixtures, a package that must be refused, a package of plugin and library tracks that must
+   play through its fallbacks, the built-in docs, kit and the MCP server over stdin/stdout. Run it
+   before `--upload`, or build without `--upload` first.
 7. Bump to the next `-dev` version (`VERSION` + `WAVELENGTH_VERSION_SUFFIX "-dev"`, and
    `.claude-plugin/plugin.json`) and push.
 
