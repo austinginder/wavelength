@@ -43,6 +43,11 @@ bool readFile(const Song &song, int rev, const std::string &path, std::string &o
 // the job at a revision (0: the folder as it is now)
 bool jobAt(const Song &song, int rev, json &job, std::string &err);
 bool readObject(const Song &song, const std::string &hash, std::string &out, std::string &err);
+// Objects a package left out because they are the same bytes as one of its files (docs/song-format.md,
+// section 5), stored again from the file at the path a revision gives them. `restored` counts them.
+bool restoreObjects(const Song &song, int &restored, std::string &err);
+// For pack: whether revision files at `path` with this hash can be left out (the file is in the package).
+bool objectIsFile(const Song &song, const std::string &path, const std::string &hash);
 
 // Every revision as one git commit (tree = its files, parent = its parent's commit, author and date from
 // the entry, message + "Wavelength-Revision: <rev>"), the same on every computer. Into a new repository

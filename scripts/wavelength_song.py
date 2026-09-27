@@ -1262,6 +1262,19 @@ def verify_object(tree, rel, expected, limit, keep=False):
     return b"".join(parts), None, ""
 
 
+def file_sha256(tree, rel, cache):
+    """SHA-256 (hex) of a file in the song, or None when there is none; cached by path."""
+    if rel not in cache:
+        cache[rel] = None
+        if not path_problems(rel) and tree.exists(rel):
+            h = hashlib.sha256()
+            with tree.open(rel) as f:
+                for buf in iter(lambda: f.read(1 << 20), b""):
+                    h.update(buf)
+            cache[rel] = h.hexdigest()
+    return cache[rel]
+
+
 def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
     """The log's entries, their sequence, and every object's name and content."""
     objects = {}
@@ -1291,6 +1304,7 @@ def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
     revs = {}
     prev = 0
     used = set()
+    hashes = {}
     for n, e in lines:
         if not check_entry(e, n, problems):
             continue
@@ -1319,7 +1333,8 @@ def check_history(tree, manifest, problems, max_total=DEFAULT_MAX_TOTAL):
                 continue
             hexd = h[7:]
             used.add(hexd)
-            if hexd not in objects:
+            if hexd not in objects and not (tree.kind == "package" and file_sha256(tree, p, hashes) == hexd):
+                # a package may leave out an object that is the same bytes as its file at that path (section 5)
                 problems.error(LOG, "%s %s is %s, which is not in history/objects/" % (w, p, h[:19] + "..."),
                                "object-missing")
         revs[rev] = e
@@ -1579,6 +1594,27 @@ def extract(tree, dest):
     return count
 
 
+def restore_objects(dest, entries):
+    """Objects a package left out because they are its files (section 5): stored again from those files."""
+    restored = 0
+    for e in entries:
+        for p, h in (e.get("files") or {}).items():
+            if not matches(HASHREF_RE, h) or path_problems(p):
+                continue
+            obj = os.path.join(dest, *(OBJECTS + h[7:9] + "/" + h[7:]).split("/"))
+            src = os.path.join(dest, *p.split("/"))
+            if os.path.exists(obj) or not os.path.isfile(src) or os.path.islink(src):
+                continue
+            data = open(src, "rb").read()
+            if hashlib.sha256(data).hexdigest() != h[7:]:
+                continue
+            os.makedirs(os.path.dirname(obj), exist_ok=True)
+            with open(obj, "wb") as f:
+                f.write(zlib.compress(data, 9))
+            restored += 1
+    return restored
+
+
 def cmd_unpack(args):
     problems = Problems()
     if not os.path.isfile(args.package):
@@ -1607,6 +1643,7 @@ def cmd_unpack(args):
         try:
             if os.path.isdir(out) and os.listdir(out):
                 count = extract(tree, out)
+                restore_objects(out, song.get("history") or [])
             else:
                 # Stage next to the target, then move it into place in one step.
                 parent = os.path.dirname(out)
@@ -1614,6 +1651,7 @@ def cmd_unpack(args):
                 stage = tempfile.mkdtemp(prefix=".unpack-", dir=parent)
                 try:
                     count = extract(tree, stage)
+                    restore_objects(stage, song.get("history") or [])
                     os.chmod(stage, 0o755)
                     if os.path.isdir(out):
                         os.rmdir(out)
@@ -1779,6 +1817,12 @@ def cmd_cat(args):
             return 1
         rel = OBJECTS + h[7:9] + "/" + h[7:]
         if not tree.exists(rel):
+            if tree.kind == "package" and file_sha256(tree, path, {}) == h[7:]:   # left out: it is the file (section 5)
+                with tree.open(path) as f:
+                    content = f.read()
+                sys.stdout.buffer.write(content)
+                sys.stdout.flush()
+                return 0
             sys.stderr.write("object %s is missing\n" % h)
             return 1
         content, code, message = verify_object(tree, rel, h[7:], MAX_LOG, keep=True)

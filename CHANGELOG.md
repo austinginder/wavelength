@@ -23,7 +23,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   - `wavelength pack` (refuses a job that uses files outside the song; lists the plugins and libraries
     it needs in the manifest's `requires`), `unpack` (checks every entry first: no paths outside the
     folder, links, `.git` or zip bombs; runs nothing), `validate` (a folder or package against the
-    spec). `render song.wavelength` renders a package directly.
+    spec). `render song.wavelength` renders a package directly. A package leaves out the history
+    objects that are the same bytes as its own files (a sample that never changed travels once), and
+    unpacking stores them again.
   - `scripts/wavelength_song.py`: a second, independent reader in Python (standard library only) that
     validates, unpacks and inspects songs; `scripts/make-song-fixtures.py` writes valid packages and
     ones every reader must refuse, and `check.sh` runs both readers over them.

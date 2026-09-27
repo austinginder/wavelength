@@ -6,6 +6,7 @@ Usage: make-song-fixtures.py DIR
 Writes into DIR:
   good/                      a minimal valid song folder (slug "good")
   good.wavelength            the same song as a valid package
+  good-lean.wavelength       the same package without the history objects that are its own files
   bad-traversal.wavelength   an entry "../evil.txt"
   bad-absolute.wavelength    an entry "/tmp/evil.txt"
   bad-symlink.wavelength     a symbolic-link entry
@@ -228,6 +229,14 @@ def main():
     written.append(("good/", "valid song folder, %d files" % len(song)))
     write_package(os.path.join(out, "good.wavelength"), song)
     written.append(("good.wavelength", "valid package"))
+    lean = dict(song)   # objects that are the same bytes as the file at their path are left out (section 5)
+    for line in song["history/log.jsonl"].decode().splitlines():
+        for path, ref in json.loads(line).get("files", {}).items():
+            hexd = ref[7:]
+            if path in song and hashlib.sha256(song[path]).hexdigest() == hexd:
+                lean.pop("history/objects/%s/%s" % (hexd[:2], hexd), None)
+    write_package(os.path.join(out, "good-lean.wavelength"), lean)
+    written.append(("good-lean.wavelength", "valid package, %d objects left out as files" % (len(song) - len(lean))))
 
     evil = b"this file must never be written\n"
     bad = [

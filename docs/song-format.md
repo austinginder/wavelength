@@ -167,7 +167,11 @@ A package is a ZIP file (APPNOTE 6.3.x), named `<slug>.wavelength`, media type
 - A package contains `wavelength.json`, the job, the files listed in `files`, `review.json` and
   `history/`, each at its path in the folder, and nothing else. `review.json`, `history/` and
   `render` files MAY be left out (`pack --no-review`, `--no-history`, `--no-render`); the manifest
-  still lists the render, and readers treat a listed file that is absent as not included. A reader
+  still lists the render, and readers treat a listed file that is absent as not included.
+- A package MAY leave out a history object whose content is the file the package carries at the path a
+  revision gives it (a sample that never changed would otherwise travel twice). A reader takes that
+  object from the file, after checking its hash, and unpacking stores it in `history/objects/` again,
+  so a song folder always has every object. A reader
   SHOULD warn about an entry that is not one of these and MAY ignore it; it MUST NOT refuse the
   package for it.
 - Encryption, multi-disk archives and entries outside the rules of section 2 are not allowed.

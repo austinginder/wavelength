@@ -286,11 +286,17 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
         std::vector<json> entries;
         if (!history::read(song, entries, err)) return false;
         addFile("history/log.jsonl");
-        std::set<std::string> objs;
+        std::set<std::string> objs, fromFiles, inPackage;
+        for (auto &l : listed) inPackage.insert(l.get<std::string>());
         for (auto &e : entries) {
             const json fs2 = e.value("files", json::object());
-            for (auto &[p, ref] : fs2.items()) objs.insert(ref.get<std::string>().substr(7));
+            for (auto &[p, ref] : fs2.items()) {   // the same bytes as a file the package carries at that path: left out
+                const std::string hex = ref.get<std::string>().substr(7);
+                objs.insert(hex);
+                if (inPackage.count(p) && !fromFiles.count(hex) && history::objectIsFile(song, p, hex)) fromFiles.insert(hex);
+            }
         }
+        for (auto &h : fromFiles) objs.erase(h);
         for (auto &h : objs) addFile("history/objects/" + h.substr(0, 2) + "/" + h);
     }
     if (out.empty()) out = m.value("slug", song.dir.filename().string()) + ".wavelength";
@@ -325,6 +331,10 @@ bool unpack(const std::string &file, std::string outDir, bool force, json &resul
     if (fs::exists(outDir, ec) && !fs::is_empty(outDir, ec) && !force) { err = outDir + " exists and is not empty (--force to unpack over it)"; return false; }
     fs::create_directories(outDir, ec);
     if (!extractTo(z, outDir, err)) return false;
+    Song song;
+    int restored = 0;
+    if (openSong(outDir, song, err) && !history::restoreObjects(song, restored, err)) return false;   // objects left out as files
+    err.clear();
     result = {{"ok", true}, {"folder", outDir}, {"title", manifest.value("title", std::string())}, {"warnings", problems}};
     return true;
 }
@@ -343,8 +353,13 @@ json validate(const std::string &target) {
             json manifest;
             if (z.read("wavelength.json", mj, err)) try { manifest = json::parse(std::string(mj.begin(), mj.end())); } catch (...) {}
             if (manifest.is_object()) checkListed(z, manifest, problems);
+            Song song;
+            int restored = 0;
             if (!extractTo(z, tmp, err)) problems.push_back({{"severity", "error"}, {"path", target}, {"message", err}});
-            else validateFolder(tmp, problems);
+            else {
+                if (openSong(tmp.string(), song, err)) history::restoreObjects(song, restored, err);   // objects left out as files
+                validateFolder(tmp, problems);
+            }
             fs::remove_all(tmp, ec);
             // messages name the package, not the folder it was unpacked into
             const std::string name = fs::path(target).filename().string();

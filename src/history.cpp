@@ -290,6 +290,33 @@ bool readObject(const Song &song, const std::string &hash, std::string &out, std
     return true;
 }
 
+bool objectIsFile(const Song &song, const std::string &path, const std::string &hash) {
+    std::string why;
+    std::error_code ec;
+    if (!checkSongPath(path, why) || !fs::is_regular_file(song.dir / fs::u8path(path), ec)) return false;
+    return sha256File((song.dir / fs::u8path(path)).string()) == hexOf(hash);
+}
+
+bool restoreObjects(const Song &song, int &restored, std::string &err) {
+    restored = 0;
+    std::vector<json> entries;
+    if (!read(song, entries, err)) return false;
+    std::error_code ec;
+    std::set<std::string> done;
+    for (auto &e : entries) {
+        const json files = e.value("files", json::object());
+        for (auto &[path, ref] : files.items()) {
+            const std::string hex = hexOf(ref.get<std::string>());
+            if (done.count(hex) || fs::exists(objectPath(song, hex), ec) || !objectIsFile(song, path, hex)) continue;
+            std::string stored;
+            if (!storeObject(song, readText(song.dir / fs::u8path(path)), stored, err)) return false;
+            done.insert(hex);
+            ++restored;
+        }
+    }
+    return true;
+}
+
 bool readFile(const Song &song, int rev, const std::string &path, std::string &out, std::string &err) {
     std::vector<json> entries;
     if (!read(song, entries, err)) return false;
