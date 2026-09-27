@@ -1337,13 +1337,15 @@ bool fireflyWithPreset(const std::vector<uint8_t> &fireflyState, const std::vect
     std::string cur(fireflyState.begin(), fireflyState.end());
     while (!cur.empty() && cur.back() == 0) cur.pop_back();
     json state = json::parse(cur, nullptr, false), p = json::parse(preset.begin(), preset.end(), nullptr, false);
-    if (!p.is_object() || !p.contains("patchState") || !p["patchState"].is_object()) { err = "is not a Firefly Synth 2 preset"; return false; }
+    // {"paramNameOverrides", "patchState": the patch}, or (older presets) the patch itself
+    const json patch = p.is_object() && p.contains("patchState") ? p["patchState"] : p;
+    if (!patch.is_object() || !patch.contains("magic") || !patch.contains("state")) { err = "is not a Firefly Synth 2 preset"; return false; }
     if (!state.is_object() || !state.contains("edit") || !state["edit"].is_object() ||
-        state["edit"].value("magic", "") != p["patchState"].value("magic", "")) {
+        state["edit"].value("magic", "") != patch.value("magic", "")) {
         err = "a .ff2preset loads into Firefly Synth 2 only";
         return false;
     }
-    state["edit"] = p["patchState"];
+    state["edit"] = patch;
     if (state.contains("gui") && state["gui"].is_object()) {
         state["gui"]["patchName"] = name;
         if (p.contains("paramNameOverrides")) state["gui"]["paramNameOverrides"] = p["paramNameOverrides"];
