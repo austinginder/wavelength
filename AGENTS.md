@@ -120,6 +120,23 @@ or compressor off, or pick another preset. A Vital `.vital` file is JSON: its `m
 list shows what `mod_wheel` and the macros drive. When the choice is taste, render the
 candidates playing the same phrase and let the human pick.
 
+## Songs that travel: `fallback`
+
+A job names plugins and sample libraries on the machine that wrote it. When it has to render
+elsewhere (a human's laptop, CI, a cloud container, a song shared as an example), give tracks a
+`fallback`: sounds to use when the plugin or library is missing, tried in order. End each list with a
+`builtin:synth` patch (or `builtin:drums`, or a General MIDI SoundFont program), which every
+machine has, and set its `gain` so the part keeps its level:
+
+```json
+{"name": "Bass", "plugin": "Serum 2", "preset": "BA - 303 Punchier",
+ "fallback": [{"plugin": "Surge XT", "preset": "Trance Seq Bass"}, {"plugin": "builtin:synth", "preset": "BA Acid", "gain": 1}], ...}
+```
+
+The report says first which tracks played a stand-in (`warnings`, `fallbacks`). The stand-in drops the
+original sound's `params`, articulations and plugin curves, so give it its own `automation` when the
+part depends on a sweep.
+
 ## VST3, VST2 and sample libraries
 
 VST3 and VST2 plugins work everywhere CLAP plugins do. `wavelength plugins` lists them all

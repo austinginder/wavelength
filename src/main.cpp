@@ -38,6 +38,7 @@
 #include "job.hpp"
 #include "picture.hpp"
 #include "docs.hpp"
+#include "fallback.hpp"
 #include "mcp.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
@@ -1018,6 +1019,9 @@ int cmdRender(const Args &a) {
     if (!in) return fail(a, "cannot read " + path);
     json j;
     try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    // tracks whose plugin or sample library isn't on this computer play their "fallback"
+    std::vector<std::string> fallbackNotes;
+    const int swapped = applyFallbacks(j, fs::absolute(path).parent_path().string(), fallbackNotes);
     // --tracks "Lead,Bass": render only those (plus, muted, the tracks that key their sidechains).
     // Workers re-read the job by track index, so the subset goes to a file next to the job.
     std::string subsetPath;
@@ -1070,7 +1074,7 @@ int cmdRender(const Args &a) {
         if (from < 1 || to <= from) return fail(a, "--from/--to are bars: --from 41 --to 45 renders bars 41-44");
         j["window"] = {{"from", (from - 1) * bpb}, {"to", (to - 1) * bpb}, {"preroll", std::max(0.0, pre) * bpb}};
     }
-    if (!only.empty() || j.contains("window")) {   // workers re-read the job by track index: the changed job goes to a file next to it
+    if (!only.empty() || j.contains("window") || swapped > 0) {   // workers re-read the job by track index: the changed job goes to a file next to it
         subsetPath = (fs::absolute(path).parent_path() / (".wavelength-tracks-" + std::to_string(platform::processId()) + ".json")).string();
         std::ofstream(subsetPath) << j.dump();
     }
@@ -1112,6 +1116,9 @@ int cmdRender(const Args &a) {
     bool ok = false;
     try { ok = renderJob(job, outDir, a.has("--verbose"), r, err); }
     catch (const std::exception &e) { err = std::string("render failed: ") + e.what(); }
+    if (!ok)   // a track with fallbacks that can't play any of them: name what was tried
+        for (auto &n : fallbackNotes)
+            if (n.find("none of its fallbacks") != std::string::npos) err += "; " + n;
     if (!ok) {   // a failed render leaves a failed report, never the previous render's
         std::error_code ec;
         if (fs::is_directory(outDir, ec)) std::ofstream(fs::path(outDir) / "report.json") << json{{"ok", false}, {"error", err}}.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
@@ -1159,6 +1166,7 @@ int cmdRender(const Args &a) {
         dropouts.push_back({{"start", std::round((d.start + r.leadIn) * 100) / 100}, {"end", std::round((d.end + r.leadIn) * 100) / 100},
                             {"lufs", r1(d.lufs)}, {"musicLufs", r1(d.around)}, {"bars", {std::floor(d.startBar), std::floor(d.endBar)}},
                             {"intended", d.intended}});
+    r.warnings.insert(r.warnings.begin(), fallbackNotes.begin(), fallbackNotes.end());   // a stand-in sound changes the song: say so first
     const bool complete = r.failedTracks.empty();
     std::string incomplete;
     if (!complete) {
@@ -1173,6 +1181,7 @@ int cmdRender(const Args &a) {
                             {"masterFx", r.masterFx}, {"masterAutomation", r.masterAutomation}, {"normalizeGainDb", r1(r.normalizeGainDb)}, {"loudnessGainDb", r1(r.loudnessGainDb)}}},
                    {"sections", sections}, {"tracks", tracks}, {"buses", buses}, {"warnings", r.warnings},
                    {"dropouts", dropouts}, {"failedTracks", r.failedTracks}};
+    if (!fallbackNotes.empty()) report["fallbacks"] = fallbackNotes;
     if (!r.deliveries.empty()) report["mix"]["deliveries"] = deliveriesJson(r.deliveries);
     if (!r.pictureFile.empty()) report["picture"] = {{"file", r.pictureFile}, {"width", r.pictureWidth}, {"height", r.pictureHeight}};
     if (!only.empty()) report["onlyTracks"] = only;

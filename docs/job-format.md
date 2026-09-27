@@ -64,6 +64,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `transpose` | 0 | Semitones added to every note (presets that sound an octave off, key changes). |
 | `output` | master | A bus name: the track feeds that bus instead of the master (group buses / sub-mixes). |
 | `roll` | 0 | Beats between notes that start together, lowest first (strummed or rolled chords); negative rolls from the top. |
+| `fallback` | none | Stand-in sounds for when this computer lacks the track's plugin (or its `builtin:sampler` library): a sound object or a list, tried in order, e.g. `[{"plugin": "Surge XT", "preset": "Trance Seq Bass"}, {"plugin": "builtin:synth", "preset": "BA Pluck", "gain": -2}]`. The first one available replaces the track's sound: `plugin`, `preset`, `state`, `params`, `synth`, `sampler`, `articulations`, `range`, `velocityTo`, `warmup` and the plugin's own `automation.params`/`cc`/`pressure` curves go, and every key the fallback gives is set (`gain`, `transpose`, `fx`, its own `automation`...). Notes lose their `art` when the fallback has no `articulations`. The report lists each swap first in `warnings` and in `fallbacks`; a track that can play neither its sound nor any fallback fails the render, naming both. |
 | `midiProgram`, `midiChannel` | none | Kept by `import song.mid` (the part's General MIDI program and channel) and written back by `export`; rendering ignores them. |
 | `bendRange` | 2 | The plugin's pitch-bend range in semitones, so `automation.pitchbend` can be written in semitones. |
 | `pan` | 0 | −1 (left) … 1 (right), equal-power. |

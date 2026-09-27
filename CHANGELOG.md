@@ -38,6 +38,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - The repository is a Claude Code plugin marketplace: `/plugin marketplace add austinginder/wavelength`,
   then `/plugin install wavelength@wavelength` installs the skill and the MCP server (whose launcher
   installs the engine on first use).
+- Track `fallback`: stand-in sounds (a sound object or a list) for when this computer lacks the track's
+  plugin or its `builtin:sampler` library, so a job travels between machines. The first available one
+  replaces the track's sound (its presets, params, articulations and plugin curves go; the fallback's
+  keys, such as `gain` and its own `automation`, are set). The report lists every swap first in
+  `warnings` and in `fallbacks`.
 - `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 

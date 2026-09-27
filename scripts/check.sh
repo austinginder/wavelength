@@ -159,6 +159,23 @@ sys.exit(0 if struct.unpack(">II", d[16:24]) == (1000, p["height"]) and p["heigh
 else
   echo "ok   picture: render --png and the arrangement picture"
 fi
+# fallback: a track whose plugin isn't installed plays its first available fallback, and the report says so first
+mkdir -p out/check/fallback
+cat > out/check/fallback/job.json <<'JOB'
+{"tempo": 120, "stems": "none", "tail": 1,
+ "tracks": [{"name": "Lead", "plugin": "No Such Plugin 9000", "preset": "X", "params": {"Cutoff": 0.3}, "articulations": {"long": 0},
+             "fallback": [{"plugin": "Another Missing One"}, {"plugin": "builtin:synth", "preset": "LD Saw", "gain": -3}],
+             "notes": [{"beat": 0, "dur": 2, "key": "C5", "vel": 0.8, "art": "long"}]}]}
+JOB
+if "./$build/wavelength" render out/check/fallback/job.json --out "out/check/fallback/$build" --json 2>/dev/null | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+t = r["tracks"][0]
+sys.exit(0 if r["ok"] and t["plugin"] == "builtin:synth" and not t["levels"]["silent"] and len(r["fallbacks"]) == 1 and r["warnings"][0] == r["fallbacks"][0] else 1)'; then
+  echo "ok   fallback: a missing plugin plays its fallback"
+else
+  echo "FAIL fallback"; fail=1
+fi
 # mcp: initialize, the tool list, the built-in guide, and a render that answers with its summary and picture
 if python3 - "./$build/wavelength" "out/check/mcp/$build" <<'PY'
 import base64, json, subprocess, sys
