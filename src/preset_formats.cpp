@@ -921,6 +921,11 @@ std::vector<uint8_t> h2pToLegacyState(const std::vector<uint8_t> &text, const st
 }
 
 namespace {
+// the root element of an OB-Xd bank: <discoDSP>, or <Datsounds> in banks saved by the original 2DaT Obxd
+size_t obxdRoot(const std::string &xml) {
+    const size_t a = xml.find("<discoDSP"), b = xml.find("<Datsounds");
+    return std::min(a, b);
+}
 // the JUCE XML document inside an OB-Xd bank (.fxb "FBCh": chunk size at 156, "VC2!" + u32 LE length + XML at 160)
 bool obxdBankXml(const std::vector<uint8_t> &fxb, std::string &xml) {
     if (fxb.size() < 168 || std::memcmp(fxb.data(), "CcnK", 4) || std::memcmp(fxb.data() + 8, "FBCh", 4) ||
@@ -966,8 +971,3 @@ bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uin
 }
 
 } // namespace wl
-// the root element of an OB-Xd bank: <discoDSP>, or <Datsounds> in banks saved by the original 2DaT Obxd
-size_t obxdRoot(const std::string &xml) {
-    const size_t a = xml.find("<discoDSP"), b = xml.find("<Datsounds");
-    return std::min(a, b);
-}
