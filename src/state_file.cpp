@@ -96,7 +96,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     // "<cartridge>.syx#<voice>" picks one voice of a DX7 cartridge, "<drum>.mtdrum#<channel>" a channel
     std::string path = pathIn;
     int voice = -1;
-    for (const char *ext : {".syx#", ".mtdrum#"}) {
+    for (const char *ext : {".syx#", ".mtdrum#", ".fxb#", ".FXB#"}) {
         const size_t hash = pathIn.rfind(ext);
         if (hash != std::string::npos) { path = pathIn.substr(0, hash + strlen(ext) - 1); voice = std::atoi(pathIn.c_str() + hash + strlen(ext)); }
     }
@@ -160,6 +160,8 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
                 std::memcpy(&f, &bits, 4);
                 out.fxParams.push_back(f);
             }
+        } else if (voice >= 0 && out.fxKind == "FBCh") {   // "<bank>.fxb#<n>": one program of an OB-Xd bank
+            if (!obxdBankState(data, voice, out.state, err)) { err = path + " " + err; return false; }
         } else {
             if (!fxpChunk(data, out.state, err)) { err = path + " " + err; return false; }
             adaptObxProgram(out.state);
@@ -172,6 +174,13 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         std::string name = path.substr(path.find_last_of("/\\") + 1);
         if (endsWith(name, ".h2p")) name.resize(name.size() - 4);
         out.state = h2pToState(data, name);
+        // older u-he builds (TyrellN6 VST 2) keep "#pgm=<name>" + the text with no length in front:
+        // follow the form of the plugin's own state
+        const auto text = data;
+        out.transform = [text, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &) {
+            state = current.size() >= 5 && std::memcmp(current.data(), "#pgm=", 5) == 0 ? h2pToLegacyState(text, name) : h2pToState(text, name);
+            return true;
+        };
     } else if (fmt == "dx7") {
         if (!isDx7Cartridge(data)) { err = path + " is not a DX7 32-voice cartridge (4104-byte sysex)"; return false; }
         const auto cart = data;

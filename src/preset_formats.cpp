@@ -697,4 +697,59 @@ std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::str
     return state;
 }
 
+std::vector<uint8_t> h2pToLegacyState(const std::vector<uint8_t> &text, const std::string &name) {
+    const std::string head = "#pgm=" + name + "\n";
+    std::vector<uint8_t> state(head.begin(), head.end());
+    state.insert(state.end(), text.begin(), text.end());
+    while (!state.empty() && state.back() == 0) state.pop_back();
+    state.push_back(0);
+    state.push_back(0);
+    return state;
+}
+
+namespace {
+// the JUCE XML document inside an OB-Xd bank (.fxb "FBCh": chunk size at 156, "VC2!" + u32 LE length + XML at 160)
+bool obxdBankXml(const std::vector<uint8_t> &fxb, std::string &xml) {
+    if (fxb.size() < 168 || std::memcmp(fxb.data(), "CcnK", 4) || std::memcmp(fxb.data() + 8, "FBCh", 4) ||
+        std::memcmp(fxb.data() + 160, "VC2!", 4)) return false;
+    const uint32_t n = le32(fxb.data() + 164);
+    if (168 + (size_t)n > fxb.size()) return false;
+    xml.assign(fxb.begin() + 168, fxb.begin() + 168 + n);
+    while (!xml.empty() && xml.back() == 0) xml.pop_back();
+    return xml.find("<discoDSP") != std::string::npos;
+}
+std::string xmlUnescape(std::string s) {
+    for (const auto &[from, to] : std::vector<std::pair<std::string, std::string>>{{"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&amp;", "&"}})
+        for (size_t at = 0; (at = s.find(from, at)) != std::string::npos; at += to.size()) s.replace(at, from.size(), to);
+    return s;
+}
+} // namespace
+
+std::vector<std::string> obxdBankPrograms(const std::vector<uint8_t> &fxb) {
+    std::vector<std::string> names;
+    std::string xml;
+    if (!obxdBankXml(fxb, xml)) return names;
+    for (size_t at = 0; (at = xml.find("<program ", at)) != std::string::npos; ++at) {
+        const size_t end = xml.find('>', at);
+        const size_t pn = xml.find("programName=\"", at);
+        std::string name;
+        if (pn != std::string::npos && pn < end) name = xmlUnescape(xml.substr(pn + 13, xml.find('"', pn + 13) - pn - 13));
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+        names.push_back(name.empty() ? "Program " + std::to_string(names.size() + 1) : name);
+    }
+    return names;
+}
+
+bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err) {
+    std::string xml;
+    if (!obxdBankXml(fxb, xml)) { err = "is not an OB-Xd bank"; return false; }
+    const size_t root = xml.find("<discoDSP");
+    const size_t cp = xml.find("currentProgram=\"", root);
+    if (cp == std::string::npos || cp > xml.find('>', root)) { err = "OB-Xd bank without a current program"; return false; }
+    const size_t v = cp + 16;
+    xml.replace(v, xml.find('"', v) - v, std::to_string(program));
+    state = juceXmlBlob(xml);
+    return true;
+}
+
 } // namespace wl

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -107,10 +108,21 @@ json measure(const Audio &a, int sr, bool selfPlaying) {
 
 std::vector<PresetInfo> listPresets(const PluginInfo &info, bool rescanNks, std::string &err) {
     std::vector<PresetInfo> presets;
-    if (info.format == "vst3") {   // factory programs from the plugin's program list
-        auto plugin = createPlugin(info, err);
-        if (!plugin) return presets;
-        for (auto &n : plugin->programs()) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
+    if (info.format == "vst3" || info.format == "vst2") {   // factory programs from the plugin's program list
+        std::string openErr;   // a plugin that can't open here (another architecture) still has its preset files
+        auto plugin = createPlugin(info, openErr);
+        if (!plugin) err = openErr;
+        std::vector<std::string> names = plugin ? plugin->programs() : std::vector<std::string>();
+        // VST 2 plugins always report a program list; placeholders ("Program 1", "Default") are not a library
+        auto generic = [](std::string n) {
+            std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+            for (const char *w : {"program", "prog", "preset", "patch", "default", "init"})
+                if (n.rfind(w, 0) == 0) { n.erase(0, strlen(w)); break; }
+            return n.find_first_not_of(" 0123456789") == std::string::npos;
+        };
+        if (std::all_of(names.begin(), names.end(), generic)) names.clear();
+        if (names.size() > 1 && std::all_of(names.begin(), names.end(), [&](const std::string &n) { return n == names[0]; })) names.clear();
+        for (auto &n : names) { PresetInfo p; p.name = n; p.category = "Programs"; presets.push_back(p); }
     } else {
         std::string discoverErr;
         discoverPresets(info.bundlePath, info.id, presets, discoverErr);

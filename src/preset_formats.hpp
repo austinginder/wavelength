@@ -61,7 +61,14 @@ bool soundboxState(const std::vector<uint8_t> &sbset, std::vector<uint8_t> &stat
 bool decentSamplerState(const std::vector<uint8_t> &dspreset, const std::string &presetPath, std::vector<uint8_t> &state,
                         std::string &err);
 
+// OB-Xd banks (.fxb, the whole bank as JUCE XML): the programs' names, and the bank as state with
+// program `program` (0-based) current, which the plugin then plays.
+std::vector<std::string> obxdBankPrograms(const std::vector<uint8_t> &fxb);
+bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
+// the same for older u-he builds: "#pgm=<name>\n" + text + NUL NUL, no length prefix
+std::vector<uint8_t> h2pToLegacyState(const std::vector<uint8_t> &text, const std::string &name);
 
 } // namespace wl

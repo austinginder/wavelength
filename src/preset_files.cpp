@@ -76,6 +76,26 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     return squash(head.substr(am + 4, end - am - 4)) == p;
 }
 
+// DecentSampler's own settings name the folder its libraries are installed to ("sampleLibraryDirectory")
+std::vector<fs::path> decentSamplerLibraries() {
+    const std::string home = platform::homeDir().string();
+    std::vector<fs::path> out;
+    for (const fs::path &settings : {fs::path(home) / "Music/Audio Music Apps/Decidedly/DecentSampler/DecentSampler.xml",
+                                    fs::path(getenv("APPDATA") ? getenv("APPDATA") : home) / "Decidedly/DecentSampler/DecentSampler.xml",
+                                    fs::path(home) / ".config/Decidedly/DecentSampler/DecentSampler.xml"}) {
+        std::ifstream in(settings, std::ios::binary);
+        if (!in) continue;
+        const std::string xml((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::string key = "name=\"sampleLibraryDirectory\" val=\"";
+        const size_t at = xml.find(key);
+        if (at == std::string::npos) continue;
+        std::string dir = xml.substr(at + key.size(), xml.find('"', at + key.size()) - at - key.size());
+        for (size_t amp; (amp = dir.find("&amp;")) != std::string::npos;) dir.replace(amp, 5, "&");
+        if (!dir.empty()) out.push_back(dir);
+    }
+    return out;
+}
+
 // ---- NKS presets: Native Instruments' RIFF "NIKS" files name the plugin they belong to --------
 struct NksEntry { std::string path, name, category, vendor, bank, magic, uid; };
 
@@ -153,7 +173,8 @@ std::vector<NksEntry> scanNks() {
             if (it.depth() >= 7 && it->is_directory(ec)) { it.disable_recursion_pending(); continue; }
             std::string ext = it->path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext != ".nksf" || !it->is_regular_file(ec)) continue;
+            // .nksfx: effect presets (u-he Zebrify), .nksr: Reaktor Blocks racks; same container
+            if ((ext != ".nksf" && ext != ".nksfx" && ext != ".nksr") || !it->is_regular_file(ec)) continue;
             NksEntry e;
             if (readNks(it->path().string(), e)) out.push_back(e);
         }
@@ -236,6 +257,18 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         dirs.push_back(kitDir() / "surge-xt" / "SurgeXTData" / "patches_3rdparty");
     }
     if (p == "surgext") dirs.push_back(fs::path(home) / "Documents/Surge XT/Patches");
+    if (p == "surge") {   // Surge 1.x, the synth before Surge XT: the same .fxp patches in its own folders
+#if defined(__APPLE__)
+        const fs::path surge = "/Library/Application Support/Surge";
+#elif defined(_WIN32)
+        const fs::path surge = fs::path(getenv("PROGRAMDATA") ? getenv("PROGRAMDATA") : "C:\\ProgramData") / "Surge";
+#else
+        const fs::path surge = "/usr/share/Surge";
+#endif
+        dirs.push_back(surge / "patches_factory");
+        dirs.push_back(surge / "patches_3rdparty");
+        dirs.push_back(fs::path(home) / "Documents/Surge");
+    }
     // presets Wavelength extracted itself (scripts/extract-embedded-presets.py)
     dirs.push_back(platform::dataDir() / "Presets" / plugin.name);
     // Cherry Audio keeps presets in Application Support
@@ -245,6 +278,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
     if (p == "decentsampler") {
         dirs.push_back(fs::path(home) / "Documents/Decent Sampler");
         dirs.push_back(fs::path(home) / "Library/Application Support/DecentSampler");
+        for (auto &d : decentSamplerLibraries()) dirs.push_back(d);
     }
     if (p.find("microtonic") != std::string::npos) {   // kits and drums; "By Category" gives drum categories
         dirs.push_back("/Library/Audio/Presets/Sonic Charge/Microtonic Presets");
@@ -386,6 +420,26 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 pi.category = it->path().stem().string();
                 pi.stateFile = true;
                 pi.location = pi.loadKey = it->path().string() + "#" + std::to_string(v);
+                out.push_back(pi);
+            }
+        }
+    }
+    // OB-Xd: every program of every bank (.fxb, 128 programs) is a preset: "<bank>.fxb#<n>"
+    if (p == "obxd") {
+        std::error_code ec;
+        for (auto &e : fs::directory_iterator(fs::path(home) / "Documents/discoDSP/OB-Xd/Banks", ec)) {
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext != ".fxb" || !e.is_regular_file(ec)) continue;
+            std::ifstream in(e.path(), std::ios::binary);
+            std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const auto names = obxdBankPrograms(d);
+            for (size_t i = 0; i < names.size(); ++i) {
+                PresetInfo pi;
+                pi.name = names[i];
+                pi.category = e.path().stem().string();
+                pi.stateFile = true;
+                pi.location = pi.loadKey = e.path().string() + "#" + std::to_string(i);
                 out.push_back(pi);
             }
         }

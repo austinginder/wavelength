@@ -4,7 +4,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- More presets by name: every program of OB-Xd's `.fxb` banks (`"<bank>.fxb#<n>"` as state), Surge 1.x patches, DecentSampler presets in the library folder its settings name, u-he NKS effect presets (`.nksfx`, Zebrify) and Reaktor Blocks racks (`.nksr`), VST2 program lists (Helm 274, Monique 143; placeholder lists such as "Program 1..n" are skipped), and TyrellN6 `.h2p` presets (older u-he builds take the text without a length prefix; Wavelength follows the plugin's own state).
+
 ### Fixed
+- `params`, `presets`, `state` and `audition` on an Intel-only plugin (re-run under Rosetta) wrote their output to stderr, so scripts reading stdout got nothing.
 - Many Wavelength commands started at once (parallel agents, scripts) no longer scan every plugin at the same time, which could exhaust memory. The plugin cache is replaced atomically instead of rewritten in place (a reader could catch it half written and rescan everything), only one process scans at a time while the others wait for its results, and a command that finds everything cached no longer writes the cache. The NKS index and audition indexes are written the same way.
 - The plugin scan finds VST3 bundles installed into a VST 2 folder, and no longer looks inside other formats' bundles. A plugin that ends the scan process while loading (V-Pan) gets an error that says so instead of a JSON parse error.
 
