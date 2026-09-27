@@ -384,6 +384,180 @@ bool generatorSample(const std::string &spec, SampleData &d, std::string &err) {
 // ---- library index ------------------------------------------------------------------------
 std::string home() { return platform::homeDir().string(); }
 
+// ---- Logic / GarageBand Sampler instruments (.exs, the EXS24 format) ------------------------------
+// Chunks of an 84-byte header (u32 type/signature: type in bits 24-27, 0 instrument, 1 zone, 2 group,
+// 3 sample; u32 size of the data after the header; u32 index; u32 flags; "TBOS" (little-endian files,
+// "SOBT" big-endian); 64-byte name) and `size` bytes of data. Offsets below are into that data.
+namespace exs {
+struct Sample { std::string name, dir; double frames = 0; };
+struct Group { double volumeDb = 0, pan = 0; int velLow = 0, velHigh = 127, keyLow = 0, keyHigh = 127;
+               int enableBy = 0, cc = 0, ccLow = 0, ccHigh = 127, channel = 0, articulation = 0; std::string name; };
+struct RawZone { int opts = 0, key = 60, fine = 0, coarse = 0, pan = 0, vol = 0, keyLow = 0, keyHigh = 127, velLow = 0, velHigh = 127;
+                 uint32_t start = 0, end = 0, loopStart = 0, loopEnd = 0; int loopOpts = 0, group = -1, sample = -1; };
+
+// Where Logic and GarageBand keep sample content: an instrument whose files moved is found by file name
+const std::map<std::string, std::string> &sampleIndex() {
+    static std::map<std::string, std::string> index;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::vector<fs::path> roots = {"/Library/Application Support/Logic/EXS Factory Samples",
+                                       "/Library/Application Support/GarageBand/Instrument Library/Sampler/Sampler Files",
+                                       fs::path(home()) / "Music/Audio Music Apps/Samples", fs::path(home()) / "Music/Audio Music Apps/Sampler Files"};
+        for (auto &root : roots) {
+            std::error_code ec;
+            for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                if (it->is_regular_file(ec) && isAudioFileName(it->path().string())) index.emplace(lower(it->path().filename().string()), it->path().string());
+            }
+        }
+    });
+    return index;
+}
+
+std::string findSample(const Sample &s, const fs::path &exsDir) {
+    std::error_code ec;
+    for (const fs::path &p : {fs::path(s.dir) / s.name, exsDir / s.name, exsDir / "Samples" / s.name})
+        if (!s.dir.empty() || p.is_absolute()) if (fs::is_regular_file(p, ec)) return p.string();
+    auto &idx = sampleIndex();
+    auto it = idx.find(lower(s.name));
+    return it == idx.end() ? "" : it->second;
+}
+
+bool parse(const std::string &path, std::vector<Zone> &zones, int &swLow, int &swHigh, int &swDefault, std::vector<std::string> &articulations,
+           std::vector<std::string> &warnings, std::string &err) {
+    std::vector<uint8_t> d;
+    if (!readFile(path, d)) { err = "cannot read " + path; return false; }
+    if (d.size() < 84 || (std::memcmp(d.data() + 16, "TBOS", 4) && std::memcmp(d.data() + 16, "SOBT", 4) && std::memcmp(d.data() + 16, "JBOS", 4) &&
+                          std::memcmp(d.data() + 16, "SOBJ", 4))) { err = "is not a Logic Sampler (EXS24) instrument"; return false; }
+    const bool big = !std::memcmp(d.data() + 16, "SOBT", 4) || !std::memcmp(d.data() + 16, "SOBJ", 4);
+    auto u32 = [&](size_t at) -> uint32_t { const uint8_t *q = d.data() + at; return big ? (uint32_t)q[0] << 24 | q[1] << 16 | q[2] << 8 | q[3] : (uint32_t)q[3] << 24 | q[2] << 16 | q[1] << 8 | q[0]; };
+    auto s8 = [&](size_t at) { return (int)(int8_t)d[at]; };
+    auto str = [&](size_t at, size_t max) { std::string o; for (size_t k = 0; k < max && at + k < d.size() && d[at + k]; ++k) o += (char)d[at + k]; return o; };
+    std::vector<RawZone> raw;
+    std::vector<Group> groups;
+    std::vector<Sample> samples;
+    for (size_t p = 0; p + 84 <= d.size();) {
+        const uint32_t sig = u32(p);
+        uint32_t size = u32(p + 4);
+        if ((sig >> 24) & 0x80) size &= 0x7FFF;   // newer files ("JBOS") flag the type and the size
+        const int type = (int)((sig >> 24) & 0x0F);
+        const size_t b = p + 84;
+        if (b + size > d.size()) break;
+        const std::string name = str(p + 20, 64);
+        if (type == 1 && size >= 96) {
+            RawZone z;
+            z.opts = d[b]; z.key = d[b + 1]; z.fine = s8(b + 2); z.pan = s8(b + 3); z.vol = s8(b + 4);
+            z.keyLow = d[b + 6]; z.keyHigh = d[b + 7]; z.velLow = d[b + 9]; z.velHigh = d[b + 10];
+            z.start = u32(b + 12); z.end = u32(b + 16); z.loopStart = u32(b + 20); z.loopEnd = u32(b + 24);
+            z.loopOpts = d[b + 33]; z.coarse = s8(b + 80);
+            z.group = (int)(int32_t)u32(b + 88); z.sample = (int)(int32_t)u32(b + 92);
+            raw.push_back(z);
+        } else if (type == 2 && size >= 92) {
+            Group g;
+            g.name = name; g.volumeDb = s8(b); g.pan = std::clamp(s8(b + 1) / 64.0, -1.0, 1.0);
+            g.velLow = d[b + 5]; g.velHigh = d[b + 6];
+            g.enableBy = d[b + 84]; g.cc = d[b + 85]; g.ccLow = d[b + 86]; g.ccHigh = d[b + 87];
+            g.keyLow = d[b + 88]; g.keyHigh = d[b + 89]; g.channel = d[b + 90]; g.articulation = d[b + 91];
+            if (g.keyHigh < g.keyLow) { g.keyLow = 0; g.keyHigh = 127; }
+            groups.push_back(g);
+        } else if (type == 3) {
+            Sample s;
+            s.name = size >= 592 && d[b + 336] ? str(b + 336, 256) : name;   // the full file name (the header's is cut at 64 bytes)
+            s.dir = size >= 336 ? str(b + 80, 256) : "";
+            s.frames = size >= 8 ? u32(b + 4) : 0;
+            samples.push_back(s);
+        }
+        p = b + size;
+    }
+    if (raw.empty()) { err = "has no zones"; return false; }
+    // groups' articulation IDs become keyswitches from MIDI 0, in ID order (Logic's articulation sets);
+    // groups enabled by a controller play when it is at rest (0: sustain pedal up); groups enabled by a
+    // MIDI channel (a guitar's strings, a shaker's tempos) play from the lowest channel covering the key
+    std::vector<int> artIds;
+    for (auto &g : groups) if (std::find(artIds.begin(), artIds.end(), g.articulation) == artIds.end()) artIds.push_back(g.articulation);
+    std::sort(artIds.begin(), artIds.end());
+    if (artIds.size() > 1) {
+        for (int id : artIds) {
+            std::string n = "Articulation " + std::to_string(id);
+            for (auto &g : groups) if (g.articulation == id) { n = g.name.substr(0, g.name.find(':')); break; }
+            articulations.push_back(n);
+        }
+        swLow = 0; swHigh = (int)artIds.size() - 1; swDefault = 0;
+    }
+    std::vector<int> channels;   // per zone: the group's MIDI channel, -1 = any
+    std::set<int> otherEnable;
+    const fs::path dir = fs::path(path).parent_path();
+    std::map<int, std::string> files;   // sample index -> path ("" = not installed)
+    size_t missing = 0, disabled = 0;
+    for (auto &r : raw) {
+        const Group *g = r.group >= 0 && r.group < (int)groups.size() ? &groups[(size_t)r.group] : nullptr;
+        int sw = -1;
+        if (g && g->enableBy == 3 && (0 < g->ccLow || 0 > g->ccHigh)) { ++disabled; continue; }   // controller at rest outside its range
+        if (g && artIds.size() > 1) sw = (int)(std::find(artIds.begin(), artIds.end(), g->articulation) - artIds.begin());
+        if (g && g->enableBy != 0 && g->enableBy != 3 && g->enableBy != 5 && g->enableBy != 6) otherEnable.insert(g->enableBy);
+        if (r.sample < 0 || r.sample >= (int)samples.size()) continue;
+        if (!files.count(r.sample)) files[r.sample] = findSample(samples[(size_t)r.sample], dir);
+        const std::string file = files[r.sample];
+        if (file.empty()) { ++missing; continue; }
+        Zone z;
+        z.keyLow = std::max(r.keyLow, g ? g->keyLow : 0);
+        z.keyHigh = std::min(r.keyHigh, g ? g->keyHigh : 127);
+        if (z.keyLow > z.keyHigh) continue;
+        z.velLow = g ? g->velLow : 0; z.velHigh = g ? g->velHigh : 127;
+        if (r.opts & 0x08) { z.velLow = std::max(z.velLow, r.velLow); z.velHigh = std::min(z.velHigh, r.velHigh); }   // the zone's own range is on
+        if (z.velLow > z.velHigh) continue;
+        z.root = r.key;
+        z.keyTrack = (r.opts & 0x02) ? 0 : 1;
+        z.tune = r.coarse + r.fine / 100.0;
+        z.gainDb = r.vol + (g ? g->volumeDb : 0);
+        z.pan = std::clamp(r.pan / 64.0 + (g ? g->pan : 0), -1.0, 1.0);
+        z.oneShot = r.opts & 0x01;
+        z.reverse = r.opts & 0x04;
+        z.sw = sw;
+        const bool loop = r.loopOpts & 0x01;
+        // a consolidated sample (one file for the whole instrument) keeps playing past the zone's end
+        // to its loop, which sits at the end of that note's audio
+        double from = r.start, to = r.end > r.start ? r.end : samples[(size_t)r.sample].frames;
+        if (loop && r.loopEnd > to) to = r.loopEnd;
+        if (loop && r.loopEnd > r.loopStart) { z.loop = Zone::Always; z.loopStart = r.loopStart - from; z.loopStop = r.loopEnd - from; }
+        z.file = file;
+        if (from > 0 || (samples[(size_t)r.sample].frames > 0 && to < samples[(size_t)r.sample].frames)) {
+            z.file = file + "#frames=" + std::to_string((long long)from) + "-" + std::to_string((long long)to);
+            z.start = 0; z.stop = to - from;
+        } else { z.start = from; z.stop = to > 0 ? to : -1; }
+        zones.push_back(z);
+        channels.push_back(g && g->enableBy == 5 ? g->channel : -1);
+    }
+    // channel groups: each key keeps the zones of the lowest channel that covers it (per articulation)
+    if (std::any_of(channels.begin(), channels.end(), [](int c) { return c >= 0; })) {
+        std::vector<Zone> kept;
+        for (size_t i = 0; i < zones.size(); ++i) {
+            if (channels[i] < 0) { kept.push_back(zones[i]); continue; }
+            auto lower = [&](int k) {
+                for (size_t j = 0; j < zones.size(); ++j)
+                    if (channels[j] >= 0 && channels[j] < channels[i] && zones[j].sw == zones[i].sw && zones[j].keyLow <= k && k <= zones[j].keyHigh) return true;
+                return false;
+            };
+            for (int k = zones[i].keyLow; k <= zones[i].keyHigh;) {
+                if (lower(k)) { ++k; continue; }
+                int e = k;
+                while (e + 1 <= zones[i].keyHigh && !lower(e + 1)) ++e;
+                Zone z = zones[i];
+                z.keyLow = k; z.keyHigh = e;
+                kept.push_back(z);
+                k = e + 1;
+            }
+        }
+        zones.swap(kept);
+    }
+    if (missing) warnings.push_back("exs: " + std::to_string(missing) + " zone(s) left out: their samples aren't installed (Logic's additional sound content)");
+    if (!otherEnable.empty()) warnings.push_back("exs: groups enabled by something other than a controller or articulation play all the time");
+    (void)disabled;
+    if (zones.empty()) { err = "none of its samples are installed"; return false; }
+    return true;
+}
+} // namespace exs
+
 int gmKeyFor(const std::string &file, std::set<int> &taken, int *primary = nullptr) {
     const std::string n = lower(fs::path(file).stem().string());
     std::vector<std::string> tok;
@@ -753,6 +927,13 @@ std::vector<std::string> sampleRoots() {
     roots.insert(roots.end(), versions.begin(), versions.end());
     const fs::path userLib = fs::path(home()) / "Documents/Bitwig Studio/Library";
     if (fs::exists(userLib, ec)) roots.push_back(userLib.string());
+#if defined(__APPLE__)
+    // Logic's and GarageBand's Sampler instruments (.exs); their samples are found by the instruments
+    for (const fs::path &dir : {fs::path("/Library/Application Support/Logic/Sampler Instruments"),
+                                fs::path("/Library/Application Support/GarageBand/Instrument Library/Sampler/Sampler Instruments"),
+                                fs::path(home()) / "Music/Audio Music Apps/Sampler Instruments"})
+        if (fs::is_directory(dir, ec)) roots.push_back(dir.string());
+#endif
     // Serum 2's multisamples are plain SFZ instruments (FLAC samples beside them)
 #if defined(__APPLE__)
     for (const fs::path &dir : {fs::path("/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Multisamples"),
@@ -801,6 +982,8 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                     if (!sf.open(p.string(), e2)) continue;
                     const bool gm = std::count_if(sf.presets().begin(), sf.presets().end(), [](const Sf2Preset &q) { return q.bank == 0; }) >= 128;
                     lib.push_back({"soundfont", p.stem().string(), p.string(), gm ? "General MIDI" : "", sf.presets().size()});
+                } else if (ext == ".exs") {
+                    lib.push_back({"exs", p.stem().string(), p.string(), p.parent_path().filename().string(), 0});
                 } else if (ext == ".sfz") {
                     std::vector<uint8_t> x;
                     if (!readFile(p.string(), x)) continue;
@@ -913,17 +1096,17 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
 
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
     const json &cfg = track.sampler;
-    if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, kit or sample)"; return false; }
+    if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, soundfont, exs, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
                                                 "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz",
-                                                "soundfont", "program", "bank", "preset"};
+                                                "soundfont", "program", "bank", "preset", "exs"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
     std::unique_ptr<Zip> zip;
     std::string source;
-    bool isKit = false, isSfz = false;
+    bool isKit = false, isSfz = false, isExs = false;
     int swLow = 128, swHigh = -1, swDefault = -1;
     bool notePolyOne = false;
     const bool sfzAsMultisample = cfg.contains("multisample") && cfg["multisample"].is_string() &&
@@ -949,6 +1132,14 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (!soundfont->zones(*pr, sz, err)) return false;
         sf2Zones(sz, zones);
         source = path;
+    } else if (cfg.contains("exs")) {
+        isExs = true;
+        const std::string q = cfg["exs"].get<std::string>();
+        std::string path = resolveIn(q, job.baseDir);
+        if (path.empty() && !findEntry("exs", q, path, err)) return false;
+        std::vector<std::string> articulations;
+        if (!exs::parse(path, zones, swLow, swHigh, swDefault, articulations, warnings, err)) { err = fs::path(path).filename().string() + ": " + err; return false; }
+        source = fs::path(path).parent_path().string();
     } else if (cfg.contains("sfz") || sfzAsMultisample) {
         isSfz = true;
         const std::string q = cfg.contains("sfz") ? cfg["sfz"].get<std::string>() : cfg["multisample"].get<std::string>();
@@ -1039,7 +1230,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     }
 
     const double sr = job.sampleRate;
-    const bool allOneShot = isSfz && std::all_of(zones.begin(), zones.end(), [](const Zone &z) { return z.oneShot || z.releaseTrigger; });
+    const bool allOneShot = (isSfz || isExs) && std::all_of(zones.begin(), zones.end(), [](const Zone &z) { return z.oneShot || z.releaseTrigger; });
     const bool oneShot = cfg.value("oneShot", isKit || allOneShot);
     const double attack = cfg.value("attack", isKit ? 0.0 : 0.002);
     const double release = cfg.value("release", isKit ? 0.05 : 0.25);
@@ -1079,6 +1270,14 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (isSfz && !file.empty() && file[0] == '*') {
             auto d = std::make_shared<SampleData>();
             if (!generatorSample(file, *d, err)) return false;
+            cache[file] = outData = d;
+            return true;
+        }
+        if (const size_t fr = file.rfind("#frames="); fr != std::string::npos) {   // a range of a consolidated sample (EXS)
+            auto d = std::make_shared<SampleData>();
+            const std::string range = file.substr(fr + 8);
+            const double a = std::atof(range.c_str()), b = std::atof(range.c_str() + range.find('-') + 1);
+            if (!readAudioFrames(file.substr(0, fr), a, b, *d, e2)) { err = fs::path(file.substr(0, fr)).filename().string() + ": " + e2; return false; }
             cache[file] = outData = d;
             return true;
         }
@@ -1143,7 +1342,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         auto selOk = [&](const Zone &z) { return select >= z.selLow && select <= z.selHigh && (z.sw < 0 || z.sw == curSw); };
         std::vector<const Zone *> hit;
         for (auto &z : zones) if (!z.releaseTrigger && n.key >= z.keyLow && n.key <= z.keyHigh && velOk(z) && selOk(z)) hit.push_back(&z);
-        if (hit.empty() && !isKit && !isSfz && !isSf2) {
+        if (hit.empty() && !isKit && !isSfz && !isSf2 && !isExs) {
             // no zone covers this key: stretch the zones with the nearest root (velocity first, then any)
             for (int pass = 0; pass < 2 && hit.empty(); ++pass) {
                 int best = 1000;

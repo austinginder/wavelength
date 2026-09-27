@@ -10,6 +10,9 @@
 //  sfz          an SFZ instrument (sfz.hpp): regions with key/velocity ranges, crossfades, round
 //               robins, keyswitches, loops (the file's own too), amp envelope, choke groups,
 //               and the *sine/*saw/*square/*triangle/*noise generators.
+//  exs          a Logic / GarageBand Sampler instrument (.exs, EXS24): zones, groups (velocity layers,
+//               key ranges, controller-enabled groups at rest, articulations as keyswitches from MIDI 0),
+//               loops; samples found where Logic keeps them, consolidated CAF samples read by range.
 //  kit          a folder of one-shot samples (any format audio_file.hpp reads), mapped to General MIDI keys from the file names
 //               (kick 36, snare 38, clap 39, closed hat 42, open hat 46, crash 49, ...), or an
 //               explicit {"key": "file"} map.
@@ -27,7 +30,7 @@ namespace wl {
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 
 struct SampleLibraryEntry {
-    std::string kind;       // "multisample", "sfz", "soundfont", "kit" or "loops"
+    std::string kind;       // "multisample", "sfz", "soundfont", "exs", "kit" or "loops"
     std::string name, path, category;
     size_t count = 0;       // zones (multisample), regions (sfz), presets (soundfont) or sample files (kit)
 };

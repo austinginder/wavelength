@@ -201,6 +201,10 @@ One file of an installed sample library, by name, so a job never depends on wher
 | `velocity` | 1 | Velocity sensitivity 0-1 (1 = about 7 dB quieter at half velocity). |
 | `gain` | 0 | dB. |
 
+#### Logic and GarageBand instruments (EXS)
+
+`"sampler": {"exs": "Steinway Grand Piano 2"}` (a name from `wavelength samples --search`, or a path to an `.exs`) plays a Logic / GarageBand Sampler instrument (the EXS24 format). Zones keep their key and velocity ranges, root, tuning, level, pan, loops, one-shot, reverse and pitch-tracking settings; groups add their velocity layers, key ranges and level. Groups that Logic enables by a controller play when it rests at 0 (a piano's sustain-pedal resonance groups stay off), groups enabled by a MIDI channel (a guitar's six strings, a shaker's tempos) play from the lowest channel that covers each key, and groups with different articulation IDs become keyswitches from MIDI 0 in ID order (`Tuba Solo+`: 0 legato, 1 staccato), so `"articulations": {"legato": 0, "staccato": 1}` and a note's `"art"` pick them. Samples are found where the instrument says, else by name under Logic's and GarageBand's sample folders; a consolidated CAF (one file for the whole instrument) is read only in the ranges its zones play. Zones whose samples aren't installed (Logic's additional content) are left out with a warning. Logic names octaves with C3 = 60, so a sample named `A1` is MIDI 45: basses sound an octave below the key, as in Logic.
+
 #### SFZ
 
 `"sampler": {"sfz": "Splendid Grand Piano"}` (a name from `wavelength samples --search`, or a path) reads the file's `<control>`, `<global>`, `<master>`, `<group>` and `<region>` headers, `#define` and `#include`. What plays:
