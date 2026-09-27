@@ -28,7 +28,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
                                            ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
-                                           ".hxp"};
+                                           ".hxp", ".echobode"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -58,6 +58,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".sbset") return p == "soundbox";
     if (ext == ".dspreset") return p == "decentsampler";
     if (ext == ".hxp") return p == "helix";
+    if (ext == ".echobode") return p == "echobode";
     if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
         std::ifstream in(file, std::ios::binary);
         char head[20] = {};
@@ -432,6 +433,29 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 out.push_back(pi);
             }
         }
+    }
+    // Permut8: every program of every bank (30 each): "<bank>.p8bank#<n>"
+    if (p == "permut8") {
+        std::error_code ec;
+        std::set<std::string> banks;
+        for (const fs::path &root : {fs::path("/Library/Audio/Presets/Sonic Charge/Permut8 Banks"), fs::path(home) / "Library/Audio/Presets/Sonic Charge/Permut8 Banks"})
+            for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                std::string ext = it->path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext != ".p8bank" || !it->is_regular_file(ec) || !banks.insert(it->path().filename().string()).second) continue;   // one copy per bank (All / By Package)
+                std::ifstream in(it->path(), std::ios::binary);
+                std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                const auto names = permut8BankPrograms(d);
+                for (size_t i = 0; i < names.size(); ++i) {
+                    PresetInfo pi;
+                    pi.name = names[i];
+                    pi.category = it->path().stem().string();
+                    pi.stateFile = true;
+                    pi.location = pi.loadKey = it->path().string() + "#" + std::to_string(i);
+                    out.push_back(pi);
+                }
+            }
     }
     // OB-Xd: every program of every bank (.fxb, 128 programs) is a preset: "<bank>.fxb#<n>"
     if (p == "obxd") {

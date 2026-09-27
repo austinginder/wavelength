@@ -4,11 +4,14 @@
 #include <zlib.h>
 #include <zstd.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 
 using json = nlohmann::json;
 
@@ -622,60 +625,242 @@ uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] <
 void putBe32(std::vector<uint8_t> &o, uint32_t v) { for (int i = 3; i >= 0; --i) o.push_back((uint8_t)(v >> (8 * i))); }
 } // namespace
 
-bool synplantWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &patch, const std::string &name,
-                       std::vector<uint8_t> &out, std::string &err) {
-    // state: 59 a2 cd 18, u8 0, u8 current program, u32 LE FXB length, FXB (big-endian "CcnK" ...
-    // "FBCh" ... chunk at +160): ";yMqmrAMPSuN" 02 00 02 00, u32 LE body length, zlib(body)
-    // body: u32 LE count, count x (u32 LE length + patch text), trailer (hash + MIDI config)
-    static const uint8_t magic[4] = {0x59, 0xa2, 0xcd, 0x18};
-    if (st.size() < 10 + 160 + 20 || std::memcmp(st.data(), magic, 4) || std::memcmp(st.data() + 10, "CcnK", 4) ||
-        std::memcmp(st.data() + 18, "FBCh", 4)) { err = "a .synplant patch loads into Synplant only"; return false; }
-    const uint8_t *fxb = st.data() + 10;
-    const uint32_t csize = be32(fxb + 156);
-    if (10 + 160 + (size_t)csize > st.size() || std::memcmp(fxb + 160, ";yMqmrAMPSuN", 12)) { err = "unexpected Synplant state layout"; return false; }
-    const uint8_t *chunk = fxb + 160;
-    uLongf blen = le32(chunk + 16);
-    std::vector<uint8_t> body(blen);
-    if (uncompress(body.data(), &blen, chunk + 20, csize - 20) != Z_OK) { err = "Synplant state does not decompress"; return false; }
-    const uint32_t count = le32(body.data());
+namespace {
+// Sonic Charge plugins (Synplant, Echobode, Permut8) share one state layout:
+// 59 a2 cd 18, u8 0, u8 current program, u32 LE FXB length, FXB (big-endian "CcnK" ... "FBCh", fxID at
+// +16, chunk size at +156, chunk at +160). The chunk is a header (";yMqmrAM" + the reversed fxID + a
+// version, 16 bytes; Permut8: 4 magic bytes), u32 LE body length, zlib(body).
+const uint8_t kScMagic[4] = {0x59, 0xa2, 0xcd, 0x18};
+struct ScState {
+    const uint8_t *fxb = nullptr, *chunk = nullptr;
+    size_t header = 0;
+    std::vector<uint8_t> body;
+};
+bool scUnpack(const std::vector<uint8_t> &st, const char *fxid, const std::string &plugin, const std::string &what, ScState &sc, std::string &err) {
+    if (st.size() < 10 + 160 + 8 || std::memcmp(st.data(), kScMagic, 4) || std::memcmp(st.data() + 10, "CcnK", 4) ||
+        std::memcmp(st.data() + 18, "FBCh", 4) || std::memcmp(st.data() + 26, fxid, 4)) { err = "a " + what + " loads into " + plugin + " only"; return false; }
+    sc.fxb = st.data() + 10;
+    const uint32_t csize = be32(sc.fxb + 156);
+    if (10 + 160 + (size_t)csize > st.size() || csize < 8) { err = "unexpected " + plugin + " state layout"; return false; }
+    sc.chunk = sc.fxb + 160;
+    sc.header = std::memcmp(sc.chunk, ";yMqmrAM", 8) == 0 ? 16 : 4;
+    if (csize < sc.header + 4) { err = "unexpected " + plugin + " state layout"; return false; }
+    uLongf blen = le32(sc.chunk + sc.header);
+    sc.body.resize(blen);
+    if (uncompress(sc.body.data(), &blen, sc.chunk + sc.header + 4, csize - sc.header - 4) != Z_OK || blen != sc.body.size()) {
+        err = plugin + " state does not decompress"; return false;
+    }
+    return true;
+}
+bool scPack(const ScState &sc, const std::vector<uint8_t> &body, int current, std::vector<uint8_t> &out, std::string &err) {
+    uLongf zlen = compressBound(body.size());
+    std::vector<uint8_t> z(zlen);
+    if (compress2(z.data(), &zlen, body.data(), body.size(), 6) != Z_OK) { err = "zlib failed"; return false; }
+    z.resize(zlen);
+    std::vector<uint8_t> newChunk(sc.chunk, sc.chunk + sc.header);
+    put32(newChunk, (uint32_t)body.size());
+    newChunk.insert(newChunk.end(), z.begin(), z.end());
+    std::vector<uint8_t> rest(sc.fxb + 8, sc.fxb + 156);   // from "FBCh" to the chunk size
+    putBe32(rest, (uint32_t)newChunk.size());
+    rest.insert(rest.end(), newChunk.begin(), newChunk.end());
+    std::vector<uint8_t> newFxb = {'C', 'c', 'n', 'K'};
+    putBe32(newFxb, (uint32_t)rest.size());
+    newFxb.insert(newFxb.end(), rest.begin(), rest.end());
+    out = {kScMagic[0], kScMagic[1], kScMagic[2], kScMagic[3], 0, (uint8_t)current};
+    put32(out, (uint32_t)newFxb.size());
+    out.insert(out.end(), newFxb.begin(), newFxb.end());
+    return true;
+}
+// a text patch (Synplant, Echobode) in program slot 0, named: its keys are sorted, so a missing
+// name line goes before the first top-level key that sorts after "name"
+bool scWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &patch, const std::string &name, const char *fxid,
+                 const std::string &plugin, const std::string &what, std::vector<uint8_t> &out, std::string &err) {
+    ScState sc;
+    if (!scUnpack(st, fxid, plugin, what, sc, err)) return false;
+    const auto &body = sc.body;
+    const uint32_t count = body.size() >= 4 ? le32(body.data()) : 0;
     size_t p = 4;
     std::vector<std::vector<uint8_t>> patches;
     for (uint32_t i = 0; i < count && p + 4 <= body.size(); ++i) {
         const uint32_t n = le32(&body[p]);
+        if (p + 4 + n > body.size()) break;
         patches.emplace_back(body.begin() + (long)p + 4, body.begin() + (long)(p + 4 + n));
         p += 4 + n;
     }
-    if (patches.empty()) { err = "Synplant state has no programs"; return false; }
+    if (patches.empty()) { err = plugin + " state has no programs"; return false; }
     const std::vector<uint8_t> trailer(body.begin() + (long)p, body.end());
-    // the patch, named: replace its name line, or add one before pitchAdjust (keys are sorted)
     std::string text(patch.begin(), patch.end()), esc;
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
     for (char c : name) { if (c == '\\' || c == '"') esc += '\\'; esc += c; }
     const size_t nm = text.find("\n\tname: \"");
     if (nm != std::string::npos) text.replace(nm + 1, text.find('\n', nm + 1) - nm - 1, "\tname: \"" + esc + "\"");
-    else if (const size_t pa = text.find("\n\tpitchAdjust: "); pa != std::string::npos) text.insert(pa + 1, "\tname: \"" + esc + "\"\n");
+    else
+        for (size_t at = text.find("\n\t"); at != std::string::npos; at = text.find("\n\t", at + 1)) {
+            if (text[at + 2] == '\t') continue;   // nested key
+            if (text.compare(at + 2, text.find(':', at) - at - 2, "name") > 0) { text.insert(at + 1, "\tname: \"" + esc + "\"\n"); break; }
+        }
     if (text.empty() || text.back() != '\n') text += '\n';
     patches[0].assign(text.begin(), text.end());
     std::vector<uint8_t> nb;
     put32(nb, (uint32_t)patches.size());
     for (auto &t : patches) { put32(nb, (uint32_t)t.size()); nb.insert(nb.end(), t.begin(), t.end()); }
     nb.insert(nb.end(), trailer.begin(), trailer.end());
-    uLongf zlen = compressBound(nb.size());
-    std::vector<uint8_t> z(zlen);
-    if (compress2(z.data(), &zlen, nb.data(), nb.size(), 6) != Z_OK) { err = "zlib failed"; return false; }
-    z.resize(zlen);
-    std::vector<uint8_t> newChunk(chunk, chunk + 16);
-    put32(newChunk, (uint32_t)nb.size());
-    newChunk.insert(newChunk.end(), z.begin(), z.end());
-    std::vector<uint8_t> rest(fxb + 8, fxb + 156);   // from "FBCh" to the chunk size
-    putBe32(rest, (uint32_t)newChunk.size());
-    rest.insert(rest.end(), newChunk.begin(), newChunk.end());
-    std::vector<uint8_t> newFxb = {'C', 'c', 'n', 'K'};
-    putBe32(newFxb, (uint32_t)rest.size());
-    newFxb.insert(newFxb.end(), rest.begin(), rest.end());
-    out = {magic[0], magic[1], magic[2], magic[3], 0, 0};   // current program 0
-    put32(out, (uint32_t)newFxb.size());
-    out.insert(out.end(), newFxb.begin(), newFxb.end());
-    return true;
+    return scPack(sc, nb, 0, out, err);
+}
+} // namespace
+
+bool synplantWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &patch, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err) {
+    return scWithPatch(st, patch, name, "NuSP", "Synplant", ".synplant patch", out, err);
+}
+
+bool isEchobodePatch(const std::vector<uint8_t> &d) {
+    return d.size() > 16 && std::memcmp(d.data(), "EchobodePatch: {", 16) == 0;
+}
+
+bool echobodeWithPatch(const std::vector<uint8_t> &st, const std::vector<uint8_t> &patch, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err) {
+    return scWithPatch(st, patch, name, "NuEB", "Echobode", ".echobode patch", out, err);
+}
+
+// ---- Permut8 banks (.p8bank): 30 programs A0..C9 of display values ------------------------------
+namespace {
+struct P8Program { std::string slot, name; bool modified = false; std::map<std::string, std::string> fields; };
+bool parseP8Bank(const std::vector<uint8_t> &d, std::string &current, std::vector<P8Program> &progs) {
+    std::string text(d.begin(), d.end());
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    if (text.rfind("Permut8BankV1: {", 0) != 0) return false;
+    std::istringstream in(text);
+    std::string line;
+    P8Program *cur = nullptr;
+    auto trim = [](std::string s) {
+        s.erase(0, s.find_first_not_of(" \t"));
+        s.erase(s.find_last_not_of(" \t") + 1);
+        return s;
+    };
+    while (std::getline(in, line)) {
+        if (line.rfind("\tCurrent Program: ", 0) == 0) current = trim(line.substr(18));
+        else if (line.size() == 7 && line.rfind("\t\t", 0) == 0 && line[2] >= 'A' && line[2] <= 'C' && std::isdigit((unsigned char)line[3]) && line.compare(4, 3, ": {") == 0) {
+            progs.push_back({});
+            cur = &progs.back();
+            cur->slot = line.substr(2, 2);
+        } else if (cur && line.rfind("\t\t}", 0) == 0) cur = nullptr;
+        else if (cur && line.rfind("\t\t\t", 0) == 0) {
+            const size_t c = line.find(": ");
+            if (c == std::string::npos) continue;
+            const std::string k = trim(line.substr(0, c)), v = trim(line.substr(c + 2));
+            if (k == "Name") {
+                std::string n = v.size() >= 2 && v.front() == '"' && v.back() == '"' ? v.substr(1, v.size() - 2) : v, u;
+                for (size_t i = 0; i < n.size(); ++i) { if (n[i] == '\\' && i + 1 < n.size()) ++i; u += n[i]; }
+                cur->name = u;
+            } else if (k == "Modified") cur->modified = v == "true";
+            else cur->fields[k] = v;
+        }
+    }
+    return progs.size() == 30;
+}
+int p8Slot(const std::string &s) { return (s[0] - 'A') * 10 + (s[1] - '0'); }
+double p8Num(const std::string &s) { return std::strtod(s.c_str() + s.find_first_of("+-.0123456789"), nullptr); }
+// display text -> normalized value, the inverse of Permut8's own parameter display
+bool p8Normalize(const std::string &key, const std::string &t, float &v) {
+    static const std::map<std::string, std::vector<std::string>> enums = {
+        {"FilterPlacement", {"Off", "Input", "Feedback", "Output"}}, {"SyncMode", {"Off", "Dotted", "Triplets", "Standard"}},
+        {"Operator1", {"NOP", "AND", "MUL", "OSC", "RND"}}, {"Operator2", {"NOP", "OR", "XOR", "MSK", "SUB"}}};
+    auto clamp = [](double x) { return (float)std::max(0.0, std::min(1.0, x)); };
+    const double ln600 = std::log(600.0);
+    if (key == "Limiter" || key == "FeedbackFlip" || key == "FeedbackInvert" || key == "Reverse") { v = t == "On"; return true; }
+    if (auto e = enums.find(key); e != enums.end()) {
+        auto it = std::find(e->second.begin(), e->second.end(), t);
+        if (it == e->second.end()) return false;
+        v = (float)(it - e->second.begin()) / (float)(e->second.size() - 1);
+        return true;
+    }
+    if (key == "InputLevel" || key == "OutputLevel") {   // dB = 54 * sign(2x-1) * (2x-1)^2
+        const double db = std::max(-54.0, std::min(54.0, p8Num(t)));
+        v = (float)(0.5 + 0.5 * std::copysign(std::sqrt(std::fabs(db) / 54.0), db));
+        return true;
+    }
+    if (key == "FilterFreq") {   // LP 40 Hz..(24 kHz) | "---" | HP (20 Hz)..12 kHz
+        if (t.rfind("---", 0) == 0) { v = 0.5f; return true; }
+        const double f = std::max(p8Num(t.substr(2)), 1e-9);
+        if (t.rfind("LP", 0) == 0) { v = clamp(0.5 * std::log(f / 40.0) / ln600); return true; }
+        if (t.rfind("HP", 0) == 0) { v = clamp(0.5 + 0.5 * std::log(f / 20.0) / ln600); return true; }
+        return false;
+    }
+    if (key == "FeedbackAmount") { v = clamp(p8Num(t) / 110.0); return true; }
+    if (key == "Mix") { v = clamp(p8Num(t) / 100.0); return true; }
+    if (key == "ClockFreq") {
+        if (t.size() > 3 && t.compare(t.size() - 3, 3, "kHz") == 0) {   // sync off: 0..44.1 kHz linear, then 3 octaves to 352.8
+            const double f = p8Num(t);
+            v = f <= 44.1 ? clamp(f / 88.2) : clamp(0.5 + 0.5 * std::log(f / 44.1) / std::log(8.0));
+            return true;
+        }
+        std::string base = t;
+        while (!base.empty() && (base.back() == 'D' || base.back() == 'T')) base.pop_back();   // 1/2D, 1/8T: from SyncMode
+        static const std::vector<std::string> steps = {"8/1", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8"};
+        auto it = std::find(steps.begin(), steps.end(), base);
+        if (it == steps.end()) return false;
+        v = (float)(it - steps.begin()) / 6.0f;
+        return true;
+    }
+    if (key.rfind("Operand", 0) == 0) { v = (float)std::strtol(t.c_str(), nullptr, 16) / 255.0f; return true; }
+    return false;
+}
+const char *const kP8Keys[18] = {"InputLevel", "Limiter", "FilterFreq", "FilterPlacement", "FeedbackAmount", "FeedbackFlip",
+                                 "FeedbackInvert", "OutputLevel", "Mix", "ClockFreq", "SyncMode", "Reverse", "Operator1",
+                                 "Operand1.High", "Operand1.Low", "Operator2", "Operand2.High", "Operand2.Low"};
+} // namespace
+
+bool isPermut8Bank(const std::vector<uint8_t> &d) {
+    return d.size() > 16 && std::memcmp(d.data(), "Permut8BankV1: {", 16) == 0;
+}
+
+std::vector<std::string> permut8BankPrograms(const std::vector<uint8_t> &bank) {
+    std::string current;
+    std::vector<P8Program> progs;
+    std::vector<std::string> names(30);
+    if (!parseP8Bank(bank, current, progs)) return {};
+    for (auto &p : progs) names[p8Slot(p.slot)] = p.name.empty() ? p.slot : p.name;
+    return names;
+}
+
+bool permut8WithBank(const std::vector<uint8_t> &st, const std::vector<uint8_t> &bank, int program, std::vector<uint8_t> &out, std::string &err) {
+    ScState sc;
+    if (!scUnpack(st, "NuPr", "Permut8", ".p8bank", sc, err)) return false;
+    std::string current;
+    std::vector<P8Program> progs;
+    if (!parseP8Bank(bank, current, progs)) { err = "is not a Permut8 bank with 30 programs"; return false; }
+    const auto &body = sc.body;   // u32 0 + 3 floats (write protect, reset, MIDI control), u32 count, programs, trailer
+    if (body.size() < 20) { err = "unexpected Permut8 state layout"; return false; }
+    size_t p = 20;
+    for (uint32_t i = 0, n = le32(body.data() + 16); i < n; ++i) {
+        if (p + 8 > body.size()) { err = "unexpected Permut8 state layout"; return false; }
+        p += 8 + le32(body.data() + p + 4) + 1 + 72;
+    }
+    if (p > body.size()) { err = "unexpected Permut8 state layout"; return false; }
+    std::vector<uint8_t> nb(body.begin(), body.begin() + 16);
+    put32(nb, 30);
+    std::sort(progs.begin(), progs.end(), [](const P8Program &a, const P8Program &b) { return p8Slot(a.slot) < p8Slot(b.slot); });
+    for (auto &pr : progs) {
+        std::string name = pr.name.substr(0, 24);   // Permut8 rejects the whole state for a name over 24 bytes
+        while (!name.empty() && ((uint8_t)name.back() & 0xC0) == 0x80) name.pop_back();   // don't cut a UTF-8 sequence
+        if (!name.empty() && (uint8_t)name.back() >= 0xC0) name.pop_back();
+        put32(nb, 0x39685ab6);
+        put32(nb, (uint32_t)name.size());
+        nb.insert(nb.end(), name.begin(), name.end());
+        nb.push_back(pr.modified ? 1 : 0);
+        for (const char *k : kP8Keys) {
+            float v = 0;
+            auto f = pr.fields.find(k);
+            if (f == pr.fields.end() || !p8Normalize(k, f->second, v)) { err = "program " + pr.slot + ": cannot read " + k; return false; }
+            uint32_t bits;
+            std::memcpy(&bits, &v, 4);
+            put32(nb, bits);
+        }
+    }
+    nb.insert(nb.end(), body.begin() + (long)p, body.end());
+    const int sel = program >= 0 ? program : (current.size() == 2 ? p8Slot(current) : 0);
+    return scPack(sc, nb, std::max(0, std::min(29, sel)), out, err);
 }
 
 bool looksLikeH2p(const std::vector<uint8_t> &d) {

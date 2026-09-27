@@ -31,6 +31,16 @@ bool dexedWithVoice(const std::vector<uint8_t> &dexedState, const std::vector<ui
 bool isSynplantPatch(const std::vector<uint8_t> &d);
 bool synplantWithPatch(const std::vector<uint8_t> &synplantState, const std::vector<uint8_t> &patch, const std::string &name,
                        std::vector<uint8_t> &out, std::string &err);
+// Echobode .echobode text patch -> program slot 0 of Echobode's own state (same container as Synplant)
+bool isEchobodePatch(const std::vector<uint8_t> &d);
+bool echobodeWithPatch(const std::vector<uint8_t> &echobodeState, const std::vector<uint8_t> &patch, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err);
+// Permut8 .p8bank (30 programs A0..C9 as display text): the program names by slot, and the bank as
+// Permut8's program bank with `program` (0-29; -1 = the bank's current program) selected
+bool isPermut8Bank(const std::vector<uint8_t> &d);
+std::vector<std::string> permut8BankPrograms(const std::vector<uint8_t> &bank);
+bool permut8WithBank(const std::vector<uint8_t> &permut8State, const std::vector<uint8_t> &bank, int program,
+                     std::vector<uint8_t> &out, std::string &err);
 
 // Cherry Audio presets (.dco106preset, .mg1preset, .sempreset, .voltagepreset): a JUCE ValueTree
 // "main" holding the patch, merged into the plugin's own state ("savedState" > "pt", or for

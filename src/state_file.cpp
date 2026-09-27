@@ -96,7 +96,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     // "<cartridge>.syx#<voice>" picks one voice of a DX7 cartridge, "<drum>.mtdrum#<channel>" a channel
     std::string path = pathIn;
     int voice = -1;
-    for (const char *ext : {".syx#", ".mtdrum#", ".fxb#", ".FXB#"}) {
+    for (const char *ext : {".syx#", ".mtdrum#", ".fxb#", ".FXB#", ".p8bank#"}) {
         const size_t hash = pathIn.rfind(ext);
         if (hash != std::string::npos) { path = pathIn.substr(0, hash + strlen(ext) - 1); voice = std::atoi(pathIn.c_str() + hash + strlen(ext)); }
     }
@@ -128,7 +128,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     if (fmt == "auto" && endsWith(path, ".hxp")) fmt = "helix";
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
-            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
+            : isFxp(data) ? "fxp" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isEchobodePatch(data) ? "echobode" : isPermut8Bank(data) ? "permut8" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
             : endsWith(path, ".sbset") ? "soundbox" : endsWith(path, ".dspreset") ? "decentsampler"
             : endsWith(path, ".odin") ? "juce-valuetree" : endsWith(path, ".ngrr") ? "ngrr" : looksLikeH2p(data) || endsWith(path, ".h2p") ? "h2p" : endsWith(path, ".vital") ? "juce-string" : "raw";
 
@@ -203,6 +203,21 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         out.transform = [patch, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
             return synplantWithPatch(current, patch, name, state, e);
         };
+    } else if (fmt == "echobode") {
+        if (!isEchobodePatch(data)) { err = path + " is not an Echobode patch"; return false; }
+        std::string name = path.substr(path.find_last_of("/\\") + 1);
+        if (endsWith(name, ".echobode")) name.resize(name.size() - 9);
+        const auto patch = data;
+        out.transform = [patch, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return echobodeWithPatch(current, patch, name, state, e);
+        };
+    } else if (fmt == "permut8") {   // "<bank>.p8bank#<0-29>" picks a program; the bank's current one otherwise
+        if (!isPermut8Bank(data)) { err = path + " is not a Permut8 bank"; return false; }
+        const auto bank = data;
+        const int program = voice;
+        out.transform = [bank, program](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return permut8WithBank(current, bank, program, state, e);
+        };
     } else if (fmt == "cherry") {
         if (!isCherryPreset(data)) { err = path + " is not a Cherry Audio preset"; return false; }
         const auto preset = data;
@@ -240,7 +255,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, serum, juce-valuetree, h2p, dx7, synplant, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, serum, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;
