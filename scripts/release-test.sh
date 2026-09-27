@@ -12,7 +12,7 @@ only=${3:-}
 [ "${2:-}" = "--only" ] || only=""
 dist="$root/dist/$tag"
 [ -d "$dist" ] || { echo "no $dist: run scripts/build-release.sh $tag first"; exit 1; }
-work="$root/dist/.test-$tag"
+work="$root/dist/.test-$tag-$$"   # its own folder per run: Docker Desktop can keep a stale mount of a recreated one
 rm -rf "$work"; mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
