@@ -288,6 +288,7 @@ private:
     std::mutex playMu_;
     std::map<std::string, std::shared_ptr<PlayWorker>> players_;
     json play(const std::string &slug, const json &in, std::string &wav);
+    void reapPlayers(double idleSec);
     std::atomic<bool> stopping_{false};
 
     fs::path songDir(const std::string &slug) const { return root_ / slug; }
@@ -439,7 +440,9 @@ json Server::startPreview(const std::string &slug, std::vector<std::string> trac
 }
 
 void Server::previewWorker() {
+    double reaped = nowSec();
     while (!stopping_) {
+        if (nowSec() - reaped > 30) { reapPlayers(600); reaped = nowSec(); }   // this loop wakes every second
         std::string id;
         {
             std::unique_lock<std::mutex> lock(mu_);
@@ -578,6 +581,19 @@ bool songSlug(const std::string &s) {
         if (c == '-' && i && s[i - 1] == '-') return false;
     }
     return true;
+}
+
+// Stop play workers idle for `idleSec` (a loaded instrument can hold a lot of memory).
+void Server::reapPlayers(double idleSec) {
+    std::lock_guard<std::mutex> lock(playMu_);
+    const double now = nowSec();
+    for (auto it = players_.begin(); it != players_.end();) {
+        if (now - it->second->lastUsed > idleSec && it->second->use.try_lock()) {
+            platform::kill(it->second->proc);
+            it->second->use.unlock();
+            it = players_.erase(it);
+        } else ++it;
+    }
 }
 
 // Live notes through a track's own instrument: a __play worker keeps it loaded, so a note renders in
