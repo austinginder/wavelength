@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavelength.run/schemas/wavelength.schema.json",
+  "title": "Wavelength song manifest (wavelength.json)",
+  "description": "The manifest of a Wavelength song, format version 1.0 (docs/song-format.md, Draft 1, section 3). Readers ignore keys they do not know (section 10), so objects stay open. Rules a schema cannot express (NFC names, at most 255 bytes per path segment, case-insensitive uniqueness, files that exist and match their sha256) are checked by `wavelength validate` and scripts/wavelength_song.py. CC0.",
+  "type": "object",
+  "required": ["format", "formatVersion", "id", "title", "slug", "job"],
+  "properties": {
+    "format": {"const": "wavelength.song"},
+    "formatVersion": {"$ref": "#/$defs/version", "description": "The version of the spec the song follows. A 1.0 reader refuses any major version but 1."},
+    "minReaderVersion": {"$ref": "#/$defs/version", "description": "The oldest format version a reader must support to use the song correctly. Default: formatVersion's major, .0."},
+    "generator": {
+      "type": "object",
+      "description": "The program that last wrote the song.",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "id": {"$ref": "#/$defs/uuid", "description": "Stays with the song through edits, renames and copies."},
+    "derivedFrom": {
+      "type": "object",
+      "description": "The song this one was made from (a remix gets a new id).",
+      "required": ["id"],
+      "properties": {
+        "id": {"$ref": "#/$defs/uuid"},
+        "title": {"type": "string"},
+        "url": {"type": "string", "format": "uri"}
+      }
+    },
+    "title": {"type": "string", "minLength": 1},
+    "slug": {
+      "type": "string",
+      "description": "Lowercase a-z 0-9 and single hyphens between words; the folder's name and the package's name before .wavelength (so at most 244 characters).",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 244
+    },
+    "created": {"$ref": "#/$defs/dateTime"},
+    "updated": {"$ref": "#/$defs/dateTime"},
+    "authors": {"type": "array", "items": {"$ref": "#/$defs/author"}},
+    "prompt": {"type": "string", "description": "The brief the song was made from."},
+    "summary": {"type": "string", "description": "One sentence."},
+    "description": {"type": "string", "description": "Longer text, in Markdown."},
+    "license": {
+      "type": "string",
+      "description": "An SPDX license expression. Missing means all rights reserved.",
+      "pattern": "^\\(*[A-Za-z0-9][A-Za-z0-9.:+-]*\\)*(?: (?:AND|OR|WITH) \\(*[A-Za-z0-9][A-Za-z0-9.:+-]*\\)*)*$"
+    },
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "job": {"$ref": "#/$defs/path", "pattern": "^[^/]+$", "description": "File name of the job, at the top of the song folder (section 4)."},
+    "files": {
+      "type": "array",
+      "description": "Every other file that belongs to the song; the job, review.json and history/ are implied.",
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "render": {"$ref": "#/$defs/render"},
+    "requires": {
+      "type": "array",
+      "description": "Written by pack: a summary of what the job needs from the computer that renders it. Never the job's source.",
+      "items": {"$ref": "#/$defs/requirement"}
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Extensions that change how a song must be read, under reverse-domain keys.",
+      "propertyNames": {"$ref": "#/$defs/reverseDomain"}
+    },
+    "extensionsRequired": {
+      "type": "array",
+      "description": "Extensions a reader MUST refuse the song without. Each should also be a key of extensions.",
+      "items": {"$ref": "#/$defs/reverseDomain"},
+      "uniqueItems": true
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Tools' own data under reverse-domain keys, such as run.wavelength.site.",
+      "propertyNames": {"$ref": "#/$defs/reverseDomain"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "path": {
+      "type": "string",
+      "description": "Relative to the song folder, '/' separated (section 2): not absolute, no backslash, no empty, '.' or '..' segment, no segment named .git.",
+      "pattern": "^(?!/)(?!~(?:/|$))(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?\\.[Gg][Ii][Tt][ .]*(?:/|$))(?!(?:.*/)?[Gg][Ii][Tt]~1(?:/|$))[^\\\\\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "hashRef": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "reverseDomain": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
+    },
+    "author": {
+      "type": "object",
+      "required": ["name", "role"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "role": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["human", "ai"], "default": "human"},
+        "url": {"type": "string", "format": "uri"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "role"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "role": {"enum": ["source", "notes", "media", "render", "other"]},
+        "mediaType": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(?:\\s*;.*)?$"
+        },
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "render": {
+      "type": "object",
+      "description": "The render that goes with the song (section 8).",
+      "required": ["mix"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "job": {"$ref": "#/$defs/hashRef", "description": "Hash of the job that was rendered; compare with the job's to tell whether the render is current."},
+        "mix": {"$ref": "#/$defs/path"},
+        "picture": {"$ref": "#/$defs/path"},
+        "report": {"$ref": "#/$defs/path"}
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "required": ["track", "fallback"],
+      "properties": {
+        "track": {"type": "string", "minLength": 1, "description": "The track's ID (its id, or its name when it has none)."},
+        "plugin": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "format": {"type": "string"},
+            "id": {"type": "string"},
+            "version": {"type": "string"}
+          }
+        },
+        "preset": {"type": "string"},
+        "fallback": {"type": "boolean", "description": "Whether the track has a stand-in sound."}
+      }
+    }
+  }
+}

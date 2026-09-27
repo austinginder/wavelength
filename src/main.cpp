@@ -10,6 +10,8 @@
 //   wavelength import <project.bwproject> [--out DIR] [--list] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength lint <job.json> --harmony [--key K] [--ignore "A,B"] [--chords] [--max-bars N] [--json]
+//   wavelength save | history | undo | redo | restore | diff | comments [song] (song_cli.cpp)
+//   wavelength pack | unpack | validate (song_cli.cpp, package.cpp)
 //   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
 //   wavelength version
 #include "analyze.hpp"
@@ -206,6 +208,30 @@ Usage:
       detected), a chord chart with --chords, one- or two-bar chords outside the key that go
       straight back (heard as a key change), clashes (a minor 2nd/9th held a beat, one note outside
       the key) and in-key rubs grouped per pair of tracks.
+  wavelength save [song] [-m MESSAGE] [--json]
+      Saves a revision of the song (docs/song-format.md): the job and the manifest's source, notes and
+      media files, in history/ inside the song folder. The first save writes the manifest,
+      wavelength.json. Every full render of a song's job adds a revision too, and its report names it.
+  wavelength history [song] [--named] [--json] | history [song] --to-git DIR | --bundle FILE.bundle
+      The revisions, newest last (* marks the current one). --to-git writes them as commits to a new
+      git repository outside the song (--bundle: one file), the same commits on every run.
+  wavelength undo [song] | redo [song] | restore [song] <revision> [--json]
+      Undo and redo step through changes the way an editor does; restore brings back any revision's
+      files. Each adds a revision, so nothing is ever lost.
+  wavelength diff [song] [A [B]] [--json]
+      What changed in the music between two revisions (r12 or 12; A defaults to the last revision, B
+      to the folder now): tracks, sounds, mix, effects and curves by bar, and notes per bar.
+  wavelength comments [song] [--all] [--json] | --reply ID --text TEXT [--done] | --resolve ID | --reopen ID
+      The song's comments (review.json) with the revision each was made on and whether the music they
+      point at has changed since. Open ones by default; --all includes resolved.
+  wavelength pack [song] [--out FILE.wavelength] [--no-history] [--no-render] [--no-review] [--json]
+      One shareable file: the song folder as a ZIP (the job, listed files, comments and history).
+      Refuses a job that uses files outside the song. Lists the plugins and libraries it needs.
+  wavelength unpack <file.wavelength> [--out DIR] [--force] [--json]
+      Checks every entry first (no paths outside the folder, no links, no .git); never runs anything.
+      render and serve open a .wavelength file directly.
+  wavelength validate <song | file.wavelength> [--json]
+      A song folder or package against the format spec.
   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
       A local web UI for reviewing songs (a folder of song folders, default the current one): the
       arrangement with its chords and harmony problems, loudness, stems, and quick previews: any

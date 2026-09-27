@@ -109,6 +109,16 @@ bool checkEntries(Zip &z, json &problems) {
     return ok;
 }
 
+// entries a package may hold (section 5): anything else is warned about and still unpacked
+void checkListed(Zip &z, const json &manifest, json &problems) {
+    std::set<std::string> allowed = {"mimetype", "wavelength.json", "review.json", "history/log.jsonl", manifest.value("job", std::string("job.json"))};
+    for (auto &f : manifest.value("files", json::array())) if (f.is_object()) allowed.insert(f.value("path", std::string()));
+    for (const auto &e : z.entries()) {
+        if (e.name.empty() || e.name.back() == '/' || allowed.count(e.name) || e.name.rfind("history/objects/", 0) == 0) continue;
+        problems.push_back({{"severity", "warning"}, {"path", e.name}, {"message", "not part of the song (not the job, a listed file, review.json or history)"}});
+    }
+}
+
 bool extractTo(Zip &z, const fs::path &dir, std::string &err) {
     std::error_code ec;
     for (const auto &e : z.entries()) {
@@ -151,7 +161,10 @@ void validateFolder(const fs::path &dir, json &problems) {
     if (!parseJob(job, song.dir.string(), parsed, err, false)) problem("error", song.jobFile(), err);
     for (auto &[where, path] : jobFileRefs(job)) {
         if (!checkSongPath(path, why)) { problem("error", song.jobFile(), where + ": " + why + " (files the job uses belong in the song, e.g. media/; name outside sounds instead)"); continue; }
-        if (!fs::exists(song.dir / fs::u8path(path), ec)) problem("error", song.jobFile(), where + ": " + path + " is missing");
+        if (!fs::exists(song.dir / fs::u8path(path), ec)) { problem("error", song.jobFile(), where + ": " + path + " is missing"); continue; }
+        bool listed = false;
+        for (auto &f : m.value("files", json::array())) listed |= f.value("path", std::string()) == path;
+        if (!listed) problem("warning", path, "used by the job (" + where + ") but not listed in the manifest's files (pack lists it)");
     }
     std::vector<json> entries;
     std::string warning;
@@ -198,7 +211,12 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
     m["generator"] = {{"name", "wavelength"}, {"version", WAVELENGTH_VERSION}};
     m["requires"] = requiresOf(job);
     json files = json::array();
-    for (auto f : m.value("files", json::array())) {
+    std::set<std::string> known;
+    for (auto &f : m.value("files", json::array())) known.insert(f.value("path", std::string()));
+    json all = m.value("files", json::array());
+    for (auto &[where, path] : jobFileRefs(job))
+        if (known.insert(path).second) all.push_back({{"path", path}, {"role", "media"}});
+    for (auto f : all) {
         const std::string p = f.value("path", std::string()), role = f.value("role", std::string());
         if (!checkSongPath(p, why)) { err = "wavelength.json: " + why; return false; }
         const fs::path full = song.dir / fs::u8path(p);
@@ -267,6 +285,7 @@ bool unpack(const std::string &file, std::string outDir, bool force, json &resul
     }
     const std::string minv = manifest.value("minReaderVersion", std::string("1.0"));
     if (!minv.empty() && minv[0] != '1') { err = "the song needs a reader for format " + minv + "; this Wavelength reads format 1"; return false; }
+    checkListed(z, manifest, problems);
     std::error_code ec;
     if (outDir.empty()) {
         std::string slug = manifest.value("slug", fs::path(file).stem().string()), why;
@@ -290,9 +309,21 @@ json validate(const std::string &target) {
         else if (checkEntries(z, problems)) {
             const fs::path tmp = fs::temp_directory_path(ec) / ("wavelength-validate-" + std::to_string(platform::processId()));
             fs::remove_all(tmp, ec);
+            std::vector<uint8_t> mj;
+            json manifest;
+            if (z.read("wavelength.json", mj, err)) try { manifest = json::parse(std::string(mj.begin(), mj.end())); } catch (...) {}
+            if (manifest.is_object()) checkListed(z, manifest, problems);
             if (!extractTo(z, tmp, err)) problems.push_back({{"severity", "error"}, {"path", target}, {"message", err}});
             else validateFolder(tmp, problems);
             fs::remove_all(tmp, ec);
+            // messages name the package, not the folder it was unpacked into
+            const std::string name = fs::path(target).filename().string();
+            for (auto &p : problems) {
+                std::string msg = p.value("message", std::string());
+                for (const std::string &t : {tmp.string(), tmp.filename().string()})
+                    for (size_t at; (at = msg.find(t)) != std::string::npos;) msg.replace(at, t.size(), name);
+                p["message"] = msg;
+            }
         }
     } else validateFolder(target, problems);
     bool ok = true;

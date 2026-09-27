@@ -80,6 +80,12 @@ bool openSong(const std::string &arg, Song &song, std::string &err) {
             err = p.filename().string() + " needs a reader for song format " + minv + "; this Wavelength reads format 1";
             return false;
         }
+        std::string why;
+        const std::string job = song.jobFile();
+        if (!checkSongPath(job, why) || job.find('/') != std::string::npos) {
+            err = m.string() + ": \"job\" must name a file at the top of the song folder (" + (why.empty() ? job : why) + ")";
+            return false;
+        }
     }
     if (!fs::exists(song.jobPath(), ec)) { err = "no job in " + p.string() + " (" + song.jobFile() + ")"; return false; }
     return true;
@@ -134,8 +140,13 @@ bool checkSongPath(const std::string &rel, std::string &err) {
     if (rel[0] == '/' || rel.find('\\') != std::string::npos || (rel.size() > 1 && rel[1] == ':')) { err = "'" + rel + "' is not a relative path"; return false; }
     std::stringstream ss(rel);
     for (std::string seg; std::getline(ss, seg, '/');) {
+        if (seg.empty() || seg == ".") { err = "'" + rel + "' has an empty or '.' segment"; return false; }
         if (seg == "..") { err = "'" + rel + "' leaves the song folder (..)"; return false; }
-        if (lower(seg) == ".git") { err = "'" + rel + "': nothing in a song may be named .git"; return false; }
+        std::string bare = lower(seg);
+        while (!bare.empty() && (bare.back() == ' ' || bare.back() == '.')) bare.pop_back();   // Windows drops these: ".git." is .git
+        if (bare == ".git" || lower(seg) == "git~1") { err = "'" + rel + "': nothing in a song may be named .git"; return false; }
+        for (unsigned char c : seg)
+            if (c < 0x20 || c == 0x7f) { err = "'" + rel + "' has a control character"; return false; }
         if (seg.size() > 255) { err = "'" + rel + "': a name longer than 255 bytes"; return false; }
     }
     return true;
@@ -166,8 +177,10 @@ std::vector<std::pair<std::string, std::string>> jobFileRefs(const json &job) {
         const std::string name = t.value("name", std::string("track"));
         if (t.contains("state")) {
             const auto &s = t["state"];
-            if (s.is_string()) out.push_back({"track '" + name + "' state", s.get<std::string>()});
-            else if (s.is_object() && s.contains("file") && s["file"].is_string()) out.push_back({"track '" + name + "' state", s["file"].get<std::string>()});
+            std::string file = s.is_string() ? s.get<std::string>() : s.is_object() && s.contains("file") && s["file"].is_string() ? s["file"].get<std::string>() : "";
+            for (const char *pick : {".syx#", ".mtdrum#"})   // "<cartridge>.syx#3": one program of the file
+                if (const size_t at = lower(file).rfind(pick); at != std::string::npos) file.resize(at + std::strlen(pick) - 1);
+            if (!file.empty()) out.push_back({"track '" + name + "' state", file});
         }
         if (t.contains("sampler") && t["sampler"].is_object())
             for (const char *k : {"sample", "sfz", "soundfont"})

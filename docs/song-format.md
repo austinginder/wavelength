@@ -40,12 +40,14 @@ express-to-nowhere/
   out/                 scratch renders: never packed, never tracked
 ```
 
-Only `wavelength.json` and the job are required. A folder MAY hold other files; a package carries
-the files named in section 5 and nothing else.
+Only `wavelength.json` and the job are required. The job sits at the top of the folder (its path has
+no `/`). A folder MAY hold other files, such as scratch renders in `out/`; the rules below apply to
+the song's files (the job, the files the manifest lists, the files the job refers to, `review.json`
+and `history/`), and a package carries those and nothing else.
 
 **Names and paths.** Every path in a song is relative to the song folder and uses `/` as the
-separator. Paths MUST NOT be absolute, MUST NOT contain `..` segments and MUST resolve inside the
-folder. Names are UTF-8 in Unicode NFC, at most 255 bytes per segment, and unique when compared
+separator. Paths MUST NOT be absolute, MUST NOT contain empty, `.` or `..` segments and MUST
+resolve inside the folder. Names are UTF-8 in Unicode NFC, at most 255 bytes per segment, and unique when compared
 case-insensitively (the folder has to survive case-insensitive file systems). Entries MUST NOT be
 symbolic links, and nothing in a song may be named `.git`.
 
@@ -104,7 +106,7 @@ symbolic links, and nothing in a song may be named `.git`.
 | `prompt`, `summary`, `description` | optional | The brief the song was made from; one sentence; longer text in Markdown. |
 | `license` | optional | An SPDX license expression (`"CC-BY-4.0"`, `"MIT"`). Missing means all rights reserved. |
 | `tags` | optional | Free words. |
-| `job` | required | Path of the job (section 4). |
+| `job` | required | File name of the job, at the top of the folder (section 4). |
 | `files` | optional | Every other file that belongs to the song (the job, `review.json` and `history/` are implied), each `{path, role, mediaType?, size?, sha256?}`. |
 | `render` | optional | The render that goes with the song (section 8). |
 | `requires` | optional | What the song needs from the computer that renders it (section 4.3). Written by `pack`; readers treat it as a summary of the job, never as its source. |
@@ -164,7 +166,9 @@ A package is a ZIP file (APPNOTE 6.3.x), named `<slug>.wavelength`, media type
 - A package contains `wavelength.json`, the job, the files listed in `files`, `review.json` and
   `history/`, each at its path in the folder, and nothing else. `review.json`, `history/` and
   `render` files MAY be left out (`pack --no-review`, `--no-history`, `--no-render`); the manifest
-  still lists the render, and readers treat a listed file that is absent as not included.
+  still lists the render, and readers treat a listed file that is absent as not included. A reader
+  SHOULD warn about an entry that is not one of these and MAY ignore it; it MUST NOT refuse the
+  package for it.
 - Encryption, multi-disk archives and entries outside the rules of section 2 are not allowed.
 
 **Readers** MUST refuse entries with absolute paths, `..` segments, symbolic links, names that
@@ -207,7 +211,7 @@ zlib (RFC 1950). The name is the SHA-256 of the uncompressed bytes; readers MUST
 | `parent` | The revision before this one in the log (0 for the first), so the log is one line of history. |
 | `files` | The full snapshot: every tracked path and its content hash. Reading a revision needs only its line and objects. |
 | `render` | For `render` entries: hashes of the report and mix that were made, and their loudness summary. |
-| `target`, `from` | For `undo`, `redo` and `restore`: the revision whose files were restored, and the one that was current. |
+| `target` | For `undo`, `redo` and `restore`: the revision whose files were restored (the one that was current is `parent`). |
 
 **Operations.** Undo, redo and restore never remove anything: each writes the target revision's files
 into the folder and appends an entry, so it can itself be undone. They follow the song's changes the
@@ -281,8 +285,9 @@ repository) and `--bundle` (a git bundle) give the same commits on every compute
 | `render/song.png` | The song picture (`render --png`). |
 | `render/report.json` | The render report, which names the revision and job it came from: `"song": {"revision": 14, "job": "sha256:..."}`. |
 
-The manifest's `render` names these files, the `revision` and the job hash. A reader can tell whether
-the render is current by comparing that hash with the job's.
+The manifest's `render` names these files (`mix` is required, `picture` and `report` optional), and
+SHOULD name the `revision` and the job hash (`"sha256:..."`) it was rendered from. A reader can tell
+whether the render is current by comparing that hash with the job's.
 
 ## 9. Security
 

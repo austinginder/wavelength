@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavelength.run/schemas/history-entry.schema.json",
+  "title": "Wavelength history entry (one line of history/log.jsonl)",
+  "description": "One revision of a Wavelength song, format version 1.0 (docs/song-format.md, Draft 1, section 6). Rules across lines (rev increasing, parent/target naming earlier revisions, objects that exist and hash to their names) are checked by `wavelength validate` and scripts/wavelength_song.py. CC0.",
+  "type": "object",
+  "required": ["rev", "time", "op", "parent", "by", "files"],
+  "properties": {
+    "rev": {"type": "integer", "minimum": 1, "description": "One more than the line before (pruning may leave gaps)."},
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339. Also the git author and committer date.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "op": {"enum": ["save", "render", "undo", "redo", "restore"]},
+    "parent": {"type": "integer", "minimum": 0, "description": "The revision the song was at before this one (0 for the first)."},
+    "by": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["human", "ai"]}
+      }
+    },
+    "message": {"type": "string"},
+    "named": {"type": "boolean", "description": "save entries: true when someone named the save point (it then has a message)."},
+    "files": {
+      "type": "object",
+      "description": "The full snapshot: every tracked path (the job and files whose role is source, notes or media) and the hash of its content, stored in history/objects/.",
+      "propertyNames": {"$ref": "#/$defs/path"},
+      "additionalProperties": {"$ref": "#/$defs/hashRef"}
+    },
+    "render": {
+      "type": "object",
+      "description": "render entries: hashes of the report and mix that were made, and their loudness summary.",
+      "properties": {
+        "report": {"$ref": "#/$defs/hashRef"},
+        "mix": {"$ref": "#/$defs/hashRef"},
+        "lufs": {"type": "number"},
+        "lra": {"type": "number"},
+        "truePeak": {"type": "number"},
+        "seconds": {"type": "number", "minimum": 0},
+        "sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {"type": "string"},
+              "lufs": {"type": "number"}
+            }
+          }
+        }
+      }
+    },
+    "target": {"type": "integer", "minimum": 1, "description": "undo, redo, restore: the revision whose files were restored."}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"op": {"const": "render"}}, "required": ["op"]},
+      "then": {"required": ["render"]}
+    },
+    {
+      "if": {"properties": {"op": {"enum": ["undo", "redo", "restore"]}}, "required": ["op"]},
+      "then": {"required": ["target"]}
+    },
+    {
+      "if": {"properties": {"named": {"const": true}}, "required": ["named"]},
+      "then": {"required": ["message"], "properties": {"message": {"minLength": 1}}}
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "hashRef": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "path": {
+      "type": "string",
+      "description": "Same rule as the manifest's paths (section 2).",
+      "pattern": "^(?!/)(?!~(?:/|$))(?![A-Za-z]:)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))(?!(?:.*/)?\\.[Gg][Ii][Tt][ .]*(?:/|$))(?!(?:.*/)?[Gg][Ii][Tt]~1(?:/|$))[^\\\\\\u0000-\\u001f\\u007f]+$"
+    }
+  }
+}

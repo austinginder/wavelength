@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wavelength.run/schemas/review.schema.json",
+  "title": "Wavelength comments (review.json)",
+  "description": "Comments on a Wavelength song, format version 1.0 (docs/song-format.md, Draft 1, section 7). Accepts both the current comment shape (anchor, replies, resolved) and comments written before the spec, whose anchor fields sit on the comment itself, whose render is a number and whose single reply is a string. Times written before the spec use a UTC offset without a colon (2026-09-26T21:23:40-0400), so comment times are not held to RFC 3339 here. CC0.",
+  "type": "object",
+  "required": ["comments"],
+  "properties": {
+    "comments": {"type": "array", "items": {"$ref": "#/$defs/comment"}}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "hashRef": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "person": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["human", "ai"], "default": "human"}
+      }
+    },
+    "timeRange": {
+      "description": "[start, end] in seconds of the song.",
+      "type": "array",
+      "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "barRange": {
+      "description": "[first, last] bar, counted from 1.",
+      "type": "array",
+      "prefixItems": [{"type": "integer", "minimum": 1}, {"type": "integer", "minimum": 1}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "beatRange": {
+      "description": "[start, end] in beats.",
+      "type": "array",
+      "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "anchorNote": {
+      "type": "object",
+      "description": "A note is identified by its track, start beat and key (MIDI number).",
+      "required": ["track", "beat", "key"],
+      "properties": {
+        "track": {"type": "string", "minLength": 1},
+        "beat": {"type": "number", "minimum": 0},
+        "key": {"type": "integer", "minimum": 0, "maximum": 127}
+      }
+    },
+    "legacyNote": {
+      "type": "object",
+      "description": "Notes in comments written before the spec: key may be a name such as A4, with the MIDI number in midi.",
+      "required": ["track"],
+      "properties": {
+        "track": {"type": "string"},
+        "beat": {"type": "number"},
+        "key": {"type": ["integer", "string"]},
+        "midi": {"type": "integer", "minimum": 0, "maximum": 127},
+        "dur": {"type": "number"},
+        "vel": {"type": "number"}
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "description": "What was heard when the comment was written. Never rewritten.",
+      "required": ["revision"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "render": {"$ref": "#/$defs/hashRef", "description": "The render report's hash."},
+        "time": {"$ref": "#/$defs/timeRange"},
+        "bars": {"$ref": "#/$defs/barRange"},
+        "beats": {"$ref": "#/$defs/beatRange"},
+        "tracks": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Track IDs."},
+        "notes": {"type": "array", "items": {"$ref": "#/$defs/anchorNote"}},
+        "ref": {"type": "string", "description": "A human-readable reference, such as 'bars 53-56 · 2:17-2:24 · Build'."}
+      }
+    },
+    "reply": {
+      "type": "object",
+      "required": ["author", "text"],
+      "properties": {
+        "author": {"$ref": "#/$defs/person"},
+        "time": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 1},
+        "text": {"type": "string"}
+      }
+    },
+    "resolved": {
+      "type": "object",
+      "description": "Which revision addressed the comment.",
+      "required": ["revision"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "time": {"type": "string"},
+        "by": {"$ref": "#/$defs/person"}
+      }
+    },
+    "comment": {
+      "type": "object",
+      "required": ["id", "status", "text"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "created": {"type": "string"},
+        "author": {"$ref": "#/$defs/person"},
+        "status": {"enum": ["open", "done"]},
+        "text": {"type": "string"},
+        "anchor": {"$ref": "#/$defs/anchor"},
+        "replies": {"type": "array", "items": {"$ref": "#/$defs/reply"}},
+        "resolved": {"$ref": "#/$defs/resolved"},
+        "ref": {"type": "string", "description": "Legacy: anchor.ref on the comment itself."},
+        "time": {"$ref": "#/$defs/timeRange", "description": "Legacy."},
+        "bars": {"$ref": "#/$defs/barRange", "description": "Legacy."},
+        "beats": {"$ref": "#/$defs/beatRange", "description": "Legacy."},
+        "tracks": {"type": "array", "items": {"type": "string"}, "description": "Legacy: track names."},
+        "notes": {"type": "array", "items": {"$ref": "#/$defs/legacyNote"}, "description": "Legacy."},
+        "render": {"type": "number", "description": "Legacy: an identifier of the render that was playing (not a hash)."},
+        "reply": {"type": "string", "description": "Legacy: the single reply."}
+      },
+      "if": {"required": ["anchor"]},
+      "then": {"required": ["created", "author"]}
+    }
+  }
+}

@@ -5,6 +5,28 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- A song format (`docs/song-format.md`, Draft 1, CC BY 4.0; JSON Schemas in `schemas/`, CC0): a song
+  is a folder with a manifest, `wavelength.json` (title, authors, licence, the job, its files and their
+  roles), and `.wavelength` is that folder as one ZIP file to share.
+  - History: `wavelength save [-m MESSAGE]`, `history`, `undo`, `redo`, `restore <rev>` keep every
+    revision of the job and the song's source, notes and media in `history/` (an append-only log plus
+    files named by their SHA-256). Every full render of a song's job adds a revision and the report names
+    it (`song.revision`, `song.job`). `history --to-git DIR` / `--bundle FILE` exports the revisions as
+    git commits outside the song, the same commits on every run; songs never contain a git repository.
+  - `wavelength diff [A [B]]`: what changed in the music between revisions, by track and bar (sounds,
+    mix, effects, curves, notes).
+  - Comments are pinned to what was heard: `serve` stores the revision and the report of the render
+    that was playing with each comment, and `wavelength comments` lists open ones with the revisions
+    since and whether the music at their bars and tracks has changed ("changed since" in the UI).
+    `comments --reply ID --text ... [--done]`, `--resolve`, `--reopen` answer them. Older
+    `review.json` files are read as before.
+  - `wavelength pack` (refuses a job that uses files outside the song; lists the plugins and libraries
+    it needs in the manifest's `requires`), `unpack` (checks every entry first: no paths outside the
+    folder, links, `.git` or zip bombs; runs nothing), `validate` (a folder or package against the
+    spec). `render song.wavelength` renders a package directly.
+  - `scripts/wavelength_song.py`: a second, independent reader in Python (standard library only) that
+    validates, unpacks and inspects songs; `scripts/make-song-fixtures.py` writes valid packages and
+    ones every reader must refuse, and `check.sh` runs both readers over them.
 - `wavelength import song.bwproject` imports a Bitwig Studio project without a DAWproject export:
   tempo, time signature, tracks named as Bitwig shows them, their plugins, states and Bitwig's own
   devices, faders, pans, mutes, sends, the master, arranger note clips (play start and loops, muted

@@ -223,6 +223,35 @@ then
 else
   echo "FAIL mcp"; fail=1
 fi
+# song format: save, render, change, undo/redo restore the job byte for byte; the package validates in both
+# readers and unpacks to the same job; git export makes one commit per revision; every fixture is judged the
+# same way by the engine and by the independent Python reader
+w="$PWD/$build/wavelength"
+rm -rf out/check/song out/check/song-unpacked out/check/song.wavelength out/check/song-git out/check/fixtures
+mkdir -p out/check/song && cp examples/synth-tour.json out/check/song/job.json
+if (cd out/check/song && "$w" save -m first >/dev/null && "$w" render job.json --out out >/dev/null 2>&1 &&
+    python3 -c 'import json;j=json.load(open("job.json"));j["title"]="changed";json.dump(j,open("job.json","w"))' &&
+    "$w" save -m second >/dev/null && "$w" undo >/dev/null && cmp -s job.json ../../../examples/synth-tour.json &&
+    "$w" redo >/dev/null && grep -q '"changed"' job.json && "$w" diff r1 --json | grep -q '"ok": true' &&
+    grep -q '"revision": 2' out/report.json && "$w" pack --out ../song.wavelength >/dev/null) &&
+   python3 scripts/wavelength_song.py validate out/check/song.wavelength >/dev/null &&
+   "$w" validate out/check/song.wavelength >/dev/null &&
+   "$w" unpack out/check/song.wavelength --out out/check/song-unpacked >/dev/null && cmp -s out/check/song/job.json out/check/song-unpacked/job.json &&
+   "$w" history out/check/song --to-git out/check/song-git >/dev/null &&
+   [ "$(git -C out/check/song-git rev-list --count HEAD)" = "$(grep -c . out/check/song/history/log.jsonl)" ]; then
+  echo "ok   song: save, render revision, undo/redo, diff, pack, unpack, git export"
+else
+  echo "FAIL song format"; fail=1
+fi
+python3 scripts/make-song-fixtures.py out/check/fixtures >/dev/null
+fixtures_ok=1
+for f in out/check/fixtures/good out/check/fixtures/*.wavelength; do
+  want=0; case "$(basename "$f")" in bad-*) want=1;; esac
+  c=0; "$w" validate "$f" >/dev/null 2>&1 || c=1
+  p=0; python3 scripts/wavelength_song.py validate "$f" >/dev/null 2>&1 || p=1
+  [ $c = $want ] && [ $p = $want ] || { echo "     $(basename "$f"): engine $c, python $p, want $want"; fixtures_ok=0; }
+done
+if [ $fixtures_ok = 1 ]; then echo "ok   song fixtures: engine and Python reader agree"; else echo "FAIL song fixtures"; fail=1; fi
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
 "./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
 spid=$!

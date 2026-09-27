@@ -112,7 +112,7 @@ int restoreStep(const Song &song, std::vector<json> &entries, int target, const 
     if (!t) { err = "no revision " + std::to_string(target); return 0; }
     const json files = t->value("files", json::object());
     if (!writeFiles(song, files, err)) return 0;
-    json e = {{"op", op}, {"by", by}, {"target", target}, {"from", current(entries)}, {"files", files}};
+    json e = {{"op", op}, {"by", by}, {"target", target}, {"files", files}};
     return append(song, entries, e, err);
 }
 
