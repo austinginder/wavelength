@@ -12,6 +12,10 @@
 namespace wl {
 
 std::filesystem::path kitDir();
+// shared with `upgrade`: a file fetched with curl (a progress line when mb > 0), and an archive (.zip,
+// .tar.gz, .dmg on macOS) unpacked into `dir`
+bool downloadFile(const std::string &url, const std::filesystem::path &to, int mb, std::string &err);
+bool extractArchive(const std::filesystem::path &archive, const std::filesystem::path &dir, std::string &err);
 // the plugins/ folder of every installed entry (the catalog scans them after the system folders)
 std::vector<std::string> kitPluginFolders();
 // every entry with its status on this computer

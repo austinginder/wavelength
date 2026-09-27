@@ -157,13 +157,14 @@ add_executable(wavelength
   src/docs.cpp
   src/fallback.cpp
   src/kit.cpp
+  src/self_upgrade.cpp
   src/song.cpp
   src/history.cpp
   src/song_cli.cpp
   src/songdiff.cpp
   src/review.cpp
   src/package.cpp
-  src/upgrade.cpp
+  src/migrate.cpp
   src/mcp.cpp
   src/render.cpp
   src/state_file.cpp

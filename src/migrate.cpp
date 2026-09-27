@@ -1,4 +1,4 @@
-#include "upgrade.hpp"
+#include "migrate.hpp"
 
 #include "audition.hpp"
 #include "catalog.hpp"
@@ -16,7 +16,7 @@
 
 namespace fs = std::filesystem;
 
-namespace wl::upgrade {
+namespace wl::migrate {
 
 using json = nlohmann::json;
 
@@ -373,7 +373,7 @@ bool run(const std::string &songDir, const Options &opt, json &result, std::stri
         }
         std::vector<json> entries;
         if (!u.changes.empty() || (history::read(song, entries, err) && entries.empty())) {
-            rev = history::save(song, "upgraded to the song format", actor(), false, err);
+            rev = history::save(song, "migrated to the song format", actor(), false, err);
             if (!rev) return false;
         }
     }
@@ -383,4 +383,4 @@ bool run(const std::string &songDir, const Options &opt, json &result, std::stri
     return true;
 }
 
-} // namespace wl::upgrade
+} // namespace wl::migrate

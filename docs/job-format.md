@@ -171,7 +171,7 @@ Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the 
 
 #### Library files: `lib:`
 
-One file of an installed sample library, by name, so a job never depends on where a computer keeps it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum Machines/Legend 909/..."`), or `"lib:<path under a sample root>"` (`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit `map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in the manifest's `requires`, and `wavelength upgrade` turns absolute library paths into `lib:` names.
+One file of an installed sample library, by name, so a job never depends on where a computer keeps it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum Machines/Legend 909/..."`), or `"lib:<path under a sample root>"` (`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit `map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in the manifest's `requires`, and `wavelength migrate` turns absolute library paths into `lib:` names.
 
 ```json
 {"name": "Keys", "plugin": "builtin:sampler", "sampler": {"multisample": "Grand Piano", "release": 0.4}, "notes": [...]}

@@ -7,7 +7,7 @@
 #include "review.hpp"
 #include "song.hpp"
 #include "songdiff.hpp"
-#include "upgrade.hpp"
+#include "migrate.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -42,7 +42,7 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"unpack", {{"--json", false}, {"--out", true}, {"--force", false}}},
     {"validate", {{"--json", false}}},
     {"fallbacks", {{"--json", false}, {"--suggest", false}, {"--write", false}, {"--no-measure", false}}},
-    {"upgrade", {{"--json", false}, {"--license", true}, {"--author", true}, {"--dry-run", false}, {"--no-copy", false}}},
+    {"migrate", {{"--json", false}, {"--license", true}, {"--author", true}, {"--dry-run", false}, {"--no-copy", false}}},
     {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
 };
 
@@ -100,7 +100,7 @@ std::string summary(const json &e) {
 bool songFor(const CliArgs &a, Song &song, const Out &o, bool create, std::string &err) {
     if (!openSong(a.pos.size() > 1 ? a.pos[1] : ".", song, err)) return false;
     if (!song.hasManifest()) {
-        if (!create) { err = song.dir.filename().string() + " has no wavelength.json yet: `wavelength save` or `wavelength upgrade` makes one"; return false; }
+        if (!create) { err = song.dir.filename().string() + " has no wavelength.json yet: `wavelength save` or `wavelength migrate` makes one"; return false; }
         song.manifest = newManifest(song.dir);
         song.manifest["generator"] = {{"name", "wavelength"}, {"version", WAVELENGTH_VERSION}};
         if (!writeManifest(song, err)) return false;
@@ -495,15 +495,15 @@ int cmdFallbacks(const CliArgs &a, const Out &o) {
     return 0;
 }
 
-int cmdUpgrade(const CliArgs &a, const Out &o) {
-    upgrade::Options opt;
+int cmdMigrate(const CliArgs &a, const Out &o) {
+    migrate::Options opt;
     opt.license = a.get("--license");
     opt.author = a.get("--author");
     opt.dryRun = a.has("--dry-run");
     opt.copyOutside = !a.has("--no-copy");
     json r;
     std::string err;
-    if (!upgrade::run(a.pos.size() > 1 ? a.pos[1] : ".", opt, r, err)) return o.fail(err);
+    if (!migrate::run(a.pos.size() > 1 ? a.pos[1] : ".", opt, r, err)) return o.fail(err);
     if (o.json) { o.emit(r); return 0; }
     for (auto &c : r["changes"]) std::fprintf(o.f, "  %s\n", c.get<std::string>().c_str());
     for (auto &p : r["problems"]) std::fprintf(o.f, "problem: %s\n", p.get<std::string>().c_str());
@@ -533,7 +533,7 @@ int runSongCommand(int argc, char **argv, std::FILE *f) {
     if (cmd == "unpack") return cmdUnpack(a, o);
     if (cmd == "validate") return cmdValidate(a, o);
     if (cmd == "comments") return cmdComments(a, o);
-    if (cmd == "upgrade") return cmdUpgrade(a, o);
+    if (cmd == "migrate") return cmdMigrate(a, o);
     if (cmd == "fallbacks") return cmdFallbacks(a, o);
     return cmdStep(a, o);
 }

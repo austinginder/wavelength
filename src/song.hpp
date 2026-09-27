@@ -24,7 +24,7 @@ struct Song {
 };
 
 // A song from a folder, its job file or its wavelength.json. A folder with a job but no manifest
-// opens too (hasManifest() false): `save` and `upgrade` give it one.
+// opens too (hasManifest() false): `save` and `migrate` give it one.
 bool openSong(const std::string &arg, Song &song, std::string &err);
 // the song a job file belongs to, when its folder has a manifest (renders record history there)
 // What to call a job in pictures and reports: its song's title, else its folder (job.json) or file name.

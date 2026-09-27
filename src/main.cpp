@@ -13,12 +13,13 @@
 //   wavelength save | history | undo | redo | restore | diff | comments [song] (song_cli.cpp)
 //   wavelength pack | unpack | validate (song_cli.cpp, package.cpp)
 //   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
-//   wavelength version
+//   wavelength version [--check] | upgrade [--check] [--force] (self_upgrade.cpp)
 #include "analyze.hpp"
 #include "audio_file.hpp"
 #include "clips.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
+#include "self_upgrade.hpp"
 #include "sf2.hpp"
 #include "audition.hpp"
 #include "catalog.hpp"
@@ -244,7 +245,7 @@ Usage:
       proposes a built-in stand-in (a synth patch, the drum kit, a General MIDI program) for every
       track without one, each level-matched to the song's last render in out/ or render/ (one child
       render per fallback position; --no-measure skips that); --write puts them in the job.
-  wavelength upgrade [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy] [--json]
+  wavelength migrate [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy] [--json]
       Brings a song folder made before the format up to it: writes wavelength.json (from site.json when
       there is one), makes paths inside the song relative, copies files the job uses out of out/ into
       media/, names library samples ("lib:Legend 909/Kick.wav") and preset files (by preset name), copies
@@ -256,7 +257,13 @@ Usage:
       bars, any tracks, rendered through the song's sends, buses and master in seconds. Comments
       pinned to bars, tracks and notes go to each song's review.json for the agent. Read-only on
       the music; plugins only run in render child processes. --open opens the browser.
-  wavelength version
+  wavelength version [--check] [--json]
+      This build's version (and the song format it reads); --check also asks GitHub for the latest release.
+  wavelength upgrade [--check] [--force] [--json]
+      Replaces this binary with the latest release for this computer when there is a newer one: downloaded
+      from GitHub, checked against the release's SHA256SUMS.txt and run once before it takes this one's
+      place (a release folder's docs and examples are refreshed too). --check only reports. A development
+      build (-dev) is left alone unless --force.
 
 <plugin> is a plugin id, a plugin name (Apricot, "BBC Symphony Orchestra"), or a path to a
 .clap/.vst3/.vst bundle. Prefix with clap:, vst3: or vst2: when a name exists in more than one format.
@@ -276,7 +283,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks", "--check"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1814,7 +1821,8 @@ int run(int argc, char **argv) {
             {"docs", {"--section", "--json"}},
             {"kit", {"--force", "--json"}},
             {"mcp", {}},
-            {"version", {"--json"}}};
+            {"version", {"--json", "--check"}},
+            {"upgrade", {"--json", "--check", "--force"}}};
         auto it = known.find(cmd);
         if (it != known.end())
             for (auto &[k, v] : a.opts)
@@ -1854,9 +1862,25 @@ int run(int argc, char **argv) {
         if (cmd == "docs") return cmdDocs(a);
         if (cmd == "kit") return cmdKit(a);
         if (cmd == "mcp") return runMcp(OUT);
-        if (cmd == "version") {
-            if (a.has("--json")) emit(json{{"ok", true}, {"name", "wavelength"}, {"version", WAVELENGTH_VERSION}, {"songFormat", kSongFormatVersion}}.dump(2));
-            else std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION);
+        if (cmd == "version" || cmd == "upgrade") {
+            json info = {{"ok", true}, {"name", "wavelength"}, {"version", WAVELENGTH_VERSION}, {"songFormat", kSongFormatVersion}};
+            if (cmd == "version" && !a.has("--check")) {
+                if (a.has("--json")) emit(info.dump(2));
+                else std::fprintf(OUT, "wavelength %s\n", WAVELENGTH_VERSION);
+                return 0;
+            }
+            UpgradeOptions opt;
+            opt.check = cmd == "version" || a.has("--check");
+            opt.force = a.has("--force");
+            json r;
+            std::string err;
+            if (!selfUpgrade(opt, r, err)) return fail(a, err);
+            if (a.has("--json")) { for (auto &[k, v] : r.items()) info[k] = v; emit(info.dump(2)); return 0; }
+            if (opt.check)
+                std::fprintf(OUT, "wavelength %s; the latest release is %s%s\n", WAVELENGTH_VERSION, r["latest"].get<std::string>().c_str(),
+                             r["upgradeAvailable"].get<bool>() ? ": `wavelength upgrade` installs it" : " (up to date)");
+            else
+                for (auto &n : r["notes"]) std::fprintf(OUT, "%s\n", n.get<std::string>().c_str());
             return 0;
         }
     } catch (const std::exception &e) {

@@ -168,10 +168,11 @@ A minimal job:
 | `comments [song] [--all] [--reply ID --text T --done] [--resolve ID] [--reopen ID]` | A song's open comments (`--all`: resolved ones too) with the revision they were made on and whether the music they point at changed since; answer, resolve or reopen them. |
 | `serve [SONGS_DIR] [--port 7400] [--host H] [--open]` | A local web UI for reviewing songs with a human: the arrangement, chords, loudness, stems and quick previews of any bars and tracks. Comments pinned to them go to each song's `review.json`. Read-only on the music. |
 | `pack [song] [--no-history] [--no-render] [--no-review]`, `unpack <file.wavelength>`, `validate <song \| file>` | One shareable file per song and back (the `--no-*` flags leave history, the kept render or comments out; entries checked first: no paths out of the folder, links, `.git` or zip bombs; nothing runs). `render song.wavelength` renders one directly. |
-| `upgrade [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy]` | Brings an older song folder up to the format: manifest, relative paths, preset and `lib:` names for installed sounds, and a revision. It copies other outside files into `media/` (`--no-copy`: only lists them). |
+| `migrate [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy]` | Brings an older song folder up to the format: manifest, relative paths, preset and `lib:` names for installed sounds, and a revision. It copies other outside files into `media/` (`--no-copy`: only lists them). |
 | `fallbacks [song] [--suggest [--write] [--no-measure]]` | What each track plays on this computer; `--suggest` proposes built-in stand-ins at the levels of the last full render (`--no-measure` skips that), `--write` puts them in the job, `render --fallbacks` plays them. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
-| `version [--json]` | Prints the engine's version. |
+| `version [--check] [--json]` | Prints the engine's version; `--check` asks GitHub for the latest release. |
+| `upgrade [--check] [--force] [--json]` | Installs the latest release over this binary when there is a newer one, checked against the release's SHA-256 sums. A development build is left alone unless `--force`. |
 
 `docs [agents | job-format | effects | song-format]` prints the docs built into the binary (the operating guide and the references that match it; `--section` for one part), and `mcp` runs an MCP server (below).
 

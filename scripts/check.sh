@@ -265,9 +265,9 @@ if ! "$w" render out/check/fixtures/bad-deliver.wavelength --out out/check/escap
 else
   echo "FAIL package safety or undo of an added file"; fail=1
 fi
-# upgrade: a pre-format folder (absolute paths inside it, a sample in scratch out/) gets a manifest,
+# migrate: a pre-format folder (absolute paths inside it, a sample in scratch out/) gets a manifest,
 # relative paths (the scratch sample copied into media/), a revision, and still renders; both readers accept it
-up="$PWD/out/check/upgrade"
+up="$PWD/out/check/migrate"
 rm -rf "$up" && mkdir -p "$up/sounds" "$up/out"
 cp "out/check/synth-tour/$build/mix.wav" "$up/sounds/hit.wav" && cp "out/check/synth-tour/$build/mix.wav" "$up/out/tail.wav"
 python3 - "$up" <<'PY'
@@ -279,14 +279,14 @@ json.dump({"tempo": 120, "tracks": [
     {"name": "Tail", "plugin": "builtin:sampler", "sampler": {"sample": d + "/out/tail.wav", "oneShot": True}, "notes": [note(2)]}]},
     open(d + "/job.json", "w"))
 PY
-if "$w" upgrade "$up" --license CC0-1.0 --author Tester >/dev/null &&
+if "$w" migrate "$up" --license CC0-1.0 --author Tester >/dev/null &&
    python3 -c 'import json,sys;j=json.load(open(sys.argv[1]+"/job.json"));m=json.load(open(sys.argv[1]+"/wavelength.json"));s=[t["sampler"]["sample"] for t in j["tracks"]];sys.exit(0 if s==["sounds/hit.wav","media/tail.wav"] and m["license"]=="CC0-1.0" and m["authors"][0]["name"]=="Tester" else 1)' "$up" &&
    [ -s "$up/media/tail.wav" ] && [ "$("$w" history "$up" --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["revisions"]))')" = 1 ] &&
    "$w" validate "$up" >/dev/null && python3 scripts/wavelength_song.py validate "$up" >/dev/null &&
    "$w" render "$up/job.json" --out "$up/out" >/dev/null 2>&1; then
-  echo "ok   upgrade: manifest, relative paths, scratch file into media/, revision, renders"
+  echo "ok   migrate: manifest, relative paths, scratch file into media/, revision, renders"
 else
-  echo "FAIL upgrade"; fail=1
+  echo "FAIL migrate"; fail=1
 fi
 # fallbacks: every CLAP track of hello gets a built-in stand-in, and render --fallbacks plays them all
 rm -rf out/check/fallbacks && mkdir -p out/check/fallbacks && cp examples/hello.json out/check/fallbacks/job.json

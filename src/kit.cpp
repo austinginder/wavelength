@@ -130,12 +130,18 @@ bool run(const std::vector<std::string> &args) {
 }
 
 bool download(const std::string &url, const fs::path &to, int mb, std::string &err) {
-    const std::string curl = platform::findProgram("curl");
-    if (curl.empty()) { err = "downloads need curl on the PATH"; return false; }
-    std::fprintf(stderr, "downloading %s (%d MB)\n", url.c_str(), mb);
     std::error_code ec;
     fs::remove(to, ec);
-    run({curl, "-fL", "-sS", "--retry", "2", "-o", to.string(), url});
+    if (url.rfind("file://", 0) == 0) {   // a local file (tests, a mirror on disk)
+        fs::copy_file(fs::u8path(url.substr(7)), to, ec);
+        if (ec) { err = "cannot read " + url + ": " + ec.message(); return false; }
+        return true;
+    }
+    const std::string curl = platform::findProgram("curl"), wget = curl.empty() ? platform::findProgram("wget") : "";
+    if (curl.empty() && wget.empty()) { err = "downloads need curl (or wget) on the PATH"; return false; }
+    if (mb > 0) std::fprintf(stderr, "downloading %s (%d MB)\n", url.c_str(), mb);
+    if (!curl.empty()) run({curl, "-fL", "-sS", "--retry", "2", "-o", to.string(), url});
+    else run({wget, "-q", "--tries=3", "-O", to.string(), url});
     if (!fs::exists(to, ec) || fs::file_size(to, ec) < (mb > 0 ? 100000u : 16u)) { err = "download failed: " + url; return false; }
     return true;
 }
@@ -301,6 +307,9 @@ bool installEntry(const KitEntry &e, bool force, json &done, std::string &err) {
 }
 
 } // namespace
+
+bool downloadFile(const std::string &url, const fs::path &to, int mb, std::string &err) { return download(url, to, mb, err); }
+bool extractArchive(const fs::path &archive, const fs::path &dir, std::string &err) { return extract(archive, dir, err); }
 
 fs::path kitDir() { return platform::dataDir() / "kit"; }
 

@@ -154,7 +154,7 @@ void validateFolder(const fs::path &dir, json &problems) {
     Song song;
     std::string err;
     if (!openSong(dir.string(), song, err)) { problem("error", "", err); return; }
-    if (!song.hasManifest()) { problem("error", "wavelength.json", "no manifest (wavelength upgrade makes one)"); return; }
+    if (!song.hasManifest()) { problem("error", "wavelength.json", "no manifest (wavelength migrate makes one)"); return; }
     const json &m = song.manifest;
     for (const char *k : {"formatVersion", "id", "title", "slug", "job"})
         if (str(m, k).empty()) problem("error", "wavelength.json", std::string("missing \"") + k + "\"");
@@ -271,7 +271,7 @@ void validateFolder(const fs::path &dir, json &problems) {
 bool isPackage(const std::string &path) { return ext(path) == ".wavelength"; }
 
 bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std::string &err) {
-    if (!song.hasManifest()) { err = song.dir.filename().string() + " has no wavelength.json (wavelength upgrade makes one)"; return false; }
+    if (!song.hasManifest()) { err = song.dir.filename().string() + " has no wavelength.json (wavelength migrate makes one)"; return false; }
     json job;
     try { job = json::parse(readText(song.jobPath())); } catch (const std::exception &e) { err = song.jobFile() + " is not valid JSON: " + e.what(); return false; }
     // every file the job uses must travel with it
@@ -280,7 +280,7 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
     for (auto &[where, path] : jobFileRefs(job))
         if (!checkSongPath(path, why) || !fs::exists(song.dir / fs::u8path(path), ec)) outside += "\n  " + where + ": " + path;
     if (!outside.empty()) {
-        err = "the job uses files outside the song (move them into media/, or name the preset or library instead; `wavelength upgrade` "
+        err = "the job uses files outside the song (move them into media/, or name the preset or library instead; `wavelength migrade` "
               "fixes most):" + outside;
         return false;
     }

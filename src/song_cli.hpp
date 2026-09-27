@@ -1,6 +1,6 @@
 #pragma once
 // The song commands (docs/song-format.md): save, history, undo, redo, restore, diff, comments, pack,
-// unpack, validate, upgrade and fallbacks. They parse their own arguments, so main.cpp only routes them.
+// unpack, validate, migrate and fallbacks. They parse their own arguments, so main.cpp only routes them.
 #include <cstdio>
 #include <string>
 
