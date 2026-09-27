@@ -620,7 +620,7 @@ async function renameSong(slug) {
 }
 async function trashSong(slug) {
 	const ok = await WLUI.confirm({ title: 'Move to Trash?', danger: true, ok: 'Move to Trash',
-		body: `The whole folder <code>${WLUI.esc(slug)}</code> (job, renders, notes, history) goes to the Trash. You can put it back from there.` });
+		body: `The whole folder <code>${WLUI.esc(slug)}</code> (job, renders, notes, history) goes to the Trash. To restore it, drag it from the Trash back into your songs folder.` });
 	if (!ok) return;
 	try {
 		await postJson('api/song/trash', { song: slug });

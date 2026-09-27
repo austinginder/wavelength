@@ -15,7 +15,10 @@
 	const E = {
 		zoom: 26, dirty: true, data: null, harmony: null, comments: [], expanded: new Set(), hover: null,
 		sel: { b0: null, b1: null, tracks: new Set(), notes: [] }, loop: false, drag: null, userScrollAt: 0, follow: true,
+		edits: new Map(),   // draft note moves, "t:n" -> {dk, db}: heard, drawn, sent as a comment; the job is never changed
+		keys: { on: false, octave: 4, track: null },
 	};
+	try { E.hear = localStorage.getItem('wl-hear') !== '0'; } catch { E.hear = true; }
 	let dlg, scroller, canvas, space, tip;
 	const HINT = 'Saved to review.json in the song folder with the bars, tracks, notes and time you selected.';
 
@@ -55,6 +58,15 @@
 						<button class="ed-btn" id="ed-copy" disabled>Copy reference</button>
 					</div>
 				</section>
+				<section class="ed-live">
+					<h4>Live notes <span class="r"><label title="Click a note to hear it through its track's instrument"><input type="checkbox" id="ed-hear"> hear notes</label></span></h4>
+					<div class="ed-hint" id="ed-hearinfo">Click a note to hear it through the track's own instrument. ↑ ↓ move selected notes a semitone (Shift: an octave), ← → a 16th (Shift: a beat).</div>
+					<div class="ed-actions"><button class="ed-btn" id="ed-keys" title="Play the selected track's instrument from the computer keyboard (A-K = C-C, W E T Y U = sharps, Z / X = octave)">Play keys</button></div>
+					<div id="ed-edits" hidden>
+						<div class="ed-ref" id="ed-editlist"></div>
+						<div class="ed-actions"><button class="ed-btn" id="ed-edhear">▶ Hear the edits</button><button class="ed-btn primary" id="ed-edsave">Send to the agent</button><button class="ed-btn" id="ed-eddiscard">Discard</button></div>
+					</div>
+				</section>
 				<section>
 					<h4>Comment for the agent</h4>
 					<textarea id="ed-text" placeholder="What should change here? (Cmd+Enter to save)"></textarea>
@@ -88,6 +100,12 @@
 		on('#ed-save', 'click', save);
 		on('#ed-cancel', 'click', () => { cancelPreview(); syncAudioSelect(); dirty(); });
 		canvas.addEventListener('contextmenu', contextMenu);
+		$d('#ed-hear').checked = E.hear;
+		on('#ed-hear', 'change', e => { E.hear = e.target.checked; try { localStorage.setItem('wl-hear', E.hear ? '1' : '0'); } catch {} });
+		on('#ed-keys', 'click', () => setKeys(!E.keys.on));
+		on('#ed-edhear', 'click', () => hearEdits());
+		on('#ed-edsave', 'click', saveEdits);
+		on('#ed-eddiscard', 'click', () => { E.edits.clear(); editsChanged(); });
 		on('#ed-list', 'click', e => {   // a comment: jump to what it points at; its buttons change it
 			const c = e.target.closest('.ed-c'); if (!c) return;
 			const act = e.target.closest('button')?.dataset.act, cm = E.comments.find(x => x.id === c.dataset.id);
@@ -125,7 +143,8 @@
 		addEventListener('mouseup', up);
 		canvas.addEventListener('mouseleave', () => { E.hover = null; tip.hidden = true; dirty(); });
 		canvas.addEventListener('dblclick', e => { const p = pos(e); if (p.x > HEAD && p.y < TOPH) seekBeat(beatAt(p.x), true); });
-		dlg.addEventListener('keydown', key);
+		// on the document: focus can sit outside the dialog (after a menu or a click on the backdrop) while it is open
+		document.addEventListener('keydown', e => { if (dlg.open && !document.querySelector('dialog.wl-dlg[open]') && !e.defaultPrevented) key(e); });
 		new ResizeObserver(() => dirty()).observe(scroller);
 		audio.addEventListener('play', icon); audio.addEventListener('pause', icon);
 	}
@@ -160,6 +179,13 @@
 		E.harmony = h && h.ok ? h : null;
 		E.comments = r.comments || [];
 		renderComments(); legend(); badge(); dirty();
+	}
+
+	/* ---------- draft edits ---------- */
+	// a note as the draft has it: [start beat, length, key, vel]
+	function eff(t, n) {
+		const x = E.data.tracks[t].beatsNotes[n], ed = E.edits.get(t + ':' + n);
+		return ed ? [Math.max(0, x[0] + ed.db), x[1], Math.max(0, Math.min(127, x[2] + ed.dk)), x[3]] : x;
 	}
 
 	/* ---------- geometry ---------- */
@@ -225,14 +251,21 @@
 					}
 				}
 				const col = hue(i);
+				const clampY = y => Math.max(top + 2, Math.min(top + lh - kg.row - 2, y));
 				for (let n = 0; n < t.beatsNotes.length; n++) {
-					const [s, len, k, vel] = t.beatsNotes[n];
-					if (s + len < b0 || s > b1) continue;
-					const x = X(s), nw = Math.max(2, len * E.zoom - 1), y = kg.y(k);
+					const moved = E.edits.has(i + ':' + n), orig = t.beatsNotes[n];
+					const [s, len, k, vel] = moved ? eff(i, n) : orig;
+					if (Math.max(s, orig[0]) + len < b0 || Math.min(s, orig[0]) > b1) continue;
+					if (moved) {   // where it was: a faint outline
+						g.globalAlpha = .5; g.strokeStyle = col; g.lineWidth = 1; g.setLineDash([3, 2]);
+						g.strokeRect(X(orig[0]), clampY(kg.y(orig[2])), Math.max(2, len * E.zoom - 1), kg.row); g.setLineDash([]);
+					}
+					const x = X(s), nw = Math.max(2, len * E.zoom - 1), y = clampY(kg.y(k));
 					const chosen = E.sel.notes.some(q => q.t === i && q.n === n);
 					g.globalAlpha = t.mute ? .3 : .4 + .6 * Math.min(1, vel);
 					g.fillStyle = col;
 					g.fillRect(x, y, nw, kg.row);
+					if (moved) { g.globalAlpha = 1; g.strokeStyle = v('--amber'); g.lineWidth = 1.5; g.strokeRect(x - .5, y - .5, nw + 1, kg.row + 1); }
 					if (chosen) { g.globalAlpha = 1; g.strokeStyle = text; g.lineWidth = 1.5; g.strokeRect(x - 1, y - 1, nw + 2, kg.row + 2); }
 					if (kg.open && nw > 26 && kg.row >= 8) { g.globalAlpha = .9; g.fillStyle = '#000'; g.font = '9px "Instrument Sans", sans-serif'; g.fillText(keyName(k), x + 2, y + kg.row - 1.5); }
 				}
@@ -392,7 +425,8 @@
 		if (!lane || p.x < HEAD || p.y < TOPH) return null;
 		const t = E.data.tracks[lane.i], kg = keyGeom(t, lane.top - scroller.scrollTop, lane.h), b = beatAt(p.x);
 		let best = null, bd = 1e9;
-		t.beatsNotes.forEach((n, idx) => {
+		t.beatsNotes.forEach((_, idx) => {
+			const n = eff(lane.i, idx);
 			if (b < n[0] - 2 / E.zoom || b > n[0] + n[1] + 2 / E.zoom) return;
 			const y = kg.y(n[2]), dy = p.y < y ? y - p.y : p.y > y + kg.row ? p.y - y - kg.row : 0;
 			if (dy < Math.max(4, kg.row) && dy < bd) { bd = dy; best = { t: lane.i, n: idx }; }
@@ -409,6 +443,10 @@
 			const i = lane.i, ly = p.y + scroller.scrollTop - lane.top;
 			if (p.x >= HEAD - 34 && ly >= 8 && ly < 34) { toggleSolo(i, e.altKey ? 'dry' : 'mix'); syncAudioSelect(); dirty(); return; }
 			if (p.x < 20) { E.expanded.has(i) ? E.expanded.delete(i) : E.expanded.add(i); sizeSpace(); dirty(); return; }
+			if (E.expanded.has(i) && ly > 40 && p.x >= HEAD - 44) {   // the note names of a piano roll: a keyboard
+				const kg = keyGeom(d.tracks[i], lane.top - scroller.scrollTop, lane.h);
+				for (let k = kg.lo; k <= kg.hi; k++) { const y = kg.y(k); if (p.y >= y - 1 && p.y <= y + kg.row + 1) { hear(i, [{ key: k, vel: .85, start: 0, dur: .6 }]); E.keys.track = i; return; } }
+			}
 			if (e.shiftKey || e.metaKey) E.sel.tracks.has(i) ? E.sel.tracks.delete(i) : E.sel.tracks.add(i);
 			else { E.sel.tracks = new Set([i]); }
 			selChanged(); return;
@@ -423,7 +461,9 @@
 				const has = E.sel.notes.findIndex(q => q.t === hit.t && q.n === hit.n);
 				if (e.shiftKey || e.metaKey) { has >= 0 ? E.sel.notes.splice(has, 1) : E.sel.notes.push(hit); }
 				else E.sel.notes = [hit];
-				barsFromNotes(); selChanged(); return;
+				barsFromNotes(); selChanged();
+				if (E.hear && !(e.shiftKey || e.metaKey)) hearNotes([hit]);
+				return;
 			}
 			E.drag = { kind: 'marquee', x0: p.x, y0: p.y, x1: p.x, y1: p.y, moved: false, add: e.shiftKey || e.metaKey };
 		}
@@ -540,6 +580,9 @@
 				{ label: E.expanded.has(i) ? 'Collapse the lane' : 'Open as a piano roll', run: () => { E.expanded.has(i) ? E.expanded.delete(i) : E.expanded.add(i); sizeSpace(); dirty(); } },
 				{ label: 'Comment on this track…', hint: 'C', run: () => { E.sel.tracks = new Set([i]); comment(); } },
 				{ label: 'Copy track name', run: () => navigator.clipboard?.writeText(t.name) },
+				'-',
+				{ label: `Play ${t.name} from the keyboard`, hint: 'A-K', run: () => { E.keys.track = i; E.sel.tracks = new Set([i]); selChanged(); setKeys(true); } },
+				{ label: 'Open as a piano roll and play it', run: () => { E.expanded.add(i); sizeSpace(); E.keys.track = i; hearInfo(`Click the note names on the left of ${t.name}'s piano roll to hear its instrument.`); dirty(); } },
 			]);
 		}
 		if (p.x >= HEAD && p.y < TOPH) {   // ruler, sections, chords
@@ -567,6 +610,10 @@
 			const one = E.sel.tracks.size === 1 ? d.tracks[[...E.sel.tracks][0]] : null;
 			return WLUI.menu(e, [
 				{ label: 'Play from here', hint: 'bar ' + barOf(beatAt(p.x)), disabled: !audio.src, run: () => seekBeat(beatAt(p.x), true) },
+				E.sel.notes.length && { label: E.sel.notes.length === 1 ? 'Hear this note' : 'Hear these notes', hint: 'its instrument', run: () => hearNotes(E.sel.notes) },
+				E.sel.notes.length && { label: 'Move up a semitone', hint: '↑', run: () => key({ key: 'ArrowUp', code: 'ArrowUp', target: {}, preventDefault() {} }) },
+				E.sel.notes.length && { label: 'Move down a semitone', hint: '↓', run: () => key({ key: 'ArrowDown', code: 'ArrowDown', target: {}, preventDefault() {} }) },
+				E.edits.size && { label: 'Discard the note edits', run: () => { E.edits.clear(); editsChanged(); } },
 				'-',
 				{ label: one ? `Preview ${one.name} here` : 'Preview the selection', hint: 'P', run: () => { previewSelection(); syncAudioSelect(); } },
 				one && E.sel.tracks.size && { label: 'Preview these bars, all tracks', run: () => { previewSelection([]); syncAudioSelect(); } },
@@ -683,6 +730,90 @@
 		$d('#ed-legend').innerHTML = h ? `<span><i style="background:color-mix(in srgb,#e5484d 45%,transparent)"></i>${probs} harmony problem${probs === 1 ? '' : 's'}</span><span><i style="background:color-mix(in srgb,#f2b33d 45%,transparent)"></i>${rubs} rub${rubs === 1 ? '' : 's'}</span>` : '';
 	}
 
+	/* ---------- live notes: the track's own instrument, loaded in a server worker ---------- */
+	let actx = null, inflight = false, queued = null;
+	const loadedTracks = new Set();
+	function hearInfo(msg, err) { const el = $d('#ed-hearinfo'); el.textContent = msg; el.classList.toggle('err', !!err); }
+	// notes: [{key, vel, start, dur}] in seconds from the first; the newest request wins while one renders
+	async function hear(ti, notes) {
+		const t = E.data?.tracks[ti]; if (!t || !notes.length) return;
+		if (inflight) { queued = [ti, notes]; return; }
+		inflight = true;
+		const id = state.slug + '|' + t.name;
+		if (!loadedTracks.has(id)) hearInfo(`Loading ${soundName(t)} for ${t.name}… (the first note takes a moment)`);
+		try {
+			const send = () => fetch('api/play', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: state.slug, track: t.name, notes }) });
+			let r = await send();
+			if (r.status === 403) { await postJson('api/preview/cancel', { song: '' }).catch(() => {}); r = await send(); }   // postJson refreshes a stale token
+			if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'the server answered ' + r.status); }
+			const info = JSON.parse(r.headers.get('X-Wavelength-Play') || '{}');
+			actx ??= new (window.AudioContext || window.webkitAudioContext)();
+			if (actx.state === 'suspended') await actx.resume();
+			const buf = await actx.decodeAudioData(await r.arrayBuffer());
+			const src = actx.createBufferSource(); src.buffer = buf; src.connect(actx.destination); src.start();
+			loadedTracks.add(id);
+			hearInfo(`${t.name} · ${info.plugin}${info.preset ? ' · ' + info.preset : ''} · ${notes.length === 1 ? keyName(notes[0].key) : notes.length + ' notes'} · ${info.loaded ? 'loaded in ' : ''}${info.ms} ms`);
+		} catch (err) { hearInfo(`Could not play ${t.name}: ${err.message}`, true); }
+		finally {
+			inflight = false;
+			if (queued) { const q = queued; queued = null; hear(...q); }
+		}
+	}
+	// selected notes (with their draft moves) of one track, as a phrase
+	function hearNotes(list) {
+		const ti = list[0]?.t; if (ti == null) return;
+		const d = E.data, ns = list.filter(q => q.t === ti).slice(0, 64).map(q => eff(q.t, q.n));
+		const t0 = Math.min(...ns.map(n => n[0]));
+		if (d.toSec(Math.max(...ns.map(n => n[0]))) - d.toSec(t0) > 8) return hearInfo('Pick fewer notes to hear (8 seconds at most).', true);
+		hear(ti, ns.map(n => ({ key: n[2], vel: n[3], start: d.toSec(n[0]) - d.toSec(t0), dur: Math.min(4, d.toSec(n[0] + n[1]) - d.toSec(n[0])) })));
+	}
+	function hearEdits() {
+		hearNotes([...E.edits.keys()].map(k => { const [t, n] = k.split(':').map(Number); return { t, n }; }));
+	}
+	function playKey(k) {
+		const ti = E.keys.track ?? [...E.sel.tracks][0] ?? E.sel.notes[0]?.t;
+		if (ti == null) return hearInfo('Select a track (click its name) to play its instrument.', true);
+		E.keys.track = ti;
+		hear(ti, [{ key: k, vel: .85, start: 0, dur: .7 }]);
+	}
+	function keysInfo() {
+		const ti = E.keys.track ?? [...E.sel.tracks][0];
+		hearInfo(E.keys.on ? `Keys play ${ti != null ? E.data.tracks[ti].name : 'the selected track'} · octave ${E.keys.octave} (Z / X) · A-K = C-C, W E T Y U = sharps` : 'Keys off.');
+	}
+	function setKeys(on) {
+		E.keys.on = on;
+		if (on) E.keys.track = [...E.sel.tracks][0] ?? E.sel.notes[0]?.t ?? E.keys.track;
+		$d('#ed-keys').classList.toggle('on', on);
+		keysInfo();
+	}
+	function describeEdit(t, n, ed) {
+		const tr = E.data.tracks[t], x = tr.beatsNotes[n], moved = eff(t, n), parts = [];
+		if (ed.dk) parts.push(`${keyName(x[2])} → ${keyName(moved[2])}`);
+		if (ed.db) parts.push(`${ed.db > 0 ? 'later' : 'earlier'} by ${Math.abs(ed.db)} beat${Math.abs(ed.db) === 1 ? '' : 's'} (to ${barBeat(moved[0])})`);
+		return { text: `${tr.name} ${keyName(x[2])} at bar ${barBeat(x[0])}: ${parts.join(', ')}`, track: tr.name,
+			note: { track: tr.name, key: keyName(x[2]), midi: x[2], bar: barBeat(x[0]), beat: x[0], dur: x[1], vel: x[3] } };
+	}
+	const editList = () => [...E.edits].map(([k, ed]) => { const [t, n] = k.split(':').map(Number); return describeEdit(t, n, ed); });
+	function editsChanged() {
+		const list = editList();
+		$d('#ed-edits').hidden = !list.length;
+		$d('#ed-editlist').textContent = list.slice(0, 12).map(x => x.text).join('\n') + (list.length > 12 ? `\n(+${list.length - 12} more)` : '');
+		dirty();
+	}
+	// the draft goes to the agent as a comment: the song's source makes the job, so edits belong there
+	async function saveEdits() {
+		const list = editList();
+		if (!list.length) return;
+		const beats = list.map(x => x.note.beat), bpb = E.data.bpb;
+		const b0 = Math.floor(Math.min(...beats) / bpb) * bpb, b1 = Math.floor(Math.max(...beats) / bpb) * bpb + bpb;
+		const tracks = [...new Set(list.map(x => x.track))];
+		const text = 'Note edits to make in the song (heard in the editor):\n' + list.map(x => '- ' + x.text).join('\n');
+		const res = await post({ op: 'add', text, report: state.song.reportPath || '', ref: `${barOf(b0) === barOf(b1 - 1e-6) ? 'bar ' + barOf(b0) : 'bars ' + barOf(b0) + '-' + barOf(b1 - 1e-6)} · note edits · ${tracks.join(', ')}`,
+			bars: [barOf(b0), barOf(b1 - 1e-6)], beats: [b0, b1], time: [+E.data.toSec(b0).toFixed(2), +E.data.toSec(b1).toFixed(2)], tracks,
+			notes: list.slice(0, 64).map(x => x.note) });
+		if (res?.comments) { E.comments = res.comments; E.edits.clear(); editsChanged(); renderComments(); badge(); }
+	}
+
 	/* ---------- zoom, keys, audio ---------- */
 	function zoomAt(f, at) {
 		const x = at ?? scroller.clientWidth / 2, b = beatAt(x);
@@ -692,8 +823,26 @@
 		dirty();
 	}
 	function fit() { if (!E.data) return; E.zoom = Math.max(1.5, (scroller.clientWidth - HEAD - 30) / E.data.endBeat); sizeSpace(); scroller.scrollLeft = 0; dirty(); }
+	const KEYMAP = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14, KeyP: 15, Semicolon: 16 };
 	function key(e) {
-		if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+		if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+		if (E.keys.on && !e.metaKey && !e.ctrlKey && !e.altKey) {   // the computer keyboard plays the instrument
+			if (e.code in KEYMAP) { e.preventDefault(); if (!e.repeat) playKey(12 * (E.keys.octave + 1) + KEYMAP[e.code]); return; }
+			if (e.code === 'KeyZ' || e.code === 'KeyX') { e.preventDefault(); E.keys.octave = Math.max(0, Math.min(8, E.keys.octave + (e.code === 'KeyX' ? 1 : -1))); keysInfo(); return; }
+		}
+		if (e.key.startsWith('Arrow') && E.sel.notes.length) {   // move the selected notes (a draft) and hear them
+			e.preventDefault();
+			const dk = e.key === 'ArrowUp' ? (e.shiftKey ? 12 : 1) : e.key === 'ArrowDown' ? (e.shiftKey ? -12 : -1) : 0;
+			const db = e.key === 'ArrowRight' ? (e.shiftKey ? 1 : .25) : e.key === 'ArrowLeft' ? (e.shiftKey ? -1 : -.25) : 0;
+			for (const q of E.sel.notes) {
+				const id = q.t + ':' + q.n, ed = E.edits.get(id) || { dk: 0, db: 0 };
+				ed.dk += dk; ed.db = Math.round((ed.db + db) * 1000) / 1000;
+				if (!ed.dk && !ed.db) E.edits.delete(id); else E.edits.set(id, ed);
+			}
+			editsChanged();
+			if (dk) hearNotes(E.sel.notes);
+			return;
+		}
 		if (e.code === 'Space') { e.preventDefault(); $d('#ed-play').click(); }
 		else if (e.key === 'l' || e.key === 'L') setLoop(!E.loop);
 		else if (e.key === 'p' || e.key === 'P') previewSelection();
@@ -761,6 +910,6 @@
 			else fetch('api/review?song=' + encodeURIComponent(state.slug)).then(r => r.json()).then(r => { E.comments = r.comments || []; badge(); }).catch(() => {});
 		},
 		redraw() { dirty(); if (dlg?.open) syncAudioSelect(); },
-		reset() { E.sel = { b0: null, b1: null, tracks: new Set(), notes: [] }; E.expanded = new Set(); E.harmony = null; E.comments = []; E.loop = false; badge(); },
+		reset() { E.sel = { b0: null, b1: null, tracks: new Set(), notes: [] }; E.expanded = new Set(); E.edits = new Map(); E.keys.track = null; E.harmony = null; E.comments = []; E.loop = false; badge(); },
 	};
 })();

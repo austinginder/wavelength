@@ -337,7 +337,7 @@ double loadAverage() {
 #endif
 }
 
-bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout, bool quietStderr) {
+bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout, bool quietStderr, bool pipeStdin) {
     p = Process{};
     // one spawn at a time: a pipe's write end exists only inside this lock, so no other child
     // can inherit it and keep the pipe open after its own child exits
@@ -346,15 +346,19 @@ bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout,
 #ifdef _WIN32
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
     HANDLE nul = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
-    HANDLE rd = nullptr, wr = nullptr;
+    HANDLE rd = nullptr, wr = nullptr, inRd = nullptr, inWr = nullptr;
     if (captureStdout) {
         if (!CreatePipe(&rd, &wr, &sa, 0)) { CloseHandle(nul); return false; }
         SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
     }
+    if (pipeStdin) {
+        if (!CreatePipe(&inRd, &inWr, &sa, 0)) { CloseHandle(nul); if (rd) { CloseHandle(rd); CloseHandle(wr); } return false; }
+        SetHandleInformation(inWr, HANDLE_FLAG_INHERIT, 0);
+    }
     STARTUPINFOW si{};
     si.cb = sizeof si;
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = nul;
+    si.hStdInput = pipeStdin ? inRd : nul;
     si.hStdOutput = captureStdout ? wr : nul;
     si.hStdError = quietStderr ? nul : GetStdHandle(STD_ERROR_HANDLE);
     std::wstring cmd;
@@ -364,17 +368,26 @@ bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout,
                                    nullptr, &si, &pi);
     CloseHandle(nul);
     if (wr) CloseHandle(wr);
-    if (!ok) { if (rd) CloseHandle(rd); return false; }
+    if (inRd) CloseHandle(inRd);
+    if (!ok) { if (rd) CloseHandle(rd); if (inWr) CloseHandle(inWr); return false; }
     CloseHandle(pi.hThread);
     p.handle = (std::intptr_t)pi.hProcess;
     p.id = (int)pi.dwProcessId;
     if (captureStdout) p.out = (std::intptr_t)rd;
+    if (pipeStdin) p.in = (std::intptr_t)inWr;
     return true;
 #else
-    int pipefd[2] = {-1, -1};
+    int pipefd[2] = {-1, -1}, infd[2] = {-1, -1};
     if (captureStdout && pipe(pipefd) != 0) return false;
+    if (pipeStdin && pipe(infd) != 0) { if (captureStdout) { close(pipefd[0]); close(pipefd[1]); } return false; }
+    if (pipeStdin) fcntl(infd[1], F_SETFD, FD_CLOEXEC);   // later children must not hold this child's stdin open
+    if (captureStdout) fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    if (pipeStdin) {
+        posix_spawn_file_actions_adddup2(&fa, infd[0], STDIN_FILENO);
+        posix_spawn_file_actions_addclose(&fa, infd[1]);
+    }
     if (captureStdout) {
         posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
         posix_spawn_file_actions_addclose(&fa, pipefd[0]);
@@ -390,10 +403,12 @@ bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout,
     const int rc = posix_spawn(&pid, args[0].c_str(), &fa, nullptr, argv.data(), environ);
     posix_spawn_file_actions_destroy(&fa);
     if (captureStdout) close(pipefd[1]);
-    if (rc != 0) { if (captureStdout) close(pipefd[0]); return false; }
+    if (pipeStdin) close(infd[0]);
+    if (rc != 0) { if (captureStdout) close(pipefd[0]); if (pipeStdin) close(infd[1]); return false; }
     p.handle = pid;
     p.id = pid;
     if (captureStdout) p.out = pipefd[0];
+    if (pipeStdin) p.in = infd[1];
     return true;
 #endif
 }
@@ -421,7 +436,21 @@ bool finished(Process &p, std::string &crash) {
     return true;
 }
 
+namespace {
+void closePipes(Process &p) {
+#ifdef _WIN32
+    if (p.in != -1) CloseHandle((HANDLE)p.in);
+    if (p.out != -1) CloseHandle((HANDLE)p.out);
+#else
+    if (p.in != -1) close((int)p.in);
+    if (p.out != -1) close((int)p.out);
+#endif
+    p.in = p.out = -1;
+}
+} // namespace
+
 void kill(Process &p) {
+    closePipes(p);
     if (!p.handle) return;
 #ifdef _WIN32
     TerminateProcess((HANDLE)p.handle, 1);
@@ -432,6 +461,49 @@ void kill(Process &p) {
     waitpid((pid_t)p.handle, nullptr, 0);
 #endif
     p.handle = 0;
+}
+
+bool writeInput(Process &p, const std::string &data) {
+    if (p.in == -1) return false;
+    size_t done = 0;
+    while (done < data.size()) {
+#ifdef _WIN32
+        DWORD n = 0;
+        if (!WriteFile((HANDLE)p.in, data.data() + done, (DWORD)(data.size() - done), &n, nullptr) || !n) return false;
+#else
+        const ssize_t n = write((int)p.in, data.data() + done, data.size() - done);   // SIGPIPE: callers ignore it
+        if (n <= 0) { if (n < 0 && errno == EINTR) continue; return false; }
+#endif
+        done += (size_t)n;
+    }
+    return true;
+}
+
+bool readLine(Process &p, std::string &line, int timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    char buf[65536];
+    for (;;) {
+        const size_t nl = p.pending.find('\n');
+        if (nl != std::string::npos) { line = p.pending.substr(0, nl); p.pending.erase(0, nl + 1); return true; }
+        if (p.out == -1) return false;
+        const int left = (int)std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+        if (left <= 0) return false;
+#ifdef _WIN32
+        DWORD avail = 0;
+        if (!PeekNamedPipe((HANDLE)p.out, nullptr, 0, nullptr, &avail, nullptr)) return false;
+        if (!avail) { Sleep(5); continue; }
+        DWORD n = 0;
+        if (!ReadFile((HANDLE)p.out, buf, (DWORD)std::min<size_t>(avail, sizeof buf), &n, nullptr) || !n) return false;
+        p.pending.append(buf, n);
+#else
+        pollfd pfd{(int)p.out, POLLIN, 0};
+        if (poll(&pfd, 1, std::min(left, 200)) > 0) {
+            const ssize_t n = read((int)p.out, buf, sizeof buf);
+            if (n <= 0) return false;
+            p.pending.append(buf, (size_t)n);
+        }
+#endif
+    }
 }
 
 void terminate(const Process &p) {

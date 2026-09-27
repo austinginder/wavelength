@@ -66,9 +66,17 @@ private:
 struct Process {
     std::intptr_t handle = 0;   // pid on POSIX, HANDLE on Windows; 0 when it could not start
     std::intptr_t out = -1;     // read end of the stdout pipe
+    std::intptr_t in = -1;      // write end of the stdin pipe (spawn with pipeStdin)
+    std::string pending;        // stdout read past the last line readLine() returned
     int id = 0;
 };
-bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout, bool quietStderr);
+// pipeStdin: the child reads its stdin from a pipe written with writeInput() (else from /dev/null)
+bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout, bool quietStderr, bool pipeStdin = false);
+// Write to the child's stdin pipe; false when the child has gone.
+bool writeInput(Process &p, const std::string &data);
+// One line of the child's stdout (without the newline), waiting up to `timeoutMs`; false on a timeout or
+// when the child closed its stdout.
+bool readLine(Process &p, std::string &line, int timeoutMs);
 // Non-blocking: true once the process has ended. `crash` describes an abnormal end (a signal or
 // an exception code), empty for a normal exit.
 bool finished(Process &p, std::string &crash);

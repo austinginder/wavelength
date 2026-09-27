@@ -101,3 +101,6 @@ dialog.wl-dlg::backdrop { background: rgba(12, 14, 23, .55); }
 .wl-add { margin-top: 6px; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font: 600 12.5px var(--body); }
 .wl-cancel { background: none; border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line)); color: var(--warn); border-radius: 99px; padding: 1px 9px; font: 600 11.5px var(--body); cursor: pointer; }
 .wl-cancel:hover { background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.ed-live label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font: 12px var(--body); color: var(--muted); }
+.ed-live #ed-edits { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.ed-live #ed-editlist { color: var(--amber); font-size: 11.5px; }

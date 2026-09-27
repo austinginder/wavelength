@@ -1,5 +1,7 @@
 #include "serve.hpp"
 
+#include "builtins.hpp"
+#include "engine.hpp"
 #include "harmony.hpp"
 #include "job.hpp"
 #include "platform.hpp"
@@ -18,13 +20,18 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <cmath>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <thread>
+#ifndef _WIN32
+#include <csignal>
+#endif
 
 namespace wl {
 
@@ -271,6 +278,16 @@ private:
     platform::Process running_;           // the preview render in progress (under mu_), for cancelling
     std::string runningId_;
     uint64_t runs_ = 0;
+    // live notes: warm __play workers, one per song + track (+ job version), newest few kept
+    struct PlayWorker {
+        platform::Process proc;
+        std::mutex use;          // one request at a time
+        double lastUsed = 0;
+        json info;               // the worker's hello: plugin, preset
+    };
+    std::mutex playMu_;
+    std::map<std::string, std::shared_ptr<PlayWorker>> players_;
+    json play(const std::string &slug, const json &in, std::string &wav);
     std::atomic<bool> stopping_{false};
 
     fs::path songDir(const std::string &slug) const { return root_ / slug; }
@@ -561,6 +578,93 @@ bool songSlug(const std::string &s) {
         if (c == '-' && i && s[i - 1] == '-') return false;
     }
     return true;
+}
+
+// Live notes through a track's own instrument: a __play worker keeps it loaded, so a note renders in
+// milliseconds after the first request (which loads the plugin). The WAV comes back in `wav`.
+json Server::play(const std::string &slug, const json &in, std::string &wav) {
+    const fs::path dir = songDir(slug);
+    const FileMap files = scanSong(dir);
+    const std::string jobPath = pick(files, "job.json", "job.json"), track = in.value("track", std::string());
+    if (jobPath.empty()) return {{"error", "the song has no job.json yet"}};
+    if (track.empty()) return {{"error", "which track?"}};
+    const std::string key = slug + "|" + track + "|" + std::to_string(files.at(jobPath).mtime);
+    std::shared_ptr<PlayWorker> w;
+    bool fresh = false;
+    {
+        std::lock_guard<std::mutex> lock(playMu_);
+        const double now = nowSec();
+        for (auto it = players_.begin(); it != players_.end();) {   // idle 10 min, or the song's job changed: stop it
+            const bool stale = it->first.rfind(slug + "|" + track + "|", 0) == 0 && it->first != key;
+            if ((now - it->second->lastUsed > 600 || stale) && it->second->use.try_lock()) {
+                platform::kill(it->second->proc);
+                it->second->use.unlock();
+                it = players_.erase(it);
+            } else ++it;
+        }
+        auto it = players_.find(key);
+        if (it != players_.end()) w = it->second;
+        else {
+            while (players_.size() >= 4) {   // at most four instruments loaded: drop the least recently used idle one
+                auto lru = players_.end();
+                for (auto j = players_.begin(); j != players_.end(); ++j)
+                    if (lru == players_.end() || j->second->lastUsed < lru->second->lastUsed) lru = j;
+                if (!lru->second->use.try_lock()) break;
+                platform::kill(lru->second->proc);
+                lru->second->use.unlock();
+                players_.erase(lru);
+            }
+            w = std::make_shared<PlayWorker>();
+            w->lastUsed = now;
+            players_[key] = w;
+            fresh = true;
+        }
+        w->lastUsed = now;
+    }
+    std::lock_guard<std::mutex> use(w->use);
+    auto fail = [&](const std::string &e) {
+        platform::kill(w->proc);
+        std::lock_guard<std::mutex> lock(playMu_);
+        auto it = players_.find(key);
+        if (it != players_.end() && it->second == w) players_.erase(it);
+        return json{{"error", e}};
+    };
+    const auto t0 = Clock::now();
+    if (fresh || !w->proc.handle) {
+        if (!platform::spawn({platform::selfExecutable(), "__play", (dir / jobPath).string(), track}, w->proc, true, true, true))
+            return fail("could not start the instrument");
+        std::string hello;
+        if (!platform::readLine(w->proc, hello, 90000)) return fail("the instrument did not load in 90 s");
+        try { w->info = json::parse(hello); } catch (...) { return fail("the instrument answered: " + hello.substr(0, 200)); }
+        if (w->info.contains("error")) return fail(w->info["error"].get<std::string>());
+    }
+    // the request: notes in seconds from the clip's start
+    json notes = json::array();
+    double end = 0;
+    for (auto &n : in.value("notes", json::array())) {
+        if (!n.is_object() || notes.size() >= 64) continue;
+        const double start = std::max(0.0, n.value("start", 0.0)), dur = std::min(8.0, std::max(0.02, n.value("dur", 0.5)));
+        notes.push_back({{"key", std::max(0, std::min(127, n.value("key", 60)))}, {"vel", std::max(0.0, std::min(1.0, n.value("vel", 0.8)))}, {"start", start}, {"dur", dur}});
+        end = std::max(end, start + dur);
+    }
+    if (notes.empty()) return {{"error", "no notes"}};
+    const fs::path out = platform::cacheDir() / "play" / (fnv(key) + "-" + std::to_string(platform::processId()) + ".wav");
+    std::error_code ec;
+    fs::create_directories(out.parent_path(), ec);
+    const json req = {{"notes", notes}, {"seconds", std::min(12.0, end + in.value("tail", 1.2))}, {"out", out.string()}};
+    std::string line;
+    if (!platform::writeInput(w->proc, req.dump() + "\n") || !platform::readLine(w->proc, line, 30000)) return fail("the instrument stopped answering");
+    json r;
+    try { r = json::parse(line); } catch (...) { return fail("the instrument answered: " + line.substr(0, 200)); }
+    if (!r.value("ok", false)) return {{"error", r.value("error", std::string("the note did not render"))}};
+    wav = readFile(out);
+    fs::remove(out, ec);
+    json o = w->info;
+    o["ok"] = true;
+    o["renderMs"] = r.value("ms", 0);
+    o["ms"] = (int)std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
+    o["loaded"] = fresh;
+    return o;
 }
 
 // Local only: the Host header must name this machine (no DNS rebinding), and changes need the token
@@ -858,6 +962,21 @@ int Server::run() {
         sendJson(res, meta(s));
     });
 
+    // live notes: POST {song, track, notes: [{key, vel, start, dur}] (seconds), tail} answers audio/wav,
+    // with the worker's details in the X-Wavelength-Play header
+    http_.Post("/api/play", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        std::string wav;
+        const json r = play(s, in, wav);
+        if (r.contains("error")) return sendJson(res, r, 500);
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("X-Wavelength-Play", r.dump(-1, ' ', true, json::error_handler_t::replace));
+        res.set_content(wav, "audio/wav");
+    });
+
     // live updates (server-sent events): file changes in the song folder, the song list, previews and
     // the agent's transcript. Each stream lasts ~45 s; EventSource reconnects on its own.
     http_.Get("/api/events", [&](const httplib::Request &req, httplib::Response &res) {
@@ -932,8 +1051,16 @@ int Server::run() {
         if (std::system(("xdg-open '" + url + "' >/dev/null 2>&1 &").c_str()) != 0) std::fprintf(stderr, "open %s in a browser\n", url.c_str());
 #endif
     }
+#ifndef _WIN32
+    std::signal(SIGPIPE, SIG_IGN);   // a play worker that died must not take the server with it on the next write
+#endif
     const bool ok = http_.listen(opt_.host, opt_.port);
     stopping_ = true;
+    {
+        std::lock_guard<std::mutex> lock(playMu_);
+        for (auto &[k, w] : players_) platform::kill(w->proc);
+        players_.clear();
+    }
     cv_.notify_all();
     worker.join();
     if (!ok) { std::fprintf(stderr, "error: could not listen on %s:%d (in use?)\n", opt_.host.c_str(), opt_.port); return 1; }
@@ -945,6 +1072,79 @@ int Server::run() {
 int serve(const ServeOptions &o) {
     Server s(o);
     return s.run();
+}
+
+int playWorker(const std::string &jobPath, const std::string &trackName, std::FILE *out) {
+    auto say = [&](const json &j) { std::fprintf(out, "%s\n", j.dump(-1, ' ', false, json::error_handler_t::replace).c_str()); std::fflush(out); };
+    json j;
+    if (!readJson(jobPath, j)) { say({{"error", "cannot read " + jobPath}}); return 1; }
+    Job job;
+    std::string err;
+    try {
+        if (!parseJob(j, fs::path(jobPath).parent_path().string(), job, err)) { say({{"error", err}}); return 1; }
+    } catch (const std::exception &e) { say({{"error", e.what()}}); return 1; }
+    const auto it = std::find_if(job.tracks.begin(), job.tracks.end(), [&](const Track &t) { return t.name == trackName; });
+    if (it == job.tracks.end()) { say({{"error", "no track named " + trackName}}); return 1; }
+    const Track track = *it;
+    const bool builtin = isBuiltin(track.plugin);
+    OpenedPlugin p;
+    if (!builtin) {
+        PluginSetup setup;
+        setup.spec = track.plugin;
+        setup.stateFile = track.stateFile;
+        setup.stateFormat = track.stateFormat;
+        setup.params = track.params;
+        setup.warmup = track.warmup;
+        setup.preset = track.preset;
+        if (!openPlugin(setup, track.name, p, err)) { say({{"error", err}}); return 1; }
+        // one silent render with the full warmup (sampled instruments stream after activation), then short ones
+        Audio prime;
+        prime.resize((size_t)(0.2 * job.sampleRate));
+        if (!runPlugin(job, p, {}, nullptr, prime, err)) { say({{"error", err}}); return 1; }
+        p.plugin->warmup = 0.02;
+    }
+    say({{"track", track.name}, {"plugin", builtin ? track.plugin : p.name}, {"preset", builtin ? track.preset : p.preset}, {"gainDb", track.gainDb}});
+    Job quick = job;   // the instrument is loaded and settled: no wall-clock warmup per note
+    quick.warmup = 0;
+    const double fader = std::pow(10.0, track.gainDb / 20);
+    std::string line;
+    char buf[1 << 16];
+    for (;;) {
+        line.clear();
+        for (;;) {   // one line of stdin (fgets: plain C stdio, no iostream in this file)
+            if (!std::fgets(buf, sizeof buf, stdin)) return 0;   // the server went away
+            line += buf;
+            if (!line.empty() && line.back() == '\n') break;
+        }
+        json req;
+        try { req = json::parse(line); } catch (...) { say({{"ok", false}, {"error", "bad request"}}); continue; }
+        const auto t0 = Clock::now();
+        Track t = track;
+        t.notes.clear();
+        for (auto &n : req.value("notes", json::array())) {
+            Note note{};
+            note.start = n.value("start", 0.0);
+            note.length = n.value("dur", 0.5);
+            note.key = n.value("key", 60);
+            note.channel = 0;
+            note.velocity = n.value("vel", 0.8);
+            t.notes.push_back(note);
+        }
+        Audio audio;
+        audio.resize((size_t)(std::max(0.1, req.value("seconds", 1.5)) * job.sampleRate));
+        std::vector<std::string> warnings;
+        bool ok;
+        if (builtin) ok = renderBuiltin(t.plugin, quick, t, audio, warnings, err);
+        else {
+            const auto events = scheduleNotes(t.notes, job.sampleRate);
+            ok = runPlugin(quick, p, events, nullptr, audio, err);
+        }
+        if (!ok) { say({{"ok", false}, {"error", err}}); continue; }
+        muteGarbage(audio, job.sampleRate, t.name, warnings);
+        for (size_t i = 0; i < audio.frames(); ++i) { audio.left[i] *= (float)fader; audio.right[i] *= (float)fader; }
+        if (!writeWav(req.value("out", std::string()), audio, job.sampleRate, err, 16)) { say({{"ok", false}, {"error", err}}); continue; }
+        say({{"ok", true}, {"ms", (int)std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count()}});
+    }
 }
 
 } // namespace wl
