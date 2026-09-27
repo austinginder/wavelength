@@ -231,6 +231,28 @@ bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> 
     return true;
 }
 
+bool isKiloheartsPreset(const std::vector<uint8_t> &d) {
+    return d.size() >= 16 && le32(d.data()) == 6 && le32(d.data() + 8) == 2;
+}
+
+std::vector<uint8_t> kiloheartsPresetToState(const std::vector<uint8_t> &p) {
+    // preset: u32 6 (version), u32 build, u32 2 (a preset file), body. The state wraps the same body:
+    // u32 1, u32 payload length; payload = u32 6, u32 build, u32 1 (a state), u32 0, u32 0, u8 0, body
+    std::vector<uint8_t> payload;
+    put32(payload, 6);
+    put32(payload, le32(p.data() + 4));
+    put32(payload, 1);
+    put32(payload, 0);
+    put32(payload, 0);
+    payload.push_back(0);
+    payload.insert(payload.end(), p.begin() + 12, p.end());
+    std::vector<uint8_t> state;
+    put32(state, 1);
+    put32(state, (uint32_t)payload.size());
+    state.insert(state.end(), payload.begin(), payload.end());
+    return state;
+}
+
 bool isSerumFxFile(const std::vector<uint8_t> &d) {
     if (!isXferJson(d) || d.size() < 17) return false;
     const uint64_t n = le64(&d[9]);

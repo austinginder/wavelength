@@ -18,6 +18,10 @@ bool isXferJson(const std::vector<uint8_t> &d);
 bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> &processor,
                          std::vector<uint8_t> &controller, std::string &err);
 
+// Kilohearts snap-in presets (.ksdl, .ksqe, ...: the extension is the snap-in's id) -> its state
+bool isKiloheartsPreset(const std::vector<uint8_t> &d);
+std::vector<uint8_t> kiloheartsPresetToState(const std::vector<uint8_t> &preset);
+
 // Serum 2 .SerumFX (one effect module) / .SerumFXRack (a rack): the Serum 2 FX plugin's processor state
 // with its rack replaced by the file's modules
 bool isSerumFxFile(const std::vector<uint8_t> &d);

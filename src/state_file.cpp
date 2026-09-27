@@ -126,6 +126,10 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
 
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto" && endsWith(path, ".hxp")) fmt = "helix";
+    if (fmt == "auto" && isKiloheartsPreset(data)) {   // extension ".ks" + 2 letters, the snap-in's id
+        const std::string ext = std::filesystem::path(path).extension().string();
+        if (ext.size() == 5 && ext.rfind(".ks", 0) == 0) fmt = "kilohearts";
+    }
     if (fmt == "auto")
         fmt = looksLikeClapPreset(data) ? "clap-preset" : isVstPreset(data) ? "vstpreset" : isNksf(data) ? "nksf"
             : isFxp(data) ? "fxp" : isSerumFxFile(data) ? "serumfx" : isXferJson(data) ? "serum" : isDx7Cartridge(data) ? "dx7" : isSynplantPatch(data) ? "synplant" : isEchobodePatch(data) ? "echobode" : isPermut8Bank(data) ? "permut8" : isCherryPreset(data) ? "cherry" : isMicrotonicText(data) ? "microtonic"
@@ -177,6 +181,9 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         };
     } else if (fmt == "juce-valuetree") {
         if (!valueTreeToJuceXml(data, out.state, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "kilohearts") {
+        if (!isKiloheartsPreset(data)) { err = path + " is not a Kilohearts preset"; return false; }
+        out.state = kiloheartsPresetToState(data);
     } else if (fmt == "helix") {   // audjoo Helix .hxp: its chunk, bare or in an .fxp (whose size field is often stale)
         if (data.size() >= 60 && std::memcmp(data.data(), "CcnK", 4) == 0 && std::memcmp(data.data() + 8, "FPCh", 4) == 0) {
             const size_t n = (size_t(data[56]) << 24) | (size_t(data[57]) << 16) | (size_t(data[58]) << 8) | data[59];
@@ -261,7 +268,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, serum, serumfx, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;

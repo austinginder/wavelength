@@ -448,6 +448,29 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             }
         }
     }
+    // Kilohearts snap-ins: presets in Kilohearts' shared folder, one subfolder and extension per
+    // plugin (index.json names them: "kHs Delay" -> presets/ksdl/**/*.ksdl)
+    if (squash(plugin.vendor) == "kilohearts") {
+        std::ifstream in("/Library/Application Support/Kilohearts/index.json");
+        const json index = in ? json::parse(in, nullptr, false) : json();
+        std::string id, ext;
+        if (index.is_object() && index.contains("plugins") && index["plugins"].is_array())
+            for (const auto &e : index["plugins"])
+                if (e.is_object() && e.value("fileName", "") == plugin.name) { id = e.value("id", ""); ext = "." + e.value("presetExtension", id); }
+        std::error_code ec;
+        if (!id.empty())
+            for (const fs::path &root : {fs::path("/Library/Application Support/Kilohearts/presets"), fs::path(home) / "Library/Application Support/Kilohearts/presets"})
+                for (auto it = fs::recursive_directory_iterator(root / id, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                    if (ec) break;
+                    if (!it->is_regular_file(ec) || it->path().extension().string() != ext) continue;
+                    PresetInfo pi;
+                    pi.name = it->path().stem().string();
+                    pi.category = it->path().parent_path() == root / id ? "Presets" : it->path().parent_path().filename().string();
+                    pi.stateFile = true;
+                    pi.location = pi.loadKey = it->path().string();
+                    out.push_back(pi);
+                }
+    }
     // Permut8: every program of every bank (30 each): "<bank>.p8bank#<n>"
     if (p == "permut8") {
         std::error_code ec;
