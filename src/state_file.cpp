@@ -126,6 +126,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
 
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto" && endsWith(path, ".hxp")) fmt = "helix";
+    if (fmt == "auto" && data.size() > 26 && std::memcmp(data.data(), "22 serialization::archive", 25) == 0) fmt = "arturia";
     if (fmt == "auto" && isKiloheartsPreset(data)) {   // extension ".ks" + 2 letters, the snap-in's id
         const std::string ext = std::filesystem::path(path).extension().string();
         if (ext.size() == 5 && ext.rfind(".ks", 0) == 0) fmt = "kilohearts";
@@ -194,6 +195,19 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         };
     } else if (fmt == "juce-valuetree") {
         if (!valueTreeToJuceXml(data, out.state, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "arturia") {   // an Arturia preset (a Boost text archive): the VST3/CLAP/AU state as is
+        out.state = data;
+        const auto text = data;
+        // the VST 2 chunk holds two archives (component and controller) behind their u64 LE lengths
+        out.transform = [text](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &) {
+            const bool pair = current.size() > 16 + 25 && std::memcmp(current.data() + 16, "22 serialization::archive", 25) == 0;
+            if (!pair) { state = text; return true; }
+            state.clear();
+            for (int half = 0; half < 2; ++half) for (int i = 0; i < 8; ++i) state.push_back((uint8_t)((uint64_t)text.size() >> (8 * i)));
+            state.insert(state.end(), text.begin(), text.end());
+            state.insert(state.end(), text.begin(), text.end());
+            return true;
+        };
     } else if (fmt == "kilohearts") {
         if (!isKiloheartsPreset(data)) { err = path + " is not a Kilohearts preset"; return false; }
         out.state = kiloheartsPresetToState(data);
@@ -284,7 +298,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, arturia, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;

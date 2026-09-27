@@ -76,11 +76,32 @@ void bef(std::vector<uint8_t> &o, float f) { uint32_t u; std::memcpy(&u, &f, 4);
 void lp(std::vector<uint8_t> &o, const std::string &s) { be32(o, (uint32_t)s.size()); o.insert(o.end(), s.begin(), s.end()); }
 uint32_t rbe32(const std::vector<uint8_t> &d, size_t i) { return (uint32_t)d[i] << 24 | (uint32_t)d[i + 1] << 16 | (uint32_t)d[i + 2] << 8 | d[i + 3]; }
 
+// a parameter by its VST name ("OscWave1"), or by its index when the format names it otherwise (the Audio
+// Unit says "Osc Wave #", "Mute 1"): globals 0-13, 23 per channel from 14, OscAtk 198-205, Choke 206-213
+bool find(Plugin &plugin, const std::string &param, ParamInfo &pi) {
+    if (plugin.findParam(param, pi)) return true;
+    static const char *globals[14] = {"Pattern", "PlayStop", "StepRate", "Swing", "FillRate", "MastVol", "Mute1", "Mute2",
+                                      "Mute3", "Mute4", "Mute5", "Mute6", "Mute7", "Mute8"};
+    static const char *perChannel[23] = {"OscWave", "OscFreq", "OscDcy", "ModMode", "ModRate", "ModAmt", "NFilMod", "NFilFrq",
+                                         "NFilQ", "NStereo", "NEnvMod", "NEnvAtk", "NEnvDcy", "Mix", "DistAmt", "EQFreq",
+                                         "EQGain", "Level", "Pan", "Output", "OscVel", "NVel", "ModVel"};
+    int index = -1;
+    for (int i = 0; i < 14; ++i) if (param == globals[i]) index = i;
+    const int ch = param.empty() ? 0 : param.back() - '0';
+    if (index < 0 && ch >= 1 && ch <= 8) {
+        const std::string key = param.substr(0, param.size() - 1);
+        for (int i = 0; i < 23; ++i) if (key == perChannel[i]) index = 14 + 23 * (ch - 1) + i;
+        if (key == "OscAtk") index = 197 + ch;
+        if (key == "Choke") index = 205 + ch;
+    }
+    return index >= 0 && plugin.findParam("#" + std::to_string(index), pi);
+}
+
 // normalized value of a parameter from its display text, read by the plugin
 bool norm(Plugin &plugin, const std::string &param, const std::string &text, float &out, std::string &err) {
     ParamInfo pi;
     double plain = 0;
-    if (!plugin.findParam(param, pi)) { err = "Microtonic has no parameter " + param; return false; }
+    if (!find(plugin, param, pi)) { err = "Microtonic has no parameter " + param; return false; }
     if (!plugin.valueFromText(pi.id, text, plain)) { err = "Microtonic could not read '" + text + "' for " + param; return false; }
     out = (float)((plain - pi.min) / std::max(1e-12, pi.max - pi.min));
     return true;
@@ -93,7 +114,7 @@ bool drumValues(Plugin &plugin, const Node &d, int ch, std::vector<float> &v, st
         size_t idx = 0;
         for (size_t i = 0; i < names.size(); ++i) if (names[i] == text) idx = i;
         ParamInfo pi;
-        if (plugin.findParam(k + std::to_string(ch), pi))
+        if (find(plugin, k + std::to_string(ch), pi))
             plugin.setControllerValue(pi.id, pi.min + (pi.max - pi.min) * (double)idx / (double)(names.size() - 1));
     }
     v.clear();
@@ -213,16 +234,19 @@ bool microtonicKitState(Plugin &plugin, const std::vector<uint8_t> &comp, const 
         for (unsigned char c : path) { prog.push_back(0); prog.push_back(c); }   // UTF-16BE (paths are ASCII)
         for (float f : v) { bef(prog, f); bef(prog, f); }                        // morph A and B
     }
+    // the kit goes into every slot of the bank: the plugin plays its current program after loading (the
+    // Audio Unit's state names one, often not the first)
+    const uint32_t slots = std::max<uint32_t>(1, std::min<uint32_t>(128, rbe32(comp, chunkAt + 4)));
     std::vector<uint8_t> chunk;
     be32(chunk, 0xeddb81a6);
-    be32(chunk, 1);
-    chunk.insert(chunk.end(), prog.begin(), prog.end());
+    be32(chunk, slots);
+    for (uint32_t i = 0; i < slots; ++i) chunk.insert(chunk.end(), prog.begin(), prog.end());
     chunk.insert(chunk.end(), tail.begin(), tail.end());
     if (form == Bare) { out = chunk; return true; }
     std::vector<uint8_t> fxb = {'F', 'B', 'C', 'h'};
     be32(fxb, 1);
     fxb.insert(fxb.end(), comp.begin() + (long)chunkAt - 144, comp.begin() + (long)chunkAt - 140);   // fxID: NuMT or NuMm (Multi)
-    be32(fxb, 1); be32(fxb, 1);
+    be32(fxb, 1); be32(fxb, slots);
     fxb.insert(fxb.end(), 128, 0);
     be32(fxb, (uint32_t)chunk.size());
     fxb.insert(fxb.end(), chunk.begin(), chunk.end());
@@ -250,7 +274,7 @@ bool microtonicDrumParams(Plugin &plugin, const std::vector<uint8_t> &drum, int 
     if (!drumValues(plugin, *d, channel, v, err)) return false;
     for (int i = 0; i < 25; ++i) {
         ParamInfo pi;
-        if (!plugin.findParam(kDrumKeys[i] + std::to_string(channel), pi)) continue;
+        if (!find(plugin, kDrumKeys[i] + std::to_string(channel), pi)) continue;
         values.push_back({pi.id, pi.cookie, pi.min + (pi.max - pi.min) * v[(size_t)i]});
     }
     return true;

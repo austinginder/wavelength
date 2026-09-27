@@ -116,6 +116,7 @@ std::vector<PresetInfo> listPresets(const PluginInfo &info, bool rescanNks, std:
         // VST 2 plugins always report a program list; placeholders ("Program 1", "Default") are not a library
         auto generic = [](std::string n) {
             std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+            if (n.rfind("midi channel ", 0) == 0) return true;   // "MIDI channel 15 program 64": program-change slots (Kontakt's VST3)
             for (const char *w : {"programchange", "program", "prog", "preset", "patch", "default", "init", "untitled"})
                 if (n.rfind(w, 0) == 0) { n.erase(0, strlen(w)); break; }
             return n.find_first_not_of(" 0123456789:-._#") == std::string::npos;   // "Program 12", "065: -"

@@ -4,7 +4,7 @@ Releases are cut by hand on a Mac; binaries are built locally, not in CI.
 
 1. In `changelog.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` (add an empty `## [Unreleased]` above it).
 2. In `CMakeLists.txt`, set `project(... VERSION x.y.z)` and clear `WAVELENGTH_VERSION_SUFFIX`; set the same version in `.claude-plugin/plugin.json` (Claude Code updates plugins by it).
-3. `scripts/check.sh` must pass.
+3. `scripts/check.sh` must pass, and `wavelength compat --report compat.md` (every installed plugin, one worker at a time, about an hour; cached results of unchanged plugins are reused within one engine version) must show no plugin newly failing against the last release's report. Compare the two reports' Failing sections; a plugin that fails for its own reasons (a crash in its code, a licence or ROM window) stays listed there.
 4. Commit `🚀 RELEASE: vx.y.z`, tag `vx.y.z`, push the commit and the tag.
 5. `gh release create vx.y.z --title vx.y.z --notes-file <the version's changelog section>`.
 6. With Docker Desktop running: `scripts/build-release.sh vx.y.z --upload`. It builds and smoke-tests every target and attaches the archives and `SHA256SUMS.txt` to the release:

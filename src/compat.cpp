@@ -26,23 +26,28 @@ namespace wl {
 namespace {
 
 constexpr double kLength = 3.0, kOn = 0.5, kLen = 1.0;
-constexpr int kTestVersion = 2;   // bump when the tests change: cached results of older tests are run again
+constexpr int kTestVersion = 3;   // bump when the tests change: cached results of older tests are run again
 
 double since(std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); }
 
 bool isInstrument(const PluginInfo &p) { return std::find(p.features.begin(), p.features.end(), "instrument") != p.features.end(); }
 
-// one render of the test: a C2-C5 chord for instruments, a noise burst through effects
+// one render of the test: a C2-C5 chord for instruments (or the same notes one after another: some
+// instruments give keys other jobs, Microtonic's Audio Unit mutes on C3), a noise burst through effects
 struct Take { bool ok = false, silent = true, garbage = false; double lufs = -120, peakDb = -120, centroid = 0, ms = 0; double bands[6] = {}; std::string error; Audio audio; };
 
-Take renderTest(OpenedPlugin &p, bool instrument, double warmup, const Audio &noise) {
+Take renderTest(OpenedPlugin &p, bool instrument, double warmup, const Audio &noise, bool arpeggio = false) {
     Take t;
     Job job;
     job.sampleRate = 48000;
     job.blockSize = 512;
     job.warmup = warmup;
     std::vector<Note> notes;
-    for (int key : {36, 48, 60, 72}) notes.push_back({kOn, kLen, key, 0, 0.8, {}, {}});
+    int n = 0;
+    for (int key : {36, 48, 60, 72}) {
+        if (arpeggio) notes.push_back({kOn + 0.4 * n++, 0.35, key, 0, 0.8, {}, {}});
+        else notes.push_back({kOn, kLen, key, 0, 0.8, {}, {}});
+    }
     const auto events = scheduleNotes(notes, job.sampleRate);
     t.audio.resize((size_t)(kLength * job.sampleRate));
     std::vector<std::string> warnings;
@@ -126,10 +131,11 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
                 if (!inst) warns.push_back("outputs silence from a noise input");
                 else if (empty) warns.push_back("renders silence at its defaults and lists no presets (a sample player waiting for an instrument?)");
                 else if (presetSounds) notes.push_back("silent at its defaults; its presets play");
-                else fails.push_back("renders silence (a C2-C5 chord, 5 s warm-up), and so do the presets tried");
+                else fails.push_back("renders silence (a C2-C5 chord, a 5 s warm-up, the notes one at a time), and so do the presets tried");
             }
             else if (s.value("passthrough", false)) notes.push_back("passes audio through unchanged at its defaults");
-            if (s.value("warmedUp", false)) notes.push_back("silent until given a 5 s warm-up (samples load after activation)");
+            if (s.value("arpeggio", false)) notes.push_back("silent with the chord, plays its notes one at a time (a key in C2-C5 has another job)");
+            else if (s.value("warmedUp", false)) notes.push_back("silent until given a 5 s warm-up (samples load after activation)");
             if (s.value("realtime", 0.0) > 1.0) warns.push_back("renders slower than real time (" + std::to_string(s.value("realtime", 0.0)).substr(0, 4) + "x)");
         } else if (step == "preset") {
             rec["presetTests"].push_back(s);
@@ -206,7 +212,7 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
     // defaults and the reference render: measured here, or (one preset per process) read from the full run
     std::vector<ParamInfo> params0;
     Take base;
-    bool warmedUp = false;
+    bool warmedUp = false, arpeggio = false;
     std::vector<PresetInfo> presets;
     std::vector<size_t> pick;
     if (only >= 0) {
@@ -220,6 +226,7 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
             if (j.value("step", "") == "render") {
                 base.ok = j.value("ok", false); base.silent = j.value("silent", true); base.lufs = j.value("lufs", -120.0);
                 base.centroid = j.value("centroid", 0.0); warmedUp = j.value("warmedUp", false);
+                arpeggio = j.value("arpeggio", false);
                 if (j.contains("bands")) for (int b = 0; b < 6; ++b) base.bands[b] = j["bands"][b];
             }
         }
@@ -244,19 +251,24 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
         for (auto &x : presets) { if (x.stateFile) ++files; else if (x.category == "Programs") ++programs; }   // the rest: the plugin's own discovery
         emit({{"step", "presets"}, {"count", presets.size()}, {"programs", programs}, {"files", files}, {"other", presets.size() - programs - files}, {"error", perr}});
 
-        // the test render (instruments get a longer warm-up when silent: samples stream in after activation)
+        // the test render (instruments get a longer warm-up when silent: samples stream in after activation;
+        // then the notes one at a time)
         double warm = 0.4;
         base = renderTest(p, instrument, warm, noise);
         if (base.ok && base.silent && instrument) {
             Take again = renderTest(p, instrument, 5.0, noise);
             if (again.ok && !again.silent) { base = std::move(again); warmedUp = true; warm = 5.0; }
         }
+        if (base.ok && base.silent && instrument) {
+            Take again = renderTest(p, instrument, 0.4, noise, true);
+            if (again.ok && !again.silent) { base = std::move(again); arpeggio = true; }
+        }
         json bands = json::array();
         for (double b : base.bands) bands.push_back(std::round(b * 10) / 10);
         json r = {{"step", "render"}, {"ok", base.ok}, {"error", base.error}, {"silent", base.silent}, {"garbage", base.garbage},
                   {"lufs", std::round(base.lufs * 10) / 10}, {"peakDb", std::round(base.peakDb * 10) / 10}, {"ms", std::round(base.ms)},
                   {"realtime", std::round(std::max(0.0, base.ms - warm * 1000) / 1000 / kLength * 100) / 100}, {"warmedUp", warmedUp},
-                  {"centroid", std::round(base.centroid)}, {"bands", bands}};
+                  {"arpeggio", arpeggio}, {"centroid", std::round(base.centroid)}, {"bands", bands}};
         if (!instrument && base.ok) r["passthrough"] = sameAudio(base.audio, noise);
         emit(r);
 
@@ -315,7 +327,7 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
             for (const auto &b : now)
                 if (a.id == b.id) { if (std::fabs(a.value - b.value) > 1e-6 * std::max(1.0, std::fabs(a.max - a.min))) ++changed; break; }
         rec["paramsChanged"] = changed;
-        Take t = renderTest(q, instrument, warmedUp ? 5.0 : 0.4, noise);
+        Take t = renderTest(q, instrument, warmedUp ? 5.0 : 0.4, noise, arpeggio);
         rec["soundChanged"] = t.ok && soundsDifferent(t, base);
         if (t.ok) rec["lufs"] = std::round(t.lufs * 10) / 10;
         else rec["renderError"] = t.error;
