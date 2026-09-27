@@ -59,6 +59,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   plugin folders. An entry whose plugin is already installed elsewhere is skipped unless `--force`; on
   Linux a plugin that won't load is reported with the library it misses. `samples --install-soundfont`
   now shares its download.
+- `wavelength serve` has the Wavelength icon (SVG and PNG favicons, an Apple touch icon, `/favicon.ico`).
+- Dexed presets on Linux and Windows: every voice of the cartridges Dexed unpacks into its user data
+  folder, as on macOS (1,045 in the kit's Dexed on Linux).
 - `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 

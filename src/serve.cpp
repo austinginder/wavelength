@@ -494,7 +494,7 @@ bool Server::allowed(const httplib::Request &req) const {
 std::string Server::uiFile(const std::string &path, std::string &type) const {
     const std::string ext = fs::path(path).extension().string();
     type = ext == ".html" ? "text/html; charset=utf-8" : ext == ".js" ? "text/javascript; charset=utf-8" : ext == ".css" ? "text/css; charset=utf-8"
-         : ext == ".svg" ? "image/svg+xml" : "application/octet-stream";
+         : ext == ".svg" ? "image/svg+xml" : ext == ".png" ? "image/png" : "application/octet-stream";
     if (path.find("..") != std::string::npos) return "";
     if (!opt_.uiDir.empty()) {
         std::error_code ec;
@@ -533,6 +533,12 @@ int Server::run() {
         if (at != std::string::npos) html.replace(at, mark.size(), meta);
         res.set_header("Cache-Control", "no-store");
         res.set_content(html, type);
+    });
+    http_.Get("/favicon.ico", [this](const httplib::Request &, httplib::Response &res) {   // for browsers that ask before reading the page's links
+        std::string type, body = uiFile("icons/favicon-32.png", type);
+        if (body.empty()) { res.status = 404; return; }
+        res.set_header("Cache-Control", "max-age=86400");
+        res.set_content(body, type);
     });
     http_.Get(R"(/ui/(.+))", [this](const httplib::Request &req, httplib::Response &res) {
         std::string type, body = uiFile(req.matches[1], type);
