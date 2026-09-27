@@ -73,6 +73,9 @@ bool spawn(const std::vector<std::string> &args, Process &p, bool captureStdout,
 // an exception code), empty for a normal exit.
 bool finished(Process &p, std::string &crash);
 void kill(Process &p);   // kill and reap
+// End the child from another thread without reaping it: whoever waits on it (finished(), readOutput())
+// sees it end as usual.
+void terminate(const Process &p);
 // Read the child's stdout until it closes it or `timeoutSec` passes (then false).
 bool readOutput(Process &p, std::string &out, int timeoutSec);
 
@@ -89,6 +92,12 @@ std::string findProgram(const std::string &name);
 // Why a library won't load, from the system loader ("" when it loads). The VST3 SDK's Linux
 // loader only says "dlopen failed".
 std::string libraryLoadError(const std::string &path);
+
+// Move a file or folder to the user's trash (macOS ~/.Trash, the freedesktop trash on Linux, the Recycle
+// Bin on Windows), renamed when the trash already holds that name. `where` gets its new path when known.
+bool moveToTrash(const std::filesystem::path &path, std::string &where, std::string &err);
+// Show a file or folder in the system file browser (Finder, Explorer, the Linux default).
+bool reveal(const std::filesystem::path &path, std::string &err);
 
 // Run the main thread's event loop for `ms` (plugins post work to it).
 void pumpEvents(double ms);

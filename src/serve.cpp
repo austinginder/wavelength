@@ -219,6 +219,7 @@ struct Preview {
     std::string path, error;            // path: mix.wav relative to the song folder
     json window;
     double queuedAt = 0, startedAt = 0, finishedAt = 0;
+    uint64_t run = 0;                   // which request this is: a re-request of the same id is a new run
 };
 
 double nowSec() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
@@ -267,6 +268,9 @@ private:
     std::map<std::string, Preview> previews_;
     std::deque<std::string> queue_;
     std::atomic<uint64_t> previewVersion_{0};
+    platform::Process running_;           // the preview render in progress (under mu_), for cancelling
+    std::string runningId_;
+    uint64_t runs_ = 0;
     std::atomic<bool> stopping_{false};
 
     fs::path songDir(const std::string &slug) const { return root_ / slug; }
@@ -277,6 +281,9 @@ private:
     json harmony(const std::string &slug);
     json previewJson(const Preview &p) const;
     json startPreview(const std::string &slug, std::vector<std::string> tracks, int from, int to);
+    json cancelPreviews(const std::string &slug, const std::string &id);
+    bool rendering(const std::string &slug);
+    json meta(const std::string &slug);
     void previewWorker();
     void prunePreviews(const fs::path &dir);
     bool allowed(const httplib::Request &req) const;
@@ -316,7 +323,14 @@ json Server::song(const std::string &slug) {
     json docs = json::object();
     for (auto &[p, f] : files)
         if (p.size() > 3 && p.substr(p.size() - 3) == ".md" && f.size < 200000) docs[p] = readFile(dir / p);
-    return {{"slug", slug}, {"files", filesJson(files)}, {"jobPath", jobPath.empty() ? json(nullptr) : json(jobPath)},
+    json info = json::object();
+    {
+        Song sg;
+        std::string err;
+        if (openSong(dir.string(), sg, err) && sg.hasManifest())
+            info = {{"title", sg.manifest.value("title", slug)}, {"authors", sg.manifest.value("authors", json::array())}};
+    }
+    return {{"slug", slug}, {"meta", info}, {"files", filesJson(files)}, {"jobPath", jobPath.empty() ? json(nullptr) : json(jobPath)},
             {"job", hasJob ? jobSummary(job) : json(nullptr)}, {"reportPath", reportPath.empty() ? json(nullptr) : json(reportPath)},
             {"report", hasReport ? report : json(nullptr)}, {"audio", audio}, {"docs", docs}};
 }
@@ -384,6 +398,7 @@ json Server::startPreview(const std::string &slug, std::vector<std::string> trac
     const fs::path outBase = reportPath.empty() ? dir / "out" : (dir / reportPath).parent_path();
     p.dir = (outBase / "preview" / id).string();
     p.queuedAt = nowSec();
+    p.run = ++runs_;
     // rendered before (by an earlier server run): ready at once
     json rep;
     std::error_code ec;
@@ -415,8 +430,11 @@ void Server::previewWorker() {
             if (queue_.empty()) continue;
             id = queue_.front();
             queue_.pop_front();
+            if (previews_[id].status == "cancelled") continue;
             previews_[id].status = "rendering";
             previews_[id].startedAt = nowSec();
+            previews_[id].finishedAt = 0;
+            previews_[id].error.clear();
         }
         ++previewVersion_;
         Preview p;
@@ -442,8 +460,19 @@ void Server::previewWorker() {
         std::string out, error;
         bool ok = false;
         json rep;
-        if (!platform::spawn(args, proc, true, true)) error = "could not start a render";
+        bool cancelled = false;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            cancelled = previews_[id].status == "cancelled";   // cancelled before it started
+        }
+        if (cancelled) error = "cancelled";
+        else if (!platform::spawn(args, proc, true, true)) error = "could not start a render";
         else {
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                running_ = proc;
+                runningId_ = id;
+            }
             platform::readOutput(proc, out, 900);
             std::string crash;
             while (!platform::finished(proc, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -453,9 +482,17 @@ void Server::previewWorker() {
         }
         {
             std::lock_guard<std::mutex> lock(mu_);
+            running_ = platform::Process();
+            runningId_.clear();
             Preview &q = previews_[id];
+            if (q.run != p.run) {   // asked for again while this run ended: the new request stands
+                ++previewVersion_;
+                continue;
+            }
             q.finishedAt = nowSec();
-            if (ok) {
+            if (q.status == "cancelled") {   // stopped on request: no half-written preview left behind
+                fs::remove_all(p.dir, ec);
+            } else if (ok) {
                 q.status = "ready";
                 q.path = fs::relative(fs::path(p.dir) / "mix.wav", dir, ec).generic_string();
                 q.window = rep.value("window", json());
@@ -477,6 +514,53 @@ void Server::prunePreviews(const fs::path &dir) {
     if (all.size() <= 40) return;
     std::sort(all.begin(), all.end(), [](auto &a, auto &b) { return a.first > b.first; });
     for (size_t i = 40; i < all.size(); ++i) fs::remove_all(all[i].second, ec);
+}
+
+// Cancel a song's previews (or one by id): queued ones leave the queue, the one rendering is stopped.
+json Server::cancelPreviews(const std::string &slug, const std::string &id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    int n = 0;
+    for (auto q = queue_.begin(); q != queue_.end();) {
+        Preview &p = previews_[*q];
+        if ((id.empty() && p.song == slug) || *q == id) { p.status = "cancelled"; p.finishedAt = nowSec(); q = queue_.erase(q); ++n; } else ++q;
+    }
+    if (!runningId_.empty()) {
+        Preview &p = previews_[runningId_];
+        if ((id.empty() && p.song == slug) || runningId_ == id) { p.status = "cancelled"; platform::terminate(running_); ++n; }
+    }
+    ++previewVersion_;
+    return {{"ok", true}, {"cancelled", n}};
+}
+
+bool Server::rendering(const std::string &slug) {
+    std::lock_guard<std::mutex> lock(mu_);
+    for (auto &[id, p] : previews_) if (p.song == slug && (p.status == "rendering" || p.status == "queued")) return true;
+    return false;
+}
+
+// What the details form edits: the manifest's fields, or what a new manifest would say
+json Server::meta(const std::string &slug) {
+    Song song;
+    std::string err;
+    const bool open = openSong(songDir(slug).string(), song, err);
+    const json m = open && song.hasManifest() ? song.manifest : newManifest(songDir(slug));
+    json out = {{"manifest", open && song.hasManifest()}, {"slug", slug}};
+    for (const char *k : {"title", "authors", "summary", "description", "prompt", "license", "tags", "created", "updated"})
+        if (m.contains(k)) out[k] = m[k];
+    if (!out.contains("authors")) out["authors"] = json::array();
+    if (!out.contains("tags")) out["tags"] = json::array();
+    return out;
+}
+
+// a folder name the song format allows: lowercase a-z, 0-9 and single dashes
+bool songSlug(const std::string &s) {
+    if (s.empty() || s.size() > 80 || s.front() == '-' || s.back() == '-') return false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) return false;
+        if (c == '-' && i && s[i - 1] == '-') return false;
+    }
+    return true;
 }
 
 // Local only: the Host header must name this machine (no DNS rebinding), and changes need the token
@@ -652,6 +736,126 @@ int Server::run() {
         auto it = previews_.find(req.get_param_value("id"));
         if (it == previews_.end()) return sendJson(res, {{"error", "unknown preview"}}, 404);
         sendJson(res, previewJson(it->second));
+    });
+
+    // cancel previews: POST {song} stops all of that song's, {id} one
+    http_.Post("/api/preview/cancel", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        sendJson(res, cancelPreviews(in.value("song", std::string()), in.value("id", std::string())));
+    });
+
+    // song folder actions: rename, move to the trash, show in the file browser, edit the manifest's details
+    auto songFrom = [&](const json &in, std::string &slug) { slug = in.value("song", std::string()); return songExists(slug); };
+    http_.Post("/api/song/rename", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        const std::string to = in.value("to", std::string());
+        if (to == s) return sendJson(res, {{"ok", true}, {"song", s}});
+        if (!songSlug(to)) return sendJson(res, {{"error", "a folder name is lowercase letters, digits and single dashes"}}, 400);
+        std::error_code ec;
+        if (fs::exists(songDir(to), ec)) return sendJson(res, {{"error", "there is already a folder named " + to}}, 409);
+        if (rendering(s)) return sendJson(res, {{"error", "a preview of this song is rendering; cancel it first"}}, 409);
+        fs::rename(songDir(s), songDir(to), ec);
+        if (ec) return sendJson(res, {{"error", "could not rename the folder: " + ec.message()}}, 500);
+        Song song;
+        std::string err;
+        if (openSong(songDir(to).string(), song, err) && song.hasManifest()) {   // the manifest's slug is the folder's name
+            song.manifest["slug"] = to;
+            song.manifest["updated"] = nowRfc3339();
+            writeManifest(song, err);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (auto it = previews_.begin(); it != previews_.end();) it = it->second.song == s ? previews_.erase(it) : std::next(it);
+        }
+        sendJson(res, {{"ok", true}, {"song", to}});
+    });
+    http_.Post("/api/song/trash", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        cancelPreviews(s, "");
+        for (int i = 0; i < 50 && rendering(s); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));   // let a stopped render end
+        std::string where, err;
+        if (!platform::moveToTrash(songDir(s), where, err)) return sendJson(res, {{"error", err}}, 500);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (auto it = previews_.begin(); it != previews_.end();) it = it->second.song == s ? previews_.erase(it) : std::next(it);
+        }
+        sendJson(res, {{"ok", true}, {"trash", where}});
+    });
+    http_.Post("/api/song/reveal", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s, err;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        const std::string file = in.value("file", std::string());
+        fs::path target = songDir(s);
+        if (!file.empty()) {
+            if (!checkSongPath(file, err)) return sendJson(res, {{"error", err}}, 400);
+            target /= file;
+        }
+        if (!platform::reveal(target, err)) return sendJson(res, {{"error", err}}, 500);
+        sendJson(res, {{"ok", true}});
+    });
+    http_.Get("/api/meta", [&](const httplib::Request &req, httplib::Response &res) {
+        std::string s;
+        if (!slugOf(req, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        sendJson(res, meta(s));
+    });
+    // POST {song, title, authors: [{name, role, kind}], summary, description, license, tags}: writes
+    // wavelength.json (a folder without one gets a new manifest, as `wavelength save` would make)
+    http_.Post("/api/meta", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s, err;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        Song song;
+        if (!openSong(songDir(s).string(), song, err)) { song = Song{}; song.dir = songDir(s); }
+        if (!song.hasManifest()) song.manifest = newManifest(song.dir);
+        json &m = song.manifest;
+        auto text = [&](const char *k, size_t max) {
+            if (!in.contains(k)) return;
+            const std::string v = in[k].is_string() ? in[k].get<std::string>() : "";
+            if (v.find_first_not_of(" \n\t") == std::string::npos) m.erase(k); else m[k] = v.substr(0, max);
+        };
+        if (in.contains("title")) {
+            const std::string t = in["title"].is_string() ? in["title"].get<std::string>() : "";
+            if (t.find_first_not_of(" \t") == std::string::npos) return sendJson(res, {{"error", "a song needs a title"}}, 400);
+            m["title"] = t.substr(0, 200);
+        }
+        text("summary", 500);
+        text("description", 20000);
+        text("license", 100);
+        if (in.contains("authors")) {
+            json authors = json::array();
+            for (auto &a : in["authors"].is_array() ? in["authors"] : json::array()) {
+                if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) continue;
+                const std::string name = a["name"].get<std::string>();
+                if (name.find_first_not_of(" \t") == std::string::npos) continue;
+                json o = {{"name", name.substr(0, 120)}};
+                if (a.contains("role") && a["role"].is_string() && !a["role"].get<std::string>().empty()) o["role"] = a["role"].get<std::string>().substr(0, 60);
+                if (a.value("kind", std::string()) == "ai") o["kind"] = "ai";
+                if (a.contains("url") && a["url"].is_string() && !a["url"].get<std::string>().empty()) o["url"] = a["url"];
+                authors.push_back(o);
+            }
+            if (authors.empty()) m.erase("authors"); else m["authors"] = authors;
+        }
+        if (in.contains("tags")) {
+            json tags = json::array();
+            for (auto &t : in["tags"].is_array() ? in["tags"] : json::array())
+                if (t.is_string() && !t.get<std::string>().empty()) tags.push_back(t.get<std::string>().substr(0, 40));
+            if (tags.empty()) m.erase("tags"); else m["tags"] = tags;
+        }
+        m["slug"] = s;
+        m["updated"] = nowRfc3339();
+        m["generator"] = {{"name", "wavelength"}, {"version", WAVELENGTH_VERSION}};
+        if (!writeManifest(song, err)) return sendJson(res, {{"error", err}}, 500);
+        sendJson(res, meta(s));
     });
 
     // live updates (server-sent events): file changes in the song folder, the song list, previews and

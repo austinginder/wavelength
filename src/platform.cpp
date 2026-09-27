@@ -1,6 +1,9 @@
 #include "platform.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstring>
+#include <ctime>
 #include <chrono>
 #include <fstream>
 #include <cstdlib>
@@ -429,6 +432,91 @@ void kill(Process &p) {
     waitpid((pid_t)p.handle, nullptr, 0);
 #endif
     p.handle = 0;
+}
+
+void terminate(const Process &p) {
+    if (!p.handle) return;
+#ifdef _WIN32
+    TerminateProcess((HANDLE)p.handle, 1);
+#else
+    ::kill((pid_t)p.handle, SIGKILL);
+#endif
+}
+
+namespace {
+// `dir`/`name`, or "name 2", "name 3", ... when that is taken
+std::filesystem::path freeName(const std::filesystem::path &dir, const std::string &name) {
+    std::error_code ec;
+    std::filesystem::path to = dir / name;
+    for (int i = 2; std::filesystem::exists(to, ec) && i < 1000; ++i) to = dir / (name + " " + std::to_string(i));
+    return to;
+}
+} // namespace
+
+bool moveToTrash(const std::filesystem::path &path, std::string &where, std::string &err) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists(path, ec)) { err = path.string() + " does not exist"; return false; }
+    const fs::path abs = fs::absolute(path, ec);
+#ifdef _WIN32
+    std::wstring from = abs.wstring();
+    from.push_back(L'\0');   // SHFileOperation takes a double-NUL-terminated list
+    SHFILEOPSTRUCTW op = {};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.c_str();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+    if (SHFileOperationW(&op) != 0 || op.fAnyOperationsAborted) { err = "the Recycle Bin refused " + abs.string(); return false; }
+    where = "Recycle Bin";
+    return true;
+#elif defined(__APPLE__)
+    const fs::path trash = homeDir() / ".Trash";
+    fs::create_directories(trash, ec);
+    const fs::path to = freeName(trash, abs.filename().string());
+    fs::rename(abs, to, ec);
+    if (ec) { err = "could not move " + abs.string() + " to the Trash: " + ec.message(); return false; }
+    where = to.string();
+    return true;
+#else
+    // freedesktop.org trash spec: files/<name> plus info/<name>.trashinfo (where it came from, when)
+    const char *xdg = std::getenv("XDG_DATA_HOME");
+    const fs::path trash = (xdg && *xdg ? fs::path(xdg) : homeDir() / ".local" / "share") / "Trash";
+    fs::create_directories(trash / "files", ec);
+    fs::create_directories(trash / "info", ec);
+    const fs::path to = freeName(trash / "files", abs.filename().string());
+    char when[32];
+    const std::time_t now = std::time(nullptr);
+    std::strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%S", std::localtime(&now));
+    std::string encoded;   // the original path, percent-encoded
+    for (unsigned char c : abs.string()) {
+        if (std::isalnum(c) || std::strchr("/-_.~", c)) encoded += (char)c;
+        else { char b[4]; std::snprintf(b, sizeof b, "%%%02X", c); encoded += b; }
+    }
+    std::ofstream(trash / "info" / (to.filename().string() + ".trashinfo")) << "[Trash Info]\nPath=" << encoded << "\nDeletionDate=" << when << "\n";
+    fs::rename(abs, to, ec);
+    if (ec) {
+        fs::remove(trash / "info" / (to.filename().string() + ".trashinfo"), ec);
+        err = "could not move " + abs.string() + " to the trash: " + ec.message();
+        return false;
+    }
+    where = to.string();
+    return true;
+#endif
+}
+
+bool reveal(const std::filesystem::path &path, std::string &err) {
+    Process p;
+#ifdef _WIN32
+    const std::vector<std::string> args = {"explorer.exe", "/select," + path.string()};
+#elif defined(__APPLE__)
+    const std::vector<std::string> args = {"/usr/bin/open", "-R", path.string()};
+#else
+    const std::string opener = findProgram("xdg-open");
+    if (opener.empty()) { err = "xdg-open is not installed"; return false; }
+    const std::vector<std::string> args = {opener, path.parent_path().string()};
+#endif
+    if (!spawn(args, p, false, true)) { err = "could not start " + args[0]; return false; }
+    std::thread([p]() mutable { std::string crash; while (!finished(p, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(100)); }).detach();
+    return true;
 }
 
 bool readOutput(Process &p, std::string &out, int timeoutSec) {

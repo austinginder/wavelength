@@ -35,6 +35,7 @@
 				<span class="ed-group"><button class="ed-btn" id="ed-zout" title="Zoom out (-)">−</button><button class="ed-btn" id="ed-fit" title="Whole song (F)">Fit</button><button class="ed-btn" id="ed-zin" title="Zoom in (+)">+</button></span>
 				<span class="ed-legend" id="ed-legend"></span>
 				<span class="ed-status" id="ed-status"></span>
+				<button class="wl-cancel" id="ed-cancel" hidden title="Stop this render">Cancel</button>
 				<span class="sp"></span>
 				<select id="ed-audio" title="What plays"></select>
 				<button class="ed-btn" id="ed-close" title="Close (Esc)">✕</button>
@@ -85,6 +86,8 @@
 			syncAudioSelect(); dirty();
 		});
 		on('#ed-save', 'click', save);
+		on('#ed-cancel', 'click', () => { cancelPreview(); syncAudioSelect(); dirty(); });
+		canvas.addEventListener('contextmenu', contextMenu);
 		on('#ed-list', 'click', e => {   // a comment: jump to what it points at; its buttons change it
 			const c = e.target.closest('.ed-c'); if (!c) return;
 			const act = e.target.closest('button')?.dataset.act, cm = E.comments.find(x => x.id === c.dataset.id);
@@ -517,6 +520,66 @@
 	}
 	function clearSel() { E.sel = { b0: null, b1: null, tracks: new Set(), notes: [] }; setLoop(false); selChanged(); }
 
+	/* ---------- right-click menus ---------- */
+	function contextMenu(e) {
+		const p = pos(e), d = E.data;
+		if (!d) return e.preventDefault();
+		tip.hidden = true;
+		const bpb = d.bpb, hasBars = E.sel.b0 != null, stop = state.pending ? { label: 'Cancel render', run: () => { cancelPreview(); syncAudioSelect(); dirty(); } } : null;
+		const comment = () => { selChanged(); $d('#ed-text').focus(); };
+		if (p.x < HEAD && p.y >= TOPH) {   // a track header
+			const lane = laneAt(p.y + scroller.scrollTop); if (!lane) return e.preventDefault();
+			const i = lane.i, t = d.tracks[i], solo = state.soloIdx === i, pend = state.pending?.i === i;
+			return WLUI.menu(e, [
+				pend ? { label: `Cancel rendering ${t.name}`, run: () => { cancelPreview(); dirty(); } }
+					: { label: solo && state.soloKind === 'mix' ? 'Unsolo (back to the mix)' : `Solo ${t.name} in the mix`, disabled: !state.song.reportPath, run: () => { toggleSolo(i, 'mix'); syncAudioSelect(); dirty(); } },
+				{ label: solo && state.soloKind === 'dry' ? 'Unsolo the dry stem' : 'Solo the dry stem', hint: 'Alt+click S', disabled: !stemFor(i), run: () => { toggleSolo(i, 'dry'); syncAudioSelect(); dirty(); } },
+				hasBars && { label: `Preview ${t.name} in the selected bars`, run: () => { previewSelection([t.name]); syncAudioSelect(); } },
+				'-',
+				{ label: 'Select this track', run: () => { E.sel.tracks = new Set([i]); selChanged(); } },
+				{ label: E.expanded.has(i) ? 'Collapse the lane' : 'Open as a piano roll', run: () => { E.expanded.has(i) ? E.expanded.delete(i) : E.expanded.add(i); sizeSpace(); dirty(); } },
+				{ label: 'Comment on this track…', hint: 'C', run: () => { E.sel.tracks = new Set([i]); comment(); } },
+				{ label: 'Copy track name', run: () => navigator.clipboard?.writeText(t.name) },
+			]);
+		}
+		if (p.x >= HEAD && p.y < TOPH) {   // ruler, sections, chords
+			const b = beatAt(p.x), bar = barOf(b), bb = (bar - 1) * bpb;
+			const inSel = hasBars && b >= E.sel.b0 && b < E.sel.b1;
+			const pickBar = () => { if (!inSel) { E.sel.b0 = bb; E.sel.b1 = bb + bpb; E.sel.notes = []; selChanged(); } };
+			return WLUI.menu(e, [
+				{ label: 'Play from here', hint: 'bar ' + barOf(b), disabled: !audio.src, run: () => seekBeat(b, true) },
+				{ label: 'Play from the start of bar ' + bar, disabled: !audio.src, run: () => seekBeat(bb, true) },
+				'-',
+				{ label: inSel ? 'Preview the selected bars' : `Preview bar ${bar}`, hint: 'P', run: () => { pickBar(); previewSelection(); syncAudioSelect(); } },
+				{ label: inSel ? 'Loop the selected bars' : `Loop bar ${bar}`, hint: 'L', run: () => { pickBar(); setLoop(true); seekBeat(E.sel.b0, true); } },
+				{ label: inSel ? 'Comment on the selected bars…' : `Comment on bar ${bar}…`, run: () => { pickBar(); comment(); } },
+				stop,
+			]);
+		}
+		if (p.x >= HEAD && p.y >= TOPH) {   // lanes: act on the note under the pointer (or the selection)
+			const hit = noteAt(p), lane = laneAt(p.y + scroller.scrollTop);
+			if (hit && !E.sel.notes.some(q => q.t === hit.t && q.n === hit.n)) { E.sel.notes = [hit]; barsFromNotes(); selChanged(); }
+			if (!hit && !hasBars) {   // an empty spot: that bar, that track
+				const b = beatAt(p.x);
+				E.sel = { b0: Math.floor(b / bpb) * bpb, b1: Math.floor(b / bpb) * bpb + bpb, tracks: new Set(lane ? [lane.i] : []), notes: [] };
+				selChanged();
+			}
+			const one = E.sel.tracks.size === 1 ? d.tracks[[...E.sel.tracks][0]] : null;
+			return WLUI.menu(e, [
+				{ label: 'Play from here', hint: 'bar ' + barOf(beatAt(p.x)), disabled: !audio.src, run: () => seekBeat(beatAt(p.x), true) },
+				'-',
+				{ label: one ? `Preview ${one.name} here` : 'Preview the selection', hint: 'P', run: () => { previewSelection(); syncAudioSelect(); } },
+				one && E.sel.tracks.size && { label: 'Preview these bars, all tracks', run: () => { previewSelection([]); syncAudioSelect(); } },
+				{ label: 'Loop these bars', hint: 'L', run: () => { setLoop(true); seekBeat(E.sel.b0, true); } },
+				{ label: 'Comment on this…', hint: 'C', run: comment },
+				{ label: 'Copy reference', run: () => navigator.clipboard?.writeText(reference().text) },
+				{ label: 'Clear the selection', hint: 'Esc', run: clearSel },
+				stop,
+			]);
+		}
+		e.preventDefault();
+	}
+
 	/* ---------- selection summary / reference ---------- */
 	function reference() {
 		const d = E.data, s = E.sel, out = { text: '' };
@@ -671,6 +734,7 @@
 			}
 			if (state.pending) E.dirty = true;   // the rendering dots on the solo button
 			const st = $d('#ed-status'), msg = document.getElementById('solo').textContent;
+			$d('#ed-cancel').hidden = !state.pending;
 			if (st.textContent !== msg || st.classList.contains('busy') !== !!state.pending) { st.textContent = msg; st.title = msg + (state.srcWindow ? '\nclick the timeline outside the preview, or pick the mix, to go back' : ''); st.classList.toggle('busy', !!state.pending); }
 			if (E.dirty) { E.dirty = false; draw(); }
 		}

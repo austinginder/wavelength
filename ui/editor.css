@@ -63,3 +63,41 @@ dialog.ed::backdrop { background: rgba(12, 14, 23, .6); backdrop-filter: blur(2p
 .ed-hint.err { color: var(--warn); }
 .ed-reply { border-left: 2px solid var(--accent-2); padding-left: 8px; color: var(--muted); font-size: 12.5px; }
 .ed-changed { color: var(--warn); font-weight: 600; cursor: help; }
+
+/* Right-click menus and the page's dialogs (menus.js): popover and modal <dialog>, above the editor */
+.wl-menu { position: fixed; inset: auto; margin: 0; min-width: 210px; max-width: 320px; padding: 5px; border: 1px solid var(--line); border-radius: 8px;
+	background: var(--panel); color: var(--text); box-shadow: 0 12px 34px rgba(0,0,0,.32); font: 13px/1.3 var(--body); }
+.wl-menu button { display: flex; width: 100%; align-items: baseline; gap: 12px; text-align: left; background: none; border: 0; border-radius: 5px; padding: 6px 10px; cursor: pointer; color: inherit; font: inherit; }
+.wl-menu button span { margin-left: auto; color: var(--muted); font: 11px var(--mono); }
+.wl-menu button.act, .wl-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 16%, var(--panel-2)); outline: none; }
+.wl-menu button.danger { color: #e5484d; }
+.wl-menu button.danger.act { background: color-mix(in srgb, #e5484d 16%, var(--panel-2)); }
+.wl-menu button:disabled { opacity: .4; cursor: default; background: none; }
+.wl-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 6px; }
+dialog.wl-dlg { width: min(460px, 94vw); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 24px 70px rgba(0,0,0,.4); }
+dialog.wl-dlg.wide { width: min(620px, 94vw); }
+dialog.wl-dlg::backdrop { background: rgba(12, 14, 23, .55); }
+.wl-dlg form { padding: 18px 20px 16px; }
+.wl-dlg h3 { margin: 0 0 10px; font: 800 18px/1.15 var(--display); font-variation-settings: "wdth" 110; }
+.wl-dlg p { margin: 0 0 12px; font-size: 13.5px; color: var(--muted); }
+.wl-dlg p b, .wl-dlg p code { color: var(--text); }
+.wl-dlg code { font: 12px var(--mono); }
+.wl-dlg-body { max-height: 70vh; overflow: auto; }
+.wl-dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.wl-dlg-err { color: #e5484d !important; font-size: 12.5px; margin: 8px 0 0 !important; }
+.ed-btn.danger { background: #d8363c; border-color: #d8363c; color: #fff; font-weight: 600; }
+.ed-btn.danger:hover { background: #e5484d; border-color: #e5484d; }
+.wl-field { display: block; margin-bottom: 12px; }
+.wl-field > span { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.wl-field small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+.wl-field input, .wl-field textarea, .wl-author input, .wl-author select { width: 100%; font: 13.5px/1.4 var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+.wl-field textarea { min-height: 64px; resize: vertical; }
+.wl-field input:focus, .wl-field textarea:focus, .wl-author input:focus, .wl-author select:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); border-color: var(--accent); }
+.wl-field input.mono { font-family: var(--mono); font-size: 12.5px; }
+.wl-authors { display: grid; gap: 6px; }
+.wl-author { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 84px 30px; gap: 6px; align-items: center; }
+.wl-author button { height: 30px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 6px; cursor: pointer; }
+.wl-author button:hover { color: #e5484d; border-color: #e5484d; }
+.wl-add { margin-top: 6px; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font: 600 12.5px var(--body); }
+.wl-cancel { background: none; border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line)); color: var(--warn); border-radius: 99px; padding: 1px 9px; font: 600 11.5px var(--body); cursor: pointer; }
+.wl-cancel:hover { background: color-mix(in srgb, var(--warn) 15%, transparent); }

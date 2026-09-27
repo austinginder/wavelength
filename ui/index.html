@@ -37,6 +37,10 @@ aside.songs { border-right: 1px solid var(--line); padding: 16px 10px; position:
 main { padding: 20px 22px 40px; min-width: 0; }
 .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 h1 { margin: 0; font: 800 30px/1.05 var(--display); font-variation-settings: "wdth" 112; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.byline { color: var(--muted); font-size: 13px; margin-top: 4px; min-height: 1em; }
+.byline b { color: var(--text); font-weight: 600; }
+.head .ed-open { margin-left: 0; align-self: center; }
+canvas#tl.labels { cursor: default; }
 .status { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .status.rendering { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .status.writing { color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 40%, transparent); }
@@ -97,7 +101,9 @@ canvas#tl { display: block; width: 100%; cursor: crosshair; }
 	</aside>
 
 	<main>
-		<div class="head"><h1 id="title">...</h1><span class="status" id="status"></span></div>
+		<div class="head"><h1 id="title">...</h1><span class="status" id="status"></span>
+			<button class="ed-open" id="detailsbtn" title="Title, folder name, authors (right-click a song for more)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>Details</button></div>
+		<div class="byline" id="byline"></div>
 		<div class="chips" id="chips"></div>
 
 		<section class="card">
@@ -107,6 +113,7 @@ canvas#tl { display: block; width: 100%; cursor: crosshair; }
 				<span class="mono" id="time">0:00 / 0:00</span>
 				<select id="audiosel"></select>
 				<span class="solo" id="solo"></span>
+				<button class="wl-cancel" id="cancel" hidden title="Stop this render">Cancel render</button>
 			</div>
 			<div class="tl-wrap"><canvas id="tl"></canvas></div>
 			<div class="warns" id="warns" hidden></div>
@@ -177,6 +184,7 @@ function setSongs(list) {
 	state.songs = list;
 	if ($('#follow').checked && list[0] && list[0].slug !== state.slug && Date.now() / 1000 - list[0].mtime < 600) selectSong(list[0].slug);
 	if (!state.slug && list[0]) selectSong(list[0].slug);
+	else if (state.slug && !state.renaming && !list.some(s => s.slug === state.slug) && list[0]) selectSong(list[0].slug);
 	renderSongList();
 }
 function renderSongList() {
@@ -297,7 +305,11 @@ function renderStatus() {
 
 function renderAll() {
 	const d = state.song, job = d.job, rep = d.report;
-	$('#title').textContent = d.slug;
+	$('#title').textContent = d.meta?.title || d.slug;
+	$('#title').title = 'folder: ' + d.slug;
+	const authors = d.meta?.authors || [];
+	$('#byline').innerHTML = (d.meta?.title && d.meta.title !== d.slug ? `<span class="mono">${esc(d.slug)}</span>` : '')
+		+ (authors.length ? (d.meta?.title && d.meta.title !== d.slug ? ' · ' : '') + 'by ' + authors.map(a => `<b>${esc(a.name)}</b>${a.role ? ' (' + esc(a.role) + ')' : ''}`).join(', ') : '');
 	renderStatus();
 	const tempo = job ? (Array.isArray(job.tempo) ? job.tempo.map(p => p.bpm).join('→') : job.tempo) : null;
 	const chip = (v, l) => v == null || v === '' ? '' : `<div class="chip"><b class="mono">${esc(v)}</b><span>${l}</span></div>`;
@@ -409,10 +421,10 @@ function stemFor(i) {
 function requestPreview(spec) {
 	const slug = state.slug, pending = { ...spec, since: Date.now() };
 	state.pending = pending;
-	const show = r => { $('#solo').textContent = r; $('#solo').title = 'A preview plays only its bars and loops; click the timeline outside them (or pick the mix) to go back'; window.WLEditor?.redraw?.(); };
+	const show = r => { $('#solo').textContent = r; $('#solo').title = 'A preview plays only its bars and loops; click the timeline outside them (or pick the mix) to go back'; $('#cancel').hidden = state.pending !== pending; window.WLEditor?.redraw?.(); };
 	const done = r => {
 		if (state.pending !== pending || state.slug !== slug) return;
-		state.pending = null;
+		state.pending = null; $('#cancel').hidden = true;
 		const w = r.window, playing = !audio.paused;
 		state.files[r.path] = [0, Date.now() / 1000];
 		if (w) {   // bars: loop them, starting where the playhead is if it is inside
@@ -437,7 +449,7 @@ function requestPreview(spec) {
 			show(`${r.status === 'queued' ? 'Waiting to render' : 'Rendering'} ${spec.label}… ${Math.round((Date.now() - pending.since) / 1000)}s`);
 			return setTimeout(() => poll(id), 700);
 		}
-		state.pending = null; show(`Could not render ${spec.label}: ${r.error || r.status}`);
+		state.pending = null; show(r.status === 'cancelled' ? `Cancelled ${spec.label}` : `Could not render ${spec.label}: ${r.error || r.status}`);
 	};
 	show(`Rendering ${spec.label}…`);
 	postJson('api/preview', { song: slug, tracks: spec.tracks || [], from: spec.from || 0, to: spec.to || 0 })
@@ -446,12 +458,25 @@ function requestPreview(spec) {
 	drawTimeline();
 }
 
+// Stop the render we are waiting for (and anything else queued for this song) and stay on what plays now.
+function cancelPreview() {
+	const p = state.pending;
+	if (!p) return;
+	state.pending = null;
+	$('#cancel').hidden = true;
+	$('#solo').textContent = 'Cancelled ' + p.label;
+	postJson('api/preview/cancel', { song: state.slug }).catch(() => {});
+	drawTimeline(); window.WLEditor?.redraw?.();
+}
+$('#cancel').addEventListener('click', cancelPreview);
+
 // Solo a track. "mix" (default): the track through its sends, buses and master at its level in the full
 // mix (a server preview of the whole song, cached until the song changes). "dry": the stem file, the
 // track right after its own effects.
 function toggleSolo(i, kind = 'mix') {
 	const t = songSecNow(), playing = !audio.paused, name = state.song.job.tracks[i].name;
-	if ((state.soloIdx === i && state.soloKind === kind && !state.preview) || (state.pending?.i === i && kind === 'mix')) return backToMix(t, playing);
+	if (state.pending?.i === i && kind === 'mix') return cancelPreview();
+	if (state.soloIdx === i && state.soloKind === kind && !state.preview) return backToMix(t, playing);
 	if (kind === 'dry') {
 		if (!stemFor(i)) return;
 		state.pending = null; state.preview = null; state.soloIdx = i; state.soloKind = 'dry';
@@ -520,8 +545,8 @@ function drawTimeline() {
 		if (i % 2) { g.fillStyle = v('--lane'); g.fillRect(0, y, w, ROW); }
 		const flashing = now - (state.flash[i] || 0) < 1500;
 		const col = hue(i);
-		g.fillStyle = state.soloIdx === i ? v('--accent') : flashing ? col : v('--text');
-		g.font = (state.soloIdx === i ? '600 ' : '500 ') + '12px ' + FONT;
+		g.fillStyle = flashing ? col : v('--text');
+		g.font = '500 12px ' + FONT;
 		g.save(); g.beginPath(); g.rect(0, y, label - 8, ROW); g.clip();
 		g.fillText((t.mute ? '(m) ' : '') + t.name, 12, y + 13);
 		g.fillStyle = v('--muted'); g.font = '10.5px ' + FONT;
@@ -553,11 +578,7 @@ $('#tl').addEventListener('click', e => {
 	if (!tl) return;
 	const r = e.target.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
 	const label = r.width < 600 ? 100 : LABEL;
-	if (x < label) {
-		const i = Math.floor((y - TOP) / ROW);
-		if (i >= 0 && i < tl.tracks.length) toggleSolo(i);
-		return;
-	}
+	if (x < label) return;   // soloing lives in the editor
 	if (!audio.src) return;
 	const t = (x - label) / (r.width - label - 10) * tl.end;
 	seekSongSec(Math.max(0, t));
@@ -576,6 +597,120 @@ $('#tl').addEventListener('dblclick', e => {
 });
 document.addEventListener('keydown', e => { if ((e.key === 'e' || e.key === 'E') && e.target === document.body && !document.querySelector('dialog[open]')) WLEditor.open(); });
 
+/* ---------- song folder actions ---------- */
+const SLUG_RULE = 'lowercase letters, digits and single dashes (the song format\'s slug)';
+const slugError = (v, cur) => !v ? 'Give it a name.' : !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(v) ? 'Use ' + SLUG_RULE + '.'
+	: v !== cur && state.songs.some(s => s.slug === v) ? 'There is already a song folder named ' + v + '.' : '';
+const toSlug = s => s.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+async function renameFolder(slug, to) {
+	state.renaming = true;
+	try {
+		const r = await postJson('api/song/rename', { song: slug, to });
+		if (state.slug === slug) { state.slug = null; selectSong(r.song); }
+		await loadSongs();
+		return r.song;
+	} finally { state.renaming = false; }
+}
+async function renameSong(slug) {
+	const to = await WLUI.prompt({ title: 'Rename song folder', label: 'Folder name', value: slug, ok: 'Rename',
+		body: `The folder in your songs directory. ${SLUG_RULE[0].toUpperCase() + SLUG_RULE.slice(1)}; the title can be anything (Details).`,
+		check: v => slugError(v, slug) });
+	if (!to || to === slug) return;
+	try { await renameFolder(slug, to); } catch (e) { WLUI.confirm({ title: 'Could not rename', body: WLUI.esc(e.message), ok: 'OK' }); }
+}
+async function trashSong(slug) {
+	const ok = await WLUI.confirm({ title: 'Move to Trash?', danger: true, ok: 'Move to Trash',
+		body: `The whole folder <code>${WLUI.esc(slug)}</code> (job, renders, notes, history) goes to the Trash. You can put it back from there.` });
+	if (!ok) return;
+	try {
+		await postJson('api/song/trash', { song: slug });
+		if (state.slug === slug) { audio.pause(); state.slug = null; }
+		state.songs = state.songs.filter(s => s.slug !== slug);
+		await loadSongs();
+	} catch (e) { WLUI.confirm({ title: 'Could not move it to the Trash', body: WLUI.esc(e.message), ok: 'OK' }); }
+}
+const reveal = (slug, file) => postJson('api/song/reveal', { song: slug, file: file || '' }).catch(e => WLUI.confirm({ title: 'Could not show it', body: WLUI.esc(e.message), ok: 'OK' }));
+async function editDetails(slug) {
+	const m = await fetch('api/meta?song=' + encodeURIComponent(slug)).then(r => r.json());
+	if (m.error) return;
+	const authorRow = (a = {}) => `<div class="wl-author"><input name="an" placeholder="Name" value="${esc(a.name || '')}"><input name="ar" placeholder="Role (producer, composer…)" value="${esc(a.role || '')}">
+		<select name="ak"><option value="human">Person</option><option value="ai" ${a.kind === 'ai' ? 'selected' : ''}>AI</option></select><button type="button" data-del title="Remove">✕</button></div>`;
+	const body = `
+		${m.manifest ? '' : '<p>This folder has no <code>wavelength.json</code> yet; saving writes one (the song format\'s manifest).</p>'}
+		<label class="wl-field"><span>Title</span><input name="title" value="${esc(m.title || '')}" required></label>
+		<label class="wl-field"><span>Folder name</span><input name="slug" class="mono" value="${esc(slug)}" spellcheck="false"><small>${SLUG_RULE}</small></label>
+		<div class="wl-field"><span>Authors</span><div class="wl-authors">${(m.authors.length ? m.authors : [{}]).map(authorRow).join('')}</div><button type="button" class="wl-add">+ Add author</button></div>
+		<label class="wl-field"><span>Summary</span><input name="summary" value="${esc(m.summary || '')}" placeholder="One sentence"></label>
+		<label class="wl-field"><span>Tags</span><input name="tags" value="${esc((m.tags || []).join(', '))}" placeholder="synthwave, 80s"></label>
+		<label class="wl-field"><span>License</span><input name="license" value="${esc(m.license || '')}" placeholder="CC-BY-4.0 (empty = all rights reserved)"></label>`;
+	await WLUI.modal({ title: 'Song details', body, cls: 'wide', buttons: [{ value: 'cancel', label: 'Cancel' }, { value: 'ok', label: 'Save', cls: 'primary', submit: async api => {
+		const f = api.dlg, val = n => f.querySelector(`[name="${n}"]`).value.trim();
+		const to = val('slug'), err = slugError(to, slug);
+		if (err) return api.error(err);
+		if (!val('title')) return api.error('A song needs a title.');
+		const authors = [...f.querySelectorAll('.wl-author')].map(r => ({ name: r.querySelector('[name=an]').value.trim(), role: r.querySelector('[name=ar]').value.trim(), kind: r.querySelector('[name=ak]').value })).filter(a => a.name);
+		api.busy(true);
+		try {
+			let cur = slug;
+			if (to !== slug) cur = await renameFolder(slug, to);
+			await postJson('api/meta', { song: cur, title: val('title'), authors, summary: val('summary'), license: val('license'), tags: val('tags').split(',').map(t => t.trim()).filter(Boolean) });
+			if (state.slug === cur) loadSong();
+			api.done('ok');
+		} catch (e) { api.busy(false); api.error(e.message); }
+	} }], init: api => {
+		const d = api.dlg, list = d.querySelector('.wl-authors');
+		d.querySelector('.wl-add').addEventListener('click', () => { list.insertAdjacentHTML('beforeend', authorRow()); list.lastElementChild.querySelector('input').focus(); });
+		list.addEventListener('click', e => { if (e.target.closest('[data-del]')) e.target.closest('.wl-author').remove(); });
+		const title = d.querySelector('[name=title]'), sl = d.querySelector('[name=slug]');
+		let follow = toSlug(title.value) === slug;   // the folder name follows the title until you edit it
+		title.addEventListener('input', () => { if (follow) sl.value = toSlug(title.value); });
+		sl.addEventListener('input', () => { follow = false; });
+		title.focus();
+	} });
+}
+$('#detailsbtn').addEventListener('click', () => state.slug && editDetails(state.slug));
+
+/* ---------- right-click menus ---------- */
+$('#songs').addEventListener('contextmenu', e => {
+	const b = e.target.closest('.song');
+	if (!b) return;
+	const slug = b.dataset.slug;
+	WLUI.menu(e, [
+		{ label: 'Open', run: () => { $('#follow').checked = false; selectSong(slug); } },
+		{ label: 'Open in the editor', hint: 'E', run: () => { $('#follow').checked = false; selectSong(slug); const wait = setInterval(() => { if (state.song?.slug === slug) { clearInterval(wait); WLEditor.open(); } }, 100); setTimeout(() => clearInterval(wait), 8000); } },
+		'-',
+		{ label: 'Edit details…', run: () => editDetails(slug) },
+		{ label: 'Rename folder…', run: () => renameSong(slug) },
+		{ label: 'Show in Finder', run: () => reveal(slug) },
+		{ label: 'Copy folder name', run: () => navigator.clipboard?.writeText(slug) },
+		'-',
+		{ label: 'Move to Trash…', danger: true, run: () => trashSong(slug) },
+	]);
+});
+$('#tl').addEventListener('contextmenu', e => {
+	if (!tl) return;
+	const r = e.target.getBoundingClientRect(), x = e.clientX - r.left, label = r.width < 600 ? 100 : LABEL;
+	const sec = Math.max(0, (x - label) / (r.width - label - 10) * tl.end), onLane = x >= label;
+	const job = state.song.job, toSec = tempoFn(job.tempo);
+	let lo = 0, hi = 1; while (toSec(hi) < sec) hi *= 2; for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; toSec(m) < sec ? lo = m : hi = m; }
+	WLUI.menu(e, [
+		onLane && { label: 'Play from here', hint: fmtTime(sec), disabled: !audio.src, run: () => { seekSongSec(sec); if (audio.paused) audio.play(); } },
+		{ label: 'Open the editor here', hint: 'double-click', run: () => WLEditor.open(onLane ? lo : undefined) },
+		state.pending && { label: 'Cancel render', run: cancelPreview },
+		(state.soloIdx >= 0 || state.srcWindow) && { label: 'Back to the full mix', run: () => backToMix(songSecNow(), !audio.paused) },
+	]);
+});
+$('#files').addEventListener('contextmenu', e => {
+	const row = e.target.closest('.fe .p');
+	if (!row) return;
+	const path = row.title, gone = !state.files[path];
+	WLUI.menu(e, [
+		{ label: 'Open in a new tab', disabled: gone, run: () => open(fileUrl(path), '_blank') },
+		{ label: 'Show in Finder', disabled: gone, run: () => reveal(state.slug, path) },
+		{ label: 'Copy path', run: () => navigator.clipboard?.writeText(path) },
+	]);
+});
+
 (function frame() {
 	if (!audio.paused || Object.values(state.flash).some(t => Date.now() - t < 1600)) drawTimeline();
 	requestAnimationFrame(frame);
@@ -591,6 +726,7 @@ const initial = new URLSearchParams(location.search).get('song');
 if (initial) { $('#follow').checked = false; selectSong(initial); }
 loadSongs();
 </script>
+<script src="ui/menus.js"></script>
 <script src="ui/editor.js"></script>
 </body>
 </html>
