@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--wavelength-->
 <title>Wavelength</title>
+<script>/* theme before the first paint: "light", "dark", or the system's (no attribute) */
+try { const t = localStorage.getItem('wl-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}</script>
 <link rel="icon" href="ui/icons/wavelength-icon.svg" type="image/svg+xml">
 <link rel="icon" href="ui/icons/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="ui/icons/favicon-16.png" sizes="16x16" type="image/png">
 <link rel="apple-touch-icon" href="ui/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="ui/brand.css">
 <link rel="stylesheet" href="ui/editor.css">
+<link rel="stylesheet" href="ui/pages.css">
 <style>
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -22,7 +25,11 @@ aside.songs { border-right: 1px solid var(--line); padding: 16px 10px; position:
 /* the lockup: the mark at 1.35 x the name's cap height, one step from the name (the site's header) */
 .brand { display: flex; align-items: center; gap: .28em; font: 700 1.2rem/1 var(--display); font-variation-settings: "wdth" 120; letter-spacing: -.01em; padding: 2px 8px 18px; }
 .brand svg { color: var(--accent); height: .95em; width: auto; flex: none; }
-.conn { margin-left: auto; align-self: center; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.theme { margin-left: auto; flex: none; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.theme:hover { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+.brand a { display: flex; align-items: center; gap: .28em; color: inherit; text-decoration: none; }
+.brand a:hover { color: var(--accent); }
+.conn { margin-left: 6px; align-self: center; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .conn.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
 .song { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
 .song:hover { background: var(--panel-2); }
@@ -39,6 +46,9 @@ main { padding: 20px 22px 40px; min-width: 0; }
 h1 { margin: 0; font: 800 30px/1.05 var(--display); font-variation-settings: "wdth" 112; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .byline { color: var(--muted); font-size: 13px; margin-top: 4px; min-height: 1em; }
 .byline b { color: var(--text); font-weight: 600; }
+.renderbar { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.renderbar .ed-open { margin-left: 0; }
+.renderbar .err { color: #e5484d; }
 .head .ed-open { margin-left: 0; align-self: center; }
 canvas#tl.labels { cursor: default; }
 .status { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 99px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
@@ -93,17 +103,26 @@ canvas#tl { display: block; width: 100%; cursor: crosshair; }
 <div class="app">
 	<aside class="songs">
 		<div class="brand">
-			<svg viewBox="0 3 24 18" role="img" aria-label="Wavelength"><path d="M0 12 H2 V4.25 H6 V19.75 H10 V10 H14 V19.75 H18 V4.25 H22 V12 H24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="miter" stroke-linecap="butt"/></svg>
-			Wavelength <span class="conn" id="conn" title="event stream"></span>
+			<a href="./" id="home-link" title="Overview"><svg viewBox="0 3 24 18" role="img" aria-label="Wavelength"><path d="M0 12 H2 V4.25 H6 V19.75 H10 V10 H14 V19.75 H18 V4.25 H22 V12 H24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="miter" stroke-linecap="butt"/></svg>Wavelength</a>
+			<button class="theme" id="theme" title="Light or dark (right-click: system)" aria-label="Colour theme"></button>
+			<span class="conn" id="conn" title="event stream"></span>
 		</div>
+		<nav class="nav" id="nav">
+			<a href="./" data-view="home"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Overview</a>
+			<a href="?view=playground" data-view="play"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M7 5v9M12 5v9M17 5v9"/></svg>Playground</a>
+		</nav>
+		<div class="nav-h">Songs</div>
 		<div id="songs"></div>
 		<label class="follow"><input type="checkbox" id="follow" checked> Follow the newest song</label>
 	</aside>
 
-	<main>
+	<main id="homeview" class="page" hidden></main>
+	<main id="playview" class="page" hidden></main>
+	<main id="songview">
 		<div class="head"><h1 id="title">...</h1><span class="status" id="status"></span>
 			<button class="ed-open" id="detailsbtn" title="Title, folder name, authors (right-click a song for more)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>Details</button></div>
 		<div class="byline" id="byline"></div>
+		<div class="renderbar"><button class="ed-open" id="renderbtn" title="Render the whole song again (job.json with any edits.json) into its out folder">Render</button><span id="renderinfo"></span><button class="wl-cancel" id="rendercancel" hidden>Cancel render</button></div>
 		<div class="chips" id="chips"></div>
 
 		<section class="card">
@@ -150,7 +169,7 @@ function ago(ts) {
 	return Math.round(s / 86400) + 'd';
 }
 const fmtTime = t => !isFinite(t) ? '0:00' : Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
-const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b > 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
+const fmtSize = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
 // Audio goes through the songs/ symlink so Caddy serves it (native ranges, no PHP thread held).
 const fileUrl = p => ['songs', state.slug, ...p.split('/')].map(encodeURIComponent).join('/');
 
@@ -182,6 +201,7 @@ async function loadSongs() {
 }
 function setSongs(list) {
 	state.songs = list;
+	if (state.view !== 'song') { renderSongList(); if (state.view === 'home') renderHome(); return; }
 	if ($('#follow').checked && list[0] && list[0].slug !== state.slug && Date.now() / 1000 - list[0].mtime < 600) selectSong(list[0].slug);
 	if (!state.slug && list[0]) selectSong(list[0].slug);
 	else if (state.slug && !state.renaming && !list.some(s => s.slug === state.slug) && list[0]) selectSong(list[0].slug);
@@ -190,23 +210,28 @@ function setSongs(list) {
 function renderSongList() {
 	$('#songs').innerHTML = state.songs.map(s => {
 		const live = Date.now() / 1000 - s.mtime < 120;
-		return `<button class="song ${s.slug === state.slug ? 'sel' : ''}" data-slug="${esc(s.slug)}">
-			<span class="dot ${live ? 'live' : s.mp3 ? 'done' : ''}"></span><span class="n">${esc(s.slug)}</span><span class="t">${ago(s.mtime)}</span></button>`;
+		return `<button class="song ${s.slug === state.slug && state.view === 'song' ? 'sel' : ''}" data-slug="${esc(s.slug)}">
+			<span class="dot ${live ? 'live' : s.mp3 ? 'done' : ''}"></span><span class="n" title="${esc(s.slug)}">${esc(s.title || s.slug)}</span><span class="t">${ago(s.mtime)}</span></button>`;
 	}).join('');
 }
 $('#songs').addEventListener('click', e => {
 	const b = e.target.closest('.song');
 	if (!b) return;
 	$('#follow').checked = b.dataset.slug === state.songs[0]?.slug;
-	selectSong(b.dataset.slug);
+	selectSong(b.dataset.slug, true);
 });
 
-function selectSong(slug) {
-	if (slug === state.slug) return;
+function selectSong(slug, push) {
+	const fromOther = state.view !== 'song';
+	showView('song');
+	if (fromOther || push) history.pushState(null, '', '?song=' + encodeURIComponent(slug));
+	if (slug === state.slug) { document.title = (state.song?.meta?.title || slug) + ' · Wavelength'; return; }
+	state.rendering = null; $('#renderinfo').textContent = '';
 	state.slug = slug; state.song = null; state.fileLog = []; state.soloIdx = -1; state.soloKind = null; state.pending = null; state.preview = null; state.src = null; state.srcWindow = null; state.srcStart = 0; state.srcLead = null; state.flash = {};
 	window.WLEditor?.reset();
 	audio.pause(); audio.removeAttribute('src');
-	history.replaceState(null, '', '?song=' + encodeURIComponent(slug));
+	if (!fromOther && !push) history.replaceState(null, '', '?song=' + encodeURIComponent(slug));
+	document.title = slug + ' · Wavelength';
 	$('#feed').innerHTML = '<div class="empty">Looking for a Claude session working in this folder...</div>';
 	renderSongList();
 	loadSong(); loadAgent(); connect();
@@ -247,10 +272,11 @@ async function loadAgent() {
 let es = null, songTimer = 0;
 function connect() {
 	if (es) es.close();
-	es = new EventSource('api/events?song=' + encodeURIComponent(state.slug));
+	es = new EventSource('api/events?song=' + encodeURIComponent(state.slug || ''));
 	es.onopen = () => $('#conn').classList.add('on');
 	es.onerror = () => $('#conn').classList.remove('on');
 	es.addEventListener('songs', e => setSongs(JSON.parse(e.data)));
+	es.addEventListener('previews', e => renderState(JSON.parse(e.data)));
 	es.addEventListener('agent', () => { clearTimeout(agentTimer); agentTimer = setTimeout(loadAgent, 400); });
 	es.addEventListener('files', e => {
 		const changes = JSON.parse(e.data);
@@ -597,6 +623,124 @@ $('#tl').addEventListener('dblclick', e => {
 });
 document.addEventListener('keydown', e => { if ((e.key === 'e' || e.key === 'E') && e.target === document.body && !document.querySelector('dialog[open]')) WLEditor.open(); });
 
+/* ---------- the Render button: a full render on the server, followed through the event stream ---------- */
+function renderState(list) {
+	const cur = list.filter(p => p.full).sort((a, b) => (b.id > a.id) - (a.id > b.id));
+	const live = cur.find(p => p.status === 'queued' || p.status === 'rendering');
+	const was = state.rendering;
+	if (live) live.since = was?.id === live.id && was.since ? was.since : Date.now() - (live.seconds || 0) * 1000;
+	state.rendering = live || null;
+	const info = $('#renderinfo');
+	if (live) info.textContent = live.status === 'queued' ? 'Waiting to render…' : `Rendering the song… ${Math.round((Date.now() - live.since) / 1000)}s`;
+	else if (was) {
+		const end = cur.find(p => p.id === was.id);
+		info.innerHTML = end?.status === 'ready' ? `Rendered in ${end.seconds}s.` : end?.status === 'cancelled' ? 'Render cancelled.' : `<span class="err">Render failed: ${esc(end?.error || 'unknown')}</span>`;
+		if (end?.status === 'ready') { clearTimeout(songTimer); songTimer = setTimeout(loadSong, 300); }
+	}
+	$('#renderbtn').disabled = !!live;
+	$('#rendercancel').hidden = !live;
+	window.WLEditor?.redraw?.();
+}
+async function startRender() {
+	try { const r = await postJson('api/render', { song: state.slug }); renderState([r]); }
+	catch (e) { $('#renderinfo').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+function cancelRender() { if (state.rendering) postJson('api/preview/cancel', { id: state.rendering.id }).catch(() => {}); }
+$('#renderbtn').addEventListener('click', startRender);
+setInterval(() => { const r = state.rendering; if (r && r.status === 'rendering') { r.seconds = Math.round((Date.now() - r.since) / 1000); $('#renderinfo').textContent = `Rendering the song… ${r.seconds}s`; } }, 1000);
+$('#rendercancel').addEventListener('click', cancelRender);
+
+/* ---------- views: overview, playground, a song ---------- */
+state.view = 'boot';   // routing decides (route() after the song list loads)
+function showView(v) {
+	state.view = v;
+	$('#songview').hidden = v !== 'song';
+	$('#homeview').hidden = v !== 'home';
+	$('#playview').hidden = v !== 'play';
+	document.querySelector('aside.side').hidden = v !== 'song';
+	document.querySelector('.app').classList.toggle('wide', v !== 'song');
+	document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('sel', a.dataset.view === v));
+	if (v !== 'song') { audio.pause(); document.querySelector('dialog.ed[open]')?.close(); }
+	if (v === 'home') { renderHome(); document.title = 'Wavelength'; }
+	if (v === 'play') WLPlay.show();
+	if (!es && v !== 'song') connect();   // the song list stays live everywhere
+	renderSongList();
+}
+function go(v) {
+	history.pushState(null, '', v === 'home' ? './' : '?view=playground');
+	showView(v);
+}
+$('#nav').addEventListener('click', e => { const a = e.target.closest('a[data-view]'); if (!a || e.metaKey || e.ctrlKey) return; e.preventDefault(); go(a.dataset.view); });
+$('#home-link').addEventListener('click', e => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); go('home'); });
+function route() {
+	const q = new URLSearchParams(location.search);
+	if (q.get('song')) { $('#follow').checked = false; selectSong(q.get('song')); }
+	else showView(q.get('view') === 'playground' ? 'play' : 'home');
+}
+addEventListener('popstate', route);
+
+const ICON_WAVE = '<svg viewBox="0 3 24 18"><path d="M0 12 H2 V4.25 H6 V19.75 H10 V10 H14 V19.75 H18 V4.25 H22 V12 H24" fill="none" stroke="currentColor" stroke-width="2.5"/></svg>';
+let instrumentCount = null;
+function renderHome() {
+	const list = state.songs, newest = list[0], ver = document.querySelector('meta[name="wavelength-version"]')?.content;
+	if (instrumentCount == null) { instrumentCount = 0; fetch('api/instruments').then(r => r.json()).then(r => { instrumentCount = new Set((r.instruments || []).map(i => i.name.toLowerCase())).size; if (state.view === 'home') renderHome(); }).catch(() => {}); }
+	const by = a => (a || []).map(x => x.name).join(', ');
+	$('#homeview').innerHTML = `
+		<div class="hero"><h1>${ICON_WAVE}Wavelength</h1>
+			<p>Music rendered through real synthesizers and samplers, written by agents. Listen to the songs, pin comments to the bars you want changed, edit notes, or play any installed instrument.</p>
+			${ver ? `<div class="ver">engine ${esc(ver)} · ${list.length} song${list.length === 1 ? '' : 's'}</div>` : ''}</div>
+		<div class="tiles">
+			<a class="tile" href="${newest ? '?song=' + encodeURIComponent(newest.slug) : './'}" data-open="${esc(newest?.slug || '')}">
+				<h2><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Songs <b>${list.length}</b></h2>
+				<p>Each song's arrangement, loudness, stems and renders, the agent's work as it happens, and an editor for comments and note edits.</p>
+				<div class="go">${newest ? 'Open the newest: ' + esc(newest.title || newest.slug) + ' →' : 'No songs yet'}</div></a>
+			<a class="tile" href="?view=playground" data-play>
+				<h2><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M7 5v9M12 5v9M17 5v9"/></svg>Playground ${instrumentCount ? `<b>${instrumentCount}</b>` : ''}</h2>
+				<p>Pick any installed instrument and preset (or a track from a song) and play it from the on-screen piano or your computer keyboard.</p>
+				<div class="go">Start playing →</div></a>
+		</div>
+		<h2 class="sect-h">Songs <span>newest first</span></h2>
+		<div class="songgrid">${list.map(s => `<button class="scard" data-open="${esc(s.slug)}">
+			<span class="t">${esc(s.title || s.slug)}</span><span class="s">${esc(s.slug)}</span>
+			${s.authors?.length ? `<span class="by">by ${esc(by(s.authors))}</span>` : ''}
+			<span class="m">${s.seconds ? `<span><b>${fmtTime(s.seconds - 0)}</b></span>` : ''}${s.lufs != null ? `<span><b>${(+s.lufs).toFixed(1)}</b> LUFS</span>` : ''}${s.tracks ? `<span><b>${s.tracks}</b> tracks</span>` : ''}<span>${ago(s.mtime)} ago</span></span></button>`).join('') || '<div class="empty">No songs in this folder yet.</div>'}</div>`;
+}
+$('#homeview').addEventListener('click', e => {
+	const o = e.target.closest('[data-open]'), pl = e.target.closest('[data-play]');
+	if (e.metaKey || e.ctrlKey) return;
+	if (pl) { e.preventDefault(); go('play'); }
+	else if (o && o.dataset.open) { e.preventDefault(); $('#follow').checked = false; selectSong(o.dataset.open, true); }
+});
+$('#homeview').addEventListener('contextmenu', e => { const o = e.target.closest('.scard'); if (o) songMenu(e, o.dataset.open); });
+
+/* ---------- theme: light, dark, or the system's (the default) ---------- */
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+const themePref = () => { try { return localStorage.getItem('wl-theme') || 'system'; } catch { return 'system'; } };
+const themeNow = () => { const p = themePref(); return p === 'system' ? (darkQuery.matches ? 'dark' : 'light') : p; };
+function setTheme(p) {
+	try { p === 'system' ? localStorage.removeItem('wl-theme') : localStorage.setItem('wl-theme', p); } catch {}
+	if (p === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = p;
+	themeIcon(); repaint();
+}
+function themeIcon() {
+	const dark = themeNow() === 'dark', pref = themePref();
+	$('#theme').innerHTML = dark
+		? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
+		: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+	$('#theme').title = `${dark ? 'Dark' : 'Light'}${pref === 'system' ? ' (following the system)' : ''}: click for ${dark ? 'light' : 'dark'}, right-click for more`;
+}
+$('#theme').addEventListener('click', () => setTheme(themeNow() === 'dark' ? 'light' : 'dark'));
+$('#theme').addEventListener('contextmenu', e => {
+	const p = themePref();
+	WLUI.menu(e, [
+		{ label: 'Light', checked: p === 'light', run: () => setTheme('light') },
+		{ label: 'Dark', checked: p === 'dark', run: () => setTheme('dark') },
+		{ label: 'System', hint: darkQuery.matches ? 'dark now' : 'light now', checked: p === 'system', run: () => setTheme('system') },
+	]);
+});
+darkQuery.addEventListener('change', themeIcon);
+themeIcon();
+
 /* ---------- song folder actions ---------- */
 const SLUG_RULE = 'lowercase letters, digits and single dashes (the song format\'s slug)';
 const slugError = (v, cur) => !v ? 'Give it a name.' : !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(v) ? 'Use ' + SLUG_RULE + '.'
@@ -619,8 +763,10 @@ async function renameSong(slug) {
 	try { await renameFolder(slug, to); } catch (e) { WLUI.confirm({ title: 'Could not rename', body: WLUI.esc(e.message), ok: 'OK' }); }
 }
 async function trashSong(slug) {
-	const ok = await WLUI.confirm({ title: 'Move to Trash?', danger: true, ok: 'Move to Trash',
-		body: `The whole folder <code>${WLUI.esc(slug)}</code> (job, renders, notes, history) goes to the Trash. To restore it, drag it from the Trash back into your songs folder.` });
+	const use = await fetch('api/song/usage?song=' + encodeURIComponent(slug)).then(r => r.json()).catch(() => ({}));
+	const size = use.bytes != null ? ` <b>${fmtSize(use.bytes)}</b> in ${use.files.toLocaleString()} file${use.files === 1 ? '' : 's'}` : '';
+	const ok = await WLUI.confirm({ title: 'Move to Trash?', danger: true, ok: use.bytes != null ? `Move ${fmtSize(use.bytes)} to Trash` : 'Move to Trash',
+		body: `The whole folder <code>${WLUI.esc(slug)}</code>${size} (job, renders, stems, notes, history) goes to the Trash. To restore it, drag it from the Trash back into your songs folder.` });
 	if (!ok) return;
 	try {
 		await postJson('api/song/trash', { song: slug });
@@ -673,11 +819,12 @@ $('#detailsbtn').addEventListener('click', () => state.slug && editDetails(state
 /* ---------- right-click menus ---------- */
 $('#songs').addEventListener('contextmenu', e => {
 	const b = e.target.closest('.song');
-	if (!b) return;
-	const slug = b.dataset.slug;
+	if (b) songMenu(e, b.dataset.slug);
+});
+function songMenu(e, slug) {
 	WLUI.menu(e, [
-		{ label: 'Open', run: () => { $('#follow').checked = false; selectSong(slug); } },
-		{ label: 'Open in the editor', hint: 'E', run: () => { $('#follow').checked = false; selectSong(slug); const wait = setInterval(() => { if (state.song?.slug === slug) { clearInterval(wait); WLEditor.open(); } }, 100); setTimeout(() => clearInterval(wait), 8000); } },
+		{ label: 'Open', run: () => { $('#follow').checked = false; selectSong(slug, true); } },
+		{ label: 'Open in the editor', hint: 'E', run: () => { $('#follow').checked = false; selectSong(slug, true); const wait = setInterval(() => { if (state.song?.slug === slug) { clearInterval(wait); WLEditor.open(); } }, 100); setTimeout(() => clearInterval(wait), 8000); } },
 		'-',
 		{ label: 'Edit details…', run: () => editDetails(slug) },
 		{ label: 'Rename folder…', run: () => renameSong(slug) },
@@ -686,7 +833,7 @@ $('#songs').addEventListener('contextmenu', e => {
 		'-',
 		{ label: 'Move to Trash…', danger: true, run: () => trashSong(slug) },
 	]);
-});
+}
 $('#tl').addEventListener('contextmenu', e => {
 	if (!tl) return;
 	const r = e.target.getBoundingClientRect(), x = e.clientX - r.left, label = r.width < 600 ? 100 : LABEL;
@@ -722,11 +869,10 @@ const repaint = () => { laneTone = null; if (state.song) drawTimeline(); window.
 document.fonts?.ready.then(repaint);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', repaint);
 
-const initial = new URLSearchParams(location.search).get('song');
-if (initial) { $('#follow').checked = false; selectSong(initial); }
-loadSongs();
+loadSongs().then(route);
 </script>
 <script src="ui/menus.js"></script>
+<script src="ui/playground.js"></script>
 <script src="ui/editor.js"></script>
 </body>
 </html>

@@ -310,9 +310,64 @@ json userJobDefaults(std::string *path) {
     return d.is_object() ? d : json::object();
 }
 
-bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::string &err, bool useDefaults) {
-    // the user's defaults fill in top-level settings the job leaves out
+json applyNoteEdits(const json &jobIn, const std::string &baseDir, std::vector<std::pair<std::string, std::string>> *unmatched) {
+    namespace fs = std::filesystem;
+    std::ifstream in(fs::path(baseDir) / "edits.json");
+    if (!in || !jobIn.is_object() || !jobIn.contains("tracks") || !jobIn["tracks"].is_array()) return jobIn;
+    auto miss = [&](const std::string &track, const std::string &why) { if (unmatched) unmatched->push_back({track, why}); };
+    json file;
+    try { in >> file; } catch (...) { miss("", "edits.json is not valid JSON; no note edits applied"); return jobIn; }
+    if (!file.is_object() || !file.contains("edits") || !file["edits"].is_array()) return jobIn;
     json j = jobIn;
+    const auto at = [](const json &o, const char *k, double d) { return o.contains(k) && o[k].is_number() ? o[k].get<double>() : d; };
+    for (const auto &ed : file["edits"]) {
+        if (!ed.is_object()) continue;
+        const std::string track = ed.value("track", std::string());
+        json *t = nullptr;
+        for (auto &x : j["tracks"])
+            if (x.is_object() && (x.value("name", std::string()) == track || x.value("id", std::string()) == track)) { t = &x; break; }
+        if (!t) { miss(track, "no track named '" + track + "'"); continue; }
+        const int transpose = t->value("transpose", 0);
+        if (!t->contains("notes") || !(*t)["notes"].is_array()) (*t)["notes"] = json::array();
+        json &notes = (*t)["notes"];
+        if (ed.contains("add") && ed["add"].is_object()) {   // a new note, key as it sounds
+            const json &a = ed["add"];
+            json n = {{"beat", std::max(0.0, at(a, "beat", 0))}, {"dur", std::max(0.01, at(a, "dur", 1))}, {"vel", std::clamp(at(a, "vel", 0.8), 0.0, 1.0)},
+                      {"key", std::clamp((int)std::lround(at(a, "key", 60)), 0, 127) - transpose}};
+            notes.push_back(n);
+            continue;
+        }
+        if (!ed.contains("at") || !ed["at"].is_object()) continue;
+        const double beat = at(ed["at"], "beat", -1);
+        const int key = (int)std::lround(at(ed["at"], "key", -1));
+        size_t hit = notes.size();
+        for (size_t i = 0; i < notes.size() && hit == notes.size(); ++i) {
+            const json &n = notes[i];
+            if (!n.is_object() || !n.contains("beat") || !n["beat"].is_number() || std::fabs(n["beat"].get<double>() - beat) > 1e-4 || !n.contains("key")) continue;
+            try { if (parseKey(n["key"]) + transpose == key) hit = i; } catch (...) {}
+        }
+        if (hit == notes.size()) {
+            miss(track, "an edit of " + keyName(key) + " at beat " + std::to_string(beat).substr(0, std::to_string(beat).find('.') + 3) +
+                        " no longer matches a note (the song's source changed): edit it again or remove it from edits.json");
+            continue;
+        }
+        if (ed.value("delete", false)) { notes.erase(notes.begin() + (long)hit); continue; }
+        json &n = notes[hit];
+        const json to = ed.contains("to") && ed["to"].is_object() ? ed["to"] : json::object();
+        if (to.contains("beat")) n["beat"] = std::max(0.0, at(to, "beat", 0));
+        if (to.contains("key")) n["key"] = std::clamp((int)std::lround(at(to, "key", 60)), 0, 127) - transpose;
+        if (to.contains("dur")) n["dur"] = std::max(0.01, at(to, "dur", 1));
+        if (to.contains("vel")) n["vel"] = std::clamp(at(to, "vel", 0.8), 0.0, 1.0);
+    }
+    return j;
+}
+
+bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::string &err, bool useDefaults) {
+    // note edits (edits.json beside the job) change the notes before anything reads them; jobs Wavelength
+    // builds internally (useDefaults false) are already edited
+    std::vector<std::pair<std::string, std::string>> editMisses;
+    // the user's defaults fill in top-level settings the job leaves out
+    json j = useDefaults ? applyNoteEdits(jobIn, baseDir, &editMisses) : jobIn;
     if (useDefaults) {
         const json defaults = userJobDefaults();   // named: items() must not outlive its object
         for (auto &[k, v] : defaults.items())
@@ -722,6 +777,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 if (buses[i].contains("automation")) lateGainWarnings(buses[i]["automation"], out.buses[i].firstSoundBeat, out.buses[i].warnings);
             if (j.contains("master") && j["master"].contains("automation"))
                 lateGainWarnings(j["master"]["automation"], out.masterFirstSoundBeat, out.masterWarnings);
+        }
+        for (const auto &miss : editMisses) {   // on the track it was about, else on the master
+            auto it = std::find_if(out.tracks.begin(), out.tracks.end(), [&](const Track &t) { return t.name == miss.first; });
+            (it != out.tracks.end() ? it->warnings : out.masterWarnings).push_back("edits.json: " + miss.second);
         }
     } catch (const std::exception &e) {
         err = std::string("invalid job: ") + e.what();

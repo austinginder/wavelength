@@ -137,4 +137,11 @@ bool parseJob(const nlohmann::json &j, const std::string &baseDir, Job &out, std
 nlohmann::json userJobDefaults(std::string *path = nullptr);
 int parseKey(const nlohmann::json &k);   // 60, "C4", "F#3", "Bb5" (C4 = 60)
 
+// Note edits: `edits.json` beside a job (docs/job-format.md, "Note edits") changes its notes after whatever
+// made the job: move (to another beat, key, length or velocity), delete, add. A note is found by its track,
+// its beat and its sounding key (after "transpose"). parseJob applies them; `unmatched` gets (track, what)
+// for each edit whose note is no longer there. Returns the job unchanged when there is no edits.json.
+nlohmann::json applyNoteEdits(const nlohmann::json &job, const std::string &baseDir,
+                              std::vector<std::pair<std::string, std::string>> *unmatched = nullptr);
+
 } // namespace wl

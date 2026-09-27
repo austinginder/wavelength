@@ -25,6 +25,7 @@ express-to-nowhere/
   job.json             what renders (required, section 4; the manifest may name another file)
   NOTES.md             notes: the story of the song, credits, a table of its tracks
   make-job.py          source: how job.json was made (listed in the manifest)
+  edits.json           source: note edits applied on top of the job (docs/job-format.md, "Note edits")
   media/               files the job uses: samples, audio clips, preset files
   render/              the render that goes with the song: mix, picture, report (section 8)
   review.json          comments (section 7)

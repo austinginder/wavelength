@@ -251,6 +251,25 @@ Not played: filter and pitch envelopes, LFOs, `<curve>` and `<effect>`. The rend
 
 Notes reach CLAP plugins as note events (or as MIDI if the plugin only accepts MIDI), VST3 plugins as note events and VST2 plugins as MIDI.
 
+### Note edits: `edits.json`
+
+A job is often written by a script (`make-job.py`) that makes its notes from patterns, so there is no list of notes to change by hand, and a hand edit to `job.json` is gone the next time the script runs. `edits.json` beside the job holds changes to its notes that every reader applies on top of whatever wrote the job: `render` (and its workers, previews, windows), `lint`, `serve` and its live notes. The `serve` editor writes it (move, delete and add notes, then Save to song and Render).
+
+```json
+{"format": "wavelength.edits", "formatVersion": "1.0", "edits": [
+  {"track": "Lead", "at": {"beat": 204, "key": 88}, "to": {"key": 90}},
+  {"track": "Lead", "at": {"beat": 272, "key": 86}, "to": {"beat": 272.5, "dur": 0.5, "vel": 0.7}},
+  {"track": "Lead", "at": {"beat": 144, "key": 86}, "delete": true},
+  {"track": "Lead", "add": {"beat": 146, "dur": 1, "key": 81, "vel": 0.8}}
+]}
+```
+
+- A note is found by its track (`name` or `id`), its `beat` and its **sounding** key (after the track's `transpose`, as the timeline shows it). Keys in `to` and `add` sound too. Notes placed with `time` (seconds) can't be edited this way.
+- Edits apply in order, so a later edit can change a note an earlier one moved.
+- An edit whose note is no longer there (the script changed) is skipped with a warning on its track: `edits.json: an edit of E6 at beat 204.00 no longer matches a note ...`.
+- `serve` adds `batch`, `time` and `by` to each edit it saves (Undo last save removes a batch). Readers ignore keys they don't know.
+- To make the edits part of the script instead, change the script, render, and remove the edits it now covers (a moved note that the script already writes where the edit put it would no longer match, and warns).
+
 ## Output
 
 ```

@@ -194,6 +194,34 @@ sys.exit(0 if r["ok"] and t["plugin"] == "builtin:synth" and not t["levels"]["si
 else
   echo "FAIL fallback"; fail=1
 fi
+# note edits: edits.json beside the job moves, deletes and adds notes (keys as they sound, after transpose),
+# and an edit whose note is gone is a warning on its track
+mkdir -p out/check/edits
+cat > out/check/edits/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 1, "stems": "float",
+ "tracks": [{"name": "Keys", "plugin": "builtin:synth", "preset": "Init", "transpose": 12,
+             "notes": [{"beat": 0, "dur": 1, "key": "A3", "vel": 0.8}, {"beat": 1, "dur": 1, "key": "C4", "vel": 0.8}]}]}
+JOB
+cat > out/check/edits/edits.json <<'JOB'
+{"format": "wavelength.edits", "formatVersion": "1.0", "edits": [
+  {"track": "Keys", "at": {"beat": 0, "key": 69}, "to": {"key": 81}},
+  {"track": "Keys", "at": {"beat": 1, "key": 72}, "delete": true},
+  {"track": "Keys", "add": {"beat": 2, "dur": 1, "key": 69, "vel": 0.8}},
+  {"track": "Keys", "at": {"beat": 9, "key": 60}, "delete": true}]}
+JOB
+if "./$build/wavelength" render out/check/edits/job.json --out "out/check/edits/$build" --json 2>/dev/null | python3 -c '
+import json, subprocess, sys
+r = json.load(sys.stdin)
+t = r["tracks"][0]
+w, d = sys.argv[1], sys.argv[2]
+def an(s, e): return json.loads(subprocess.run([w, "analyze", d + "/stems/01-keys.wav", "--start", str(s), "--end", str(e), "--json"], capture_output=True, text=True).stdout)
+moved, gone, added = an(0.2, 0.7), an(1.2, 1.7), an(2.2, 2.7)
+ok = r["ok"] and t["notes"] == 2 and sum("edits.json" in x for x in t.get("warnings", [])) == 1 and moved["pitch"]["note"] == "A5" and added["pitch"]["note"] == "A4" and gone["rmsDb"] < moved["rmsDb"] - 20
+sys.exit(0 if ok else 1)' "./$build/wavelength" "out/check/edits/$build"; then
+  echo "ok   note edits: edits.json moves, deletes and adds notes; a stale edit warns"
+else
+  echo "FAIL note edits: edits.json"; fail=1
+fi
 # render --loop: every file exactly the loop's length (8 bars at 124 BPM) with a smpl loop over all of it
 if "./$build/wavelength" render examples/synth-tour.json --from 9 --to 17 --loop --stems 16 --out "out/check/loop/$build" --json > /dev/null 2>&1 &&
    python3 - "out/check/loop/$build" <<'PY'

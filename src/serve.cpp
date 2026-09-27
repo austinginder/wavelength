@@ -227,9 +227,22 @@ struct Preview {
     json window;
     double queuedAt = 0, startedAt = 0, finishedAt = 0;
     uint64_t run = 0;                   // which request this is: a re-request of the same id is a new run
+    bool full = false;                  // a full render of the song (the Render button): stems, report, mp3 in its out folder
 };
 
 double nowSec() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+
+// this executable with `args`: its stdout, parsed as JSON (null when it failed)
+json runSelf(std::vector<std::string> args, int timeoutSec) {
+    args.insert(args.begin(), platform::selfExecutable());
+    platform::Process proc;
+    if (!platform::spawn(args, proc, true, true)) return nullptr;
+    std::string out, crash;
+    const bool done = platform::readOutput(proc, out, timeoutSec);
+    if (!done) platform::kill(proc);
+    else while (!platform::finished(proc, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    try { return json::parse(out); } catch (...) { return nullptr; }
+}
 
 std::string fnv(const std::string &s) {
     uint64_t h = 1469598103934665603ull;
@@ -287,7 +300,16 @@ private:
     };
     std::mutex playMu_;
     std::map<std::string, std::shared_ptr<PlayWorker>> players_;
-    json play(const std::string &slug, const json &in, std::string &wav);
+    json play(const fs::path &jobPath, const std::string &track, const std::string &key, const json &in, std::string &wav);
+    json playSong(const std::string &slug, const json &in, std::string &wav);
+    json playInstrument(const json &in, std::string &wav);
+    // the instrument lists the playground shows: `plugins --json` and `presets <plugin> --json`, run in child
+    // processes (a plugin never loads in this one) and kept for 10 minutes
+    std::mutex listMu_;
+    std::map<std::string, std::pair<double, json>> lists_;
+    json listing(const std::vector<std::string> &args, const std::string &key);
+    // title (manifest) and length (report) per song folder, read again only when those files change
+    std::map<std::string, std::pair<std::string, json>> songInfo_;
     void reapPlayers(double idleSec);
     std::atomic<bool> stopping_{false};
 
@@ -299,6 +321,7 @@ private:
     json harmony(const std::string &slug);
     json previewJson(const Preview &p) const;
     json startPreview(const std::string &slug, std::vector<std::string> tracks, int from, int to);
+    json startRender(const std::string &slug);
     json cancelPreviews(const std::string &slug, const std::string &id);
     bool rendering(const std::string &slug);
     json meta(const std::string &slug);
@@ -318,7 +341,28 @@ json Server::songs() {
         double mtime = unixTime(d.path());
         bool mp3 = false;
         for (auto &[p, f] : files) { mtime = std::max(mtime, f.mtime); if (p.size() > 4 && p.substr(p.size() - 4) == ".mp3" && isAudio(p)) mp3 = true; }
-        list.push_back({{"slug", name}, {"mtime", mtime}, {"files", files.size()}, {"mp3", mp3}});
+        json item = {{"slug", name}, {"mtime", mtime}, {"files", files.size()}, {"mp3", mp3}};
+        // title from the manifest, length from the render report: cached until those files change
+        const std::string rp = pick(files, "report.json", "out/report.json");
+        const std::string sig = std::to_string(files.count("wavelength.json") ? files.at("wavelength.json").mtime : 0) + "|" + (rp.empty() ? "" : std::to_string(files.at(rp).mtime));
+        std::lock_guard<std::mutex> lock(listMu_);   // songs() runs on every event stream's thread
+        auto &cache = songInfo_[name];
+        if (cache.first != sig) {
+            json info = json::object(), m, rep;
+            if (files.count("wavelength.json") && readJson(d.path() / "wavelength.json", m)) {
+                if (m.contains("title") && m["title"].is_string()) info["title"] = m["title"];
+                if (m.contains("authors") && m["authors"].is_array()) info["authors"] = m["authors"];
+                if (m.contains("summary") && m["summary"].is_string()) info["summary"] = m["summary"];
+            }
+            if (!rp.empty() && readJson(d.path() / rp, rep)) {
+                if (rep.contains("seconds")) info["seconds"] = rep["seconds"];
+                if (rep.contains("mix") && rep["mix"].is_object() && rep["mix"].contains("lufs")) info["lufs"] = rep["mix"]["lufs"];
+                if (rep.contains("tracks") && rep["tracks"].is_array()) info["tracks"] = rep["tracks"].size();
+            }
+            cache = {sig, info};
+        }
+        for (auto &[k, v] : cache.second.items()) item[k] = v;
+        list.push_back(item);
     }
     std::sort(list.begin(), list.end(), [](const json &a, const json &b) { return a["mtime"].get<double>() > b["mtime"].get<double>(); });
     return list;
@@ -348,7 +392,17 @@ json Server::song(const std::string &slug) {
         if (openSong(dir.string(), sg, err) && sg.hasManifest())
             info = {{"title", sg.manifest.value("title", slug)}, {"authors", sg.manifest.value("authors", json::array())}};
     }
+    // note edits (edits.json) as the timeline shows them: applied, listed, and the ones that no longer match
+    json edits = json::array(), unmatchedEdits = json::array();
+    if (hasJob) {
+        std::vector<std::pair<std::string, std::string>> misses;
+        job = applyNoteEdits(job, (dir / jobPath).parent_path().string(), &misses);
+        for (auto &[t, why] : misses) unmatchedEdits.push_back({{"track", t}, {"why", why}});
+        json ef;
+        if (readJson(dir / "edits.json", ef) && ef.contains("edits") && ef["edits"].is_array()) edits = ef["edits"];
+    }
     return {{"slug", slug}, {"meta", info}, {"files", filesJson(files)}, {"jobPath", jobPath.empty() ? json(nullptr) : json(jobPath)},
+            {"edits", edits}, {"unmatchedEdits", unmatchedEdits},
             {"job", hasJob ? jobSummary(job) : json(nullptr)}, {"reportPath", reportPath.empty() ? json(nullptr) : json(reportPath)},
             {"report", hasReport ? report : json(nullptr)}, {"audio", audio}, {"docs", docs}};
 }
@@ -384,7 +438,7 @@ json Server::harmony(const std::string &slug) {
 }
 
 json Server::previewJson(const Preview &p) const {
-    json o = {{"id", p.id}, {"song", p.song}, {"status", p.status}, {"tracks", p.tracks}, {"from", p.from}, {"to", p.to}};
+    json o = {{"id", p.id}, {"song", p.song}, {"status", p.status}, {"tracks", p.tracks}, {"from", p.from}, {"to", p.to}, {"full", p.full}};
     if (!p.path.empty()) o["path"] = p.path;
     if (!p.error.empty()) o["error"] = p.error;
     if (!p.window.is_null()) o["window"] = p.window;
@@ -401,7 +455,7 @@ json Server::startPreview(const std::string &slug, std::vector<std::string> trac
     if (jobPath.empty()) return {{"error", "the song has no job.json yet"}};
     std::sort(tracks.begin(), tracks.end());
     std::string sig = slug + "|" + std::to_string(files.at(jobPath).mtime) + "|" + (reportPath.empty() ? "" : std::to_string(files.at(reportPath).mtime)) + "|" +
-                      std::to_string(from) + "|" + std::to_string(to);
+                      std::to_string(from) + "|" + std::to_string(to) + "|" + (files.count("edits.json") ? std::to_string(files.at("edits.json").mtime) : "");
     for (auto &t : tracks) sig += "|" + t;
     const std::string id = fnv(sig);
     std::lock_guard<std::mutex> lock(mu_);
@@ -439,6 +493,30 @@ json Server::startPreview(const std::string &slug, std::vector<std::string> trac
     return previewJson(p);
 }
 
+// The Render button: the song's job rendered in full into the folder its last report is in (out/ by
+// default), with an mp3 and the picture. Queued with the previews, one render at a time.
+json Server::startRender(const std::string &slug) {
+    const fs::path dir = songDir(slug);
+    const FileMap files = scanSong(dir);
+    const std::string jobPath = pick(files, "job.json", "job.json"), reportPath = pick(files, "report.json", "out/report.json");
+    if (jobPath.empty()) return {{"error", "the song has no job.json yet"}};
+    std::lock_guard<std::mutex> lock(mu_);
+    for (auto &[id, q] : previews_)
+        if (q.song == slug && q.full && (q.status == "queued" || q.status == "rendering")) return previewJson(q);
+    Preview p;
+    p.id = "render-" + fnv(slug + std::to_string(nowSec()));
+    p.song = slug;
+    p.full = true;
+    p.dir = (reportPath.empty() ? dir / "out" : (dir / reportPath).parent_path()).string();
+    p.queuedAt = nowSec();
+    p.run = ++runs_;
+    previews_[p.id] = p;
+    queue_.push_back(p.id);
+    ++previewVersion_;
+    cv_.notify_all();
+    return previewJson(p);
+}
+
 void Server::previewWorker() {
     double reaped = nowSec();
     while (!stopping_) {
@@ -463,7 +541,8 @@ void Server::previewWorker() {
         const FileMap files = scanSong(dir);
         const std::string jobPath = pick(files, "job.json", "job.json"), reportPath = pick(files, "report.json", "out/report.json");
         std::vector<std::string> args = {platform::selfExecutable(), "render", (dir / jobPath).string(), "--out", p.dir, "--stems", "none", "--json"};
-        if (!reportPath.empty()) { args.push_back("--level-from"); args.push_back((dir / reportPath).string()); }
+        if (p.full) args = {platform::selfExecutable(), "render", (dir / jobPath).string(), "--out", p.dir, "--deliver", "mp3", "--png", "--json"};
+        else if (!reportPath.empty()) { args.push_back("--level-from"); args.push_back((dir / reportPath).string()); }
         if (!p.tracks.empty()) {
             std::string t;
             for (auto &n : p.tracks) t += (t.empty() ? "" : ",") + n;
@@ -511,7 +590,7 @@ void Server::previewWorker() {
             }
             q.finishedAt = nowSec();
             if (q.status == "cancelled") {   // stopped on request: no half-written preview left behind
-                fs::remove_all(p.dir, ec);
+                if (!q.full) fs::remove_all(p.dir, ec);
             } else if (ok) {
                 q.status = "ready";
                 q.path = fs::relative(fs::path(p.dir) / "mix.wav", dir, ec).generic_string();
@@ -522,7 +601,7 @@ void Server::previewWorker() {
             }
         }
         ++previewVersion_;
-        prunePreviews(fs::path(p.dir).parent_path());
+        if (!p.full) prunePreviews(fs::path(p.dir).parent_path());
     }
 }
 
@@ -583,6 +662,19 @@ bool songSlug(const std::string &s) {
     return true;
 }
 
+json Server::listing(const std::vector<std::string> &args, const std::string &key) {
+    {
+        std::lock_guard<std::mutex> lock(listMu_);
+        auto it = lists_.find(key);
+        if (it != lists_.end() && nowSec() - it->second.first < 600) return it->second.second;
+    }
+    json r = runSelf(args, 120);
+    if (r.is_null()) return {{"error", "the listing failed"}};
+    std::lock_guard<std::mutex> lock(listMu_);
+    lists_[key] = {nowSec(), r};
+    return r;
+}
+
 // Stop play workers idle for `idleSec` (a loaded instrument can hold a lot of memory).
 void Server::reapPlayers(double idleSec) {
     std::lock_guard<std::mutex> lock(playMu_);
@@ -598,13 +690,31 @@ void Server::reapPlayers(double idleSec) {
 
 // Live notes through a track's own instrument: a __play worker keeps it loaded, so a note renders in
 // milliseconds after the first request (which loads the plugin). The WAV comes back in `wav`.
-json Server::play(const std::string &slug, const json &in, std::string &wav) {
+json Server::playSong(const std::string &slug, const json &in, std::string &wav) {
     const fs::path dir = songDir(slug);
     const FileMap files = scanSong(dir);
     const std::string jobPath = pick(files, "job.json", "job.json"), track = in.value("track", std::string());
     if (jobPath.empty()) return {{"error", "the song has no job.json yet"}};
     if (track.empty()) return {{"error", "which track?"}};
-    const std::string key = slug + "|" + track + "|" + std::to_string(files.at(jobPath).mtime);
+    return play(dir / jobPath, track, slug + "|" + track + "|" + std::to_string(files.at(jobPath).mtime), in, wav);
+}
+
+// The playground: any installed instrument and preset, as a one-track job of its own
+json Server::playInstrument(const json &in, std::string &wav) {
+    const std::string plugin = in.value("plugin", std::string()), preset = in.value("preset", std::string());
+    if (plugin.empty()) return {{"error", "which instrument?"}};
+    const fs::path dir = platform::cacheDir() / "playground" / fnv(plugin + "|" + preset);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    json track = {{"name", "Play"}, {"plugin", plugin}};
+    if (!preset.empty()) track["preset"] = preset;
+    const json job = {{"tempo", 120}, {"tracks", json::array({track})}};
+    std::ofstream(dir / "job.json") << job.dump(1);
+    return play(dir / "job.json", "Play", "playground|" + plugin + "|" + preset, in, wav);
+}
+
+json Server::play(const fs::path &jobFile, const std::string &track, const std::string &key, const json &in, std::string &wav) {
+    const std::string slug = key.substr(0, key.find('|'));
     std::shared_ptr<PlayWorker> w;
     bool fresh = false;
     {
@@ -647,7 +757,7 @@ json Server::play(const std::string &slug, const json &in, std::string &wav) {
     };
     const auto t0 = Clock::now();
     if (fresh || !w->proc.handle) {
-        if (!platform::spawn({platform::selfExecutable(), "__play", (dir / jobPath).string(), track}, w->proc, true, true, true))
+        if (!platform::spawn({platform::selfExecutable(), "__play", jobFile.string(), track}, w->proc, true, true, true))
             return fail("could not start the instrument");
         std::string hello;
         if (!platform::readLine(w->proc, hello, 90000)) return fail("the instrument did not load in 90 s");
@@ -730,6 +840,7 @@ int Server::run() {
         res.set_content(j.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
     };
     auto slugOf = [this](const httplib::Request &req, std::string &slug) { slug = req.get_param_value("song"); return songExists(slug); };
+    auto songFrom = [&](const json &in, std::string &slug) { slug = in.value("song", std::string()); return songExists(slug); };
 
     // the UI
     http_.Get("/", [this](const httplib::Request &, httplib::Response &res) {
@@ -858,6 +969,72 @@ int Server::run() {
         sendJson(res, previewJson(it->second));
     });
 
+    // note edits: POST {song, op: "add", edits: [...]} appends to edits.json; "undo" drops the last saved batch;
+    // "clear" removes the file. A song with a manifest lists edits.json as a source file (history keeps it).
+    http_.Post("/api/edits", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s, err;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        std::lock_guard<std::mutex> lock(mu_);
+        const fs::path f = songDir(s) / "edits.json";
+        json file;
+        if (!readJson(f, file) || !file.contains("edits") || !file["edits"].is_array()) file = {{"format", "wavelength.edits"}, {"formatVersion", "1.0"}, {"edits", json::array()}};
+        const std::string op = in.value("op", std::string());
+        std::error_code ec;
+        if (op == "add") {
+            const std::string batch = "b" + fnv(req.body + std::to_string(nowSec())).substr(0, 8), when = nowRfc3339();
+            size_t n = 0;
+            for (auto &e : in.value("edits", json::array())) {
+                if (!e.is_object() || !e.contains("track") || !e["track"].is_string()) continue;
+                json x = {{"track", e["track"]}, {"batch", batch}, {"time", when}, {"by", actor()}};
+                if (e.contains("add") && e["add"].is_object()) x["add"] = e["add"];
+                else if (e.contains("at") && e["at"].is_object()) {
+                    x["at"] = e["at"];
+                    if (e.value("delete", false)) x["delete"] = true;
+                    else if (e.contains("to") && e["to"].is_object()) x["to"] = e["to"];
+                    else continue;
+                } else continue;
+                file["edits"].push_back(x);
+                ++n;
+            }
+            if (!n) return sendJson(res, {{"error", "no edits"}}, 400);
+        } else if (op == "undo") {   // the last saved batch
+            json &list = file["edits"];
+            if (list.empty()) return sendJson(res, {{"error", "nothing to undo"}}, 400);
+            const std::string last = list.back().value("batch", std::string());
+            while (!list.empty() && list.back().value("batch", std::string()) == last) list.erase(list.end() - 1);
+        } else if (op == "clear") {
+            file["edits"] = json::array();
+        } else return sendJson(res, {{"error", "unknown op"}}, 400);
+        if (file["edits"].empty()) fs::remove(f, ec);
+        else if (!platform::writeFileAtomic(f, file.dump(1) + "\n", err)) return sendJson(res, {{"error", err}}, 500);
+        Song song;
+        if (openSong(songDir(s).string(), song, err) && song.hasManifest()) {   // edits.json is part of the song's source
+            json &files = song.manifest["files"];
+            if (!files.is_array()) files = json::array();
+            const bool listed = std::any_of(files.begin(), files.end(), [](const json &x) { return x.value("path", std::string()) == "edits.json"; });
+            const bool exists = fs::exists(f, ec);
+            if (exists && !listed) { files.push_back({{"path", "edits.json"}, {"role", "source"}, {"mediaType", "application/json"}}); writeManifest(song, err); }
+            if (!exists && listed) {
+                json kept = json::array();
+                for (auto &x : files) if (x.value("path", std::string()) != "edits.json") kept.push_back(x);
+                files = kept;
+                writeManifest(song, err);
+            }
+        }
+        sendJson(res, {{"ok", true}, {"count", file["edits"].size()}});
+    });
+    // the Render button: POST {song}
+    http_.Post("/api/render", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        json r = startRender(s);
+        sendJson(res, r, r.contains("error") ? 400 : 200);
+    });
+
     // cancel previews: POST {song} stops all of that song's, {id} one
     http_.Post("/api/preview/cancel", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
@@ -866,7 +1043,6 @@ int Server::run() {
     });
 
     // song folder actions: rename, move to the trash, show in the file browser, edit the manifest's details
-    auto songFrom = [&](const json &in, std::string &slug) { slug = in.value("song", std::string()); return songExists(slug); };
     http_.Post("/api/song/rename", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
         std::string s;
@@ -978,15 +1154,50 @@ int Server::run() {
         sendJson(res, meta(s));
     });
 
+    // the playground's lists: instruments (plugins --json) and one instrument's presets
+    http_.Get("/api/instruments", [&](const httplib::Request &, httplib::Response &res) {
+        const json r = listing({"plugins", "--json"}, "plugins");
+        if (r.contains("error")) return sendJson(res, r, 500);
+        json out = json::array();
+        for (auto &p : r.value("plugins", json::array()))
+            if (!p.value("blocked", false) && p.contains("features") && std::find(p["features"].begin(), p["features"].end(), "instrument") != p["features"].end())
+                out.push_back({{"format", p.value("format", "")}, {"id", p.value("id", "")}, {"name", p.value("name", "")}, {"vendor", p.value("vendor", "")},
+                               {"arch", p.value("arch", "")}});
+        sendJson(res, {{"instruments", out}});
+    });
+    http_.Get("/api/presets", [&](const httplib::Request &req, httplib::Response &res) {
+        const std::string plugin = req.get_param_value("plugin");
+        if (plugin.empty()) return sendJson(res, {{"error", "which instrument?"}}, 400);
+        json r = listing({"presets", plugin, "--json"}, "presets|" + plugin);
+        if (r.contains("error") && !r.contains("presets")) r["presets"] = json::array();
+        sendJson(res, r);
+    });
+    // how much a song folder holds (the Trash dialog says it)
+    http_.Get("/api/song/usage", [&](const httplib::Request &req, httplib::Response &res) {
+        std::string s;
+        if (!slugOf(req, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        double bytes = 0;
+        size_t count = 0;
+        std::error_code ec;
+        for (auto it = fs::recursive_directory_iterator(songDir(s), fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) break;
+            if (it->is_regular_file(ec)) { bytes += (double)it->file_size(ec); ++count; }
+        }
+        sendJson(res, {{"bytes", bytes}, {"files", count}});
+    });
+
     // live notes: POST {song, track, notes: [{key, vel, start, dur}] (seconds), tail} answers audio/wav,
     // with the worker's details in the X-Wavelength-Play header
     http_.Post("/api/play", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
         std::string s;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
-        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
         std::string wav;
-        const json r = play(s, in, wav);
+        json r;
+        if (in.contains("song")) {
+            if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+            r = playSong(s, in, wav);
+        } else r = playInstrument(in, wav);
         if (r.contains("error")) return sendJson(res, r, 500);
         res.set_header("Cache-Control", "no-store");
         res.set_header("X-Wavelength-Play", r.dump(-1, ' ', true, json::error_handler_t::replace));

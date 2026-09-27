@@ -56,7 +56,7 @@
 		while (menuItems[menuItems.length - 1] === '-') menuItems.pop();
 		if (!menuItems.length) return;
 		menuEl.innerHTML = menuItems.map((it, i) => it === '-' ? '<hr>'
-			: `<button type="button" role="menuitem" data-i="${i}" class="${it.danger ? 'danger' : ''}" ${it.disabled ? 'disabled' : ''}>${esc(it.label)}${it.hint ? `<span>${esc(it.hint)}</span>` : ''}</button>`).join('');
+			: `<button type="button" role="menuitem" data-i="${i}" class="${it.danger ? 'danger' : ''}" ${it.disabled ? 'disabled' : ''}>${it.checked != null ? `<i class="ck">${it.checked ? '✓' : ''}</i>` : ''}${esc(it.label)}${it.hint ? `<span>${esc(it.hint)}</span>` : ''}</button>`).join('');
 		if (isOpen()) menuEl.hidePopover();
 		// inside the top modal dialog (the editor), since a modal makes everything outside it inert
 		const host = [...document.querySelectorAll('dialog[open]')].filter(d => d.matches(':modal')).pop() || document.body;
