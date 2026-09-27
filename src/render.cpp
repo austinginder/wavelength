@@ -2,6 +2,7 @@
 
 #include "builtins.hpp"
 #include "picture.hpp"
+#include "song.hpp"
 #include "clips.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
@@ -1191,8 +1192,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     if (job.picture) {   // song.png: sections, loudness, spectrum and a lane per track, for agents that can see
         Picture pic;
         const fs::path src(job.sourcePath);
-        pic.title = src.empty() ? fs::path(outDir).filename().string()
-                                : (src.filename() == "job.json" ? src.parent_path().filename().string() : src.stem().string());
+        pic.title = src.empty() ? fs::path(outDir).filename().string() : titleOfJob(fs::absolute(src));
         pic.width = job.pictureWidth;
         pic.from = job.window.on ? job.window.trimSec : 0;
         pic.seconds = job.window.loop ? job.window.loopSec : seconds;

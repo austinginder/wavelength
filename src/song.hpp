@@ -27,6 +27,8 @@ struct Song {
 // opens too (hasManifest() false): `save` and `upgrade` give it one.
 bool openSong(const std::string &arg, Song &song, std::string &err);
 // the song a job file belongs to, when its folder has a manifest (renders record history there)
+// What to call a job in pictures and reports: its song's title, else its folder (job.json) or file name.
+std::string titleOfJob(const std::filesystem::path &jobPath);
 bool songOfJob(const std::string &jobPath, Song &song);
 bool writeManifest(const Song &song, std::string &err);
 // A minimal manifest for a folder that has none: an ID, a title from the folder's name, the job and

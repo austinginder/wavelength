@@ -1427,7 +1427,7 @@ int cmdPicture(const Args &a) {
     for (const auto &t : job.tracks) if (!t.clips.empty()) end = std::max(end, clipsEndSeconds(job, t));
     Picture pic;
     const fs::path src = fs::absolute(path);
-    pic.title = src.filename() == "job.json" ? src.parent_path().filename().string() : src.stem().string();
+    pic.title = titleOfJob(src);
     pic.width = std::atoi(a.get("--width", std::to_string(job.pictureWidth)).c_str());
     pic.seconds = job.length > 0 ? job.length : end + job.tail;
     const std::string out = a.get("--out", (src.parent_path() / "arrangement.png").string());

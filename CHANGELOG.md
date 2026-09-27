@@ -37,7 +37,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
     and indent, and lists what it could not fix.
   - `render --keep` keeps the render with the song: its MP3 (added to the deliveries when missing),
     picture (with `--png`) and report go to `render/`, and the manifest's `render` names them with the
-    revision and job hash.
+    revision and job hash. Pictures of a song carry its title from the manifest.
 - `"lib:<library>/<file>"` names one file of an installed sample library (a kit or loop folder as
   `samples` lists it, or a path under a sample root) for a sampler `sample`, a kit `map` entry or an
   audio clip, so a job never depends on where a computer keeps its libraries.

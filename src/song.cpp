@@ -91,6 +91,12 @@ bool openSong(const std::string &arg, Song &song, std::string &err) {
     return true;
 }
 
+std::string titleOfJob(const fs::path &jobPath) {
+    Song song;
+    if (!jobPath.empty() && songOfJob(jobPath.string(), song) && !song.title().empty()) return song.title();
+    return jobPath.filename() == "job.json" ? jobPath.parent_path().filename().string() : jobPath.stem().string();
+}
+
 bool songOfJob(const std::string &jobPath, Song &song) {
     std::error_code ec;
     const fs::path dir = fs::absolute(jobPath, ec).parent_path();
