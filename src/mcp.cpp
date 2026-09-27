@@ -122,6 +122,7 @@ json tools() {
          {"tracks", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "only these tracks (with the song's buses and master)"}}},
          {"stems", {{"type", "string"}, {"enum", {"none", "16", "24", "float"}}, {"description", "stem files (default none)"}}},
          {"deliver", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "extra files next to mix.wav: mp3, flac, wav:16..."}}},
+         {"loop", prop("boolean", "with from_bar/to_bar: a seamless loop for games (tail folded onto the start, smpl loop chunk)")},
          {"picture", prop("boolean", "attach the song picture (default true)")}},
         {"job"}, writes));
     list.push_back(tool("picture", "Picture of an arrangement",
@@ -459,6 +460,7 @@ private:
         if (picture) args.push_back("--png");
         if (a.contains("from_bar") && a["from_bar"].is_number()) { args.push_back("--from"); args.push_back(numArg(a["from_bar"])); }
         if (a.contains("to_bar") && a["to_bar"].is_number()) { args.push_back("--to"); args.push_back(numArg(a["to_bar"])); }
+        if (a.value("loop", false)) args.push_back("--loop");
         if (a.contains("tracks") && a["tracks"].is_array()) {
             std::string t;
             for (auto &x : a["tracks"]) if (x.is_string()) t += (t.empty() ? "" : ",") + x.get<std::string>();
