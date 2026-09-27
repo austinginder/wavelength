@@ -48,7 +48,7 @@ bool ZipWriter::write(const std::string &path, std::string &err) const {
     for (const auto &f : files_) {
         std::vector<uint8_t> comp;
         uint16_t method = 8;
-        if (!zipdetail::deflateRaw(f.data, comp) || comp.size() >= f.data.size()) { comp = f.data; method = 0; }   // store what doesn't shrink
+        if (f.store || !zipdetail::deflateRaw(f.data, comp) || comp.size() >= f.data.size()) { comp = f.data; method = 0; }   // store what doesn't shrink
         const uint32_t crc = zipdetail::crc32(f.data), offset = (uint32_t)out.size();
         auto header = [&](std::vector<uint8_t> &v, bool centralEntry) {
             u32(v, centralEntry ? 0x02014b50 : 0x04034b50);

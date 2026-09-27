@@ -1,6 +1,7 @@
 #include "song_cli.hpp"
 
 #include "history.hpp"
+#include "package.hpp"
 #include "review.hpp"
 #include "song.hpp"
 #include "songdiff.hpp"
@@ -34,6 +35,9 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"redo", {{"--json", false}}},
     {"restore", {{"--json", false}}},
     {"diff", {{"--json", false}}},
+    {"pack", {{"--json", false}, {"--out", true}, {"--no-history", false}, {"--no-render", false}, {"--no-review", false}}},
+    {"unpack", {{"--json", false}, {"--out", true}, {"--force", false}}},
+    {"validate", {{"--json", false}}},
     {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
 };
 
@@ -281,6 +285,49 @@ int cmdComments(const CliArgs &a, const Out &o) {
     return 0;
 }
 
+int cmdPack(const CliArgs &a, const Out &o) {
+    Song song;
+    std::string err;
+    if (!songFor(a, song, o, false, err)) return o.fail(err);
+    package::PackOptions opt;
+    opt.history = !a.has("--no-history");
+    opt.render = !a.has("--no-render");
+    opt.review = !a.has("--no-review");
+    json r;
+    if (!package::pack(song, a.get("--out"), opt, r, err)) return o.fail(err);
+    if (o.json) { o.emit(r); return 0; }
+    std::fprintf(o.f, "%s (%.1f MB, %zu entries)\n", r["file"].get<std::string>().c_str(), r["bytes"].get<double>() / 1048576.0, r["entries"].get<size_t>());
+    int missing = 0;
+    for (auto &q : r["requires"]) {
+        const std::string what = q.contains("plugin") ? q["plugin"].value("name", std::string()) + (q.contains("preset") ? " '" + q.value("preset", std::string()) + "'" : "")
+                                                      : q["library"].value("kind", std::string()) + " '" + q["library"].value("name", std::string()) + "'";
+        if (!q.value("fallback", false)) ++missing;
+        std::fprintf(o.f, "  needs %-40s track %s%s\n", what.c_str(), q.value("track", std::string()).c_str(), q.value("fallback", false) ? "  (has a fallback)" : "");
+    }
+    if (missing) std::fprintf(o.f, "%d track%s without a fallback will be silent where their plugin or library is missing (wavelength fallbacks --suggest)\n", missing, missing == 1 ? "" : "s");
+    return 0;
+}
+
+int cmdUnpack(const CliArgs &a, const Out &o) {
+    if (a.pos.size() < 2) return o.fail("usage: wavelength unpack <file.wavelength> [--out DIR] [--force]");
+    json r;
+    std::string err;
+    if (!package::unpack(a.pos[1], a.get("--out"), a.has("--force"), r, err)) return o.fail(err);
+    if (o.json) o.emit(r);
+    else std::fprintf(o.f, "%s -> %s\n", r.value("title", std::string()).c_str(), r["folder"].get<std::string>().c_str());
+    return 0;
+}
+
+int cmdValidate(const CliArgs &a, const Out &o) {
+    const json r = package::validate(a.pos.size() > 1 ? a.pos[1] : ".");
+    if (o.json) { o.emit(r); return r["ok"] ? 0 : 1; }
+    for (auto &p : r["problems"])
+        std::fprintf(o.f, "%-7s %s%s%s\n", p.value("severity", std::string()).c_str(), p.value("path", std::string()).c_str(), p.value("path", std::string()).empty() ? "" : ": ",
+                     p.value("message", std::string()).c_str());
+    std::fprintf(o.f, "%s\n", r["ok"] ? "valid" : "not valid");
+    return r["ok"] ? 0 : 1;
+}
+
 } // namespace
 
 bool isSongCommand(const std::string &cmd) { return kCommands.count(cmd) > 0; }
@@ -296,6 +343,9 @@ int runSongCommand(int argc, char **argv, std::FILE *f) {
     if (cmd == "save") return cmdSave(a, o);
     if (cmd == "history") return cmdHistory(a, o);
     if (cmd == "diff") return cmdDiff(a, o);
+    if (cmd == "pack") return cmdPack(a, o);
+    if (cmd == "unpack") return cmdUnpack(a, o);
+    if (cmd == "validate") return cmdValidate(a, o);
     if (cmd == "comments") return cmdComments(a, o);
     return cmdStep(a, o);
 }

@@ -9,7 +9,7 @@
 
 namespace wl {
 
-struct ZipEntry { std::string name; uint16_t method; uint32_t compSize, size, localOffset; };
+struct ZipEntry { std::string name; uint16_t method; uint32_t compSize, size, localOffset; uint16_t flags = 0; uint32_t externalAttr = 0; };
 
 namespace zipdetail {
 inline uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -23,11 +23,12 @@ uint32_t crc32(const std::vector<uint8_t> &data);
 // Entries are collected in memory, then written as one archive (no zip64: under 4 GB).
 class ZipWriter {
 public:
-    void add(const std::string &name, std::vector<uint8_t> data) { files_.push_back({name, std::move(data)}); }
-    void add(const std::string &name, const std::string &text) { add(name, std::vector<uint8_t>(text.begin(), text.end())); }
+    // store: keep the entry uncompressed (a `mimetype` entry, audio and images); otherwise deflated when that makes it smaller
+    void add(const std::string &name, std::vector<uint8_t> data, bool store = false) { files_.push_back({name, std::move(data), store}); }
+    void add(const std::string &name, const std::string &text, bool store = false) { add(name, std::vector<uint8_t>(text.begin(), text.end()), store); }
     bool write(const std::string &path, std::string &err) const;
 private:
-    struct File { std::string name; std::vector<uint8_t> data; };
+    struct File { std::string name; std::vector<uint8_t> data; bool store = false; };
     std::vector<File> files_;
 };
 
@@ -35,6 +36,7 @@ class Zip {
 public:
     // entry names, in archive order
     std::vector<std::string> names() const { std::vector<std::string> n; for (auto &e : entries_) n.push_back(e.name); return n; }
+    const std::vector<ZipEntry> &entries() const { return entries_; }
     bool open(const std::string &path, std::string &err) {
         path_ = path;
         f_.open(path, std::ios::binary);
@@ -58,7 +60,9 @@ public:
         f_.read(reinterpret_cast<char *>(cd.data()), cdSize);
         for (size_t p = 0; p + 46 <= cd.size() && zipdetail::u32(&cd[p]) == 0x02014b50;) {
             ZipEntry e;
+            e.flags = zipdetail::u16(&cd[p + 8]);
             e.method = zipdetail::u16(&cd[p + 10]);
+            e.externalAttr = zipdetail::u32(&cd[p + 38]);
             e.compSize = zipdetail::u32(&cd[p + 20]);
             e.size = zipdetail::u32(&cd[p + 24]);
             const uint16_t nameLen = zipdetail::u16(&cd[p + 28]), extraLen = zipdetail::u16(&cd[p + 30]), commentLen = zipdetail::u16(&cd[p + 32]);

@@ -162,6 +162,7 @@ add_executable(wavelength
   src/song_cli.cpp
   src/songdiff.cpp
   src/review.cpp
+  src/package.cpp
   src/mcp.cpp
   src/render.cpp
   src/state_file.cpp

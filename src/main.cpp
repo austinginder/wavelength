@@ -42,6 +42,7 @@
 #include "fallback.hpp"
 #include "kit.hpp"
 #include "history.hpp"
+#include "package.hpp"
 #include "song_cli.hpp"
 #include "mcp.hpp"
 #include "render.hpp"
@@ -991,6 +992,14 @@ int cmdExport(const Args &a) {
 int cmdRender(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json | project.dawproject>");
     std::string path = a.positional[1];
+    if (package::isPackage(path)) {   // a .wavelength song: unpacked once into the cache, rendered from there
+        std::string err;
+        const std::string dir = package::cached(path, err);
+        if (dir.empty()) return fail(a, err);
+        Song song;
+        if (!openSong(dir, song, err)) return fail(a, err);
+        path = song.jobPath().string();
+    }
     if (const std::string ext = fs::path(path).extension().string(); ext == ".mid" || ext == ".midi") {   // import, then render
         const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
         MidiImport m;
