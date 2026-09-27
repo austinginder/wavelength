@@ -157,6 +157,9 @@ add_executable(wavelength
   src/docs.cpp
   src/fallback.cpp
   src/kit.cpp
+  src/song.cpp
+  src/history.cpp
+  src/song_cli.cpp
   src/mcp.cpp
   src/render.cpp
   src/state_file.cpp

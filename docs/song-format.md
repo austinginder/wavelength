@@ -204,14 +204,17 @@ zlib (RFC 1950). The name is the SHA-256 of the uncompressed bytes; readers MUST
 | `rev` | 1, 2, 3...: the revision number, one more than the line before. |
 | `time`, `by`, `message` | When, who (`{name, kind}`) and why. |
 | `op` | `save` (a save point someone made; `named`: true when it has a message), `render` (a render: its files as they were rendered), `undo`, `redo`, `restore`. |
-| `parent` | The revision the song was at before this one (0 for the first). |
+| `parent` | The revision before this one in the log (0 for the first), so the log is one line of history. |
 | `files` | The full snapshot: every tracked path and its content hash. Reading a revision needs only its line and objects. |
 | `render` | For `render` entries: hashes of the report and mix that were made, and their loudness summary. |
 | `target`, `from` | For `undo`, `redo` and `restore`: the revision whose files were restored, and the one that was current. |
 
 **Operations.** Undo, redo and restore never remove anything: each writes the target revision's files
-into the folder and appends an entry, so it can itself be undone. Undo restores the `parent` of the
-current revision; redo restores the revision the last undo left, as long as nothing was saved since.
+into the folder and appends an entry, so it can itself be undone. They follow the song's changes the
+way an editor does: a `save` or `render` whose files differ from the previous state is a change (one
+that changed nothing is not), and a `restore` is one. Undo returns to the state before the latest
+change; redo reapplies what undo took back, until the next change. Unsaved edits in the folder are
+saved as a revision before any of them runs.
 Every render appends a `render` entry, even when the files are unchanged (it costs one line: the
 objects are already there), so each render a person listens to has a revision of its own. Content
 that appears in many revisions is stored once.

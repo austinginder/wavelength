@@ -41,6 +41,8 @@
 #include "docs.hpp"
 #include "fallback.hpp"
 #include "kit.hpp"
+#include "history.hpp"
+#include "song_cli.hpp"
 #include "mcp.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
@@ -1198,6 +1200,12 @@ int cmdRender(const Args &a) {
     }
     if (!complete) report["error"] = incomplete;
     std::ofstream(fs::path(outDir) / "report.json") << report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
+    int songRev = 0;   // a full render of a song is a revision (docs/song-format.md): the report names it
+    if (complete && only.empty() && !job.window.on) {
+        std::string herr;
+        songRev = history::recordRender(path, outDir, report, herr);
+        if (!herr.empty()) std::fprintf(stderr, "warning: song history: %s\n", herr.c_str());
+    }
     if (a.has("--json")) { emit(report.dump(2, ' ', false, json::error_handler_t::replace)); return complete ? 0 : 1; }
     for (auto &t : r.tracks) {
         std::fprintf(OUT, "%-24s %-20s peak %6.1f dB  %6.1f LUFS  %s\n", t.name.c_str(), t.pluginName.c_str(), t.levels.peakDb,
@@ -1214,6 +1222,7 @@ int cmdRender(const Args &a) {
     for (auto &sec : r.sections) std::fprintf(OUT, "    section %-18s %6.1f LUFS  (%.1f–%.1f s)\n", sec.name.c_str(), sec.lufs, sec.start, sec.end);
     for (auto &w : r.warnings) std::fprintf(OUT, "    ! %s\n", w.c_str());
     if (!r.pictureFile.empty()) std::fprintf(OUT, "picture %s\n", r.pictureFile.c_str());
+    if (songRev) std::fprintf(OUT, "song revision %d\n", songRev);
     std::fprintf(OUT, "%.2f s of audio rendered in %.2f s\n", r.seconds, r.renderSeconds);
     if (!complete) { std::fprintf(stderr, "error: %s\n", incomplete.c_str()); return 1; }
     return 0;
@@ -1662,6 +1671,7 @@ int run(int argc, char **argv) {
     Args a = parse(argc, argv);
     if (a.positional.empty() || a.positional[0] == "help" || a.has("--help")) { std::fputs(kUsage, OUT); return a.positional.empty() ? 1 : 0; }
     const std::string cmd = a.positional[0];
+    if (isSongCommand(cmd)) return runSongCommand(argc, argv, OUT);   // save, history, undo... (song_cli.cpp)
     if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
