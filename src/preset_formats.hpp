@@ -18,6 +18,12 @@ bool isXferJson(const std::vector<uint8_t> &d);
 bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> &processor,
                          std::vector<uint8_t> &controller, std::string &err);
 
+// Surge XT Effects .srgfx (one effect, Surge's plain parameter values in storage order) -> the plugin's
+// state: its effect type, normalized slot values and parameter features (tempo sync, deactivated, ...)
+bool isSurgeFxPreset(const std::vector<uint8_t> &d);
+bool surgeFxWithPreset(const std::vector<uint8_t> &surgeFxState, const std::vector<uint8_t> &srgfx, std::vector<uint8_t> &out,
+                       std::string &err);
+
 // Kilohearts snap-in presets (.ksdl, .ksqe, ...: the extension is the snap-in's id) -> its state
 bool isKiloheartsPreset(const std::vector<uint8_t> &d);
 std::vector<uint8_t> kiloheartsPresetToState(const std::vector<uint8_t> &preset);

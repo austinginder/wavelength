@@ -1,5 +1,7 @@
 #include "preset_formats.hpp"
 
+#include "xml.hpp"
+
 #include <nlohmann/json.hpp>
 #include <zlib.h>
 #include <zstd.h>
@@ -228,6 +230,101 @@ bool serumPresetToStates(const std::vector<uint8_t> &file, std::vector<uint8_t> 
     for (const char *k : {"presetName", "presetAuthor", "presetDescription"}) ch[k] = header.value(k, "");
     processor = writeXfer(ph, proc);
     controller = writeXfer(ch, ctl);
+    return true;
+}
+
+// ---- Surge XT Effects .srgfx: one effect with Surge's own (storage) parameter values ------------
+namespace {
+struct SurgeFxParam { int isInt; float min, max; };
+struct SurgeFxType { int type; int remap[12]; SurgeFxParam p[12]; };
+const SurgeFxType kSurgeFxTypes[] = {
+#include "surge_fx_table.inc"
+};
+std::string xmlAttr(const std::string &v) {
+    std::string o;
+    for (char c : v) o += c == '&' ? "&amp;" : c == '<' ? "&lt;" : c == '>' ? "&gt;" : c == '"' ? "&quot;" : std::string(1, c);
+    return o;
+}
+std::string num9(double v) { char b[40]; std::snprintf(b, sizeof b, "%.9g", v); return b; }
+} // namespace
+
+bool isSurgeFxPreset(const std::vector<uint8_t> &d) {
+    const std::string head(d.begin(), d.begin() + (long)std::min<size_t>(d.size(), 256));
+    return head.find("<single-fx") != std::string::npos;
+}
+
+bool surgeFxWithPreset(const std::vector<uint8_t> &current, const std::vector<uint8_t> &file, std::vector<uint8_t> &out, std::string &err) {
+    // the plugin's state: JUCE binary XML ("VC2!" + u32 LE length + <surgefx .../> + NUL), then the wrapper's own data
+    if (current.size() < 8 || std::memcmp(current.data(), "VC2!", 4)) { err = "an .srgfx preset loads into Surge XT Effects only"; return false; }
+    const uint32_t n = le32(current.data() + 4);
+    if (8 + (size_t)n > current.size()) { err = "unexpected Surge XT Effects state"; return false; }
+    std::string text(current.begin() + 8, current.begin() + 8 + n);
+    while (!text.empty() && text.back() == 0) text.pop_back();
+    const std::vector<uint8_t> tail(current.begin() + 8 + n, current.end());
+    std::string perr;
+    auto state = xml::parse(text, perr);
+    if (!state || state->tag != "surgefx") { err = "an .srgfx preset loads into Surge XT Effects only"; return false; }
+    // a factory preset ("This Cassette") has a stray non-ASCII byte in place of the space between two
+    // attributes: read it as the space
+    std::string src;
+    bool quoted = false;
+    for (size_t k = 0; k < file.size(); ++k) {
+        const char c = (char)file[k];
+        if (c == '"') quoted = !quoted;
+        if (!quoted && (uint8_t)c >= 0x80 && k > 0 && (file[k - 1] == '"' || (uint8_t)file[k - 1] >= 0x80)) {
+            if (src.empty() || src.back() != ' ') src += ' ';
+            continue;
+        }
+        src += c;
+    }
+    auto preset = xml::parse(src, perr);
+    const xml::Node *snap = preset ? preset->child("snapshot") : nullptr;
+    if (!snap) { err = "is not a Surge effect preset (" + (perr.empty() ? "no <snapshot>" : perr) + ")"; return false; }
+    const int type = (int)snap->num("type", 0);
+    const SurgeFxType *t = nullptr;
+    for (const auto &x : kSurgeFxTypes) if (x.type == type) t = &x;
+    if (!t) { err = "Surge effect type " + std::to_string(type) + " is unknown to Wavelength"; return false; }
+    auto &attrs = state->attrs;
+    auto set = [&](const std::string &k, const std::string &v) {
+        for (auto &a : attrs) if (a.first == k) { a.second = v; return; }
+        attrs.push_back({k, v});
+    };
+    auto has = [&](const std::string &k) { return state->attr(k) != nullptr; };
+    set("fxt", std::to_string(type));
+    for (int slot = 0; slot < 12; ++slot) {
+        const int i = t->remap[slot];
+        const SurgeFxParam &p = t->p[i];
+        const std::string key = "p" + std::to_string(i);
+        const bool given = snap->attr(key) != nullptr;
+        const double v = snap->num(key, p.min);
+        double norm = 0;
+        if (p.max > p.min) {   // Surge: floats (v - min) / (max - min); integers 0.005 + 0.99 x that
+            const double x = std::clamp((v - p.min) / (p.max - p.min), 0.0, 1.0);
+            norm = p.isInt ? 0.005 + 0.99 * x : x;
+        }
+        int features = 0;   // SurgeFXProcessor::ParamFeatureFlags
+        if (snap->get(key + "_temposync") == "1") features |= 1;
+        if (snap->get(key + "_extend_range") == "1") features |= 2;
+        if (snap->get(key + "_absolute") == "1") features |= 4;
+        if (snap->get(key + "_deactivated") == "1") features |= 8;
+        const std::string s = std::to_string(slot);
+        set("fxp_" + s, num9(norm));
+        set("fxp_param_features_" + s, std::to_string(features));
+        if (has("fxp_temposync_" + s)) set("fxp_temposync_" + s, (features & 1) ? "1" : "0");
+        if (has("surgevaltype_" + s)) {   // newer builds read integer values from these
+            set("surgevaltype_" + s, p.isInt ? "0" : "2");
+            set("surgeval_" + s, p.isInt ? std::to_string((long)std::lround(given ? v : p.min)) : num9(given ? v : p.min));
+        }
+    }
+    if (has("currentPresetName")) set("currentPresetName", snap->get("name"));
+    std::string x = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<surgefx";
+    for (auto &[k, v] : attrs) x += " " + k + "=\"" + xmlAttr(v) + "\"";
+    x += "/>\n";
+    out = {'V', 'C', '2', '!'};
+    put32(out, (uint32_t)x.size() + 1);
+    out.insert(out.end(), x.begin(), x.end());
+    out.push_back(0);
+    out.insert(out.end(), tail.begin(), tail.end());
     return true;
 }
 

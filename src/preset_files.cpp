@@ -28,7 +28,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
                                            ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
-                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide"};
+                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide", ".srgfx"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -60,6 +60,7 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".hxp") return p == "helix";
     if (ext == ".echobode") return p == "echobode";
     if (ext == ".tide") return p == "pendulate";
+    if (ext == ".srgfx") return p == "surgexteffects";
     if (ext == ".serumfx" || ext == ".serumfxrack") return p == "serum2fx";
     if (ext == ".fxp") {   // Serum 1 patches (fxID "XfsX") turn up in Serum 2's folders; Serum 2 can't load them
         std::ifstream in(file, std::ios::binary);
@@ -262,6 +263,17 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         dirs.push_back(kitDir() / "surge-xt" / "SurgeXTData" / "patches_3rdparty");
     }
     if (p == "surgext") dirs.push_back(fs::path(home) / "Documents/Surge XT/Patches");
+    if (p == "surgexteffects") {   // the effect presets Surge XT and Surge XT Effects share
+#if defined(__APPLE__)
+        dirs.push_back("/Library/Application Support/Surge XT/fx_presets");
+#elif defined(_WIN32)
+        dirs.push_back(fs::path(getenv("PROGRAMDATA") ? getenv("PROGRAMDATA") : "C:\\ProgramData") / "Surge XT/fx_presets");
+#else
+        dirs.push_back(fs::exists("/usr/share/surge-xt") ? "/usr/share/surge-xt/fx_presets" : "/usr/local/share/surge-xt/fx_presets");
+#endif
+        dirs.push_back(kitDir() / "surge-xt" / "SurgeXTData" / "fx_presets");
+        dirs.push_back(fs::path(home) / "Documents/Surge XT/FX Presets");
+    }
     if (p == "surge") {   // Surge 1.x, the synth before Surge XT: the same .fxp patches in its own folders
 #if defined(__APPLE__)
         const fs::path surge = "/Library/Application Support/Surge";
