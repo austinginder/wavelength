@@ -162,7 +162,8 @@ std::vector<NksEntry> scanNks() {
     fs::create_directories(fs::path(cachePath()).parent_path(), ec);
     json j = json::array();
     for (auto &e : out) j.push_back({e.path, e.name, e.category, e.vendor, e.bank, e.magic, e.uid});
-    std::ofstream(cachePath()) << j.dump();
+    std::string werr;
+    platform::writeFileAtomic(cachePath(), j.dump(), werr);   // other processes read it meanwhile
     return out;
 }
 

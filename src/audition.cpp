@@ -141,7 +141,8 @@ int retagAuditions(std::string &summary) {
         if (!j.is_object() || !j.contains("presets")) continue;
         for (auto &[k, v] : j["presets"].items())
             if (!v.contains("error")) { v["tags"] = tagsFor(v); ++presets; }
-        std::ofstream(e.path()) << j.dump(1, ' ', false, json::error_handler_t::replace);
+        std::string werr;
+        platform::writeFileAtomic(e.path(), j.dump(1, ' ', false, json::error_handler_t::replace), werr);
         ++files;
     }
     summary = "retagged " + std::to_string(presets) + " presets in " + std::to_string(files) + " indexes";
@@ -296,8 +297,9 @@ int runAudition(const PluginInfo &info, int jobs, int limit, bool rebuild, bool 
         for (auto it = index.begin(); it != index.end();) it = names.count(it.key()) ? std::next(it) : index.erase(it);
     }
     fs::create_directories(fs::path(indexPath(info)).parent_path());
-    std::ofstream(indexPath(info)) << json{{"plugin", info.name}, {"id", info.id}, {"note", "C4, 1 s at 0.5 s, velocity 0.8"},
-                                            {"presets", index}}.dump(1, ' ', false, json::error_handler_t::replace);
+    std::string werr;
+    platform::writeFileAtomic(indexPath(info), json{{"plugin", info.name}, {"id", info.id}, {"note", "C4, 1 s at 0.5 s, velocity 0.8"},
+                                                    {"presets", index}}.dump(1, ' ', false, json::error_handler_t::replace), werr);
     std::error_code ec;
     fs::remove_all(tmp, ec);
     size_t failed = 0;

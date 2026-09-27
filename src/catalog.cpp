@@ -177,47 +177,26 @@ std::vector<std::string> vst2SearchPaths() {
     return paths;
 }
 
-std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warnings) {
-    json cache = json::object();
-    if (!rescan) {
+// The cache as another process last wrote it. Writes are atomic (a rename), so a file that won't
+// parse is damaged or from an old build: try again briefly before giving up on it, because giving
+// up means scanning every plugin.
+json readCatalogCache() {
+    for (int attempt = 0; attempt < 5; ++attempt) {
         std::ifstream in(cacheFile());
-        if (in) { try { in >> cache; } catch (...) { cache = json::object(); } }
+        if (!in) return json::object();
+        json j = json::parse(in, nullptr, false);
+        if (j.is_object()) return j;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    json fresh = {{"version", 2}, {"bundles", json::object()}};
-    std::vector<PluginInfo> all;
-    auto cached = [&](const std::string &key, long long mt) -> const json * {
-        if (cache.value("version", 0) != 2 || !cache.contains("bundles") || !cache["bundles"].contains(key)) return nullptr;
-        const json &c = cache["bundles"][key];
-        return c.value("mtime", 0LL) == mt ? &c : nullptr;
-    };
-    auto record = [&](const std::string &key, long long mt, const std::vector<PluginInfo> &plugins, const std::string &error) {
-        json pj = json::array();
-        for (const auto &p : plugins) { pj.push_back(pluginToJson(p)); all.push_back(p); }
-        fresh["bundles"][key] = {{"mtime", mt}, {"plugins", pj}};
-        if (!error.empty()) fresh["bundles"][key]["error"] = error;
-    };
+    return json::object();
+}
 
-    // CLAP: loading a CLAP bundle only reads its descriptors, so scan in-process
+std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warnings) {
+    // every bundle on disk first, so the cache can be checked before anything is loaded
+    std::vector<std::pair<std::string, long long>> clapBundles, childBundles;
     for (const auto &dir : clapSearchPaths())
-        for (const auto &b : findBundles(dir, ".clap")) {
-            const std::string key = b.string();
-            const long long mt = mtimeOf(b);
-            std::vector<PluginInfo> plugins;
-            std::string error;
-            if (const json *c = cached(key, mt)) {
-                for (auto &p : (*c)["plugins"]) plugins.push_back(pluginFromJson(p));
-                error = c->value("error", "");
-            } else {
-                auto bundle = Bundle::open(key, error);
-                if (bundle) plugins = bundle->plugins();
-                else warnings.push_back(error);
-            }
-            record(key, mt, plugins, error);
-        }
-
-    // VST3: loading a module runs plugin code, so unknown bundles are scanned in child
-    // processes (a few at a time) and the result, including failures, is cached
-    std::vector<std::pair<std::string, long long>> todo;
+        for (const auto &b : findBundles(dir, ".clap")) clapBundles.push_back({b.string(), mtimeOf(b)});
+    // VST3 (and VST 2): loading a module runs plugin code, so unknown bundles are scanned in child processes
     std::vector<fs::path> childScanned;
     for (const auto &dir : vst3SearchPaths()) for (const auto &b : findBundles(dir, ".vst3")) childScanned.push_back(b);
     // VST 2: bundles on macOS, libraries elsewhere; scanned in child processes like VST3
@@ -233,15 +212,64 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     for (const auto &dir : vst2SearchPaths()) for (const auto &b : findBundles(dir, ".vst3")) childScanned.push_back(b);
     std::sort(childScanned.begin(), childScanned.end());
     childScanned.erase(std::unique(childScanned.begin(), childScanned.end()), childScanned.end());
-    for (const auto &b : childScanned) {
-            const std::string key = b.string();
-            const long long mt = mtimeOf(b);
-            if (const json *c = cached(key, mt)) {
-                std::vector<PluginInfo> plugins;
-                for (auto &p : (*c)["plugins"]) plugins.push_back(pluginFromJson(p));
-                record(key, mt, plugins, c->value("error", ""));
-            } else todo.push_back({key, mt});
+    for (const auto &b : childScanned) childBundles.push_back({b.string(), mtimeOf(b)});
+
+    json cache = rescan ? json::object() : readCatalogCache();
+    auto cached = [&](const std::string &key, long long mt) -> const json * {
+        if (cache.value("version", 0) != 2 || !cache.contains("bundles") || !cache["bundles"].contains(key)) return nullptr;
+        const json &c = cache["bundles"][key];
+        return c.value("mtime", 0LL) == mt ? &c : nullptr;
+    };
+    auto anyMissing = [&] {
+        for (const auto *list : {&clapBundles, &childBundles})
+            for (const auto &[key, mt] : *list) if (!cached(key, mt)) return true;
+        return false;
+    };
+
+    // Scanning is serialized across processes: many Wavelength commands started together (agents,
+    // parallel renders) would otherwise each scan every plugin at once, 6 child processes apiece.
+    // The one that gets the lock scans; the others wait and then find its results in the cache.
+    platform::FileLock lock;
+    if (rescan || anyMissing()) {
+        std::string lockErr;
+        if (!lock.acquire(platform::cacheDir() / "plugins.lock", 900, lockErr))
+            warnings.push_back(lockErr + "; scanning without the lock");
+        else if (!rescan) cache = readCatalogCache();
+    }
+
+    json fresh = {{"version", 2}, {"bundles", json::object()}};
+    std::vector<PluginInfo> all;
+    auto record = [&](const std::string &key, long long mt, const std::vector<PluginInfo> &plugins, const std::string &error) {
+        json pj = json::array();
+        for (const auto &p : plugins) { pj.push_back(pluginToJson(p)); all.push_back(p); }
+        fresh["bundles"][key] = {{"mtime", mt}, {"plugins", pj}};
+        if (!error.empty()) fresh["bundles"][key]["error"] = error;
+    };
+
+    // CLAP: loading a CLAP bundle only reads its descriptors, so scan in-process
+    for (const auto &[key, mt] : clapBundles) {
+        std::vector<PluginInfo> plugins;
+        std::string error;
+        if (const json *c = cached(key, mt)) {
+            for (auto &p : (*c)["plugins"]) plugins.push_back(pluginFromJson(p));
+            error = c->value("error", "");
+        } else {
+            auto bundle = Bundle::open(key, error);
+            if (bundle) plugins = bundle->plugins();
+            else warnings.push_back(error);
         }
+        record(key, mt, plugins, error);
+    }
+
+    // child-scanned bundles: a few at a time, the result (including failures) is cached
+    std::vector<std::pair<std::string, long long>> todo;
+    for (const auto &[key, mt] : childBundles) {
+        if (const json *c = cached(key, mt)) {
+            std::vector<PluginInfo> plugins;
+            for (auto &p : (*c)["plugins"]) plugins.push_back(pluginFromJson(p));
+            record(key, mt, plugins, c->value("error", ""));
+        } else todo.push_back({key, mt});
+    }
     if (!todo.empty()) {
         std::mutex m;
         std::atomic<size_t> next{0};
@@ -263,10 +291,17 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     std::sort(all.begin(), all.end(), [](const PluginInfo &a, const PluginInfo &b) {
         return lower(a.name) != lower(b.name) ? lower(a.name) < lower(b.name) : a.format < b.format;
     });
-    std::error_code ec;
-    fs::create_directories(cacheFile().parent_path(), ec);
-    std::ofstream out(cacheFile());
-    if (out) out << fresh.dump(2);
+    // keep bundles another Wavelength build found and this one doesn't look for, while they exist,
+    // so two versions sharing the cache don't rescan each other's bundles
+    if (cache.value("version", 0) == 2 && cache.contains("bundles")) {
+        std::error_code ec;
+        for (const auto &[key, entry] : cache["bundles"].items())
+            if (!fresh["bundles"].contains(key) && fs::exists(key, ec)) fresh["bundles"][key] = entry;
+    }
+    if (fresh != cache) {
+        std::string err;
+        if (!platform::writeFileAtomic(cacheFile(), fresh.dump(2), err)) warnings.push_back(err);
+    }
     return all;
 }
 

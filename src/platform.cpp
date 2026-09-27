@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
+#include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char **environ;
@@ -181,6 +182,67 @@ int processId() {
 #else
     return (int)getpid();
 #endif
+}
+
+bool writeFileAtomic(const std::filesystem::path &path, const std::string &data, std::string &err) {
+    std::error_code ec;
+    if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), ec);
+    std::filesystem::path tmp = path;
+    tmp += "." + std::to_string(processId()) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out.write(data.data(), (std::streamsize)data.size());
+        out.flush();
+        if (!out) { err = "cannot write " + tmp.string(); out.close(); std::filesystem::remove(tmp, ec); return false; }
+    }
+    std::filesystem::rename(tmp, path, ec);   // atomic on POSIX; MoveFileEx(REPLACE_EXISTING) on Windows
+    if (ec) { err = "cannot replace " + path.string() + ": " + ec.message(); std::filesystem::remove(tmp, ec); return false; }
+    return true;
+}
+
+FileLock::~FileLock() { release(); }
+
+bool FileLock::acquire(const std::filesystem::path &path, int timeoutSec, std::string &err) {
+    release();
+    std::error_code ec;
+    if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), ec);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+#ifdef _WIN32
+    HANDLE h = CreateFileW(path.wstring().c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);   // not inheritable by default
+    if (h == INVALID_HANDLE_VALUE) { err = "cannot open lock file " + path.string(); return false; }
+    for (;;) {
+        OVERLAPPED ov{};
+        if (LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &ov)) break;
+        if (std::chrono::steady_clock::now() >= deadline) { CloseHandle(h); err = "timed out waiting for " + path.string(); return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    handle_ = (std::intptr_t)h;
+#else
+    const int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) { err = "cannot open lock file " + path.string() + ": " + std::strerror(errno); return false; }
+    for (;;) {
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0) break;
+        if (errno != EWOULDBLOCK && errno != EINTR) { err = "cannot lock " + path.string() + ": " + std::strerror(errno); close(fd); return false; }
+        if (std::chrono::steady_clock::now() >= deadline) { close(fd); err = "timed out waiting for " + path.string(); return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    handle_ = fd;
+#endif
+    return true;
+}
+
+void FileLock::release() {
+    if (handle_ == invalid()) return;
+#ifdef _WIN32
+    OVERLAPPED ov{};
+    UnlockFileEx((HANDLE)handle_, 0, 1, 0, &ov);
+    CloseHandle((HANDLE)handle_);
+#else
+    flock((int)handle_, LOCK_UN);
+    close((int)handle_);
+#endif
+    handle_ = invalid();
 }
 
 std::vector<std::string> binaryArchs(const std::string &path) {

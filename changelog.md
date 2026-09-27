@@ -5,6 +5,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Fixed
+- Many Wavelength commands started at once (parallel agents, scripts) no longer scan every plugin at the same time, which could exhaust memory. The plugin cache is replaced atomically instead of rewritten in place (a reader could catch it half written and rescan everything), only one process scans at a time while the others wait for its results, and a command that finds everything cached no longer writes the cache. The NKS index and audition indexes are written the same way.
 - The plugin scan finds VST3 bundles installed into a VST 2 folder, and no longer looks inside other formats' bundles. A plugin that ends the scan process while loading (V-Pan) gets an error that says so instead of a JSON parse error.
 
 ## [0.4.0] - 2026-09-27

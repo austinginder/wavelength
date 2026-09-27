@@ -40,6 +40,27 @@ bool archPrefix(const std::string &arch, std::vector<std::string> &prefix, std::
 // One-minute load average (runnable processes), or -1 where the system doesn't report it.
 double loadAverage();
 
+// Replace `path` with `data` so that a concurrent reader sees the old file or the new one, never a
+// partial one: write a temporary file named for this process beside it, then rename it over.
+bool writeFileAtomic(const std::filesystem::path &path, const std::string &data, std::string &err);
+
+// An exclusive lock between processes on a lock file (created if missing), held until destroyed.
+// Released by the system if the process dies; child processes do not inherit it.
+class FileLock {
+public:
+    FileLock() = default;
+    ~FileLock();
+    FileLock(const FileLock &) = delete;
+    FileLock &operator=(const FileLock &) = delete;
+    // Wait up to `timeoutSec` for the lock; false when it could not be taken (err says why).
+    bool acquire(const std::filesystem::path &path, int timeoutSec, std::string &err);
+    void release();
+    bool held() const { return handle_ != invalid(); }
+private:
+    static std::intptr_t invalid() { return -1; }
+    std::intptr_t handle_ = -1;
+};
+
 // A child process running this executable (or another). Its stdout goes to /dev/null or, with
 // captureStdout, to a pipe read by readOutput(); stderr is inherited unless quiet.
 struct Process {
