@@ -55,6 +55,12 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `width` takes `monoBelow` (Hz): the low end below it is made mono and the rest keeps its width. The
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 
+### Fixed
+- `wavelength serve`: comments and previews failed with 403 in a page opened before the server started
+  again (after a rebuild or a login-item restart), because each start made a new token. The token is now
+  kept in the settings folder (readable by this user only), a page whose token is stale fetches the
+  current one and tries again, and a comment that can't be saved says so under the save button.
+
 ## [0.3.0] - 2026-09-26
 
 Highlights: VST2 hosting (Intel-only plugins under Rosetta); DAWproject import and export (songs open

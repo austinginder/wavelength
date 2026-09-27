@@ -17,6 +17,7 @@
 		sel: { b0: null, b1: null, tracks: new Set(), notes: [] }, loop: false, drag: null, userScrollAt: 0, follow: true,
 	};
 	let dlg, scroller, canvas, space, tip;
+	const HINT = 'Saved to review.json in the song folder with the bars, tracks, notes and time you selected.';
 
 	/* ---------- markup ---------- */
 	function build() {
@@ -57,7 +58,7 @@
 					<h4>Comment for the agent</h4>
 					<textarea id="ed-text" placeholder="What should change here? (Cmd+Enter to save)"></textarea>
 					<div class="ed-actions"><button class="ed-btn primary" id="ed-save">Save comment</button></div>
-					<div class="ed-hint">Saved to review.json in the song folder with the bars, tracks, notes and time you selected.</div>
+					<div class="ed-hint">${HINT}</div>
 				</section>
 				<h4 style="padding:12px 14px 0;margin:0">Comments <span class="r" id="ed-count"></span></h4>
 				<div class="ed-list" id="ed-list"></div>
@@ -575,12 +576,24 @@
 		const r = reference();
 		const body = { op: 'add', text, ref: r.ref || 'whole song', render: state.song.reportPath ? state.files[state.song.reportPath]?.[1] : null };
 		for (const k of ['bars', 'beats', 'time', 'tracks', 'notes']) if (r[k]) body[k] = r[k];
-		const res = await fetch('api/review?song=' + encodeURIComponent(state.slug), { method: 'POST', headers: postHeaders(), body: JSON.stringify(body) }).then(r => r.json());
-		if (res.comments) { E.comments = res.comments; $d('#ed-text').value = ''; renderComments(); badge(); dirty(); }
+		const res = await post(body);
+		if (res?.comments) { E.comments = res.comments; $d('#ed-text').value = ''; renderComments(); badge(); dirty(); }
 	}
 	async function op(body) {
-		const res = await fetch('api/review?song=' + encodeURIComponent(state.slug), { method: 'POST', headers: postHeaders(), body: JSON.stringify(body) }).then(r => r.json());
-		if (res.comments) { E.comments = res.comments; renderComments(); badge(); dirty(); }
+		const res = await post(body);
+		if (res?.comments) { E.comments = res.comments; renderComments(); badge(); dirty(); }
+	}
+	// a change to review.json; a failure shows under the save button instead of vanishing (the text stays in the box)
+	async function post(body) {
+		const hint = $d('.ed-hint');
+		try {
+			const res = await postJson('api/review?song=' + encodeURIComponent(state.slug), body);
+			hint.textContent = HINT; hint.classList.remove('err');
+			return res;
+		} catch (e) {
+			hint.textContent = `Not saved: ${e.message}. Reload the page and save again.`; hint.classList.add('err');
+			return null;
+		}
 	}
 	function renderComments() {
 		if (!dlg) return;

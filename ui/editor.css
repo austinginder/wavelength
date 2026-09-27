@@ -60,3 +60,4 @@ dialog.ed::backdrop { background: rgba(12, 14, 23, .6); backdrop-filter: blur(2p
 .ed-status { font-size: 12px; color: var(--accent); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ed-status.busy { color: var(--warn); }
 .ed-status.busy::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-right: 6px; animation: pulse 1.2s infinite; }
+.ed-hint.err { color: var(--warn); }

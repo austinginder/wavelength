@@ -330,8 +330,22 @@ function renderAll() {
 // Every source knows where it sits in the song: `lead` seconds of silence at the start of the file
 // (the mix's lead-in), then song time from `start`. A bar preview starts mid-song with no lead-in and
 // loops. The playhead, seeking and the editor all work in song seconds.
-const TOKEN = document.querySelector('meta[name="wavelength-token"]')?.content || '';
+let TOKEN = document.querySelector('meta[name="wavelength-token"]')?.content || '';
 function postHeaders() { return { 'Content-Type': 'application/json', 'X-Wavelength-Token': TOKEN }; }
+// POST JSON and read the answer. A 403 means this page's token is stale (a server from before 0.4 made a new
+// one each start): take the current one from a fresh copy of the page and try once more.
+async function postJson(url, body) {
+	const send = () => fetch(url, { method: 'POST', headers: postHeaders(), body: JSON.stringify(body) });
+	let r = await send();
+	if (r.status === 403) {
+		const page = await fetch('./', { cache: 'no-store' }).then(x => x.text()).catch(() => '');
+		const m = page.match(/name="wavelength-token" content="([0-9a-f]+)"/);
+		if (m && m[1] !== TOKEN) { TOKEN = m[1]; r = await send(); }
+	}
+	const j = await r.json().catch(() => ({}));
+	if (!r.ok) throw new Error(j.error || `the server answered ${r.status}`);
+	return j;
+}
 const songLead = () => state.song?.report?.leadIn ?? state.song?.job?.leadIn ?? 0;
 function songSecNow() { return audio.currentTime - (state.srcLead ?? songLead()) + (state.srcStart || 0); }
 function seekSongSec(s, play) {
@@ -422,9 +436,9 @@ function requestPreview(spec) {
 		state.pending = null; show(`Could not render ${spec.label}: ${r.error || r.status}`);
 	};
 	show(`Rendering ${spec.label}…`);
-	fetch('api/preview', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: slug, tracks: spec.tracks || [], from: spec.from || 0, to: spec.to || 0 }) })
-		.then(r => r.json()).then(r => r.error ? (state.pending = null, show(`Could not render ${spec.label}: ${r.error}`)) : r.status === 'ready' ? done(r) : poll(r.id))
-		.catch(() => { state.pending = null; show('The server did not answer'); });
+	postJson('api/preview', { song: slug, tracks: spec.tracks || [], from: spec.from || 0, to: spec.to || 0 })
+		.then(r => r.error ? (state.pending = null, show(`Could not render ${spec.label}: ${r.error}`)) : r.status === 'ready' ? done(r) : poll(r.id))
+		.catch(e => { state.pending = null; show(`Could not render ${spec.label}: ${e.message || 'the server did not answer'}`); });
 	drawTimeline();
 }
 

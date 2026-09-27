@@ -227,15 +227,30 @@ std::string fnv(const std::string &s) {
     return std::string(buf).substr(0, 12);
 }
 
+// The token pages send with every change. It lives in the settings folder (readable by this user only), so a
+// server started again (after a rebuild, by a login item) still accepts the pages already open; other sites
+// can never read it, which is all it guards against.
+std::string serveToken() {
+    const fs::path f = platform::dataDir() / "serve-token";
+    {
+        std::ifstream in(f);
+        std::string t;
+        if (in >> t && t.size() == 32 && t.find_first_not_of("0123456789abcdef") == std::string::npos) return t;
+    }
+    std::random_device rd;
+    std::mt19937_64 g(rd());
+    char buf[33];
+    std::snprintf(buf, sizeof buf, "%016llx%016llx", (unsigned long long)g(), (unsigned long long)g());
+    std::error_code ec;
+    fs::create_directories(f.parent_path(), ec);
+    std::ofstream(f) << buf << "\n";
+    fs::permissions(f, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
+    return buf;
+}
+
 class Server {
 public:
-    explicit Server(const ServeOptions &o) : opt_(o), root_(fs::absolute(o.root)) {
-        std::random_device rd;
-        std::mt19937_64 g(rd());
-        char buf[33];
-        std::snprintf(buf, sizeof buf, "%016llx%016llx", (unsigned long long)g(), (unsigned long long)g());
-        token_ = buf;
-    }
+    explicit Server(const ServeOptions &o) : opt_(o), root_(fs::absolute(o.root)), token_(serveToken()) {}
     int run();
 
 private:
