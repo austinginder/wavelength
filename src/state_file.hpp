@@ -9,7 +9,10 @@
 //               the VST3 host whole
 //  nksf         a Native Instruments NKS preset (RIFF "NIKS"); the PCHK chunk holds the
 //               plugin's own state (after a 4-byte chunk version)
-//  fxp          VST2 .fxp/.fxb program or bank chunk (Surge XT, OB-Xf patches)
+//  fxp          VST2 .fxp/.fxb program or bank chunk (Surge XT, OB-Xf patches); "<bank>.fxb#n" picks a
+//               program of an OB-Xd or Full Bucket (FB-02, FB3) bank
+//  firefly      Firefly Synth 2 .ff2preset, swapped into the plugin's current state
+//  juce-xml     a JUCE plugin's XML preset (Vaporizer2 .vvp), wrapped as its binary XML state
 //  serum        Serum 2 .SerumPreset, split into its processor and controller states
 //  juce-valuetree  a JUCE ValueTree in binary form (Odin2 .odin), re-written as the JUCE binary
 //               XML state the plugin loads

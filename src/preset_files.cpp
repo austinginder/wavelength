@@ -28,7 +28,7 @@ std::string squash(std::string s) {   // "Serum 2" == "serum2", "Odin2" == "odin
 
 const std::set<std::string> kExtensions = {".vstpreset", ".fxp", ".fxb", ".serumpreset", ".odin", ".h2p", ".vital", ".nksf", ".synplant",
                                            ".dco106preset", ".mg1preset", ".sempreset", ".voltagepreset", ".ngrr", ".mtpreset", ".mtdrum", ".wlstate", ".sbset", ".dspreset",
-                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide", ".srgfx", ".preset"};
+                                           ".hxp", ".echobode", ".serumfx", ".serumfxrack", ".tide", ".srgfx", ".preset", ".ff2preset", ".vvp"};
 
 // a child folder of `dir` whose squashed name is one of `names`
 std::vector<fs::path> childrenNamed(const fs::path &dir, const std::vector<std::string> &names) {
@@ -61,6 +61,11 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     if (ext == ".echobode") return p == "echobode";
     if (ext == ".tide") return p == "pendulate";
     if (ext == ".srgfx") return p == "surgexteffects";
+    if (ext == ".vvp") return p == "vaporizer2";
+    if (ext == ".ff2preset") {   // Firefly Synth 2 keeps instrument and effect presets side by side
+        const bool fx = file.generic_string().find("/presets/fx/") != std::string::npos;
+        return p == (fx ? "fireflysynth2fx" : "fireflysynth2");
+    }
     if (ext == ".preset") {   // HISE user presets (other plugins use .preset for their own formats), in <Product>/User Presets/
         bool ours = false;
         for (fs::path d = file.parent_path(); !d.empty() && d != d.parent_path(); d = d.parent_path())
@@ -350,6 +355,14 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
         dirs.push_back(fs::path(home) / "Library/Audio/Plug-Ins/VST/audjoo_helix_data/patches");
         dirs.push_back(fs::path(home) / "Library/Application Support/audjoo_helix_userdata/patches");
     }
+    if (p == "fireflysynth2" || p == "fireflysynth2fx")   // factory presets inside the bundle
+        dirs.push_back(fs::path(plugin.bundlePath) / "Contents/Resources/presets");
+    if (p == "vaporizer2") {
+#if defined(__APPLE__)
+        dirs.push_back("/Applications/Vaporizer2/Presets");
+#endif
+        dirs.push_back(fs::path(home) / "Documents/Vaporizer2/Presets");
+    }
     if (p == "obxf") {
         dirs.push_back("/Library/Application Support/Surge Synth Team/OB-Xf/Patches");
         dirs.push_back(fs::path(home) / "Documents/Surge Synth Team/OB-Xf/Patches");
@@ -375,6 +388,13 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             pi.category = it->path().parent_path().filename().string();
             if ((ext == ".serumfx" || ext == ".serumfxrack") && (pi.category == "Factory" || pi.category == "User"))
                 pi.category = it->path().parent_path().parent_path().filename().string();   // Effect Chains/<Delay>/Factory/
+            if (ext == ".vvp") {   // Vaporizer2: the patch's own category ("AR" arps, "BS" basses, ...)
+                std::ifstream in(it->path(), std::ios::binary);
+                std::string head(1024, '\0');
+                in.read(&head[0], (std::streamsize)head.size());
+                const size_t c = head.find("PatchCategory=\"");
+                if (c != std::string::npos) pi.category = head.substr(c + 15, head.find('"', c + 15) - c - 15);
+            }
             if (ext == ".ngrr") {   // Guitar Rig: category from the rack's own tags, licence status in the description
                 std::ifstream in(it->path(), std::ios::binary);
                 const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -586,6 +606,40 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                 pi.category = e.path().stem().string();
                 pi.stateFile = true;
                 pi.location = pi.loadKey = e.path().string() + "#" + std::to_string(i);
+                out.push_back(pi);
+            }
+        }
+    }
+    // Full Bucket Music (FB-02, FB3, ...): the banks inside the bundle, every program a preset "<bank>.fxb#<n>".
+    // Its VST3 and Audio Unit list the current bank's programs themselves; the banks repeat programs, so
+    // each sound is listed once.
+    if (plugin.format == "clap" && !plugin.bundlePath.empty()) {
+        std::error_code ec;
+        std::set<std::vector<uint8_t>> sounds;
+        std::vector<fs::path> banks;
+        for (auto &e : fs::directory_iterator(fs::path(plugin.bundlePath) / "Contents/Resources", ec)) {
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".fxb" && e.is_regular_file(ec)) banks.push_back(e.path());
+        }
+        std::sort(banks.begin(), banks.end());
+        for (auto &bank : banks) {
+            std::ifstream in(bank, std::ios::binary);
+            std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (!isFullBucketBank(d)) continue;
+            const auto programs = fullBucketBankPrograms(d);
+            if (programs.empty()) continue;
+            const auto &first = programs[0].second;   // the version string every program starts with
+            const size_t slot = std::find_if(first.begin(), first.end(), [](uint8_t c) { return c < 0x20 || c >= 0x7f; }) - first.begin();
+            for (size_t i = 0; i < programs.size(); ++i) {
+                auto key = programs[i].second;   // the patch without its program slot (the u32 after the version string)
+                if (slot + 4 <= key.size()) key.erase(key.begin() + (long)slot, key.begin() + (long)slot + 4);
+                if (!sounds.insert(key).second) continue;
+                PresetInfo pi;
+                pi.name = programs[i].first.empty() ? "Program " + std::to_string(i + 1) : programs[i].first;
+                pi.category = bank.stem().string();
+                pi.stateFile = true;
+                pi.location = pi.loadKey = bank.string() + "#" + std::to_string(i);
                 out.push_back(pi);
             }
         }

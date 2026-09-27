@@ -1278,6 +1278,92 @@ bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uin
     return true;
 }
 
+bool isFullBucketBank(const std::vector<uint8_t> &fxb) {
+    return fxb.size() >= 172 && std::memcmp(fxb.data(), "CcnK", 4) == 0 && std::memcmp(fxb.data() + 8, "FBCh", 4) == 0 &&
+           std::memcmp(fxb.data() + 160, "tffp", 4) == 0;
+}
+
+std::vector<std::pair<std::string, std::vector<uint8_t>>> fullBucketBankPrograms(const std::vector<uint8_t> &fxb) {
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> out;
+    if (!isFullBucketBank(fxb)) return out;
+    const size_t end = std::min(fxb.size(), 160 + (size_t)be32(fxb.data() + 156));
+    // an entry: u32 LE name length + name + u8 1, then the program
+    auto entry = [&](size_t at, std::string &name, size_t &program) {
+        if (at + 4 > end) return false;
+        const uint32_t n = le32(fxb.data() + at);
+        if (n > 256 || at + 4 + n + 1 > end || fxb[at + 4 + n] != 1) return false;
+        name.assign(fxb.begin() + (long)at + 4, fxb.begin() + (long)(at + 4 + n));
+        program = at + 4 + n + 1;
+        return true;
+    };
+    std::string name;
+    size_t program = 0;
+    if (!entry(168, name, program)) return out;
+    size_t v = program;
+    while (v < end && fxb[v] >= 0x20 && fxb[v] < 0x7f) ++v;
+    const std::string version(fxb.begin() + (long)program, fxb.begin() + (long)v);   // "FB-02_1.1.0"
+    if (version.size() < 3 || version.find('_') == std::string::npos) return out;
+    for (;;) {
+        // programs have no length: one ends where the entry of the next copy of the version string begins
+        size_t next = end, nextProgram = 0;
+        std::string nextName;
+        for (size_t s = program + version.size(); next == end && s + version.size() <= end; ++s) {
+            if (std::memcmp(fxb.data() + s, version.data(), version.size()) != 0) continue;
+            for (size_t n = 0; n <= 64 && s >= program + n + 5; ++n) {
+                std::string nm;
+                size_t p = 0;
+                if (entry(s - 1 - n - 4, nm, p) && p == s) { next = s - 1 - n - 4; nextProgram = s; nextName = nm; break; }
+            }
+        }
+        const size_t a = name.find_first_not_of(' '), b = name.find_last_not_of(' ');
+        out.push_back({a == std::string::npos ? "" : name.substr(a, b - a + 1), std::vector<uint8_t>(fxb.begin() + (long)program, fxb.begin() + (long)next)});
+        if (next == end) break;
+        program = nextProgram;
+        name = nextName;
+    }
+    return out;
+}
+
+bool fullBucketBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err) {
+    const auto programs = fullBucketBankPrograms(fxb);
+    if (programs.empty()) { err = "is not a Full Bucket bank"; return false; }
+    if (program < 0 || program >= (int)programs.size()) { err = "has no program " + std::to_string(program) + " (0-" + std::to_string(programs.size() - 1) + ")"; return false; }
+    state = programs[(size_t)program].second;
+    return true;
+}
+
+bool fireflyWithPreset(const std::vector<uint8_t> &fireflyState, const std::vector<uint8_t> &preset, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err) {
+    std::string cur(fireflyState.begin(), fireflyState.end());
+    while (!cur.empty() && cur.back() == 0) cur.pop_back();
+    json state = json::parse(cur, nullptr, false), p = json::parse(preset.begin(), preset.end(), nullptr, false);
+    if (!p.is_object() || !p.contains("patchState") || !p["patchState"].is_object()) { err = "is not a Firefly Synth 2 preset"; return false; }
+    if (!state.is_object() || !state.contains("edit") || !state["edit"].is_object() ||
+        state["edit"].value("magic", "") != p["patchState"].value("magic", "")) {
+        err = "a .ff2preset loads into Firefly Synth 2 only";
+        return false;
+    }
+    state["edit"] = p["patchState"];
+    if (state.contains("gui") && state["gui"].is_object()) {
+        state["gui"]["patchName"] = name;
+        if (p.contains("paramNameOverrides")) state["gui"]["paramNameOverrides"] = p["paramNameOverrides"];
+    }
+    const std::string text = state.dump(2);
+    out.assign(text.begin(), text.end());
+    return true;
+}
+
+std::vector<uint8_t> juceXmlState(const std::vector<uint8_t> &xml) {
+    std::string x(xml.begin(), xml.end());
+    while (!x.empty() && (x.back() == 0 || std::isspace((unsigned char)x.back()))) x.pop_back();
+    // Vaporizer2 reads its preset files as display values whatever their version, but a V2.00000 state as
+    // internal values (and ignores it); V2.10000 is the same patch generation read as display values
+    const std::string v200 = "PatchVersion=\"VASTVaporizerParamsV2.00000\"";
+    const size_t root = x.find("<VASTvaporizer2 "), v = x.find(v200);
+    if (root != std::string::npos && v != std::string::npos && v < x.find('>', root)) x.replace(v + 36, 1, "1");
+    return juceXmlBlob(x);
+}
+
 // --- Native Instruments containers: an item is u64 size, u32 1, "hsin", u64, uuid[16], then a stack of
 // frames (u64 size, domain fourcc, u32 type, u32 version; innermost the base item frame, type 1), each
 // frame's data after the frame it wraps, then u32 1, u32 child count and the children (u32 0, domain,

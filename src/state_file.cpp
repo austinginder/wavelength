@@ -132,6 +132,8 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
 
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto" && endsWith(path, ".hxp")) fmt = "helix";
+    if (fmt == "auto" && endsWith(path, ".ff2preset")) fmt = "firefly";
+    if (fmt == "auto" && endsWith(path, ".vvp")) fmt = "juce-xml";
     if (fmt == "auto" && (endsWith(path, ".ens") || endsWith(path, ".rkplr")) && isNiContainer(data)) fmt = "reaktor";
     if (fmt == "auto" && data.size() > 26 && std::memcmp(data.data(), "22 serialization::archive", 25) == 0) fmt = "arturia";
     if (fmt == "auto" && isKiloheartsPreset(data)) {   // extension ".ks" + 2 letters, the snap-in's id
@@ -173,6 +175,8 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
                 std::memcpy(&f, &bits, 4);
                 out.fxParams.push_back(f);
             }
+        } else if (out.fxKind == "FBCh" && isFullBucketBank(data)) {   // "<bank>.fxb#<n>" (the first program without #n)
+            if (!fullBucketBankState(data, voice < 0 ? 0 : voice, out.state, err)) { err = path + " " + err; return false; }
         } else if (voice >= 0 && out.fxKind == "FBCh") {   // "<bank>.fxb#<n>": one program of an OB-Xd bank
             if (!obxdBankState(data, voice, out.state, err)) { err = path + " " + err; return false; }
         } else {
@@ -237,6 +241,16 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
             state.insert(state.end(), text.begin(), text.end());
             return true;
         };
+    } else if (fmt == "firefly") {
+        std::string name = path.substr(path.find_last_of("/\\") + 1);
+        if (endsWith(name, ".ff2preset")) name.resize(name.size() - 10);
+        const auto preset = data;
+        out.transform = [preset, name](Plugin &, const std::vector<uint8_t> &current, std::vector<uint8_t> &state, std::string &e) {
+            return fireflyWithPreset(current, preset, name, state, e);
+        };
+    } else if (fmt == "juce-xml") {
+        if (data.empty() || data[0] != '<') { err = path + " is not an XML preset"; return false; }
+        out.state = juceXmlState(data);
     } else if (fmt == "kilohearts") {
         if (!isKiloheartsPreset(data)) { err = path + " is not a Kilohearts preset"; return false; }
         out.state = kiloheartsPresetToState(data);
@@ -327,7 +341,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, arturia, reaktor, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, arturia, reaktor, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, firefly, juce-xml, juce-string or raw)";
         return false;
     }
     return true;

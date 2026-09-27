@@ -10,6 +10,7 @@
 //                        u32 LE length + "#pgm=<name>.h2p\n" + the preset text.
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace wl {
@@ -97,6 +98,19 @@ bool decentSamplerState(const std::vector<uint8_t> &dspreset, const std::string 
 // program `program` (0-based) current, which the plugin then plays.
 std::vector<std::string> obxdBankPrograms(const std::vector<uint8_t> &fxb);
 bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err);
+
+// Full Bucket Music banks (.fxb "FBCh" with a "tffp" chunk: FB-02, FB3, ...): every program with its name.
+// A program is the plugin's whole state (version string, u32 LE program slot, the patch).
+bool isFullBucketBank(const std::vector<uint8_t> &fxb);
+std::vector<std::pair<std::string, std::vector<uint8_t>>> fullBucketBankPrograms(const std::vector<uint8_t> &fxb);
+bool fullBucketBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err);
+
+// Firefly Synth 2 .ff2preset (JSON "patchState"): the plugin's state (JSON) with its "edit" patch replaced
+bool fireflyWithPreset(const std::vector<uint8_t> &fireflyState, const std::vector<uint8_t> &preset, const std::string &name,
+                       std::vector<uint8_t> &out, std::string &err);
+
+// A JUCE plugin's XML preset file (Vaporizer2 .vvp) as its state: "VC2!" + u32 LE length + XML + NUL
+std::vector<uint8_t> juceXmlState(const std::vector<uint8_t> &xml);
 
 // Native Instruments Reaktor ensembles (.ens, .rkplr, NI containers): a Reaktor state that points at the file,
 // so Reaktor loads the ensemble (and checks its licence) itself, and the snapshots it holds
