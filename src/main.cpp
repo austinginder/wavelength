@@ -1751,6 +1751,7 @@ int run(int argc, char **argv) {
             cargs.push_back(nullptr);
             setenv("WAVELENGTH_ARCH_REEXEC", "1", 1);
             std::fflush(nullptr);
+            dup2(fileno(OUT), STDOUT_FILENO);   // give the real stdout back: fd 1 points at stderr since takeStdout()
             execv(cargs[0], cargs.data());
             return fail(a, "could not run " + info.name + " under Rosetta");
         }
