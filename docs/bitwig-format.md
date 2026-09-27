@@ -1,10 +1,12 @@
 # Bitwig project files (.bwproject)
 
-Bitwig's own project format is private and undocumented. Wavelength reads it (`src/bitwig.cpp`) only
-for what a DAWproject export leaves out: the settings of Bitwig's own devices, the plugins inside
-them (Drum Machine pads, Chain, Multiband FX-3 bands) and those plugins' saved states. Notes and
-clips still come from the DAWproject. This page records the layout as observed in 745 projects
-saved by Bitwig 4 to 6, so the reader can be extended.
+Bitwig's own project format is private and undocumented. Wavelength reads it (`src/bitwig.cpp`) for
+the settings of Bitwig's own devices, the plugins inside them (Drum Machine pads, Chain, Multiband FX-3
+bands) and those plugins' saved states, which a DAWproject export leaves out, and for the arrangement
+itself (tempo, mixer, note clips, automation), so `wavelength import song.bwproject` needs no export.
+This page records the layout as observed in 745 projects saved by Bitwig 4 to 6, so the reader can be
+extended. The arrangement fields were checked against a DAWproject export of the same song (the two
+imports give the same job, note for note).
 
 ## File
 
@@ -76,3 +78,24 @@ Units: frequencies are MIDI pitch (69 = 440 Hz); faders and pad volumes store am
 dB and Q is log10. EQ+ band types seen: 3 and 5 bell, 1 and 10 low cut, 0 and 14 high cut, 6 and 15
 high shelf, 16 and 17 low shelf, 13 off (the cut and shelf numbers were inferred from their
 frequencies and gains).
+
+## The arrangement
+
+| Path | Meaning |
+|---|---|
+| project `0xbd9` -> `0x211` | tempo parameter, value `0x2c8` (bpm). Bitwig 6: `0x211` on the project itself |
+| project `0xbd9` -> `0x212` | time signature, `0x1cbe` = `0x1000_00<log2 denominator><numerator>` (`0x10000024` = 4/4; only 4/4 appears in the corpus, so the nibble order is inferred). Bitwig 6: `0x212` on the project |
+| track `0x165` | mixer: `0x1a4` volume, `0x1a5` pan, `0x1a6` mute; each a parameter with its value in `0x2c8` (volume = amplitude^(1/3), pan -1..1) or `0xd2` (mute); `0xa5` sends |
+| send | `0xab3` amount (a parameter, amplitude^(1/3)), `0xbd0` the effect track it feeds |
+| track `0x15d` -> `0x238` -> `0x21f` | the arranger's clips. Bitwig 6: track `0x2bf8` -> `0x2d8e` -> `0x21f` |
+| clip (class 71) | `0x2af` position, `0x26` length (beats), `0x10f8` muted; `0x288` the content (Bitwig 6: `0x2ae9` -> `0x10e9`) |
+| content (class 191 = notes) | `0x98f` playback (Bitwig 6: on the clip, `0x2adb`): `0x98c` -> `0x2af` play start, `0x991` loop on, `0x992` loop region (`0x2af` start, `0x26` length). Audio clips have another content class |
+| content `0x49c` -> `0x18cb` | note rows (class 66): `0xee` key, `0x21f` notes (class 102): `0x2af` start, `0x26` length, `0xef` velocity, `0xf0` release velocity, `0x10f8` muted (content time) |
+| track `0x15d` -> `0x239` | automation lanes (class 290): `0x4cc` target, `0x48e` -> `0x21f` points (class 264: `0x2af` beat, `0x28f` value, `0xba6` curve tension) |
+| Bitwig 6 automation | track `0x2dc9` -> `0x4ba` lanes (class 573): `0x2a3` target, `0x2d8c` body -> `0x35ac` curve -> `0x21f` points; the body's `0x21f` holds automation clips (not read yet) |
+| target (class 101) | `0x133b` device name, `0x133a` parameter name, `0xed` path: `.../PID<hex id>` a CLAP or VST3 parameter, `.../PARAM<index>` a VST2 one, a path with `:` a device inside a chain, empty with device `Mixer` the track's `Volume` or `Pan` |
+
+Values follow the clip semantics of DAWproject: content time `playStart` sounds at the clip's position,
+a looping clip then repeats the loop region until the clip ends, and notes past the clip's end are cut.
+Automation values are stored like the parameters they move: volume as amplitude^(1/3), pan -1..1,
+plugin parameters normalized. A track's name is often empty; Bitwig then shows its instrument's.

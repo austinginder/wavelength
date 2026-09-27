@@ -63,9 +63,16 @@ built-in effects, with the plugins inside them. Other Bitwig devices (Polymer, M
 are listed as left out. Without the Bitwig project a Drum Machine becomes `builtin:drums`. Audio
 clips become `builtin:audio` tracks (warped clips follow the song tempo); automation of volume, pan
 and the instrument plugin's parameters comes across. Automation of plugin effects and of Bitwig's own
-devices, and launcher clips, don't. `wavelength import song.bwproject` lists a Bitwig project's tracks,
-devices, pads and plugin states. Then edit the job like any other and render it; `render
+devices, and launcher clips, don't. Then edit the job like any other and render it; `render
 song.dawproject` does both steps.
+
+A Bitwig project needs no export: `wavelength import song.bwproject --out songs/x --json` reads the
+arrangement straight from Bitwig's own file (tempo, tracks named as Bitwig shows them, devices and
+states, faders, pans, mutes, sends, note clips with their loops, automation of faders, pans and the
+instrument's parameters) into the same job the DAWproject route makes. Projects live in
+`~/Documents/Bitwig Studio/Projects/<name>/<name>.bwproject`. Audio clips and Bitwig 6 automation
+clips aren't read from it yet (the result lists them): ask for a DAWproject export when a song has
+them. `import song.bwproject --list` shows the project's tracks, devices, pads and plugin states.
 
 ## Starting from a MIDI file
 
@@ -579,7 +586,8 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
 
 - CLAP, VST3 and VST2 (no Audio Units yet; no VST2 shell plugins). DAWproject import brings notes,
   plugins, mixer, audio clips and automation of volume, pan and the instrument's parameters; a DAW's
-  own devices only for Bitwig (read from the project behind the export). DAWproject export leaves
+  own devices only for Bitwig (read from the project behind the export). A Bitwig project imports
+  without an export, except its audio clips and Bitwig 6 automation clips. DAWproject export leaves
   built-in instruments and most built-in effects out (it lists them). Built-in effects cover the
   essentials; installed plugin effects work in any `fx` chain (Intel-only ones on tracks only).
 - Plugin tracks render in worker processes, several at once: a crashing plugin costs its track

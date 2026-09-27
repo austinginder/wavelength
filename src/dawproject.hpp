@@ -25,6 +25,13 @@ struct DawprojectImport {
 bool importDawproject(const std::string &path, const std::string &outDir, DawprojectImport &out, std::string &err,
                       const std::string &bitwig = "");
 
+// Reads a Bitwig project (.bwproject) without a DAWproject export: tempo, time signature, tracks
+// with their devices and plugin states, faders, pans, mutes, sends, arranger note clips (play start,
+// loops) and automation of faders, pans and plugin instrument parameters, into the same job
+// importDawproject makes. Audio clips and Bitwig 6's automation clips aren't read yet. `notes` says
+// what was left out.
+bool importBitwig(const std::string &path, const std::string &outDir, DawprojectImport &out, std::string &err);
+
 // DAWproject export (dawproject_export.cpp): tracks with their plugin instrument and plugin effects,
 // each with its state saved as the job sets it up (preset, state file, params) in a worker process;
 // notes, fader, pan, mute, sends, buses as effect tracks, the master, tempo map, time signature,

@@ -3,7 +3,9 @@
 #include "vst2_abi.hpp"
 #include "zip.hpp"
 
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <fstream>
@@ -171,7 +173,23 @@ const Val *field(const Obj *o, uint32_t f) {
     return nullptr;
 }
 std::string sfield(const Obj *o, uint32_t f) { const Val *v = field(o, f); return v ? v->s : ""; }
-Obj *ofield(const Reader &r, const Obj *o, uint32_t f) { const Val *v = field(o, f); return v ? r.resolve(v->obj) : nullptr; }
+// an object field: written in place (0x09, 0x1a) or as a reference to an earlier object (0x0b)
+Obj *ofield(const Reader &r, const Obj *o, uint32_t f) {
+    const Val *v = field(o, f);
+    if (!v) return nullptr;
+    if (v->type == 0x0b) {
+        auto it = r.byNumber.find((uint32_t)v->i);
+        return it == r.byNumber.end() ? nullptr : r.resolve(it->second);
+    }
+    return r.resolve(v->obj);
+}
+double dfield(const Obj *o, uint32_t f, double def) {
+    const Val *v = field(o, f);
+    if (!v) return def;
+    if (v->type == 0x06 || v->type == 0x07) return v->d;
+    if (v->type == 0x01 || v->type == 0x02 || v->type == 0x03 || v->type == 0x04 || v->type == 0x05) return (double)v->i;
+    return def;
+}
 
 // Field ids (stable across Bitwig 4-6)
 enum : uint32_t {
@@ -182,7 +200,22 @@ enum : uint32_t {
     F_MULTI_ZONES = 0x76d, F_ZONE_BODY = 0x76e, F_MULTI_NAME = 0xfb3,
     F_SAMPLE_ZONE = 0x74c, F_ZONE_SAMPLE = 0x748, F_SAMPLE_FILE = 0x129e, F_FILE_PACKAGE_PATH = 0xcd4, F_ZONE_ROOT = 0x75c,
     F_TRACKS = 0x4de, F_EFFECT_TRACKS = 0x4df, F_MASTER = 0x4e0, F_TRACK_NAME = 0x15b, F_TRACK_CHAIN = 0x164, F_CHAIN_SLOTS = 0x144,
+    // the arrangement (Bitwig 5 layout; Bitwig 6 moves a few links, see docs/bitwig-format.md)
+    F_TRANSPORT = 0xbd9, F_TEMPO = 0x211, F_METER = 0x212, F_METER_VALUE = 0x1cbe, F_VALUE = 0x2c8, F_PARAM_KEY = 0x2bd,
+    F_TRACK_ARRANGER = 0x15d, F_ARRANGER_CLIPS = 0x238, F_ARRANGER_AUTOMATION = 0x239, F_LANE_ITEMS = 0x21f,
+    F_TRACK_ARRANGER6 = 0x2bf8, F_ARRANGER_CLIPS6 = 0x2d8e, F_TRACK_AUTOMATION6 = 0x2dc9, F_AUTOMATION_LANES6 = 0x4ba,
+    F_LANE_BODY6 = 0x2d8c, F_LANE_CURVE6 = 0x35ac, F_LANE_TARGET6 = 0x2a3,
+    F_TIME = 0x2af, F_LENGTH = 0x26, F_MUTED = 0x10f8,
+    F_CLIP_CONTENT = 0x288, F_CLIP_WRAPPER6 = 0x2ae9, F_WRAPPER_CONTENT6 = 0x10e9, F_CONTENT_PLAYBACK = 0x98f, F_CLIP_PLAYBACK6 = 0x2adb,
+    F_LOOP_ON = 0x991, F_LOOP_REGION = 0x992, F_PLAY_START = 0x98c,
+    F_CONTENT_NOTES = 0x49c, F_NOTE_ROWS = 0x18cb, F_ROW_KEY = 0xee, F_ROW_NOTES = 0x21f, F_VELOCITY = 0xef, F_RELEASE = 0xf0,
+    F_TRACK_MIXER = 0x165, F_MIXER_VOLUME = 0x1a4, F_MIXER_PAN = 0x1a5, F_MIXER_MUTE = 0x1a6, F_BOOL_VALUE = 0xd2,
+    F_SENDS = 0xa5, F_SEND_AMOUNT = 0xab3, F_SEND_TARGET = 0xbd0,
+    F_AUTOMATION_TARGET = 0x4cc, F_AUTOMATION_CURVE = 0x48e, F_CURVE_POINTS = 0x21f, F_POINT_VALUE = 0x28f,
+    F_TARGET_DEVICE = 0x133b, F_TARGET_PARAMETER = 0x133a, F_TARGET_PATH = 0xed,
 };
+
+constexpr uint32_t C_NOTE_CONTENT = 191;   // a clip's content: note clips (audio clips have another class)
 
 bool paramValue(const Obj *p, double &out) {
     for (auto &f : p->fields) {
@@ -271,6 +304,79 @@ std::vector<Device> chainDevices(const Reader &r, const Obj *chain) {
     return out;
 }
 
+const std::vector<Obj *> *lfield(const Obj *o, uint32_t f) {
+    const Val *v = field(o, f);
+    return v && v->type == 0x12 ? &v->list : nullptr;
+}
+
+// A note clip: its place in the arranger, the playback settings (play start, loop) and the notes,
+// kept per key in note rows. Bitwig 6 wraps the content in one more object and moves the playback
+// settings from the content to the clip.
+bool clip(const Reader &r, const Obj *c, Clip &out, bool &audio) {
+    audio = false;
+    if (!c || dfield(c, F_MUTED, 0) != 0) return false;
+    const Obj *content = ofield(r, c, F_CLIP_CONTENT);
+    if (!content) content = ofield(r, ofield(r, c, F_CLIP_WRAPPER6), F_WRAPPER_CONTENT6);
+    if (!content) return false;
+    if (content->cls != C_NOTE_CONTENT) { audio = true; return false; }
+    out.time = dfield(c, F_TIME, 0);
+    out.duration = dfield(c, F_LENGTH, 0);
+    const Obj *play = ofield(r, content, F_CONTENT_PLAYBACK);
+    if (!play) play = ofield(r, c, F_CLIP_PLAYBACK6);
+    out.playStart = dfield(ofield(r, play, F_PLAY_START), F_TIME, 0);
+    if (dfield(play, F_LOOP_ON, 0) != 0) {
+        const Obj *region = ofield(r, play, F_LOOP_REGION);
+        out.loopStart = dfield(region, F_TIME, 0);
+        out.loopEnd = out.loopStart + dfield(region, F_LENGTH, 0);
+        out.loop = out.loopEnd > out.loopStart;
+    }
+    if (const auto *rows = lfield(ofield(r, content, F_CONTENT_NOTES), F_NOTE_ROWS))
+        for (Obj *ro : *rows) {
+            const Obj *row = r.resolve(ro);
+            const int key = (int)dfield(row, F_ROW_KEY, 60);
+            if (const auto *notes = lfield(row, F_ROW_NOTES))
+                for (Obj *no : *notes) {
+                    const Obj *n = r.resolve(no);
+                    if (!n || dfield(n, F_MUTED, 0) != 0) continue;
+                    Note nt;
+                    nt.key = key;
+                    nt.time = dfield(n, F_TIME, 0);
+                    nt.duration = dfield(n, F_LENGTH, 0);
+                    nt.velocity = dfield(n, F_VELOCITY, 0.8);
+                    nt.release = dfield(n, F_RELEASE, nt.velocity);
+                    out.notes.push_back(nt);
+                }
+        }
+    return true;
+}
+
+// An automation lane: its target and its curve. The target names the device and parameter; a
+// plugin's own parameter is addressed as ".../PID<hex id>" (CLAP, VST3) or ".../PARAM<index>" (VST2),
+// the track's fader and pan as the "Mixer" device's "Volume" and "Pan".
+Automation automation(const Reader &r, const Obj *target, const Obj *curve) {
+    Automation a;
+    a.device = sfield(target, F_TARGET_DEVICE);
+    a.parameter = sfield(target, F_TARGET_PARAMETER);
+    const std::string path = sfield(target, F_TARGET_PATH);
+    a.kind = "other";
+    if (path.empty() && a.device == "Mixer") a.kind = a.parameter == "Volume" ? "volume" : a.parameter == "Pan" ? "pan" : "other";
+    else if (path.find(':') == std::string::npos) {   // a parameter of a device at the top of the track (':' = inside a chain)
+        const size_t slash = path.rfind('/');
+        const std::string last = slash == std::string::npos ? path : path.substr(slash + 1);
+        if (last.rfind("PID", 0) == 0 && last.size() > 3) {
+            a.kind = "param";
+            a.paramId = std::to_string(std::strtoull(last.c_str() + 3, nullptr, 16));
+        } else if (last.rfind("PARAM", 0) == 0 && last.size() > 5 && std::isdigit((unsigned char)last[5])) {
+            a.kind = "param";
+            a.paramId = last.substr(5);
+        }
+    }
+    if (const auto *pts = lfield(curve, F_CURVE_POINTS))
+        for (Obj *po : *pts)
+            if (const Obj *p = r.resolve(po)) a.points.emplace_back(dfield(p, F_TIME, 0), dfield(p, F_POINT_VALUE, 0));
+    return a;
+}
+
 Track track(const Reader &r, const Obj *t) {
     Track tr;
     tr.name = sfield(t, F_TRACK_NAME);
@@ -280,7 +386,49 @@ Track track(const Reader &r, const Obj *t) {
             Device dv;
             if (device(r, r.resolve(s), dv)) tr.devices.push_back(std::move(dv));
         }
+    // mixer: the fader stores amplitude^(1/3), like pad volumes
+    if (const Obj *mix = ofield(r, t, F_TRACK_MIXER)) {
+        tr.volume = std::pow(dfield(ofield(r, mix, F_MIXER_VOLUME), F_VALUE, 1), 3);
+        tr.pan = dfield(ofield(r, mix, F_MIXER_PAN), F_VALUE, 0);
+        tr.mute = dfield(ofield(r, mix, F_MIXER_MUTE), F_BOOL_VALUE, 0) != 0;
+    }
+    // arranger: the clip lane and the automation lanes
+    const Obj *arranger = ofield(r, t, F_TRACK_ARRANGER);
+    const Obj *clips = ofield(r, arranger, F_ARRANGER_CLIPS);
+    if (!clips) clips = ofield(r, ofield(r, t, F_TRACK_ARRANGER6), F_ARRANGER_CLIPS6);
+    if (const auto *items = lfield(clips, F_LANE_ITEMS))
+        for (Obj *co : *items) {
+            Clip c;
+            bool audio = false;
+            if (clip(r, r.resolve(co), c, audio)) tr.clips.push_back(std::move(c));
+            else if (audio) ++tr.audioClips;
+        }
+    auto keep = [&](Automation a) { if (!a.points.empty()) tr.automation.push_back(std::move(a)); };
+    if (const auto *lanes = lfield(arranger, F_ARRANGER_AUTOMATION))
+        for (Obj *lo : *lanes)
+            if (const Obj *lane = r.resolve(lo)) keep(automation(r, ofield(r, lane, F_AUTOMATION_TARGET), ofield(r, lane, F_AUTOMATION_CURVE)));
+    // Bitwig 6: the lanes hang off the track, the curve sits in the lane's body next to its automation clips
+    if (const auto *lanes = lfield(ofield(r, t, F_TRACK_AUTOMATION6), F_AUTOMATION_LANES6))
+        for (Obj *lo : *lanes) {
+            const Obj *lane = r.resolve(lo);
+            const Obj *body = ofield(r, lane, F_LANE_BODY6);
+            keep(automation(r, ofield(r, lane, F_LANE_TARGET6), ofield(r, body, F_LANE_CURVE6)));
+            if (const auto *clips = lfield(body, F_LANE_ITEMS)) tr.unreadAutomation += clips->size();
+        }
     return tr;
+}
+
+// the sends of a track, once the effect tracks are known (a send names its target track object)
+void sends(const Reader &r, const Obj *t, const std::vector<const Obj *> &effects, Track &tr) {
+    const auto *list = lfield(ofield(r, t, F_TRACK_MIXER), F_SENDS);
+    if (!list) return;
+    for (Obj *so : *list) {
+        const Obj *s = r.resolve(so);
+        const Obj *target = ofield(r, s, F_SEND_TARGET);
+        const double amount = std::pow(dfield(ofield(r, s, F_SEND_AMOUNT), F_VALUE, 0), 3);
+        for (size_t k = 0; k < effects.size(); ++k)
+            if (effects[k] == target && amount > 1e-6) tr.sends.push_back({(int)k, amount});
+    }
 }
 
 bool readAll(const std::string &path, std::vector<uint8_t> &d, std::string &err) {
@@ -324,13 +472,22 @@ bool load(const std::string &path, Project &out, std::string &err) {
         if (!root) { err = path + ": can't read this Bitwig project (" + first + ")"; return false; }
     }
     Reader &r = *reader;
-    if (const Val *ts = field(root, F_TRACKS)) for (Obj *t : ts->list) if (const Obj *x = r.resolve(t)) out.tracks.push_back(track(r, x));
-    if (const Val *ts = field(root, F_EFFECT_TRACKS)) for (Obj *t : ts->list) if (const Obj *x = r.resolve(t)) out.effects.push_back(track(r, x));
-    if (const Val *m = field(root, F_MASTER)) {
-        const Obj *mo = nullptr;
-        if (m->type == 0x0b) { auto it = r.byNumber.find((uint32_t)m->i); if (it != r.byNumber.end()) mo = r.resolve(it->second); }
-        else mo = r.resolve(m->obj);
-        if (mo) { out.master = track(r, mo); out.hasMaster = true; }
+    std::vector<const Obj *> trackObjs, effectObjs;
+    if (const Val *ts = field(root, F_TRACKS)) for (Obj *t : ts->list) if (const Obj *x = r.resolve(t)) { trackObjs.push_back(x); out.tracks.push_back(track(r, x)); }
+    if (const Val *ts = field(root, F_EFFECT_TRACKS)) for (Obj *t : ts->list) if (const Obj *x = r.resolve(t)) { effectObjs.push_back(x); out.effects.push_back(track(r, x)); }
+    for (size_t k = 0; k < trackObjs.size(); ++k) sends(r, trackObjs[k], effectObjs, out.tracks[k]);
+    for (size_t k = 0; k < effectObjs.size(); ++k) sends(r, effectObjs[k], effectObjs, out.effects[k]);
+    if (const Obj *mo = ofield(r, root, F_MASTER)) { out.master = track(r, mo); out.hasMaster = true; }
+    // transport: tempo, and the time signature packed as 0x1000_00<log2 denominator><numerator>
+    // (Bitwig 5 keeps both in a transport object, Bitwig 6 on the project itself)
+    const Obj *transport = ofield(r, root, F_TRANSPORT);
+    if (!transport) transport = root;
+    out.tempo = dfield(ofield(r, transport, F_TEMPO), F_VALUE, 120);
+    if (const Obj *meter = ofield(r, transport, F_METER); meter && field(meter, F_METER_VALUE)) {
+        const uint32_t v = (uint32_t)dfield(meter, F_METER_VALUE, 0x24);
+        const int num = (int)(v & 0xf), den = 1 << ((v >> 4) & 0xf);
+        if (num > 0 && den <= 64) { out.numerator = num; out.denominator = den; }
+        out.meterChecked = (v & 0xff) == 0x24;   // only 4/4 appears in the projects the layout was learned from
     }
     return true;
 }

@@ -5,6 +5,15 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `wavelength import song.bwproject` imports a Bitwig Studio project without a DAWproject export:
+  tempo, time signature, tracks named as Bitwig shows them, their plugins, states and Bitwig's own
+  devices, faders, pans, mutes, sends, the master, arranger note clips (play start and loops, muted
+  clips and notes left out) and automation of faders, pans and instrument plugin parameters (Bitwig 4
+  to 6). It makes the same job as importing the project's DAWproject export (checked on a song
+  exported both ways: identical job, identical render) and imports all 745 projects of the corpus the
+  reader was learned from. `render song.bwproject` imports and renders; `import song.bwproject --list`
+  shows the tracks and devices as before. Audio clips and Bitwig 6 automation clips aren't read yet
+  (listed as left out: export a DAWproject for those).
 - `render --png`: each lane's LUFS is now its level after the track's fader (new report field
   `tracks[].postFaderLufs`), not the raw stem, so a track with a big fader cut no longer looks like the
   loudest part; the loudness panel marks each checked boundary with its drop jump (green 3+ dB, amber

@@ -607,6 +607,144 @@ void collectAutomation(Ctx &c, const xml::Node &lanes, std::map<std::string, jso
 
 } // namespace
 
+namespace {
+
+// ---- a Bitwig project as a DAWproject document -------------------------------------------------
+// importBitwig reads the arrangement out of the .bwproject and writes it as the project.xml a
+// DAWproject export would hold (tracks, channels, clips, notes, automation), so the rest of the
+// import is the same code, with every device taken from the Bitwig project.
+
+std::string xnum(double v) {
+    char b[40];
+    std::snprintf(b, sizeof b, "%.10g", v);
+    return b;
+}
+
+xml::Node &xadd(xml::Node &parent, const std::string &tag, std::vector<std::pair<std::string, std::string>> attrs = {}) {
+    auto n = std::make_unique<xml::Node>();
+    n->tag = tag;
+    n->attrs = std::move(attrs);
+    parent.children.push_back(std::move(n));
+    return *parent.children.back();
+}
+
+// Bitwig's note effects: devices in front of the instrument that aren't it
+bool bitwigNoteFx(const bitwig::Device &d) {
+    static const std::set<std::string> names = {
+        "Arpeggiator", "Channel Filter", "Channel Map", "Expressions", "Humanize", "Key Filter", "Micro-pitch",
+        "Multi-Note", "Note Counter", "Note Echo", "Note Filter", "Note FX Layer", "Note FX Selector", "Note Grid",
+        "Note Harmonizer", "Note Latch", "Note Length", "Note MOD", "Note Receiver", "Note Velocity", "Pitch Filter",
+        "Quantize", "Randomize", "Ricochet", "Transpose", "Velocity Curve", "Note Repeats", "Dribble"};
+    return d.kind == "native" && names.count(d.name);
+}
+
+std::unique_ptr<xml::Node> bitwigDocument(const bitwig::Project &p) {
+    auto root = std::make_unique<xml::Node>();
+    root->tag = "Project";
+    char fmt[16];
+    std::snprintf(fmt, sizeof fmt, "%x", p.format);
+    xadd(*root, "Application", {{"name", "Bitwig Studio"}, {"version", std::string("project (format ") + fmt + ")"}});
+    xml::Node &tr = xadd(*root, "Transport");
+    xadd(tr, "Tempo", {{"value", xnum(p.tempo)}});
+    xadd(tr, "TimeSignature", {{"numerator", std::to_string(p.numerator)}, {"denominator", std::to_string(p.denominator)}});
+    xml::Node &structure = xadd(*root, "Structure");
+    xml::Node &arr = xadd(*root, "Arrangement");
+    xml::Node &lanes = xadd(arr, "Lanes", {{"timeUnit", "beats"}});
+
+    auto channel = [&](xml::Node &track, const bitwig::Track &t, const std::string &id, const std::string &role, bool instrumentTrack,
+                       std::map<std::string, std::string> &paramIds) -> xml::Node & {
+        xml::Node &ch = xadd(track, "Channel", {{"id", "c" + id}, {"role", role}});
+        if (role != "master") ch.attrs.push_back({"destination", "cmaster"});
+        xml::Node &devs = xadd(ch, "Devices");
+        bool instrumentSeen = false;
+        for (auto &d : t.devices) {
+            std::string r = "audioFX";
+            if (instrumentTrack && !instrumentSeen) {
+                if (bitwigNoteFx(d)) r = "noteFX";
+                else { r = "instrument"; instrumentSeen = true; }
+            }
+            xml::Node &dn = xadd(devs, "Device", {{"deviceRole", r}, {"name", d.name}});
+            // the plugin parameters its automation lanes address (the first device of that name)
+            xml::Node *params = nullptr;
+            for (auto &a : t.automation) {
+                if (a.kind != "param" || a.device != d.name || paramIds.count(a.device + "\n" + a.paramId)) continue;
+                if (!params) params = &xadd(dn, "Parameters");
+                const std::string pid = "p" + id + "_" + std::to_string(paramIds.size());
+                xadd(*params, "RealParameter", {{"parameterID", a.paramId}, {"id", pid}, {"unit", "normalized"}});
+                paramIds[a.device + "\n" + a.paramId] = pid;
+            }
+        }
+        xadd(ch, "Volume", {{"id", "v" + id}, {"value", xnum(t.volume)}, {"unit", "linear"}});
+        xadd(ch, "Pan", {{"id", "pan" + id}, {"value", xnum((t.pan + 1) / 2)}, {"unit", "normalized"}});
+        xadd(ch, "Mute", {{"value", t.mute ? "true" : "false"}});
+        if (!t.sends.empty()) {
+            xml::Node &ss = xadd(ch, "Sends");
+            for (auto &s : t.sends) {
+                xml::Node &sn = xadd(ss, "Send", {{"destination", "cfx" + std::to_string(s.effect)}, {"type", "post"}});
+                xadd(sn, "Enable", {{"value", "true"}});
+                xadd(sn, "Volume", {{"value", xnum(s.amount)}, {"unit", "linear"}});
+            }
+        }
+        return ch;
+    };
+    auto arrangement = [&](const bitwig::Track &t, const std::string &id, const std::map<std::string, std::string> &paramIds) {
+        xml::Node &ln = xadd(lanes, "Lanes", {{"track", "t" + id}});
+        if (!t.clips.empty()) {
+            xml::Node &clips = xadd(ln, "Clips");
+            for (auto &c : t.clips) {
+                xml::Node &cn = xadd(clips, "Clip", {{"time", xnum(c.time)}, {"duration", xnum(c.duration)}, {"playStart", xnum(c.playStart)}});
+                if (c.loop) { cn.attrs.push_back({"loopStart", xnum(c.loopStart)}); cn.attrs.push_back({"loopEnd", xnum(c.loopEnd)}); }
+                xml::Node &notes = xadd(cn, "Notes");
+                for (auto &n : c.notes)
+                    xadd(notes, "Note", {{"time", xnum(n.time)}, {"duration", xnum(n.duration)}, {"channel", "0"}, {"key", std::to_string(n.key)},
+                                         {"vel", xnum(n.velocity)}, {"rel", xnum(n.release)}});
+            }
+        }
+        for (auto &a : t.automation) {
+            std::string target = "unmapped";
+            if (a.kind == "volume") target = "v" + id;
+            else if (a.kind == "pan") target = "pan" + id;
+            else if (a.kind == "param") { auto it = paramIds.find(a.device + "\n" + a.paramId); if (it != paramIds.end()) target = it->second; }
+            xml::Node &pts = xadd(ln, "Points");
+            xadd(pts, "Target", {{"parameter", target}});
+            for (auto &[beat, v] : a.points) {
+                const double y = a.kind == "volume" ? v * v * v : a.kind == "pan" ? (v + 1) / 2 : v;   // as DAWproject stores them
+                xadd(pts, "RealPoint", {{"time", xnum(beat)}, {"value", xnum(y)}, {"interpolation", "linear"}});
+            }
+        }
+    };
+    auto name = [](const bitwig::Track &t, const std::string &fallback) {
+        if (!t.name.empty()) return t.name;
+        for (auto &d : t.devices) if (!bitwigNoteFx(d)) return d.name;   // Bitwig shows the instrument's name
+        return fallback;
+    };
+    for (size_t k = 0; k < p.tracks.size(); ++k) {
+        const std::string id = std::to_string(k);
+        xml::Node &t = xadd(structure, "Track", {{"id", "t" + id}, {"name", name(p.tracks[k], "Track " + std::to_string(k + 1))}});
+        std::map<std::string, std::string> paramIds;
+        channel(t, p.tracks[k], id, "regular", true, paramIds);
+        arrangement(p.tracks[k], id, paramIds);
+    }
+    for (size_t k = 0; k < p.effects.size(); ++k) {
+        const std::string id = "fx" + std::to_string(k);
+        xml::Node &t = xadd(structure, "Track", {{"id", "t" + id}, {"name", p.effects[k].name.empty() ? "FX " + std::to_string(k + 1) : p.effects[k].name}});
+        std::map<std::string, std::string> paramIds;
+        channel(t, p.effects[k], id, "effect", false, paramIds);
+        arrangement(p.effects[k], id, paramIds);
+    }
+    if (p.hasMaster) {
+        xml::Node &t = xadd(structure, "Track", {{"id", "tmaster"}, {"name", "Master"}});
+        std::map<std::string, std::string> paramIds;
+        channel(t, p.master, "master", "master", false, paramIds);
+        arrangement(p.master, "master", paramIds);
+    }
+    return root;
+}
+
+bool buildJob(Ctx &c, const xml::Node &rootNode, const std::string &path, const std::string &outDir, DawprojectImport &res, std::string &err);
+
+} // namespace
+
 bool importDawproject(const std::string &path, const std::string &outDir, DawprojectImport &res, std::string &err, const std::string &bitwigPath) {
     Ctx c;
     c.outDir = outDir;
@@ -624,6 +762,37 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
     if (!c.zip.read("project.xml", xmlBytes, err)) { err = path + ": " + err; return false; }
     auto root = xml::parse(std::string(xmlBytes.begin(), xmlBytes.end()), err);
     if (!root) { err = path + ": project.xml: " + err; return false; }
+    return buildJob(c, *root, path, outDir, res, err);
+}
+
+bool importBitwig(const std::string &path, const std::string &outDir, DawprojectImport &res, std::string &err) {
+    Ctx c;
+    c.outDir = outDir;
+    c.res = &res;
+    if (!bitwig::load(path, c.bw, err)) return false;
+    {   // projects from before Bitwig kept plugin states inside the file have no zip at the end
+        std::string e;
+        if (!c.bwZip.open(path, e)) res.notes.push_back("the project holds no plugin states (an older Bitwig file): plugins load with their defaults");
+    }
+    c.haveBw = true;
+    res.bitwig = path;
+    size_t audio = 0, unread = 0;
+    for (auto *list : {&c.bw.tracks, &c.bw.effects})
+        for (auto &t : *list) { audio += t.audioClips; unread += t.unreadAutomation; }
+    unread += c.bw.master.unreadAutomation;
+    if (audio) res.notes.push_back(std::to_string(audio) + " audio clip(s) aren't read from .bwproject files yet: export a DAWproject for them");
+    if (unread) res.notes.push_back(std::to_string(unread) + " automation clip(s) (Bitwig 6) aren't read yet: export a DAWproject for them");
+    if (!c.bw.meterChecked)
+        res.notes.push_back("time signature read as " + std::to_string(c.bw.numerator) + "/" + std::to_string(c.bw.denominator) +
+                            " (only 4/4 projects have been checked; say if it's wrong)");
+    auto root = bitwigDocument(c.bw);
+    return buildJob(c, *root, path, outDir, res, err);
+}
+
+namespace {
+
+bool buildJob(Ctx &c, const xml::Node &rootNode, const std::string &path, const std::string &outDir, DawprojectImport &res, std::string &err) {
+    const xml::Node *root = &rootNode;
     if (const xml::Node *app = root->child("Application")) res.application = app->get("name") + " " + app->get("version");
 
     json job = json::object();
@@ -936,5 +1105,7 @@ bool importDawproject(const std::string &path, const std::string &outDir, Dawpro
     if (!o) { err = "cannot write " + (fs::path(outDir) / "job.json").string(); return false; }
     return true;
 }
+
+} // namespace
 
 } // namespace wl

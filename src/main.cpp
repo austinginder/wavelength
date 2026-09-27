@@ -7,6 +7,7 @@
 //   wavelength render <job.json> [--out DIR] [--json] [--verbose]
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
 //   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
+//   wavelength import <project.bwproject> [--out DIR] [--list] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength lint <job.json> --harmony [--key K] [--ignore "A,B"] [--chords] [--max-bars N] [--json]
 //   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
@@ -144,6 +145,12 @@ Usage:
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
       markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
       `render project.dawproject` imports into <out>/import and renders in one go.
+  wavelength import <project.bwproject> [--out DIR] [--list] [--json]
+      Turn a Bitwig Studio project into a job without exporting it: tempo, tracks with their
+      plugins, states and Bitwig's own devices, faders, pans, mutes, sends, arranger note clips
+      (play start, loops) and automation of faders, pans and instrument plugin parameters. Audio
+      clips and Bitwig 6 automation clips aren't read yet: export a DAWproject for those. --list shows
+      the project's tracks and devices instead. `render project.bwproject` imports and renders.
   wavelength import <score.musicxml | score.mxl> [--out DIR] [--instrument PLUGIN] [--json]
       Turn a MusicXML score (MuseScore, Sibelius, Finale, Dorico, music21) into a job: a track per
       part, repeats and endings played out, ties, chords and voices, concert pitch for transposing
@@ -855,7 +862,7 @@ int cmdMaster(const Args &a) {
 int cmdImport(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | score.musicxml | score.mxl | project.bwproject> [--out DIR]");
     const std::string src = a.positional[1];
-    if (fs::path(src).extension() == ".bwproject") {   // Bitwig's own format: list what it holds
+    if (fs::path(src).extension() == ".bwproject" && a.has("--list")) {   // Bitwig's own format: list its tracks and devices
         bitwig::Project p;
         std::string err;
         if (!bitwig::load(src, p, err)) return fail(a, err);
@@ -892,7 +899,6 @@ int cmdImport(const Args &a) {
         for (auto &t : tj) { std::fprintf(OUT, "track %d %s\n", k++, t["name"].get<std::string>().c_str()); show(t["devices"], 2); }
         for (auto &t : ej) { std::fprintf(OUT, "effect track %s\n", t["name"].get<std::string>().c_str()); show(t["devices"], 2); }
         if (out.contains("master")) { std::fprintf(OUT, "master\n"); show(out["master"]["devices"], 2); }
-        std::fprintf(OUT, "(notes and clips aren't read from .bwproject files: export a DAWproject and import that)\n");
         return 0;
     }
     const std::string outDir = a.get("--out", fs::path(src).stem().string());
@@ -928,7 +934,8 @@ int cmdImport(const Args &a) {
     }
     DawprojectImport r;
     std::string err;
-    if (!importDawproject(src, outDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
+    const bool bwproject = ext == ".bwproject";   // Bitwig's own project, no export needed
+    if (bwproject ? !importBitwig(src, outDir, r, err) : !importDawproject(src, outDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
     const std::string jobPath = (fs::path(outDir) / "job.json").string();
     if (a.has("--json")) {
         emit(json{{"ok", true}, {"job", jobPath}, {"application", r.application}, {"tracks", r.tracks}, {"buses", r.buses},
@@ -937,7 +944,7 @@ int cmdImport(const Args &a) {
     }
     std::fprintf(OUT, "imported %s%s: %zu tracks, %zu buses, %zu notes, %zu plugins -> %s\n", src.c_str(),
                  r.application.empty() ? "" : (" (" + r.application + ")").c_str(), r.tracks, r.buses, r.noteCount, r.plugins, jobPath.c_str());
-    if (!r.bitwig.empty()) std::fprintf(OUT, "  Bitwig's own devices from %s\n", r.bitwig.c_str());
+    if (!r.bitwig.empty() && !bwproject) std::fprintf(OUT, "  Bitwig's own devices from %s\n", r.bitwig.c_str());
     for (auto &n : r.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
     return 0;
 }
@@ -998,11 +1005,13 @@ int cmdRender(const Args &a) {
         for (auto &n : m.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
         path = (fs::path(importDir) / "job.json").string();
     }
-    if (fs::path(path).extension() == ".dawproject") {   // import next to the output, then render that job
+    if (fs::path(path).extension() == ".dawproject" || fs::path(path).extension() == ".bwproject") {   // import next to the output, then render that job
         const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
         DawprojectImport r;
         std::string err;
-        if (!importDawproject(path, importDir, r, err, a.get("--bitwig", ""))) return fail(a, err);
+        const bool ok = fs::path(path).extension() == ".bwproject" ? importBitwig(path, importDir, r, err)
+                                                                    : importDawproject(path, importDir, r, err, a.get("--bitwig", ""));
+        if (!ok) return fail(a, err);
         for (auto &n : r.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
         path = (fs::path(importDir) / "job.json").string();
     }
@@ -1711,7 +1720,7 @@ int run(int argc, char **argv) {
             {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
-            {"import", {"--out", "--json", "--bitwig", "--instrument"}},
+            {"import", {"--out", "--json", "--bitwig", "--instrument", "--list"}},
             {"export", {"--out", "--json", "--no-print"}},
             {"serve", {"--port", "--host", "--open", "--ui"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},

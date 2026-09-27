@@ -138,9 +138,9 @@ json tools() {
     list.push_back(tool("timeline", "Song time of bars and markers",
         "Song time of every marker and every few bars from the tempo map, in song and file seconds: find bar 57, or plan a length.",
         {{"job", prop("string", "path to job.json")}, {"every", prop("number", "bars between rows (default 8)")}}, {"job"}, readOnly));
-    list.push_back(tool("import", "Import MIDI, MusicXML or DAWproject",
-        "Makes a job from a MIDI file, a MusicXML score (MuseScore, Sibelius, Dorico) or a DAWproject, ready to render and edit.",
-        {{"file", prop("string", ".mid, .musicxml/.mxl or .dawproject")}, {"out", prop("string", "folder for job.json")}}, {"file", "out"}, writes));
+    list.push_back(tool("import", "Import MIDI, MusicXML, DAWproject or a Bitwig project",
+        "Makes a job from a MIDI file, a MusicXML score (MuseScore, Sibelius, Dorico), a DAWproject or a Bitwig Studio project (.bwproject, no export needed), ready to render and edit.",
+        {{"file", prop("string", ".mid, .musicxml/.mxl, .dawproject or .bwproject")}, {"out", prop("string", "folder for job.json")}}, {"file", "out"}, writes));
     return list;
 }
 

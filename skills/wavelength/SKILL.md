@@ -46,8 +46,9 @@ Write the plan into the song folder's generator as comments; it doubles as docum
 
 If the human hands you material, start from it: `"$WAVELENGTH" import score.mxl` (MusicXML from
 MuseScore, Sibelius, Dorico; repeats played out, dynamics as velocities), `import part.mid`, or
-`import song.dawproject` (a DAW's tracks, plugins and mixer) each write a `job.json` that renders at
-once. Without Bitwig's sound content, run `"$WAVELENGTH" samples --install-soundfont` once so
+`import song.dawproject` (a DAW's tracks, plugins and mixer), or a Bitwig project as it is
+(`import ~/Documents/Bitwig\ Studio/Projects/<name>/<name>.bwproject`, no export needed) each write a
+`job.json` that renders at once. Without Bitwig's sound content, run `"$WAVELENGTH" samples --install-soundfont` once so
 imported parts get General MIDI sounds.
 
 ## 3. Choose sounds from what is installed
