@@ -394,9 +394,10 @@ void measureFallbacks(const fs::path &jobPath, const json &job, json &suggestion
     fs::remove(tmpJob, ec);
     fs::remove_all(outDir, ec);
     if (!rep.is_object() || !rep.contains("tracks")) { notes.push_back("cannot measure the fallbacks: " + (rep.is_object() ? rep.value("error", std::string("the render failed")) : std::string("the render failed"))); return; }
+    const std::set<std::string> swapped(names.begin(), names.end());   // the render also plays sidechain keys, unswapped
     for (auto &t : rep["tracks"]) {
         const std::string name = t.value("name", std::string());
-        if (!suggestions.contains(name) || !t.contains("lufs") || !t["lufs"].is_number() || t["lufs"].get<double>() < -70 || orig[name] < -70) continue;
+        if (!swapped.count(name) || !t.contains("lufs") || !t["lufs"].is_number() || t["lufs"].get<double>() < -70 || orig[name] < -70) continue;
         const json *track = nullptr;
         for (auto &x : job["tracks"]) if (x.value("name", std::string()) == name) track = &x;
         const double fader = track && track->contains("gain") && (*track)["gain"].is_number() ? (*track)["gain"].get<double>() : 0.0;
