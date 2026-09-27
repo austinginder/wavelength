@@ -39,6 +39,26 @@ long long mtimeOf(const fs::path &p) {
     return (long long)std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
 }
 
+} // namespace
+
+// When a plugin last changed: the newest of the bundle, its Info.plist and its binaries. Installers keep
+// the archived dates of folders (Native Access left Kontakt 7.vst3 dated 2022 around a 2025 binary).
+long long bundleStamp(const std::string &path) {
+    const fs::path p(path);
+    long long t = mtimeOf(p);
+    std::error_code ec;
+    if (!fs::is_directory(p, ec)) return t;
+    t = std::max(t, mtimeOf(p / "Contents" / "Info.plist"));
+    for (const char *dir : {"MacOS", "x86_64-linux", "aarch64-linux", "x86_64-win", "arm64-win", "arm64ec-win"}) {
+        const fs::path d = p / "Contents" / dir;
+        if (!fs::is_directory(d, ec)) continue;
+        for (auto it = fs::directory_iterator(d, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) t = std::max(t, mtimeOf(it->path()));
+    }
+    return t;
+}
+
+namespace {
+
 std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
     return s;
@@ -197,7 +217,7 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     // every bundle on disk first, so the cache can be checked before anything is loaded
     std::vector<std::pair<std::string, long long>> clapBundles, childBundles;
     for (const auto &dir : clapSearchPaths())
-        for (const auto &b : findBundles(dir, ".clap")) clapBundles.push_back({b.string(), mtimeOf(b)});
+        for (const auto &b : findBundles(dir, ".clap")) clapBundles.push_back({b.string(), bundleStamp(b.string())});
     // VST3 (and VST 2): loading a module runs plugin code, so unknown bundles are scanned in child processes
     std::vector<fs::path> childScanned;
     for (const auto &dir : vst3SearchPaths()) for (const auto &b : findBundles(dir, ".vst3")) childScanned.push_back(b);
@@ -214,7 +234,7 @@ std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warni
     for (const auto &dir : vst2SearchPaths()) for (const auto &b : findBundles(dir, ".vst3")) childScanned.push_back(b);
     std::sort(childScanned.begin(), childScanned.end());
     childScanned.erase(std::unique(childScanned.begin(), childScanned.end()), childScanned.end());
-    for (const auto &b : childScanned) childBundles.push_back({b.string(), mtimeOf(b)});
+    for (const auto &b : childScanned) childBundles.push_back({b.string(), bundleStamp(b.string())});
 
     json cache = rescan ? json::object() : readCatalogCache();
     auto cached = [&](const std::string &key, long long mt) -> const json * {

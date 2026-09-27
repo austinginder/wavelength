@@ -1,6 +1,6 @@
 #pragma once
 // Finds CLAP and VST3 plugins on disk. Descriptors are cached (keyed by bundle path +
-// modification time) in plugins.json in platform::cacheDir(). VST3 bundles are scanned
+// bundleStamp()) in plugins.json in platform::cacheDir(). VST3 bundles are scanned
 // in child processes, because loading them runs plugin code that may crash or hang.
 #include "bundle.hpp"
 
@@ -14,6 +14,8 @@ namespace wl {
 std::vector<std::string> clapSearchPaths();
 std::vector<std::string> vst3SearchPaths();
 std::vector<std::string> vst2SearchPaths();
+// When a bundle last changed (seconds): the newest of the bundle, its Info.plist and its binaries
+long long bundleStamp(const std::string &path);
 // All plugins, from cache where possible. `rescan` ignores the cache.
 std::vector<PluginInfo> scanPlugins(bool rescan, std::vector<std::string> &warnings);
 // Resolve an id, a plugin name, a path to a .clap/.vst3 bundle, or "path#id". Prefix with

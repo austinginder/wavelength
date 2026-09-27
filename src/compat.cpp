@@ -90,12 +90,7 @@ bool sameAudio(const Audio &a, const Audio &b) {
 
 std::string key(const PluginInfo &p) { return p.format + ":" + p.id; }
 
-long long bundleTime(const PluginInfo &p) {
-    std::error_code ec;
-    if (p.bundlePath.empty()) return 0;
-    const auto t = fs::last_write_time(p.bundlePath, ec);
-    return ec ? 0 : (long long)std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
-}
+long long bundleTime(const PluginInfo &p) { return p.bundlePath.empty() ? 0 : bundleStamp(p.bundlePath); }
 
 // The spec a worker resolves: the format and id, through the catalog (which knows an Intel-only
 // plugin's architecture, so the worker runs itself under Rosetta for it)
