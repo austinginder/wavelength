@@ -90,7 +90,9 @@ walks the agent through writing, mixing and mastering a song.
 **MCP server** for Claude Desktop, Cursor and any other MCP client: `wavelength mcp` speaks the Model
 Context Protocol on stdin/stdout. Tools read the guide, list instruments, presets, samples and
 parameters, lint, render (the reply carries the report's summary and the picture of the song), draw an
-arrangement, analyze audio, find bars and import MIDI, MusicXML, DAWproject and Bitwig project files.
+arrangement, analyze audio, find bars and import MIDI, MusicXML, DAWproject and Bitwig project files;
+for songs: save, history, undo/redo/restore, diff, read and answer review comments, suggest
+fallbacks and pack.
 
 ```json
 {"mcpServers": {"wavelength": {"command": "/path/to/wavelength", "args": ["mcp"]}}}

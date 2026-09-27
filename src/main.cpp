@@ -191,7 +191,8 @@ Usage:
   wavelength mcp
       Runs a Model Context Protocol server on stdin/stdout for MCP clients (Claude Desktop, Claude Code,
       Cursor): tools to read the guide, list instruments, presets, samples and parameters, lint, render
-      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject.
+      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject;
+      for songs: save, history, undo, diff, comments and replies, fallbacks, pack.
   wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
       Draws the arrangement before rendering: sections, bars and a lane per track with its notes
       (default: arrangement.png next to the job). render --png draws the full picture with levels.

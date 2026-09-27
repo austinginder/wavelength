@@ -50,6 +50,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   song as a computer without its plugins would.
 - `builtin:drums` takes `"drum": "snare"` (kick, rim, snare, hat, open hat, crash, ride, low/mid/high
   tom): every note plays that drum, whatever its key.
+- MCP tools for songs: `save`, `history`, `undo` (undo, redo, restore), `diff`, `comments`, `reply`,
+  `fallbacks` and `pack`; `render` takes `keep` and `fallbacks`.
 - `presets Vital` lists Vital's own library (`~/Music/Vital`, `~/Documents/Vital`: factory banks, packs
   and user presets), so a song can name a Vital preset instead of pointing at its file.
 - `wavelength import song.bwproject` imports a Bitwig Studio project without a DAWproject export:

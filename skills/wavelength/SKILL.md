@@ -142,7 +142,9 @@ out mastered.
 Give the human the MP3 path and a short description: the form with timestamps, the instruments
 per section, the loudness. For a listening session, `"$WAVELENGTH" serve <songs folder>` opens a
 local page with the arrangement, stems and quick previews where they pin comments to bars and
-tracks; read them from the song's `review.json` and answer there. Ask them to listen and name anything that sounds wrong with a time.
+tracks. `"$WAVELENGTH" comments <song>` lists the open ones with the revision each was made on and
+whether the music there changed since; answer with `comments <song> --reply <id> --text "..." --done`.
+Ask them to listen and name anything that sounds wrong with a time.
 For a named moment, follow "When the human names a moment" in AGENTS.md: find the bar, render
 that stretch with stems, find the stem that moves, test the instrument alone, fix, re-render.
 Compare versions only at equal loudness.
@@ -153,6 +155,12 @@ listed as left out.
 
 Finish with a `NOTES.md` in the song folder: the prompt, the description, and a table of every
 track with its plugin, preset or patch, and role. It is how the song gets credited and rebuilt.
+
+Keep the song as a song (docs/song-format.md): `"$WAVELENGTH" save <song> -m "..."` at each milestone
+(the first save writes `wavelength.json`; fill in its title, summary and licence), `undo`/`restore`
+when the human prefers an earlier version, `fallbacks <song> --suggest --write` so it plays on
+machines without your plugins, `render job.json --png --keep` for the render that goes with it, and
+`pack <song>` for one `.wavelength` file to share.
 
 ## Rules
 
