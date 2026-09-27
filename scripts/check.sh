@@ -305,15 +305,21 @@ if "./$build/wavelength" help | grep -q "^Make music" && "./$build/wavelength" h
 else
   echo "FAIL help"; fail=1
 fi
+# a free port each run: two checkouts (or agents) running the check at once must not answer for each other
+sport=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
-"./$build/wavelength" serve out/check/serve-songs --port 7499 2>/dev/null &
+"./$build/wavelength" serve out/check/serve-songs --port $sport 2>/dev/null &
 spid=$!
-for _ in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:7499/ && break; sleep 0.1; done   # up to 5 s on a busy machine
-if curl -s http://127.0.0.1:7499/ | grep -q 'wavelength-token' && curl -s http://127.0.0.1:7499/api/songs | grep -q '"demo"' &&
-   [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' 'http://127.0.0.1:7499/api/review?song=demo')" = "403" ]; then
+for _ in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:$sport/ && break; sleep 0.1; done   # up to 5 s on a busy machine
+serve_why=""
+page=$(curl -s -w '\nHTTP %{http_code}' http://127.0.0.1:$sport/)
+echo "$page" | grep -q 'wavelength-token' || serve_why="the page has no token ($(echo "$page" | tail -1); $(echo "$page" | head -c 160 | tr '\n' ' '))"
+[ -z "$serve_why" ] && { curl -s http://127.0.0.1:$sport/api/songs | grep -q '"demo"' || serve_why="the song list lacks demo: $(curl -s http://127.0.0.1:$sport/api/songs | head -c 200)"; }
+[ -z "$serve_why" ] && { code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' "http://127.0.0.1:$sport/api/review?song=demo"); [ "$code" = "403" ] || serve_why="a POST without the token got $code, not 403"; }
+if [ -z "$serve_why" ]; then
   echo "ok   serve: UI, song list, token check"
 else
-  echo "FAIL serve"; fail=1
+  echo "FAIL serve: $serve_why"; fail=1
 fi
 kill $spid 2>/dev/null
 exit $fail
