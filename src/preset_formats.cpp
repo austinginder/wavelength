@@ -1278,4 +1278,144 @@ bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uin
     return true;
 }
 
+// --- Native Instruments containers: an item is u64 size, u32 1, "hsin", u64, uuid[16], then a stack of
+// frames (u64 size, domain fourcc, u32 type, u32 version; innermost the base item frame, type 1), each
+// frame's data after the frame it wraps, then u32 1, u32 child count and the children (u32 0, domain,
+// u32 type, item).
+
+bool isNiContainer(const std::vector<uint8_t> &d) { return d.size() >= 40 && std::memcmp(d.data() + 12, "hsin", 4) == 0; }
+
+namespace {
+
+std::string urlOfPath(const std::string &path) {
+    static const char *hex = "0123456789ABCDEF";
+    std::string u = "file://";
+    for (unsigned char c : path) {
+        if (std::isalnum(c) || c == '/' || c == '-' || c == '_' || c == '.' || c == '~') u += (char)c;
+        else { u += '%'; u += hex[c >> 4]; u += hex[c & 15]; }
+    }
+    return u;
+}
+
+struct NiFile {
+    std::ifstream in;
+    uint64_t size = 0;
+    bool read(uint64_t at, void *out, size_t n) {
+        if (at + n > size) return false;
+        in.seekg((std::streamoff)at);
+        return (bool)in.read(static_cast<char *>(out), (std::streamsize)n);
+    }
+    bool u32(uint64_t at, uint32_t &v) { uint8_t b[4]; if (!read(at, b, 4)) return false; v = b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24; return true; }
+    bool u64(uint64_t at, uint64_t &v) { uint32_t lo, hi; if (!u32(at, lo) || !u32(at + 4, hi)) return false; v = lo | (uint64_t)hi << 32; return true; }
+};
+
+struct NiFrame { std::string domain; uint32_t type = 0; uint64_t dataAt = 0, dataSize = 0; };
+
+// an item's frames (outermost first) and where its children start; false if it is not an item
+bool niItem(NiFile &f, uint64_t at, std::vector<NiFrame> &frames, uint64_t &children, uint64_t &end) {
+    uint64_t size;
+    char magic[4];
+    if (!f.u64(at, size) || !f.read(at + 12, magic, 4) || std::memcmp(magic, "hsin", 4) != 0 || at + size > f.size) return false;
+    end = at + size;
+    frames.clear();
+    std::vector<uint64_t> starts, sizes;
+    for (uint64_t o = at + 40;;) {
+        uint64_t fs;
+        char dom[4];
+        uint32_t type;
+        if (!f.u64(o, fs) || !f.read(o + 8, dom, 4) || !f.u32(o + 12, type) || fs < 20 || o + fs > end || frames.size() > 32) return false;
+        NiFrame fr;
+        fr.domain.assign(dom, 4);
+        std::reverse(fr.domain.begin(), fr.domain.end());
+        fr.type = type;
+        frames.push_back(fr);
+        starts.push_back(o);
+        sizes.push_back(fs);
+        if (type == 1 && fr.domain == "NISD") break;
+        o += 20;
+    }
+    for (size_t i = 0; i < frames.size(); ++i) {
+        const uint64_t inner = i + 1 < frames.size() ? starts[i + 1] + sizes[i + 1] : starts[i] + 20;
+        frames[i].dataAt = inner;
+        frames[i].dataSize = starts[i] + sizes[i] - inner;
+    }
+    children = starts[0] + sizes[0];
+    return true;
+}
+
+// a UTF-16 string stored as u32 length + code units (ASCII kept, the rest as '?')
+std::string niString(NiFile &f, uint64_t at) {
+    uint32_t n;
+    if (!f.u32(at, n) || n > 1024) return "";
+    std::vector<uint8_t> b(n * 2);
+    if (!f.read(at + 4, b.data(), b.size())) return "";
+    std::string s;
+    for (size_t i = 0; i + 1 < b.size(); i += 2) { const uint16_t c = (uint16_t)(b[i] | b[i + 1] << 8); s += c < 128 ? (char)c : '?'; }
+    return s;
+}
+
+void niWalk(NiFile &f, uint64_t at, int depth, std::string bank, std::vector<std::string> &out) {
+    std::vector<NiFrame> frames;
+    uint64_t children, end;
+    if (depth > 12 || !niItem(f, at, frames, children, end)) return;
+    for (const auto &fr : frames) {
+        if (fr.domain != "NISD") continue;
+        if (fr.type == 100 && fr.dataSize >= 8) bank = niString(f, fr.dataAt + 4);                 // a snapshot bank's name
+        if (fr.type == 108 && fr.dataSize >= 24) {                                                   // a preset header: its name
+            const std::string name = niString(f, fr.dataAt + 16);
+            if (!name.empty()) out.push_back(bank.empty() ? name : bank + "/" + name);
+            return;
+        }
+        if (fr.type == 117) return;   // the ensemble itself (megabytes, no snapshots in it)
+    }
+    uint32_t one, n;
+    if (!f.u32(children, one) || !f.u32(children + 4, n) || n > 4096) return;
+    uint64_t o = children + 8;
+    for (uint32_t i = 0; i < n && o + 12 < end; ++i) {
+        uint64_t size;
+        if (!f.u64(o + 12, size) || size < 40) return;
+        niWalk(f, o + 12, depth + 1, bank, out);
+        o += 12 + size;
+    }
+}
+
+} // namespace
+
+std::vector<uint8_t> reaktorEnsembleState(const std::string &path) {
+    // Reaktor's own chunk: "\x01" "4RIN" u32 17, 0, 1 (an ensemble follows), "CSAR" with the file's URL, its
+    // name and its folder's URL, then an instance block, left empty: Reaktor loads the ensemble as saved
+    std::vector<uint8_t> c = {0x01, '4', 'R', 'I', 'N', 17, 0, 0, 0, 0, 1, 'C', 'S', 'A', 'R', 5, 0, 0, 0, 0, 3, 0, 0, 0, 2, 1};
+    auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) c.push_back((uint8_t)(v >> (8 * i))); };
+    auto text = [&](const std::string &s) { c.insert(c.end(), s.begin(), s.end()); };
+    const size_t slash = path.find_last_of('/');
+    std::string name = path.substr(slash + 1);
+    const size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos) name.resize(dot);
+    text(urlOfPath(path));
+    c.push_back(0);
+    u32(4);
+    u32((uint32_t)name.size());
+    text(name);
+    u32(1);
+    u32(3);
+    c.push_back(2);
+    c.push_back(2);
+    text(urlOfPath(path.substr(0, slash + 1)));
+    c.push_back(0);
+    u32(0);
+    u32(0);
+    return c;
+}
+
+std::vector<std::string> reaktorSnapshots(const std::string &path) {
+    std::vector<std::string> out;
+    NiFile f;
+    f.in.open(path, std::ios::binary);
+    if (!f.in) return out;
+    f.in.seekg(0, std::ios::end);
+    f.size = (uint64_t)f.in.tellg();
+    niWalk(f, 0, 0, "", out);
+    return out;
+}
+
 } // namespace wl

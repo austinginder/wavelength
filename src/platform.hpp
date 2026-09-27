@@ -29,6 +29,9 @@ int processId();
 // True when process `pid` has a window on screen (macOS; false elsewhere). Headless plugins never
 // should: a window in a worker is a licence or registration dialog waiting for a click.
 bool hasOnscreenWindow(int pid);
+// Native Instruments libraries: where each installed one lives (the ContentDir NI's installers register,
+// /Library/Preferences/com.native-instruments.<product>.plist on macOS). Empty elsewhere for now.
+std::vector<std::filesystem::path> niContentDirs();
 // macOS: the CPU architectures a plugin bundle (or a plain library/executable) contains, e.g.
 // {"x86_64"} for an Intel-only plugin; empty when it can't be read or elsewhere.
 std::vector<std::string> binaryArchs(const std::string &path);

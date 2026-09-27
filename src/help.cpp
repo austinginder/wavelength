@@ -210,7 +210,7 @@ Usage:
 .clap/.vst3/.vst bundle. Prefix with clap:, vst3:, vst2: or au: (Audio Units, macOS) when a name exists in more than one format.
 State formats: auto (default), clap-preset, vstpreset, nksf, fxp, serum, juce-valuetree (.odin), h2p,
 dx7 (<cartridge>.syx#<voice>), synplant, cherry, ngrr, microtonic, soundbox, decentsampler,
-juce-string (.vital), raw.
+reaktor (.ens#<snapshot>), juce-string (.vital), raw.
 Exit status is non-zero on any error; with --json, errors are {"ok":false,"error":...}.
 )";
 

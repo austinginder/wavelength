@@ -120,12 +120,19 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         }
         return true;
     }
+    // "<ensemble>.ens#<snapshot>": a Reaktor ensemble with one of its snapshots
+    std::string snapshot;
+    for (const char *ext : {".ens#", ".rkplr#"}) {
+        const size_t hash = path.rfind(ext);
+        if (hash != std::string::npos) { snapshot = path.substr(hash + strlen(ext)); path = path.substr(0, hash + strlen(ext) - 1); }
+    }
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot read state file " + path; return false; }
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
     std::string fmt = format.empty() ? "auto" : format;
     if (fmt == "auto" && endsWith(path, ".hxp")) fmt = "helix";
+    if (fmt == "auto" && (endsWith(path, ".ens") || endsWith(path, ".rkplr")) && isNiContainer(data)) fmt = "reaktor";
     if (fmt == "auto" && data.size() > 26 && std::memcmp(data.data(), "22 serialization::archive", 25) == 0) fmt = "arturia";
     if (fmt == "auto" && isKiloheartsPreset(data)) {   // extension ".ks" + 2 letters, the snap-in's id
         const std::string ext = std::filesystem::path(path).extension().string();
@@ -195,6 +202,28 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
         };
     } else if (fmt == "juce-valuetree") {
         if (!valueTreeToJuceXml(data, out.state, err)) { err = path + ": " + err; return false; }
+    } else if (fmt == "reaktor") {   // a Reaktor ensemble: a state that has Reaktor open it (the file's content stays Reaktor's)
+        std::error_code ec;
+        const std::string abs = std::filesystem::absolute(path, ec).lexically_normal().string();
+        out.state = reaktorEnsembleState(abs);
+        out.transform = [abs](Plugin &plugin, const std::vector<uint8_t> &, std::vector<uint8_t> &, std::string &e) {
+            if (plugin.name().find("Reaktor") != std::string::npos) return true;
+            e = abs + " is a Reaktor ensemble: it loads into Reaktor 6, not " + plugin.name();
+            return false;
+        };
+        if (!snapshot.empty())
+            out.after = [snapshot](Plugin &plugin, std::string &e) {
+                std::string loaded;
+                // "<bank>/<snapshot>": the plugin lists its current bank's names (VST 2 ones cut at 24 characters)
+                const std::string name = snapshot.substr(snapshot.rfind('/') + 1);
+                if (plugin.loadPreset(snapshot, loaded, e) || plugin.loadPreset(name, loaded, e) || (name.size() > 24 && plugin.loadPreset(name.substr(0, 24), loaded, e)))
+                    return true;
+                const auto names = plugin.programs();
+                std::string some;
+                for (size_t i = 0; i < names.size() && i < 12; ++i) some += (i ? ", " : "") + names[i];
+                e = "snapshot '" + snapshot + "': " + e + (some.empty() ? "" : " (its programs: " + some + (names.size() > 12 ? ", ..." : "") + ")");
+                return false;
+            };
     } else if (fmt == "arturia") {   // an Arturia preset (a Boost text archive): the VST3/CLAP/AU state as is
         out.state = data;
         const auto text = data;
@@ -298,7 +327,7 @@ bool readStateFile(const std::string &pathIn, const std::string &format, StateFi
     } else if (fmt == "raw") {
         out.state = std::move(data);
     } else {
-        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, arturia, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
+        err = "unknown state format '" + fmt + "' (use auto, clap-preset, vstpreset, nksf, fxp, helix, kilohearts, serum, serumfx, surgefx, hise, arturia, reaktor, juce-valuetree, h2p, dx7, synplant, echobode, permut8, cherry, ngrr, microtonic, soundbox, decentsampler, juce-string or raw)";
         return false;
     }
     return true;

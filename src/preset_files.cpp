@@ -190,7 +190,7 @@ std::vector<NksEntry> scanNks() {
             if (it.depth() >= 7 && it->is_directory(ec)) { it.disable_recursion_pending(); continue; }
             std::string ext = it->path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            // .nksfx: effect presets (u-he Zebrify), .nksr: Reaktor Blocks racks; same container
+            // .nksfx: effect presets (u-he Zebrify), .nksr: Reaktor Blocks racks (not listed: see nksBelongsTo)
             if ((ext != ".nksf" && ext != ".nksfx" && ext != ".nksr") || !it->is_regular_file(ec)) continue;
             NksEntry e;
             if (readNks(it->path().string(), e)) out.push_back(e);
@@ -221,6 +221,8 @@ std::vector<NksEntry> &nksIndex(bool rescan) {
 // NKS files name their plugin by VST2 id ("VST.magic", which VST3 versions of VST2 plugins embed
 // in their class id), by VST3 uid, or only by bank name ("DUNE 3")
 bool nksBelongsTo(const NksEntry &e, const PluginInfo &plugin) {
+    // a Reaktor Blocks rack's PCHK is a module graph Komplete Kontrol builds a rack from, not Reaktor state
+    if (e.path.size() > 5 && e.path.compare(e.path.size() - 5, 5, ".nksr") == 0) return false;
     std::string id = plugin.id;
     std::transform(id.begin(), id.end(), id.begin(), ::toupper);
     if (!e.uid.empty()) return e.uid == id;
@@ -512,6 +514,38 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
                     pi.location = pi.loadKey = it->path().string();
                     out.push_back(pi);
                 }
+    }
+    // Reaktor 6: the ensembles in Native Instruments' installed libraries and the user's Ensembles folder,
+    // each with the snapshots it holds ("<ensemble>.ens#<bank>/<snapshot>")
+    if (p.rfind("reaktor6", 0) == 0) {
+        std::vector<fs::path> roots = platform::niContentDirs();
+        roots.push_back(fs::path(home) / "Documents/Native Instruments/Reaktor 6/Ensembles");
+        std::error_code ec;
+        for (const auto &root : roots)
+            for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                if (it.depth() > 4 || it->path().filename().string().rfind('.', 0) == 0) { it.disable_recursion_pending(); continue; }
+                std::string ext = it->path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if ((ext != ".ens" && ext != ".rkplr") || !it->is_regular_file(ec)) continue;
+                PresetInfo ens;
+                ens.name = it->path().stem().string();
+                ens.category = root.filename().string();
+                ens.stateFile = true;
+                ens.location = ens.loadKey = it->path().string();
+                out.push_back(ens);
+                // the first bank's snapshots: the plugin lists (and loads by name) its current bank only
+                const auto snaps = reaktorSnapshots(it->path().string());
+                const std::string first = snaps.empty() ? "" : snaps[0].substr(0, snaps[0].rfind('/') + 1);
+                for (const auto &snap : snaps) {
+                    if (snap.compare(0, first.size(), first) != 0 || snap.find('/', first.size()) != std::string::npos) break;
+                    PresetInfo pi = ens;
+                    pi.name = snap.substr(snap.rfind('/') + 1);
+                    pi.category = ens.name;
+                    pi.location = pi.loadKey = ens.location + "#" + snap;
+                    out.push_back(pi);
+                }
+            }
     }
     // Permut8: every program of every bank (30 each): "<bank>.p8bank#<n>"
     if (p == "permut8") {

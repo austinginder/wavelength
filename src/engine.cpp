@@ -24,7 +24,8 @@ bool loadStateInto(Plugin &plugin, StateFile &sf, std::string &err) {
         sf.transform = nullptr;
         if (sf.state.empty()) return true;   // the transform set parameters only (a Microtonic drum)
     }
-    return plugin.loadState(sf, err);
+    if (!plugin.loadState(sf, err)) return false;
+    return !sf.after || sf.after(plugin, err);
 }
 
 bool loadPresetByName(Plugin &plugin, const PluginInfo &info, const std::string &query, std::string &loadedName,

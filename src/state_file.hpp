@@ -33,6 +33,8 @@ struct StateFile {
     // plugin's current state, returns the state to load (or nothing, when it only set parameters).
     // Empty = load `state` as is.
     std::function<bool(Plugin &plugin, const std::vector<uint8_t> &current, std::vector<uint8_t> &out, std::string &err)> transform;
+    // Called once the state has loaded (a Reaktor snapshot is picked from the ensemble the state opened)
+    std::function<bool(Plugin &plugin, std::string &err)> after;
     std::string pluginId;         // from a clap-preset header or a vstpreset class id, if present
     std::string fxKind;           // .fxp/.fxb: "FPCh" program chunk, "FBCh" bank chunk, "FxCk"/"FxBk" parameter lists
     std::vector<float> fxParams;  // "FxCk"/"FxBk" (first program): normalized VST2 parameter values

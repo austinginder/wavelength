@@ -98,6 +98,13 @@ bool decentSamplerState(const std::vector<uint8_t> &dspreset, const std::string 
 std::vector<std::string> obxdBankPrograms(const std::vector<uint8_t> &fxb);
 bool obxdBankState(const std::vector<uint8_t> &fxb, int program, std::vector<uint8_t> &state, std::string &err);
 
+// Native Instruments Reaktor ensembles (.ens, .rkplr, NI containers): a Reaktor state that points at the file,
+// so Reaktor loads the ensemble (and checks its licence) itself, and the snapshots it holds
+// ("<bank>/<snapshot>"), read from the file's own snapshot banks.
+bool isNiContainer(const std::vector<uint8_t> &head);
+std::vector<uint8_t> reaktorEnsembleState(const std::string &absolutePath);
+std::vector<std::string> reaktorSnapshots(const std::string &path);
+
 bool looksLikeH2p(const std::vector<uint8_t> &d);
 std::vector<uint8_t> h2pToState(const std::vector<uint8_t> &text, const std::string &name);
 // the same for older u-he builds: "#pgm=<name>\n" + text + NUL NUL, no length prefix

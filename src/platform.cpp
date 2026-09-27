@@ -328,6 +328,41 @@ bool hasOnscreenWindow(int pid) {
 #endif
 }
 
+std::vector<std::filesystem::path> niContentDirs() {
+    std::vector<std::filesystem::path> out;
+#if defined(__APPLE__)
+    std::error_code ec;
+    for (auto it = std::filesystem::directory_iterator("/Library/Preferences", ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.rfind("com.native-instruments.", 0) != 0 || it->path().extension() != ".plist") continue;
+        std::ifstream in(it->path(), std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CFDataRef data = CFDataCreate(nullptr, reinterpret_cast<const UInt8 *>(bytes.data()), (CFIndex)bytes.size());
+        if (!data) continue;
+        CFPropertyListRef plist = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, nullptr);
+        CFRelease(data);
+        if (!plist) continue;
+        char buf[2048] = "";
+        if (CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+            auto dir = (CFStringRef)CFDictionaryGetValue((CFDictionaryRef)plist, CFSTR("ContentDir"));
+            if (dir && CFGetTypeID(dir) == CFStringGetTypeID()) CFStringGetCString(dir, buf, sizeof buf, kCFStringEncodingUTF8);
+        }
+        CFRelease(plist);
+        // an HFS path: "Macintosh HD:Users:Shared:TRK-01 Bass:" (the volume first; "/" inside a name is ':' in POSIX)
+        std::string hfs = buf;
+        const size_t colon = hfs.find(':');
+        if (colon == std::string::npos) continue;
+        std::string rest = hfs.substr(colon + 1);
+        for (char &c : rest) c = c == ':' ? '/' : c == '/' ? ':' : c;
+        while (!rest.empty() && rest.back() == '/') rest.pop_back();
+        std::filesystem::path dir = "/" + rest;
+        if (!std::filesystem::is_directory(dir, ec)) dir = "/Volumes/" + hfs.substr(0, colon) + "/" + rest;
+        if (std::filesystem::is_directory(dir, ec) && std::find(out.begin(), out.end(), dir) == out.end()) out.push_back(dir);
+    }
+#endif
+    return out;
+}
+
 double loadAverage() {
 #ifdef _WIN32
     return -1;
