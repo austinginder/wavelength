@@ -85,9 +85,9 @@ json tools() {
     list.push_back(tool("guide", "Read the Wavelength guide",
         "Wavelength's own documentation, matching this engine. doc \"agents\" is the operating guide: the render loop, choosing "
         "sounds, arranging, mixing, mastering, reading the report and the picture. Read it in full before writing a first job. "
-        "\"job-format\" is the job JSON reference, \"effects\" the effects, buses and automation reference. Pass section (part of a "
-        "heading) to read one part again.",
-        {{"doc", {{"type", "string"}, {"enum", {"agents", "job-format", "effects"}}, {"description", "which document (default agents)"}}},
+        "\"job-format\" is the job JSON reference, \"effects\" the effects, buses and automation reference, \"song-format\" the "
+        "song folder and .wavelength format (history, comments, packages). Pass section (part of a heading) to read one part again.",
+        {{"doc", {{"type", "string"}, {"enum", {"agents", "job-format", "effects", "song-format"}}, {"description", "which document (default agents)"}}},
          {"section", prop("string", "part of a heading, e.g. \"Mixing\"; omit for the whole document")}},
         {}, readOnly));
     list.push_back(tool("list_instruments", "List instruments and effects",
@@ -453,9 +453,14 @@ private:
             if (total > shown) lines += "... " + std::to_string(total - shown) + " more: narrow with search\n";
             return text(lines.empty() ? "no parameters match" : lines);
         }
-        if (name == "lint") {
+        if (name == "lint") {   // the harmony check, then voice leading (parallel fifths and octaves)
             if (!run({"lint", need(a, "job"), "--harmony", "--json"}, id, progress, 300, out, fail)) return fail;
-            return text(out.dump(1));
+            json voices;
+            Result vfail;
+            json both = {{"harmony", out}};
+            if (run({"lint", need(a, "job"), "--json"}, id, progress, 300, voices, vfail)) both["voiceLeading"] = voices;
+            else both["voiceLeading"] = {{"error", vfail.content.empty() ? json("failed") : vfail.content[0].value("text", json("failed"))}};
+            return text(both.dump(1));
         }
         if (name == "timeline") {
             std::vector<std::string> args = {"timeline", need(a, "job"), "--json"};

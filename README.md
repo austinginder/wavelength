@@ -6,8 +6,8 @@ and sample libraries, offline, with no DAW and no screen. It mixes them with bui
 effects, buses and automation, and returns WAV stems, a mixdown and a machine-readable
 report with loudness per track and section.
 
-It is built for agents: jobs are JSON, every command has `--json` output with actionable
-errors, and plugin output never pollutes stdout. See **[AGENTS.md](AGENTS.md)** for the
+It is built for agents: jobs are JSON, every command except `serve` and `mcp` has `--json`
+output with actionable errors, and plugin output never pollutes stdout. See **[AGENTS.md](AGENTS.md)** for the
 operating guide and mixing playbook, **[docs/job-format.md](docs/job-format.md)** for the job
 schema and **[docs/effects.md](docs/effects.md)** for effects, buses, automation and the
 built-in instruments.
@@ -48,12 +48,13 @@ https://wavelength.run
 - **Write for orchestral libraries:** per-note articulations that send their own keyswitches,
   playable-range warnings, and velocity driving a controller such as BBC SO's Dynamics.
 - **Mix:** per-track effect chains, sends, group buses, bus and master automation (fades),
-  and 20 built-in effects:
-  - dynamics: compressor, multiband (a chain per band), true-peak limiter, sidechain duck, gate
-  - EQ, filter and saturation
+  and 22 built-in effects:
+  - dynamics: compressor, multiband (a chain per band), true-peak limiter, soft clipper, sidechain
+    duck, gate
+  - gain, EQ, filter and saturation
   - space: reverb, delay, chorus, width
   - modulation: tremolo, pan, Leslie rotary, auto-wah, vibrato
-  - bitcrush and tape stop
+  - bitcrush, tape stop and beat repeat
 - **Master:** a master chain with a loudness target (`"loudness": -14` finds the gain into the
   limiter), `wavelength master` to master a finished mix without re-rendering, and `leadIn`
   silence before the song for streaming uploads.
@@ -161,7 +162,7 @@ cmake --build build -j
 scripts/check.sh              # build + render the examples; fails on errors, silence or clipping
 ```
 
-`scripts/build-release.sh <tag>` builds the release archives for all five targets from a git tag
+`scripts/build-release.sh <tag>` builds the release archives for all four targets from a git tag
 on one Mac: macOS natively, Linux in Docker, Windows cross-compiled with llvm-mingw and
 smoke-tested under Wine. `--upload` attaches them to the GitHub release. The whole release checklist is in
 [docs/releasing.md](docs/releasing.md).
@@ -169,7 +170,7 @@ smoke-tested under Wine. `--upload` attaches them to the GitHub release. The who
 ## Try it
 
 ```sh
-./build/wavelength plugins                          # installed CLAP/VST3 plugins + built-ins
+./build/wavelength plugins                          # installed CLAP/VST3/VST2 plugins + built-ins
 ./build/wavelength presets "Serum 2" --search bass  # presets you can use by name
 ./build/wavelength samples --search piano           # sample libraries for builtin:sampler
 ./build/wavelength params "vst3:Dexed" --preset "E.-PIANO"
@@ -208,7 +209,7 @@ A minimal job:
 | `audition <plugin> [--jobs N] [--limit N] [--rebuild]` | Renders every preset once in worker processes and indexes how it sounds (octave offset, brightness, band balance, envelope, width), so `presets` can show and search sound tags. |
 | `analyze <file.wav \| render-dir> [--start S] [--end S] [--peaks] [--json]` | Measures pitch, brightness, band balance, stereo width, onsets and envelope of a WAV, or of a render's mix, stems (bus stems too) and sections. `--peaks` lists the strongest spectral peaks as Hz, note and level, and the spacing they share (a comb's tuning). |
 | `params <plugin> [--preset N] [--state F] [--all] [--set "Name=v"]… [--map "Name"] [--json]` | Shows parameters with ranges, current values and display text, optionally after loading a preset or state. `--set "Rate=0.5"` prints the display text of a plain value (or the value display text or a note name reads as), `--map "Rate"` a value -> display table across the range. |
-| `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--deliver mp3,flac] [--jobs N] [--json]` | Renders stems, `mix.wav` and `report.json`, plus MP3/FLAC/16-bit WAV deliveries measured after decoding (`--deliver` or the job's `deliver`; MP3 through LAME or ffmpeg). Plugin tracks render in worker processes, several at once; a crashing plugin costs its track, not the song. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |
+| `render <job.json> [--out DIR] [--stems float\|24\|16\|none] [--deliver mp3,flac] [--jobs N] [--tracks "A,B"] [--from BAR --to BAR [--loop]] [--png] [--keep] [--fallbacks] [--json]` | Renders stems, `mix.wav` and `report.json`, plus MP3/FLAC/16-bit WAV deliveries measured after decoding (`--deliver` or the job's `deliver`; MP3 through LAME or ffmpeg). `--tracks` renders only those tracks and `--from/--to` only those bars (`--loop`: as a seamless loop); `--png` draws `song.png`, `--keep` keeps the render with the song, `--fallbacks` plays every track's fallback. Plugin tracks render in worker processes, several at once; a crashing plugin costs its track, not the song. A failed render leaves `{"ok": false}` in `report.json`, never a stale report. |
 | `import <song.dawproject> [--out DIR] [--bitwig FILE \| none] [--json]` | Turns a DAWproject export (Bitwig, Studio One, Cubase) into a job: notes, tracks with their plugins and saved states, mixer, sends, groups, tempo map, markers, volume and pan automation. Audio clips (warped ones follow the song tempo) and automation of the instrument plugin's parameters come across too. For Bitwig it also reads the `.bwproject` behind the export for Bitwig's own devices: Drum Machine pads (plugins and samples), Chain, EQ+, EQ-5, Filter, Reverb, Delay-2, Distortion, Compressor, Multiband FX-3, Peak Limiter, Tool. Lists what didn't come across. `render song.dawproject` imports and renders in one step. |
 | `import <song.bwproject> [--out DIR] [--list] [--json]` | Imports a Bitwig Studio project with no export: tempo, time signature, tracks (named as Bitwig shows them) with their plugins, states and Bitwig's own devices, faders, pans, mutes, sends, arranger note clips with their play start and loops, and automation of faders, pans and instrument plugin parameters. The job is the one the project's DAWproject export makes. Audio clips and Bitwig 6 automation clips aren't read yet (listed). `--list` shows the tracks and devices; `render song.bwproject` imports and renders. |
 | `import <song.mid> [--out DIR] [--instrument PLUGIN] [--json]` | Turns a Standard MIDI File into a job: tempo map, time signature, markers, and a track per MIDI track and channel with its notes (sustain pedal folded into note lengths), volume, pan and expression, other controllers, pitch bend (with the file's bend range) and pressure. Channel 10 plays `builtin:drums`; other channels a General MIDI-family sound from the installed sample library, or `--instrument` for all of them. `render song.mid` imports and renders. |
@@ -217,17 +218,21 @@ A minimal job:
 | `kit [install [names] [--force] \| remove NAME] [--json]` | Free instruments for machines without plugins: Surge XT, OB-Xf and Dexed from their own releases and the General MIDI SoundFont, into Wavelength's own folder. Lists them with licence, size and status; skips what is installed elsewhere unless `--force`; on Linux names the system libraries a plugin misses. |
 | `picture <job.json> [--out FILE.png] [--width PX] [--json]` | The arrangement as an image before rendering: sections, bars and a lane per track with its notes (`arrangement.png` next to the job). `render --png` draws the full picture: loudness, spectrum and each track's level too. |
 | `timeline <job.json> [--every BARS] [--json]` | Song time of every marker and every BARS bars from the tempo map (ramps included), in song seconds and file time (after the lead-in), with the tempo there and the song's length, before rendering. |
+| `lint <job.json> [--harmony [--chords] [--key K]] [--tracks "A,B"] [--from BAR --to BAR] [--json]` | Checks the notes before any render. Voice leading: parallel fifths and octaves between melodic tracks (`--crossings` adds voice crossings, `--split "Organ=4"` reads a chord track as voices). `--harmony`: the key of every stretch of bars, a chord chart with `--chords`, one- or two-bar chords outside the key, and clashes. |
 | `master <mix.wav> --chain <chain \| job> [--loudness L] [--lead-in S] [--out DIR] [--deliver mp3,flac] [--json]` | Masters a finished mix: plays it through a master chain (an effect list, a master object, or a song's job with its markers; a file or inline JSON) and reports loudness and true peak before and after, per section. |
 | `save [song] [-m MSG]`, `history`, `undo`, `redo`, `restore <rev>`, `diff [A [B]]` | Revisions of a song ([song format](docs/song-format.md)): the job and its source, notes and media in `history/`, every full render recorded with its loudness. `diff` names what changed by track and bar; `history --to-git DIR` exports the revisions as git commits outside the song. |
-| `comments [song] [--reply ID --text T --done]` | A song's open comments with the revision they were made on and whether the music they point at changed since; answer and resolve them. |
-| `pack [song]`, `unpack <file.wavelength>`, `validate <song \| file>` | One shareable file per song and back (entries checked first: no paths out of the folder, links, `.git` or zip bombs; nothing runs). `render song.wavelength` renders one directly. |
-| `upgrade [song] [--license SPDX] [--author NAME] [--dry-run]` | Brings an older song folder up to the format: manifest, relative paths, preset and `lib:` names for installed sounds, and a revision. |
-| `fallbacks [song] [--suggest [--write]]` | What each track plays on this computer; `--suggest` proposes built-in stand-ins at matched levels, `render --fallbacks` plays them. |
+| `comments [song] [--all] [--reply ID --text T --done] [--resolve ID] [--reopen ID]` | A song's open comments (`--all`: resolved ones too) with the revision they were made on and whether the music they point at changed since; answer, resolve or reopen them. |
+| `serve [SONGS_DIR] [--port 7400] [--host H] [--open]` | A local web UI for reviewing songs with a human: the arrangement, chords, loudness, stems and quick previews of any bars and tracks. Comments pinned to them go to each song's `review.json`. Read-only on the music. |
+| `pack [song] [--no-history] [--no-render] [--no-review]`, `unpack <file.wavelength>`, `validate <song \| file>` | One shareable file per song and back (the `--no-*` flags leave history, the kept render or comments out; entries checked first: no paths out of the folder, links, `.git` or zip bombs; nothing runs). `render song.wavelength` renders one directly. |
+| `upgrade [song] [--license SPDX] [--author NAME] [--dry-run] [--no-copy]` | Brings an older song folder up to the format: manifest, relative paths, preset and `lib:` names for installed sounds, and a revision. It copies other outside files into `media/` (`--no-copy`: only lists them). |
+| `fallbacks [song] [--suggest [--write] [--no-measure]]` | What each track plays on this computer; `--suggest` proposes built-in stand-ins at the levels of the last full render (`--no-measure` skips that), `--write` puts them in the job, `render --fallbacks` plays them. |
 | `state save <plugin> --out FILE [--state F] [--set "Name=v"]…` | Builds a preset from a starting state plus parameter changes (`.clap-preset` for CLAP, `.vstpreset` for VST3). |
+| `version [--json]` | Prints the engine's version. |
 
-`docs [agents | job-format | effects]` prints the docs built into the binary (the operating guide and
-the references that match it; `--section` for one part), and `mcp` runs an MCP server (below).
+`docs [agents | job-format | effects | song-format]` prints the docs built into the binary (the operating
+guide and the references that match it; `--section` for one part), and `mcp` runs an MCP server (below).
 
+Two helper scripts are in the source checkout (release archives don't include `scripts/`).
 `scripts/extract-embedded-presets.py` extracts factory presets compiled into JUCE plugin
 binaries, for example TAL-NoiseMaker and Relica 2, so `presets` can list them.
 `scripts/stage-gains.py <song> [render dir]` sets a song's faders from its target loudness and a

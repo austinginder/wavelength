@@ -1,8 +1,9 @@
 # Wavelength, operating guide for AI agents
 
-Wavelength renders music through real, installed CLAP synthesizers without a DAW or a
-screen. You describe notes and sounds in a JSON job; Wavelength plays them through the
-plugins offline and hands back WAV stems, a mixdown and a JSON report with levels.
+Wavelength renders music through the CLAP, VST3 and VST2 instruments, sample libraries and
+built-in synth on the machine, without a DAW or a screen. You describe notes and sounds in a
+JSON job; Wavelength plays them offline and hands back WAV stems, a mixdown and a JSON report
+with levels.
 
 You cannot hear the result. Use the measurements in the report (and tools such as
 `ffmpeg -af ebur128`) to judge balance and loudness, and ask the human to listen when
@@ -108,7 +109,7 @@ the beat (`"marks": ["grace"]`); pedal marks hold notes until the pedal lifts.
 In order of preference:
 
 0. **A factory preset by name.** `wavelength presets <plugin> --search organ` lists what a
-   CLAP plugin ships (Altitude alone has 450: basses, leads, pads, plucks, drums, organs,
+   plugin ships (Altitude alone has 450: basses, leads, pads, plucks, drums, organs,
    sequences); use it as `"preset": "OR Cathedral Organ"`. Prefixes in names tell the role
    (`BA` bass, `LD` lead, `PD` pad, `PL` pluck, `DR` drum one-shot on C4, `OR` organ, `SQ` sequence).
 1. **A preset file as `state`.** Vital `.vital` files (JSON, `~/Music/Vital/**`) load
@@ -166,10 +167,13 @@ part depends on a sweep.
 `wavelength fallbacks <song>` shows what each track plays here. `fallbacks --suggest` proposes a
 built-in stand-in for every track without one (its role from the track's name, preset and notes: a
 General MIDI program then a synth patch for orchestral parts, `builtin:drums` for kits and one-sound drum
-tracks) and sets each one's `gain` so its stem is as loud as the track's own in the last render;
-`--write` puts them in the job (and in your generator script too, or its next run drops them). Hear
-the result with `render --fallbacks`, which plays every track's first available fallback. Library
-samples go by name, never by path: `"sample": "lib:Legend 909/Snare Legend 909 01 accent.wav"`.
+tracks) and sets each one's `gain` so its stem is as loud as the track's own in the last full render
+next to the job (`render/report.json` or `out/report.json`). Render the song into its `out/` folder
+first (or keep a render with `--keep`) so the stand-ins get your levels; `--no-measure` skips the
+matching. `--write` puts them in the job; add them to your generator script too, or its next run
+drops them. Hear the result with `render --fallbacks`, which plays every track's first available
+fallback. Library samples go by name, never by path:
+`"sample": "lib:Legend 909/Snare Legend 909 01 accent.wav"`.
 
 ## VST3, VST2 and sample libraries
 
@@ -209,7 +213,9 @@ Plugins with no program parameter and no preset files (factory presets compiled 
 binary) can still be driven by state. JUCE plugins' state is `VC2!` + u32 little-endian
 length + an XML document + NUL; write that XML yourself with plain parameter values and load
 it as `{"file": ..., "format": "raw"}`. `scripts/extract-embedded-presets.py` reads such factory
-presets out of the binary (Relica 2, TAL-NoiseMaker); override values per part with `params`.
+presets out of the binary (Relica 2, TAL-NoiseMaker); override values per part with `params`. The
+`scripts/` folder is in the source checkout (https://github.com/austinginder/wavelength), not in
+the release archives.
 Run `wavelength state save <plugin> --out x.vstpreset` first to see the plugin's real layout.
 
 ## Writing jobs
@@ -294,7 +300,7 @@ in the job (details in `docs/effects.md`):
 - **Clean low end:** `eq` high-pass everything that isn't bass (pads ~140 Hz, leads ~150,
   arps ~250) and low-pass the sub.
 - **Pump:** `duck` bass, pads and arps from the kick (`"trigger": "Drums", "keys": [36]`).
-  Roughly: bass 10 dB, pads 6, arps 4–5, leads ~1. For pumping that follows the kick's actual
+  Roughly: bass 10 dB, pads 6, arps 4-5, leads ~1. For pumping that follows the kick's actual
   sound, use a `compressor` (or a plugin compressor) with `"sidechain": "Kick"`.
 - **Movement:** automate filters (`"automate": {"cutoff": ...}`) through builds and intros.
   LFOs work on any automatable value (`"lfo": {"cutoff": {"rate": "1/8", "depth": 1}}`), and
@@ -316,8 +322,8 @@ in the job (details in `docs/effects.md`):
   `--set "Name=800 Hz"` what a text reads as); `--map "Name"` tabulates value -> display.
 - **Buses have stems and faders to stage too.** `"stem": true` on a bus writes `stems/bus-<name>.wav`
   (after its effects, before its fader: listen to or `analyze` a return on its own); the report's
-  `buses[].lufs` measures the same point, and `scripts/stage-gains.py` sets `"bus:<Name>"` targets from
-  `targets.json` into `gains.json`.
+  `buses[].lufs` measures the same point, and `scripts/stage-gains.py` (in the source checkout) sets
+  `"bus:<Name>"` targets from `targets.json` into `gains.json`.
 - **Delay and reverb throws:** `"sends": {"Echo": {"base": -40, "throws": [[31.5, 0.5, -6], ...]}}`
   (beat, length in beats, dB) opens the send for single words or notes; no hand-built step curves.
 - **Tuned effects follow the chords.** Give the job a `"chords": [[0, "C#m"], [80, "A"], ...]`
@@ -331,11 +337,11 @@ in the job (details in `docs/effects.md`):
   `roll` for strummed chords; `automation.pitchbend` / `cc` for plugins, per-note `bend` and
   `mono` + `glide` for samples (808 slides, guitar bends); `transpose` for presets that sound
   an octave off; a tempo point with `"ramp": true` for ritardando.
-- **Master:** while mixing, a gentle glue `compressor` (ratio ~1.6–2) then a `limiter` at −1.5 dB;
+- **Master:** while mixing, a gentle glue `compressor` (ratio ~1.6 to 2) then a `limiter` at -1.5 dB;
   for the release, a real mastering chain (see Mastering).
 - **Balance, then dynamics:** first set each track's `gain` from its stem loudness
-  (`gain = target − tracks[].lufs`; e.g. leads −18, brass −17, drums −15, pads −23,
-  arps −23 LUFS), then add `markers` and ride faders with `automation.gain` until the
+  (`gain = target - tracks[].lufs`; e.g. leads -18, brass -17, drums -15, pads -23,
+  arps -23 LUFS), then add `markers` and ride faders with `automation.gain` until the
   per-section loudness in the report follows the music (quiet sections really quiet).
 
 ## Choosing sounds: `wavelength audition`
@@ -402,9 +408,12 @@ confidence 0; the peaks still name its notes. Works on a render folder too (mix,
 1. Find the bar: `wavelength timeline job.json --every 1` lists every bar's song time and file
    time (after any `leadIn`) from the tempo map; `sections[].start` in the report is file time too.
    Plan a song's length the same way before the first render.
-2. Render just that stretch: a copy of the job keeping only the notes in those bars, `stems`
-   `"16"`. Keep every track an effect is keyed from (a `duck` trigger, a `sidechain`), or the
-   render fails.
+2. Render just that stretch:
+   `wavelength render job.json --from 41 --to 45 --stems 16 --out out/moment --json` renders
+   bars 41-44 with a stem per track (the files hold just those bars; the report's
+   `window.songStart` says where they sit). Add `--tracks "Lead,Pad"` to render only
+   the suspects: tracks their `duck`, `gate` or sidechain is keyed from come along, muted, on
+   their own.
 3. Measure each stem's short-term level through the moment (0.25-0.5 s steps) and look for
    the stem that moves; then test that instrument alone (one note per pitch, one controller
    value per render) until you know why.
@@ -456,9 +465,10 @@ drum hit under 0.4 s: a snare roll played up keys 60-67 is a riser, not a Cdim c
 
 ## Songs: history, sharing and the format
 
-A song is a folder (docs/song-format.md): `wavelength.json` (title, authors, licence, the job and its
-files), the job, `media/` for files the job uses, `render/` for the render that goes with it,
-`review.json` and `history/`. Keep generator scripts and notes in it; list them in the manifest.
+A song is a folder: `wavelength.json` (title, authors, licence, the job and its files), the job,
+`media/` for files the job uses, `render/` for the render that goes with it, `review.json` and
+`history/`. Keep generator scripts and notes in it; list them in the manifest. The full spec is
+built in: `wavelength docs song-format`.
 
 - `wavelength save <song> -m "what changed"` saves a revision (the first save writes the manifest).
   Every full render of the song's job is a revision too; `history`, `undo`, `redo` and `restore <rev>`
@@ -484,18 +494,26 @@ under `out/preview/`). They leave comments pinned to what they selected; those g
 `review.json`:
 
 ```json
-{"comments": [{"id": "c260925...", "status": "open", "text": "the lead is too busy here",
-  "ref": "bars 41-44 · 1:08-1:15 · Power-up · Lead", "bars": [41, 44], "beats": [160, 176],
-  "time": [68.57, 75.43], "tracks": ["Lead"],
-  "notes": [{"track": "Lead", "key": "E5", "midi": 76, "bar": "42.3", "beat": 166, "dur": 0.5, "vel": 0.8}]}]}
+{"comments": [{"id": "c260925190412a3f", "created": "2026-09-25T19:04:12-04:00",
+  "author": {"name": "Austin", "kind": "human"}, "status": "open", "text": "the lead is too busy here",
+  "anchor": {"revision": 11, "render": "sha256:55e1...", "time": [68.57, 75.43], "bars": [41, 44],
+    "beats": [160, 176], "tracks": ["Lead"],
+    "notes": [{"track": "Lead", "key": "E5", "midi": 76, "bar": "42.3", "beat": 166, "dur": 0.5, "vel": 0.8}],
+    "ref": "bars 41-44 · 1:08-1:15 · Power-up · Lead"}}]}
 ```
 
+The `anchor` is what the human heard: the revision and render (the report's hash) that were
+playing, the song time, bars and beats selected, and the tracks and notes picked. It is never
+rewritten. Replies go in the comment's `replies` list and a resolved comment gets `"status": "done"`
+and `resolved` (the revision that addressed it).
+
 **Before working on a song, read its open comments:** `wavelength comments <song>` lists them with the
-revision each was made on (its `anchor`: the render that was playing, the bars, tracks and notes) and
-whether the music at those bars and tracks changed since, so an old comment still says what the human
-heard. Change the song where it is made (your script or job), render, then answer each one:
+revision each was made on and whether the music at those bars and tracks changed since, so an old
+comment still says what the human heard (`--all` includes resolved ones). Change the song where it is
+made (your script or job), render, then answer each one:
 `wavelength comments <song> --reply <id> --text "what you changed" --done`. The UI shows replies under
-the comment. The UI is read-only on the music: it never edits the job.
+the comment. `--resolve <id>` and `--reopen <id>` change a comment's status without a reply. The UI is
+read-only on the music: it never edits the job.
 
 ## Mastering
 
@@ -513,7 +531,8 @@ job.json` lines the sections up and keeps the lead-in.
 - **Deliver from the render, not with ffmpeg.** `"deliver": ["mp3", "flac"]` in the job (or
   `render --deliver mp3`, `master --deliver mp3`) writes `mix.mp3` / `mix.flac` next to `mix.wav`,
   decodes them again and reports each one's `truePeakDb` and `overshootDb` in `mix.deliveries`.
-  Give a `file` to write straight to its destination (`{"format": "mp3", "file": "/Users/me/Downloads/song.mp3"}`).
+  Give a `file` to write straight to its destination (`{"format": "mp3", "file": "~/Downloads/song.mp3"}`;
+  relative paths are inside the output folder, `~/` is your home folder).
 - **MP3 and AAC overshoot.** Lossy encoding adds 0.4-1.0 dB of true peak: a `-1.3` limiter
   decoded to -0.9 dBTP on four album tracks, a `-2.0` one to -1.1 on a dense orchestral mix. For
   a lossy release use a ceiling near `-2.0` (`-2.3` to `-2.7` for dense or breakbeat mixes). The
@@ -536,8 +555,10 @@ job.json` lines the sections up and keeps the lead-in.
   sections. The loudness target's gain is applied at the start of the chain, so a trim `gain`
   first keeps the compressors' input steady whatever the target.
 - **Compare at equal loudness.** Louder sounds better to everyone. Before asking the human to
-  choose between two versions, bring both to the same LUFS: `wavelength master old.wav --chain
-  '{"fx": [], "loudness": -14}'` writes a level-matched copy.
+  choose between two versions, bring both to the same LUFS:
+  `wavelength master old.wav --chain '{"fx": [], "loudness": -14}' --out old-14` writes a
+  level-matched copy to `old-14/mix.wav`. Give each version its own `--out`: without it, every
+  file is written to `mastered/` next to its input.
 - **Check plugin limiters** in the report: `truePeakDb` should sit at their ceiling. The built-in
   `limiter` with `truePeak` last in the chain guarantees it.
 - **Master the pre-master without a lead-in.** `--chain job.json` reads the job's markers, which
@@ -590,8 +611,8 @@ job.json` lines the sections up and keeps the lead-in.
   works hard, a warning names the tracks whose peaks feed it; tame those (a `limiter` or
   `saturate` on the track) instead of turning the whole song down.
 - `tracks[].lufs` and `buses[].lufs`, integrated loudness after the `fx`, before the fader.
-  Use it for gain staging: `gain` = target − lufs. `mix.lufs` is the whole song
-  (−14 LUFS is a common streaming level); `sections[].lufs` is per marker section.
+  Use it for gain staging: `gain` = target - lufs. `mix.lufs` is the whole song
+  (-14 LUFS is a common streaming level); `sections[].lufs` is per marker section.
   These match `ffmpeg -af ebur128` exactly.
 - `tracks[].levels.activeRmsDb`, RMS while the track is sounding.
 - `tracks[].levels.peakDb`, stems are unclipped float; peaks above 0 only matter in the mix.
@@ -637,8 +658,8 @@ A failed render leaves `report.json` as `{"ok": false, ...}`, never the previous
   and Microtonic kits and drums (`"AC BD Back#3"` puts a drum on channel 3). `wavelength presets
   <plugin>` lists them all. Parameters also take the plugin's display text: `"Cutoff": "800 Hz"`.
   Presets compiled into plugin binaries (TAL-NoiseMaker, Relica 2) appear after running
-  `scripts/extract-embedded-presets.py` once. Analog Lab V, AAS Player (guitars, electric
-  pianos, mallets), MPowerSynth, Soundbox and DecentSampler also load by name.
+  `scripts/extract-embedded-presets.py` (in the source checkout) once. Analog Lab V, AAS Player
+  (guitars, electric pianos, mallets), MPowerSynth, Soundbox and DecentSampler also load by name.
 - Not loadable headlessly: Kontakt (never pass it an unknown state file: it can hang the render),
   Komplete Kontrol, ZENOLOGY (needs a Roland Cloud login), Spitfire LABS (encrypted patches; the
   default patch plays), UVI Workstation.

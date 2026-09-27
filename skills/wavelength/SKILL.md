@@ -1,12 +1,13 @@
 ---
 name: wavelength
-description: Compose, arrange, mix and master original music with Wavelength, the headless music engine for AI agents. It plays notes through the real CLAP and VST3 synths and sample libraries installed on this computer (macOS, Linux or Windows) and returns a mastered mix plus measurements. Installs or builds the engine when it is missing. Use when the user asks to make a song, track, theme, score, soundtrack, jingle or beat, or to render music with their plugins.
+description: Compose, arrange, mix and master original music with Wavelength, the headless music engine for AI agents. It plays notes through the CLAP, VST3 and VST2 instruments and sample libraries installed on this computer (macOS, Linux or Windows), or through its built-in synth, and returns a mastered mix plus measurements. Installs or builds the engine when it is missing. Use when the user asks to make a song, track, theme, score, soundtrack, jingle or beat, or to render music with their plugins.
 ---
 
 # Wavelength
 
-Wavelength renders music offline through the synthesizers installed on this machine (Vital,
-Serum 2, Surge XT, Dexed, BBC Symphony Orchestra, ...). You write a JSON job (notes, sounds,
+Wavelength renders music offline through the CLAP, VST3 and VST2 instruments and sample
+libraries installed on this machine (Vital, Serum 2, Surge XT, Dexed, BBC Symphony Orchestra,
+...), or through its built-in synth when there are none. You write a JSON job (notes, sounds,
 effects, mix); it returns stems, a mix and a report with loudness per track and section. You
 cannot hear the result, so you measure it, and you ask the human to listen.
 
@@ -29,7 +30,7 @@ the binary doesn't know, run the installer with `--update` (newest release) or `
 (latest main), or do that step the way the docs you have describe.
 
 **Before writing anything, read `$WAVELENGTH_DOCS/AGENTS.md` in full** (engines from 0.4.0 carry the
-same docs inside: `"$WAVELENGTH" docs agents`, `docs job-format`, `docs effects`, `--section` for one part). It is the operating
+same docs inside: `"$WAVELENGTH" docs agents`, `docs job-format`, `docs effects`, `docs song-format`, `--section` for one part). It is the operating
 guide: choosing sounds, the mixing playbook, orchestral libraries, reading the report,
 mastering. `docs/job-format.md` and `docs/effects.md` are the reference; `examples/` has jobs
 that render.
@@ -156,7 +157,7 @@ listed as left out.
 Finish with a `NOTES.md` in the song folder: the prompt, the description, and a table of every
 track with its plugin, preset or patch, and role. It is how the song gets credited and rebuilt.
 
-Keep the song as a song (docs/song-format.md): `"$WAVELENGTH" save <song> -m "..."` at each milestone
+Keep the song as a song (`"$WAVELENGTH" docs song-format`): `"$WAVELENGTH" save <song> -m "..."` at each milestone
 (the first save writes `wavelength.json`; fill in its title, summary and licence), `undo`/`restore`
 when the human prefers an earlier version, `fallbacks <song> --suggest --write` so it plays on
 machines without your plugins, `render job.json --png --keep` for the render that goes with it, and

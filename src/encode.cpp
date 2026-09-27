@@ -494,6 +494,7 @@ std::string deliveryPath(const DeliverySpec &spec, const std::string &outDir) {
         else if (spec.format == "flac" && spec.bits == 16) name = "mix-16bit.flac";
         else name = "mix." + spec.format;
     }
+    if (name.rfind("~/", 0) == 0) return (platform::homeDir() / fs::u8path(name.substr(2))).string();   // the home folder
     fs::path p(name);
     if (p.is_relative()) p = fs::path(outDir) / p;
     return p.string();

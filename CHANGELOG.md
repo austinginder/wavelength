@@ -4,8 +4,18 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+Highlights: agents can see what they render (`render --png`, mix checks that name a problem and its
+fix) and work on a machine with no plugins (`builtin:synth`, `wavelength kit`, track `fallback`s with
+`fallbacks --suggest`); `wavelength mcp`, the docs built into the binary and a Claude Code plugin; an
+open song format with revisions, undo, a musical diff, comments pinned to what was heard and
+`.wavelength` files to share; `render --loop` for games; Bitwig projects import without an export.
+
+Upgrading from 0.3.0: jobs render as before. A folder with a `wavelength.json` is now a song: a full
+render of its job adds a revision to its `history/`, and `serve` writes new comments in the `anchor`
+form (older comments still read). `wavelength upgrade` turns an older song folder into one.
+
 ### Added
-- A song format (`docs/song-format.md`, Draft 1, CC BY 4.0; JSON Schemas in `schemas/`, CC0): a song
+- A song format (`docs/song-format.md`, Draft 2, CC BY 4.0; JSON Schemas in `schemas/`, CC0): a song
   is a folder with a manifest, `wavelength.json` (title, authors, licence, the job, its files and their
   roles), and `.wavelength` is that folder as one ZIP file to share.
   - History: `wavelength save [-m MESSAGE]`, `history`, `undo`, `redo`, `restore <rev>` keep every
@@ -23,7 +33,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   - `wavelength pack` (refuses a job that uses files outside the song; lists the plugins and libraries
     it needs in the manifest's `requires`), `unpack` (checks every entry first: no paths outside the
     folder, links, `.git` or zip bombs; runs nothing), `validate` (a folder or package against the
-    spec). `render song.wavelength` renders a package directly. A package leaves out the history
+    spec). `render song.wavelength` renders a package directly, and refuses one whose job would read or
+    write outside the song. Readers check names the way Windows and case-insensitive file systems
+    need, each entry's CRC-32, duplicate JSON keys and the format version, and never follow a
+    symbolic link into a song. A package leaves out the history
     objects that are the same bytes as its own files (a sample that never changed travels once), and
     unpacking stores them again.
   - `scripts/wavelength_song.py`: a second, independent reader in Python (standard library only) that
@@ -47,7 +60,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   proposes a built-in stand-in for every plugin or library track without one, from its name, preset
   and notes (a General MIDI program and then a synth patch for orchestral parts, `builtin:drums` for
   kits and one-sound drum tracks, a `builtin:synth` patch by role), with each one's `gain` set so its
-  stem is as loud as the track's own in the last render (measured in one child render); `--write`
+  stem is as loud as the track's own in the last render (one child render per fallback position); `--write`
   adds them to the job. `render --fallbacks` plays every track's first available fallback, to hear a
   song as a computer without its plugins would.
 - `builtin:drums` takes `"drum": "snare"` (kick, rim, snare, hat, open hat, crash, ride, low/mid/high
@@ -65,10 +78,6 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   reader was learned from. `render song.bwproject` imports and renders; `import song.bwproject --list`
   shows the tracks and devices as before. Audio clips and Bitwig 6 automation clips aren't read yet
   (listed as left out: export a DAWproject for those).
-- `render --png`: each lane's LUFS is now its level after the track's fader (new report field
-  `tracks[].postFaderLufs`), not the raw stem, so a track with a big fader cut no longer looks like the
-  loudest part; the loudness panel marks each checked boundary with its drop jump (green 3+ dB, amber
-  passes, red weak).
 - `builtin:synth`: a virtual-analog polysynth, so melodic parts render with no plugin installed (CI, a
   fresh machine, an agent's cloud container). Band-limited saw and pulse, triangle, sine with FM, noise,
   unison with detune and stereo spread, a sub, a resonant 12/24 dB low/high/band-pass filter with key
@@ -83,9 +92,11 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `render --png` (or the job's `"picture": true`): `song.png` next to `mix.wav`, a picture of the song
   for agents that can read images but can't hear: the sections and bars, the mix's short-term and
   momentary loudness with each section's integrated LUFS and the dropouts, a spectrogram of the mix
-  (30 Hz-16 kHz, +3 dB/oct), and a lane per track with its notes over its post-fader level and its
-  loudness. The report names it (`picture.file`, `width`, `height`). `wavelength picture job.json`
-  draws the arrangement (sections, bars, notes) before rendering.
+  (30 Hz-16 kHz, +3 dB/oct), and a lane per track with its notes over its level after the fader (new
+  report field `tracks[].postFaderLufs`), so a track with a big fader cut doesn't look like the loudest
+  part. The loudness panel marks each checked boundary with its drop jump (green 3+ dB, amber passes,
+  red weak). The report names the picture (`picture.file`, `width`, `height`). `wavelength picture
+  job.json` draws the arrangement (sections, bars, notes) before rendering.
 - Mix checks in the render's warnings, measured on what each track sends to the mix (after its effects
   and fader), each with its fix: a kick with no room below 120 Hz (another part less than 3 dB under it
   at its hits: duck it or split the range), a track wide below 120 Hz that carries a real share of the low
@@ -97,8 +108,10 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   as an image), `picture`, `analyze`, `timeline` and `import`. Each tool runs the engine in a child
   process, so a crashing plugin never takes the server down; long renders send progress and can be
   cancelled.
-- `wavelength docs [agents | job-format | effects] [--section TEXT]`: the operating guide and the
-  references, built into the binary so they always match it.
+- `wavelength docs [agents | job-format | effects | song-format] [--section TEXT]`: the operating guide
+  and the references, built into the binary so they always match it.
+- `version --json`. A delivery `file` starting with `~/` is written in the home folder. The MCP `lint`
+  tool runs the voice-leading check (parallel fifths and octaves) as well as the harmony check.
 - The repository is a Claude Code plugin marketplace: `/plugin marketplace add austinginder/wavelength`,
   then `/plugin install wavelength@wavelength` installs the skill and the MCP server (whose launcher
   installs the engine on first use).
@@ -126,6 +139,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
   width effect's "narrowing removes" warning leaves out the low side signal it removes on purpose.
 
 ### Fixed
+- A master with a `loudness` target and no effects (`"master": {"loudness": -14}`, or `master --chain
+  '{"fx": [], "loudness": -14}'`) crashed.
 - `presets` listed macOS zip leftovers (`__MACOSX/._name` files) as presets.
 - `wavelength serve`: comments and previews failed with 403 in a page opened before the server started
   again (after a rebuild or a login-item restart), because each start made a new token. The token is now

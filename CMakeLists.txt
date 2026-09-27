@@ -197,10 +197,10 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ui_assets.cpp
   DEPENDS ${WAVELENGTH_UI_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-ui.cmake
   COMMENT "Embedding the web UI")
 # the agent docs, built into the binary for `wavelength docs` and the MCP server
-set(WAVELENGTH_DOCS "agents=AGENTS.md,job-format=docs/job-format.md,effects=docs/effects.md")
+set(WAVELENGTH_DOCS "agents=AGENTS.md,job-format=docs/job-format.md,effects=docs/effects.md,song-format=docs/song-format.md")
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/docs_assets.cpp
   COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${CMAKE_CURRENT_BINARY_DIR}/docs_assets.cpp "-DDOCS=${WAVELENGTH_DOCS}" -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-docs.cmake
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/AGENTS.md ${CMAKE_CURRENT_SOURCE_DIR}/docs/job-format.md ${CMAKE_CURRENT_SOURCE_DIR}/docs/effects.md ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-docs.cmake
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/AGENTS.md ${CMAKE_CURRENT_SOURCE_DIR}/docs/job-format.md ${CMAKE_CURRENT_SOURCE_DIR}/docs/effects.md ${CMAKE_CURRENT_SOURCE_DIR}/docs/song-format.md ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-docs.cmake
   COMMENT "Embedding the agent docs" VERBATIM)
 target_include_directories(wavelength SYSTEM PRIVATE ${zstd_SOURCE_DIR}/lib ${signalsmith_stretch_SOURCE_DIR}/include ${httplib_SOURCE_DIR}
                            ${signalsmith_linear_SOURCE_DIR}/include ${dr_libs_SOURCE_DIR} ${stb_SOURCE_DIR})
