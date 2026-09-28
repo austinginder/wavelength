@@ -30,6 +30,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
+- The song picture's header gives the song's tempo range, lowest to highest (96-160 BPM), not the first and last tempo: a song that sped up to 160 and broadened back to 144 read "96-144".
 - Surge 1.x's Audio Unit factory presets load: the unit lists them ("Basses / Attacky") but refuses to select them, so Wavelength loads the matching patch file ("Basses/Attacky") instead, for any plugin whose own preset fails that way.
 - `compat` reads more plugins right: a preset that only changes the stereo image counts as changing the sound (MSpectralPan's autopan presets), an effect that is silent at its defaults but whose presets pass audio is a note (TugGlicento, a step sequencer with an empty pattern), presets of analysis tools that change nothing are notes (MTuner, MAutoAlign), and a Maize Sampler player whose sounds folder is gone says so and names the folder (HERA-ONE, Subs).
 - Plugins updated in place are noticed: the catalog and `compat` caches now key on the newest of a bundle's folder, Info.plist and binaries. Native Access keeps the folder's archived date (Kontakt 7.vst3 stayed dated 2022 around a 2025 binary), so updated plugins kept their old descriptors and cached results. The first run after this rescans every bundle once.
