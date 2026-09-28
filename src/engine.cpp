@@ -259,10 +259,37 @@ void muteGarbage(Audio &out, int sampleRate, const std::string &name, std::vecto
     warnings.push_back(name + " output " + what + ", first at " + at + " (render time, before any lead-in); they were muted");
 }
 
+// FigBug's RP2A03 and SID write their mono chip into channel 0 of a stereo output and leave channel 1
+// empty: the part plays hard left. No stereo instrument leaves one side at digital silence for a whole
+// render while the other sounds, so copy the sounding side across and say so.
+int oneSidedChannel(const Audio &out) {
+    constexpr float kSilent = 1e-7f, kSound = 1e-4f;   // -140 dBFS, -80 dBFS
+    float peakL = 0, peakR = 0;
+    for (size_t i = 0; i < out.frames(); ++i) {
+        peakL = std::max(peakL, std::fabs(out.left[i]));
+        peakR = std::max(peakR, std::fabs(out.right[i]));
+    }
+    if (peakR <= kSilent && peakL >= kSound) return 1;
+    if (peakL <= kSilent && peakR >= kSound) return 2;
+    return 0;
+}
+
+bool fillSilentChannel(Audio &out, const std::string &name, std::vector<std::string> &warnings) {
+    const int side = oneSidedChannel(out);
+    if (!side) return false;
+    if (side == 1) out.right = out.left;
+    else out.left = out.right;
+    warnings.push_back(name + " sounds only in the " + (side == 1 ? "left" : "right") +
+                       " channel of its stereo output (a mono instrument written into one side): copied to the " +
+                       (side == 1 ? "right" : "left") + " so the part plays in the centre");
+    return true;
+}
+
 bool runPlugin(const Job &job, OpenedPlugin &p, const std::vector<TimedEvent> &events, const Audio *input, Audio &out,
                std::string &err) {
     if (!p.plugin->render(job, events, p.initial, p.autos, input, out, p.warnings, err)) return false;
     muteGarbage(out, job.sampleRate, p.name, p.warnings);
+    if (!input) fillSilentChannel(out, p.name, p.warnings);
     return true;
 }
 

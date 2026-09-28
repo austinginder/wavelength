@@ -26,7 +26,7 @@ namespace wl {
 namespace {
 
 constexpr double kLength = 3.0, kOn = 0.5, kLen = 1.0;
-constexpr int kTestVersion = 4;   // bump when the tests change: cached results of older tests are run again
+constexpr int kTestVersion = 5;   // bump when the tests change: cached results of older tests are run again
 
 double since(std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); }
 
@@ -34,7 +34,7 @@ bool isInstrument(const PluginInfo &p) { return std::find(p.features.begin(), p.
 
 // one render of the test: a C2-C5 chord for instruments (or the same notes one after another: some
 // instruments give keys other jobs, Microtonic's Audio Unit mutes on C3), a noise burst through effects
-struct Take { bool ok = false, silent = true, garbage = false; double lufs = -120, peakDb = -120, centroid = 0, ms = 0, midDb = -120, sideDb = -120; double bands[6] = {}; std::string error; Audio audio; };
+struct Take { bool ok = false, silent = true, garbage = false; int oneSided = 0; double lufs = -120, peakDb = -120, centroid = 0, ms = 0, midDb = -120, sideDb = -120; double bands[6] = {}; std::string error; Audio audio; };
 
 Take renderTest(OpenedPlugin &p, bool instrument, double warmup, const Audio &noise, bool arpeggio = false) {
     Take t;
@@ -58,6 +58,7 @@ Take renderTest(OpenedPlugin &p, bool instrument, double warmup, const Audio &no
     std::vector<std::string> g;
     muteGarbage(t.audio, job.sampleRate, p.name, g);
     t.garbage = !g.empty();
+    t.oneSided = instrument ? oneSidedChannel(t.audio) : 0;
     const Analysis a = analyzeAudio(t.audio, job.sampleRate);
     t.silent = a.silent;
     t.lufs = a.lufs;
@@ -165,6 +166,9 @@ json summarize(const PluginInfo &info, const std::vector<json> &steps, const std
                 else fails.push_back("renders silence (a C2-C5 chord, a 5 s warm-up, the notes one at a time), and so do the presets tried");
             }
             else if (s.value("passthrough", false)) notes.push_back("passes audio through unchanged at its defaults");
+            if (!s.value("oneSided", std::string()).empty())
+                notes.push_back("sounds only in the " + s.value("oneSided", std::string()) +
+                                " channel of its stereo output (a mono voice in one side); renders copy it across");
             if (s.value("arpeggio", false)) notes.push_back("silent with the chord, plays its notes one at a time (a key in C2-C5 has another job)");
             else if (s.value("warmedUp", false)) notes.push_back("silent until given a 5 s warm-up (samples load after activation)");
             if (s.value("realtime", 0.0) > 1.0) warns.push_back("renders slower than real time (" + std::to_string(s.value("realtime", 0.0)).substr(0, 4) + "x)");
@@ -301,7 +305,8 @@ int compatWorker(const std::string &spec, const std::string &resultsFile, int pr
                   {"lufs", std::round(base.lufs * 10) / 10}, {"peakDb", std::round(base.peakDb * 10) / 10}, {"ms", std::round(base.ms)},
                   {"realtime", std::round(std::max(0.0, base.ms - warm * 1000) / 1000 / kLength * 100) / 100}, {"warmedUp", warmedUp},
                   {"arpeggio", arpeggio}, {"centroid", std::round(base.centroid)}, {"bands", bands},
-                  {"midDb", std::round(base.midDb * 10) / 10}, {"sideDb", std::round(base.sideDb * 10) / 10}};
+                  {"midDb", std::round(base.midDb * 10) / 10}, {"sideDb", std::round(base.sideDb * 10) / 10},
+                  {"oneSided", base.oneSided == 1 ? "left" : base.oneSided == 2 ? "right" : ""}};
         if (!instrument && base.ok) r["passthrough"] = sameAudio(base.audio, noise);
         emit(r);
 

@@ -61,4 +61,10 @@ bool runPlugin(const Job &job, OpenedPlugin &p, const std::vector<TimedEvent> &e
 // built-in instrument and after every effect.
 void muteGarbage(Audio &out, int sampleRate, const std::string &name, std::vector<std::string> &warnings);
 
+// 1 when only the left channel sounds and the right is digital silence for the whole buffer, 2 for the
+// reverse, 0 otherwise. fillSilentChannel copies the sounding side across and warns: runPlugin does it
+// for every instrument (some write a mono voice into one side of a stereo output).
+int oneSidedChannel(const Audio &out);
+bool fillSilentChannel(Audio &out, const std::string &name, std::vector<std::string> &warnings);
+
 } // namespace wl
