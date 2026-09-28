@@ -110,3 +110,23 @@ dialog.wl-dlg::backdrop { background: rgba(12, 14, 23, .55); }
 .ed-saved code { font: 11.5px var(--mono); }
 .ed-saved button { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
 .ed-saved .miss { color: var(--warn); margin-top: 4px; }
+
+/* live loop: status and a small mixer */
+.ed-livemix { background: color-mix(in srgb, var(--warn) 6%, var(--panel)); }
+.ed-livemix .lv-top { display: flex; align-items: center; gap: 8px; font: 600 12px var(--body); color: var(--text); margin-bottom: 6px; }
+.ed-livemix .lv-top .sp { flex: 1; }
+.ed-livemix .lv-top .lv-head::before { content: "● "; color: var(--warn); }
+.ed-livemix .lv-status { font: 11.5px var(--body); color: var(--muted); min-height: 30px; margin-bottom: 8px; line-height: 1.45; }
+.ed-livemix .lv-status b { color: var(--text); }
+.ed-livemix .lv-err { color: var(--warn); }
+.ed-livemix .lv-mixer { display: grid; gap: 3px; max-height: 320px; overflow-y: auto; margin-bottom: 8px; }
+.ed-livemix .lv-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) 20px 20px 72px 34px 44px; align-items: center; gap: 5px; font: 11.5px var(--body); }
+.ed-livemix .lv-dot { width: 8px; height: 8px; border-radius: 50%; }
+.ed-livemix .lv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ed-livemix .lv-m, .ed-livemix .lv-s { height: 18px; width: 20px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); color: var(--muted); font: 600 10px var(--body); cursor: pointer; }
+.ed-livemix .lv-m.on { background: var(--amber); border-color: var(--amber); color: #1a1c2b; }
+.ed-livemix .lv-s.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ed-livemix input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); }
+.ed-livemix .lv-db { font-size: 10.5px; color: var(--muted); text-align: right; }
+#ed-live.on { background: color-mix(in srgb, var(--warn) 18%, var(--panel-2)); border-color: var(--warn); color: var(--warn); }
+.ed-livemix .lv-note { font: 11px var(--body); color: var(--muted); line-height: 1.45; margin-top: 8px; }

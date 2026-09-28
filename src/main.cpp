@@ -94,7 +94,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--help"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--help"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1049,6 +1049,32 @@ int cmdRender(const Args &a) {
     std::vector<std::string> fallbackNotes;
     if (a.has("--fallbacks") && a.has("--keep")) return fail(a, "--keep keeps the song's own render, not one with --fallbacks");
     const int swapped = applyFallbacks(j, fs::absolute(path).parent_path().string(), fallbackNotes, a.has("--fallbacks"));
+    // --mix '{"Bass": {"gain": -3, "pan": 0.2, "mute": true}}': mixer settings for this render only (the job file
+    // stays as it is). With --cache nothing renders again for them.
+    bool mixed = false;
+    if (a.has("--mix")) {
+        std::string text = a.get("--mix");
+        if (!text.empty() && text[0] == '@') {
+            std::ifstream mf(text.substr(1));
+            if (!mf) return fail(a, "--mix: cannot read " + text.substr(1));
+            text.assign(std::istreambuf_iterator<char>(mf), std::istreambuf_iterator<char>());
+        }
+        const json m = json::parse(text, nullptr, false);
+        if (!m.is_object()) return fail(a, "--mix takes a JSON object: {\"<track>\": {\"gain\": dB, \"pan\": -1..1, \"mute\": true}}");
+        if (!j.contains("tracks") || !j["tracks"].is_array()) return fail(a, "the job has no tracks");
+        for (auto &[name, set] : m.items()) {
+            json *t = nullptr;
+            for (auto &x : j["tracks"]) if (x.value("name", "") == name) t = &x;
+            if (!t) return fail(a, "--mix: no track named '" + name + "'");
+            if (!set.is_object()) return fail(a, "--mix: '" + name + "' needs an object ({\"gain\": -3})");
+            for (auto &[k, v] : set.items()) {
+                if ((k == "gain" || k == "pan") && v.is_number()) (*t)[k] = k == "pan" ? std::clamp(v.get<double>(), -1.0, 1.0) : v.get<double>();
+                else if (k == "mute" && v.is_boolean()) (*t)[k] = v;
+                else return fail(a, "--mix: '" + name + "': \"" + k + "\" must be gain (dB), pan (-1..1) or mute (true/false)");
+            }
+        }
+        mixed = true;
+    }
     // --tracks "Lead,Bass": render only those (plus, muted, the tracks that key their sidechains).
     // Workers re-read the job by track index, so the subset goes to a file next to the job.
     std::string subsetPath;
@@ -1102,7 +1128,7 @@ int cmdRender(const Args &a) {
         j["window"] = {{"from", (from - 1) * bpb}, {"to", (to - 1) * bpb}, {"preroll", std::max(0.0, pre) * bpb}};
         if (a.has("--loop")) { j["window"]["loop"] = true; j["window"]["preroll"] = 0; }   // the bars alone, their tail folded back in
     } else if (a.has("--loop")) return fail(a, "--loop needs --from BAR --to BAR (the loop's bars, to exclusive)");
-    if (!only.empty() || j.contains("window") || swapped > 0) {   // workers re-read the job by track index: the changed job goes to a file next to it
+    if (!only.empty() || j.contains("window") || swapped > 0 || mixed) {   // workers re-read the job by track index: the changed job goes to a file next to it
         subsetPath = (fs::absolute(path).parent_path() / (".wavelength-tracks-" + std::to_string(platform::processId()) + ".json")).string();
         std::ofstream(subsetPath) << j.dump();
     }
@@ -1140,6 +1166,7 @@ int cmdRender(const Args &a) {
         if (job.stemBits < 0) return fail(a, "--stems must be float, 24, 16 or none");
     }
     if (a.has("--png")) job.picture = true;
+    if (a.has("--no-png")) job.picture = false;   // a job with "picture": true, rendered where no one looks at it (serve's live loop)
     Song keepSong;
     if (a.has("--keep")) {   // the render goes with the song: it needs a song, the whole song and an MP3
         if (!songOfJob(path, keepSong)) return fail(a, "--keep needs a song (its job next to wavelength.json: `wavelength save` makes one)");
@@ -1845,7 +1872,7 @@ int run(int argc, char **argv) {
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
             {"compat", {"--format", "--jobs", "--presets", "--timeout", "--report", "--rebuild", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop", "--keep", "--fallbacks", "--cache"}},
+            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--mix"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument", "--list"}},

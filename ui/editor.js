@@ -36,6 +36,7 @@
 				<div class="ed-clock" id="ed-clock">0:00<small>bar 1.1</small></div>
 				<button class="ed-btn" id="ed-loop" title="Loop the selected bars (L)">
 					<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg>Loop</button>
+				<button class="ed-btn" id="ed-live" disabled title="Loop the selected bars live: change the mix and the notes and hear each change within a second or two (V)">● Live</button>
 				<button class="ed-btn on" id="ed-follow" title="Keep the playhead in view">Follow</button>
 				<span class="ed-group"><button class="ed-btn" id="ed-zout" title="Zoom out (-)">−</button><button class="ed-btn" id="ed-fit" title="Whole song (F)">Fit</button><button class="ed-btn" id="ed-zin" title="Zoom in (+)">+</button></span>
 				<span class="ed-legend" id="ed-legend"></span>
@@ -51,6 +52,7 @@
 				<div class="ed-tip" id="ed-tip" hidden></div>
 			</div>
 			<div class="ed-side">
+				<section class="ed-livemix" id="ed-livemix" hidden></section>
 				<section>
 					<h4>Selection <span class="r"><button class="ed-btn" id="ed-clear" style="height:22px;font-size:11px">Clear</button></span></h4>
 					<div class="ed-ref none" id="ed-ref">Drag across the ruler to pick bars, click a track name, click or drag over notes.</div>
@@ -85,7 +87,17 @@
 		scroller = dlg.querySelector('#ed-scroll'); canvas = dlg.querySelector('#ed-canvas'); space = dlg.querySelector('#ed-space'); tip = dlg.querySelector('#ed-tip');
 		const on = (id, ev, fn) => dlg.querySelector(id).addEventListener(ev, fn);
 		on('#ed-close', 'click', () => dlg.close());
-		on('#ed-play', 'click', () => audio.paused ? audio.play() : audio.pause());
+		on('#ed-play', 'click', () => { if (WLLive.active) { WLLive.toggle(); icon(); } else audio.paused ? audio.play() : audio.pause(); });
+		on('#ed-live', 'click', toggleLive);
+		WLLive.mount($d('#ed-livemix'));
+		WLLive.onchange = () => { icon(); $d('#ed-live').classList.toggle('on', WLLive.active); dirty(); };
+		WLLive.onsend = async (text, tracks, from, to) => {   // the live mixer's changes, as a comment for the agent
+			const b0 = (from - 1) * E.data.bpb, b1 = (to - 1) * E.data.bpb;
+			const res = await post({ op: 'add', text, ref: `bars ${from}-${to - 1} · live mix · ${tracks.join(', ')}`, report: state.song.reportPath || '',
+				bars: [from, to - 1], beats: [b0, b1], time: [+E.data.toSec(b0).toFixed(2), +E.data.toSec(b1).toFixed(2)], tracks });
+			if (res?.comments) { E.comments = res.comments; renderComments(); badge(); dirty(); return true; }
+			return false;
+		};
 		on('#ed-loop', 'click', () => setLoop(!E.loop));
 		on('#ed-sloop', 'click', () => { setLoop(true); seekBeat(E.sel.b0, true); });
 		on('#ed-preview', 'click', previewSelection);
@@ -138,7 +150,7 @@
 			dirty();
 		});
 		dlg.addEventListener('cancel', e => { if (E.sel.b0 != null || E.sel.tracks.size || E.sel.notes.length) { e.preventDefault(); clearSel(); } });
-		dlg.addEventListener('close', () => { E.loop = false; });
+		dlg.addEventListener('close', () => { E.loop = false; WLLive.stop(); });
 		scroller.addEventListener('scroll', () => { E.userScrollAt = performance.now(); dirty(); });
 		scroller.addEventListener('wheel', e => {
 			if (!(e.ctrlKey || e.metaKey)) return;
@@ -172,7 +184,16 @@
 		audio.addEventListener('play', icon); audio.addEventListener('pause', icon);
 	}
 	const $d = s => dlg.querySelector(s);
-	function icon() { if (dlg) $d('#ed-playicon').innerHTML = audio.paused ? '<path d="M6 4l14 8-14 8z"/>' : '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>'; }
+	function icon() { if (dlg) $d('#ed-playicon').innerHTML = !(WLLive.active ? WLLive.playing() : !audio.paused) ? '<path d="M6 4l14 8-14 8z"/>' : '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>'; }
+	// Live: the selected bars loop through Web Audio and every change to the mix or the notes is heard
+	function toggleLive() {
+		if (WLLive.active) { WLLive.stop(); selChanged(); return; }
+		if (E.sel.b0 == null) return;
+		audio.pause(); setLoop(false);
+		WLLive.start(state.slug, barOf(E.sel.b0), barOf(E.sel.b1 - 1e-6) + 1);
+		hearInfo('Live: note edits save to edits.json as you make them and play on the next pass.');
+		dirty();
+	}
 
 	/* ---------- data ---------- */
 	function prepare() {
@@ -368,13 +389,20 @@
 		g.restore();
 
 		// ---- playhead ----
-		if (audio.src && audio.duration) {
+		if (WLLive.active || (audio.src && audio.duration)) {
 			const x = X(audioBeat());
 			if (x >= HEAD) { g.fillStyle = v('--play'); g.fillRect(x - 1, 0, 2, h); }
 		}
 		if (E.loop && E.sel.b0 != null) {
 			g.fillStyle = accent; g.font = '600 10px "Instrument Sans", sans-serif'; g.textBaseline = 'alphabetic';
 			const x = Math.max(HEAD + 4, X(E.sel.b0) + 4); g.fillText('LOOP', x, TOPH - 5);
+		}
+		const lw = WLLive.window();
+		if (lw) {   // the live loop's bars
+			const x0 = Math.max(HEAD, X((lw.from - 1) * E.data.bpb)), x1 = X((lw.to - 1) * E.data.bpb);
+			g.fillStyle = alpha(v('--warn'), 0.1); g.fillRect(x0, RULER, Math.max(0, x1 - x0), h - RULER);
+			g.fillStyle = v('--warn'); g.font = '600 10px "Instrument Sans", sans-serif'; g.textBaseline = 'alphabetic';
+			g.fillText('● LIVE', Math.max(HEAD + 4, x0 + 4), TOPH - 5);
 		}
 
 		// ---- frozen header column ----
@@ -691,6 +719,7 @@
 		el.classList.toggle('none', !any);
 		el.textContent = any ? r.text.replace(state.slug + ' · ', '') : 'Drag across the ruler to pick bars, click a track name, click or drag over notes.';
 		$d('#ed-sloop').disabled = E.sel.b0 == null;
+		$d('#ed-live').disabled = E.sel.b0 == null && !WLLive.active;
 		$d('#ed-preview').disabled = E.sel.b0 == null;
 		$d('#ed-preview').textContent = E.sel.b0 == null ? '▶ Preview these bars' : E.sel.tracks.size ? `▶ Preview ${E.sel.tracks.size === 1 ? E.data.tracks[[...E.sel.tracks][0]].name : E.sel.tracks.size + ' tracks'} here` : '▶ Preview these bars';
 		$d('#ed-solo').disabled = !(E.sel.tracks.size || E.sel.notes.length);
@@ -833,8 +862,10 @@
 	const editList = () => [...E.edits].map(([k, ed]) => { const [t, n] = k.split(':').map(Number); return { ...describeEdit(t, n, ed), ed, t, n }; })
 		.concat(E.adds.map(a => { const tr = E.data.tracks[a.t]; return { text: `${tr.name}: add ${keyName(a.key)} at bar ${barBeat(a.beat)}`, track: tr.name, add: a,
 			note: { track: tr.name, key: keyName(a.key), midi: a.key, bar: barBeat(a.beat), beat: a.beat, dur: a.dur, vel: a.vel } }; }));
+	let liveSave = 0;
 	function editsChanged() {
 		const list = editList();
+		if (WLLive.active && list.length) { clearTimeout(liveSave); liveSave = setTimeout(() => saveToSong(true), 300); }   // live: every edit is heard
 		$d('#ed-edits').hidden = !list.length;
 		$d('#ed-edhear').hidden = !E.edits.size;
 		$d('#ed-editlist').textContent = list.slice(0, 12).map(x => x.text).join('\n') + (list.length > 12 ? `\n(+${list.length - 12} more)` : '');
@@ -854,7 +885,7 @@
 		if (res?.comments) { E.comments = res.comments; E.edits.clear(); E.adds = []; editsChanged(); renderComments(); badge(); }
 	}
 	// the draft into the song: edits.json (note found by its beat and sounding key, as the timeline shows it)
-	async function saveToSong() {
+	async function saveToSong(live) {
 		const list = editList(), edits = [], skipped = [];
 		for (const x of list) {
 			const tr = E.data.tracks[x.add ? x.add.t : x.t];
@@ -873,7 +904,7 @@
 		try {
 			await postJson('api/edits', { song: state.slug, op: 'add', edits });
 			E.edits.clear(); E.adds = []; E.sel.notes = []; editsChanged(); selChanged();
-			hearInfo(`Saved ${edits.length} edit${edits.length === 1 ? '' : 's'} to edits.json${skipped.length ? ` (${skipped.length} placed in seconds left out)` : ''}. Render to hear ${edits.length === 1 ? 'it' : 'them'} in the mix.`);
+			hearInfo(`Saved ${edits.length} edit${edits.length === 1 ? '' : 's'} to edits.json${skipped.length ? ` (${skipped.length} placed in seconds left out)` : ''}. ${live === true ? 'The live loop plays ' + (edits.length === 1 ? 'it' : 'them') + ' next.' : 'Render to hear ' + (edits.length === 1 ? 'it' : 'them') + ' in the mix.'}`);
 			$d('#ed-render').classList.add('amber');
 			await loadSong();
 		} catch (err) { hearInfo('Not saved: ' + err.message, true); }
@@ -932,6 +963,7 @@
 		}
 		if (e.code === 'Space') { e.preventDefault(); $d('#ed-play').click(); }
 		else if (e.key === 'l' || e.key === 'L') setLoop(!E.loop);
+		else if (e.key === 'v' || e.key === 'V') toggleLive();
 		else if (e.key === 'p' || e.key === 'P') previewSelection();
 		else if (e.key === '+' || e.key === '=') zoomAt(1.4);
 		else if (e.key === '-') zoomAt(1 / 1.4);
@@ -957,15 +989,15 @@
 	/* ---------- frame loop: playhead, loop, follow ---------- */
 	(function frame() {
 		if (dlg?.open && E.data) {
-			if (!audio.paused) {
+			if (!audio.paused || WLLive.playing()) {
 				const b = audioBeat();
-				if (E.loop && !state.srcWindow && E.sel.b0 != null && (b >= E.sel.b1 || b < E.sel.b0 - E.data.bpb)) seekBeat(E.sel.b0, false);
+				if (E.loop && !WLLive.active && !state.srcWindow && E.sel.b0 != null && (b >= E.sel.b1 || b < E.sel.b0 - E.data.bpb)) seekBeat(E.sel.b0, false);
 				if (E.follow && performance.now() - E.userScrollAt > 2500 && !E.drag) {
 					const x = X(b), w = scroller.clientWidth;
 					if (x > w - 60 || x < HEAD) scroller.scrollLeft = HEAD + b * E.zoom - HEAD - (w - HEAD) * 0.15;
 				}
 				const s = songSecNow(), ab = audioBeat(), bar = barOf(ab), beat = Math.floor(ab - (bar - 1) * E.data.bpb + 1e-9) + 1;
-				$d('#ed-clock').innerHTML = `${fmtTime(Math.max(0, s))} / ${fmtTime(E.data.toSec(E.data.endBeat))}<small>bar ${bar} · beat ${beat}${s < 0 ? ' (lead-in)' : state.srcWindow ? ' · preview' : ''}</small>`;
+				$d('#ed-clock').innerHTML = `${fmtTime(Math.max(0, s))} / ${fmtTime(E.data.toSec(E.data.endBeat))}<small>bar ${bar} · beat ${beat}${s < 0 ? ' (lead-in)' : WLLive.active ? ' · live' : state.srcWindow ? ' · preview' : ''}</small>`;
 				E.dirty = true;
 			}
 			if (state.pending) E.dirty = true;   // the rendering dots on the solo button
@@ -995,10 +1027,12 @@
 			loadExtras();
 		},
 		refresh() {   // the song was re-rendered or its job changed
-			if (dlg?.open) { prepare(); sizeSpace(); syncAudioSelect(); renderSaved(); dirty(); loadExtras(); }
+			if (dlg?.open) { prepare(); sizeSpace(); syncAudioSelect(); renderSaved(); dirty(); loadExtras(); WLLive.refresh(); }
 			else fetch('api/review?song=' + encodeURIComponent(state.slug)).then(r => r.json()).then(r => { E.comments = r.comments || []; badge(); }).catch(() => {});
 		},
 		redraw() { dirty(); if (dlg?.open) syncAudioSelect(); },
+		// select beats b0..b1 (whole bars), as dragging across the ruler does
+		select(b0, b1) { if (!E.data) return; const bpb = E.data.bpb; E.sel = { b0: Math.floor(b0 / bpb) * bpb, b1: Math.ceil(b1 / bpb) * bpb, tracks: new Set(), notes: [] }; selChanged(); },
 		reset() { E.sel = { b0: null, b1: null, tracks: new Set(), notes: [] }; E.expanded = new Set(); E.edits = new Map(); E.adds = []; E.keys.track = null; E.harmony = null; E.comments = []; E.loop = false; badge(); },
 	};
 })();

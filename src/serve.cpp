@@ -133,7 +133,8 @@ json jobSummary(const json &job) {
         if (preset.empty() && t.contains("sampler") && t["sampler"].is_object())
             preset = t["sampler"].value("kit", t["sampler"].value("multisample", std::string()));
         tracks.push_back({{"name", t.value("name", "track" + std::to_string(i))}, {"plugin", t.value("plugin", std::string())}, {"preset", preset},
-                          {"fx", fx}, {"gain", t.contains("gain") && t["gain"].is_number() ? t["gain"] : json(0)}, {"output", t.value("output", std::string())},
+                          {"fx", fx}, {"gain", t.contains("gain") && t["gain"].is_number() ? t["gain"] : json(0)},
+                          {"pan", t.contains("pan") && t["pan"].is_number() ? t["pan"] : json(0)}, {"output", t.value("output", std::string())},
                           {"mute", t.value("mute", false)}, {"notes", notes}});
     }
     json master = json::array();
@@ -325,6 +326,25 @@ private:
     std::map<std::string, std::pair<std::string, json>> songInfo_;
     void reapPlayers(double idleSec);
     std::atomic<bool> stopping_{false};
+    // the editor's live loop: bars rendered as a seamless loop with the page's mixer (render --loop --cache
+    // --mix), newest request per song wins; only tracks whose sound changed render again
+    struct LoopState {
+        uint64_t want = 0, taken = 0, done = 0;   // newest request, the one rendering (or last taken), newest finished
+        int from = 0, to = 0;
+        json mix = json::object();
+        std::string status = "queued", error;
+        std::string wav;                          // the newest finished loop's audio
+        json info = json::object();               // its window, times and which tracks rendered
+    };
+    std::mutex loopMu_;
+    std::condition_variable loopCv_;
+    std::map<std::string, LoopState> loops_;
+    uint64_t loopSeq_ = 0;
+    platform::Process loopRunning_;
+    void loopWorker();
+    json loopJson(const LoopState &l) const {
+        return {{"want", l.want}, {"done", l.done}, {"status", l.status}, {"error", l.error}, {"info", l.info}, {"from", l.from}, {"to", l.to}};
+    }
 
     fs::path songDir(const std::string &slug) const { return root_ / slug; }
     bool songExists(const std::string &slug) const { std::error_code ec; return validSlug(slug) && fs::is_directory(songDir(slug), ec); }
@@ -620,6 +640,77 @@ void Server::previewWorker() {
         }
         ++previewVersion_;
         if (!p.full) prunePreviews(fs::path(p.dir).parent_path());
+    }
+}
+
+// The live loop: one render at a time, always of the newest request of a song (older ones are skipped).
+// Output in out/.loop (hidden from the file list); the audio is kept in memory for the page to fetch.
+void Server::loopWorker() {
+    while (!stopping_) {
+        std::string slug;
+        LoopState req;
+        {
+            std::unique_lock<std::mutex> lock(loopMu_);
+            loopCv_.wait_for(lock, std::chrono::milliseconds(500), [&] {
+                if (stopping_) return true;
+                for (auto &[s, l] : loops_) if (l.want > l.taken) return true;
+                return false;
+            });
+            if (stopping_) break;
+            for (auto &[s, l] : loops_) if (l.want > l.taken) { slug = s; break; }
+            if (slug.empty()) continue;
+            LoopState &l = loops_[slug];
+            l.taken = l.want;
+            l.status = "rendering";
+            req.taken = l.taken; req.from = l.from; req.to = l.to; req.mix = l.mix;
+        }
+        const double t0 = nowSec();
+        const fs::path dir = songDir(slug);
+        const FileMap files = scanSong(dir);
+        const std::string jobPath = pick(files, "job.json", "job.json"), reportPath = pick(files, "report.json", "out/report.json");
+        const fs::path out = dir / "out" / ".loop";
+        std::vector<std::string> args = {platform::selfExecutable(), "render", (dir / jobPath).string(), "--from", std::to_string(req.from),
+                                         "--to", std::to_string(req.to), "--loop", "--cache", "--no-png", "--stems", "none", "--json", "--out", out.string()};
+        if (!reportPath.empty()) { args.push_back("--level-from"); args.push_back((dir / reportPath).string()); }
+        if (!req.mix.empty()) { args.push_back("--mix"); args.push_back(req.mix.dump()); }
+        std::string text, error, wav, crash;
+        json rep;
+        platform::Process proc;
+        if (jobPath.empty()) error = "the song has no job.json yet";
+        else if (!platform::spawn(args, proc, true, true)) error = "could not start a render";
+        else {
+            { std::lock_guard<std::mutex> lock(loopMu_); loopRunning_ = proc; }
+            platform::readOutput(proc, text, 300);
+            while (!platform::finished(proc, crash)) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            { std::lock_guard<std::mutex> lock(loopMu_); loopRunning_ = platform::Process(); }
+            try { rep = json::parse(text); } catch (...) {}
+            if (!rep.is_object() || !rep.value("ok", false))
+                error = rep.is_object() && rep.contains("error") ? rep["error"].get<std::string>() : (crash.empty() ? "the render failed" : "the render crashed: " + crash);
+            else wav = readFile(out / "mix.wav");
+            if (error.empty() && wav.empty()) error = "the render wrote no audio";
+        }
+        json info = json::object();
+        if (error.empty()) {
+            json tracks = json::array();
+            int cached = 0;
+            for (auto &t : rep.value("tracks", json::array())) {
+                const bool c = t.value("cached", false);
+                cached += c;
+                if (!c) tracks.push_back({{"name", t.value("name", std::string())}, {"seconds", t.value("renderSeconds", 0.0)}});
+            }
+            info = {{"window", rep.value("window", json())}, {"seconds", std::round((nowSec() - t0) * 100) / 100}, {"cached", cached},
+                    {"tracks", rep.value("tracks", json::array()).size()}, {"rendered", tracks}, {"lufs", rep["mix"].value("lufs", -120.0)}};
+        }
+        std::lock_guard<std::mutex> lock(loopMu_);
+        auto it = loops_.find(slug);
+        if (it == loops_.end()) continue;   // stopped while it rendered
+        LoopState &l = it->second;
+        if (req.taken > l.done) {
+            l.done = req.taken;
+            if (error.empty()) { l.wav = std::move(wav); l.info = info; l.error.clear(); }
+            else l.error = error.substr(0, 600);
+        }
+        l.status = l.want > l.done ? "rendering" : l.error.empty() ? "ready" : "failed";
     }
 }
 
@@ -1120,6 +1211,48 @@ int Server::run() {
         sendJson(res, cancelPreviews(in.value("song", std::string()), in.value("id", std::string())));
     });
 
+    // the editor's live loop: POST {song, from, to (bars), mix: {track: {gain, pan, mute}}} asks for the loop as it
+    // should sound now; GET says where it is; GET audio is the newest finished loop (a WAV); POST stop ends it
+    http_.Post("/api/loop", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        const std::string s = in.value("song", std::string());
+        if (!songExists(s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        const int from = in.value("from", 0), to = in.value("to", 0);
+        if (from < 1 || to <= from) return sendJson(res, {{"error", "from/to are bars, to after from"}}, 400);
+        std::lock_guard<std::mutex> lock(loopMu_);
+        LoopState &l = loops_[s];
+        if (l.from != from || l.to != to) { l.wav.clear(); l.info = json::object(); l.error.clear(); }   // other bars: the old loop is no answer
+        l.want = ++loopSeq_;
+        l.from = from;
+        l.to = to;
+        l.mix = in.contains("mix") && in["mix"].is_object() ? in["mix"] : json::object();
+        if (l.status != "rendering") l.status = "queued";
+        loopCv_.notify_all();
+        sendJson(res, loopJson(l));
+    });
+    http_.Get("/api/loop", [&](const httplib::Request &req, httplib::Response &res) {
+        std::lock_guard<std::mutex> lock(loopMu_);
+        auto it = loops_.find(req.get_param_value("song"));
+        if (it == loops_.end()) return sendJson(res, {{"error", "no loop"}}, 404);
+        sendJson(res, loopJson(it->second));
+    });
+    http_.Get("/api/loop/audio", [&](const httplib::Request &req, httplib::Response &res) {
+        std::lock_guard<std::mutex> lock(loopMu_);
+        auto it = loops_.find(req.get_param_value("song"));
+        if (it == loops_.end() || it->second.wav.empty()) return sendJson(res, {{"error", "no loop audio yet"}}, 404);
+        res.set_header("X-Wavelength-Loop", std::to_string(it->second.done));
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(it->second.wav, "audio/wav");
+    });
+    http_.Post("/api/loop/stop", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        std::lock_guard<std::mutex> lock(loopMu_);
+        loops_.erase(in.value("song", std::string()));
+        sendJson(res, {{"ok", true}});
+    });
+
     // song folder actions: rename, move to the trash, show in the file browser, edit the manifest's details
     http_.Post("/api/song/rename", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
@@ -1411,6 +1544,7 @@ int Server::run() {
     });
 
     std::thread worker([this] { previewWorker(); });
+    std::thread looper([this] { loopWorker(); });
     const std::string url = "http://" + std::string(opt_.host == "0.0.0.0" ? "127.0.0.1" : opt_.host) + ":" + std::to_string(opt_.port) + "/";
     std::fprintf(stderr, "Wavelength %s serving %s\n  %s\n  (Ctrl+C to stop)\n", WAVELENGTH_VERSION, root_.string().c_str(), url.c_str());
     if (opt_.open) {
@@ -1439,6 +1573,12 @@ int Server::run() {
     }
     cv_.notify_all();
     worker.join();
+    {
+        std::lock_guard<std::mutex> lock(loopMu_);
+        platform::kill(loopRunning_);
+    }
+    loopCv_.notify_all();
+    looper.join();
     if (!ok) { std::fprintf(stderr, "error: could not listen on %s:%d (in use?)\n", opt_.host.c_str(), opt_.port); return 1; }
     return 0;
 }

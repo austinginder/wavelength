@@ -389,8 +389,9 @@ async function postJson(url, body) {
 	return j;
 }
 const songLead = () => state.song?.report?.leadIn ?? state.song?.job?.leadIn ?? 0;
-function songSecNow() { return audio.currentTime - (state.srcLead ?? songLead()) + (state.srcStart || 0); }
+function songSecNow() { return window.WLLive?.active ? WLLive.songSec() : audio.currentTime - (state.srcLead ?? songLead()) + (state.srcStart || 0); }
 function seekSongSec(s, play) {
+	if (window.WLLive?.active) { WLLive.seek(s); return; }   // the live loop: only inside its bars
 	if (state.srcWindow && (s < state.srcWindow[0] - 1e-3 || s >= state.srcWindow[1])) {   // outside the preview: back to the mix there
 		backToMix(s, play ?? !audio.paused); return;
 	}
@@ -873,6 +874,7 @@ loadSongs().then(route);
 </script>
 <script src="ui/menus.js"></script>
 <script src="ui/playground.js"></script>
+<script src="ui/live.js"></script>
 <script src="ui/editor.js"></script>
 </body>
 </html>
