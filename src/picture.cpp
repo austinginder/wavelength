@@ -59,7 +59,18 @@ bool writePicture(const std::string &path, const Job &job, const Picture &pic, i
         if (rendered) {
             stats += "   " + fmt("%.1f LUFS", pic.mixLufs) + "   LRA " + fmt("%.1f", pic.lra) + "   true peak " + fmt("%.1f dBTP", pic.truePeak);
         }
-        const double b0 = job.tempo.bpmAtBeat(job.tempo.secToBeat(t0)), b1 = job.tempo.bpmAtBeat(job.tempo.secToBeat(t1));
+        // Lowest to highest tempo in the window: ramps are linear between points, so the extremes
+        // sit at the window's ends or at a tempo point inside it.
+        const double beat0 = job.tempo.secToBeat(t0), beat1 = job.tempo.secToBeat(t1);
+        double b0 = job.tempo.bpmAtBeat(beat0), b1 = b0;
+        auto take = [&](double beat) {
+            const double v = job.tempo.bpmAtBeat(beat);
+            b0 = std::min(b0, v);
+            b1 = std::max(b1, v);
+        };
+        take(beat1);
+        for (const auto& p : job.tempo.points())
+            if (p.beat > beat0 && p.beat < beat1) take(p.beat);
         stats += "   " + fmt("%.0f", b0) + (std::fabs(b1 - b0) > 0.5 ? fmt("-%.0f", b1) : "") + " BPM   " + std::to_string(job.tsigNum) + "/" +
                  std::to_string(job.tsigDen) + "   " + std::to_string(n) + (n == 1 ? " track" : " tracks");
         if (!rendered) stats += "   (arrangement: not rendered)";

@@ -14,6 +14,7 @@ public:
     double beatToSec(double beat) const;
     double secToBeat(double sec) const;
     double bpmAtBeat(double beat) const;
+    const std::vector<TempoPoint>& points() const { return pts_; }
     // A render window (render --from): seconds count from `beat`, so the window starts at 0 s while
     // beats stay song beats (transport, bars and tempo-synced plugins keep the song's position).
     void setOrigin(double beat);
