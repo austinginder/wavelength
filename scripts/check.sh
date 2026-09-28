@@ -177,6 +177,19 @@ sys.exit(0 if struct.unpack(">II", d[16:24]) == (1000, p["height"]) and p["heigh
 else
   echo "ok   picture: render --png and the arrangement picture"
 fi
+# card: a contact sheet of built-in synth patches (a bad name fails alone), the pitch and a percussive patch read right
+if "./$build/wavelength" card builtin:synth "LD Chip" "BA Pluck" "PD Nope" --out "out/check/picture/$build/cards.png" --json | python3 -c '
+import json, struct, sys
+d = json.load(sys.stdin)
+p = {x.get("preset"): x for x in d["patches"]}
+png = open(d["file"], "rb").read(24)
+ok = (struct.unpack(">II", png[16:24]) == (d["width"], d["height"]) and p["LD Chip"]["ok"] and p["LD Chip"]["sounds"] == "C4"
+      and p["LD Chip"]["transpose"] == 0 and any(f.startswith("percussive") for f in p["BA Pluck"]["flags"]) and not p["PD Nope"]["ok"])
+sys.exit(0 if ok else 1)'; then
+  echo "ok   card: patch contact sheet, sounding pitch, percussive flag, a bad preset fails alone"
+else
+  echo "FAIL card"; fail=1
+fi
 # fallback: a track whose plugin isn't installed plays its first available fallback, and the report says so first
 mkdir -p out/check/fallback
 cat > out/check/fallback/job.json <<'JOB'

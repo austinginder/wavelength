@@ -38,13 +38,14 @@ Never guess plugin or preset names. List them:
 "$WAVELENGTH" plugins --json
 "$WAVELENGTH" presets <plugin> --search <text>      # factory presets by name
 "$WAVELENGTH" audition <plugin>                     # once per plugin: tags like "octave -1", dark, pluck
+"$WAVELENGTH" card <plugin> "<A>" "<B>" + <plugin2> "<C>"   # cards.png: a contact sheet of candidates; read it
 "$WAVELENGTH" samples --search <text>               # sample libraries, SFZ, SoundFonts, drum kits (builtin:sampler)
 "$WAVELENGTH" presets builtin:synth                 # the built-in synth's patches: always there, no plugin needed
 ```
 
 On a machine with few or no plugins (a cloud container, CI), build the song from `builtin:synth` patches, `builtin:drums` and `builtin:fx`; `samples --install-soundfont` adds General MIDI sounds, and `"$WAVELENGTH" kit install` adds free synthesizers with their factory patches (Surge XT, OB-Xf, Dexed) into Wavelength's own folder. On Linux, install the system libraries it names for any plugin that won't load.
 
-Prefer factory presets by name. Transpose presets tagged `octave -1`. **Check every melodic preset over the range you will write for it** before committing (AGENTS.md explains how): presets voiced for the mod wheel sound dull and fade on high notes, and aggressive ones hide distortion and OTT compression. When the choice is a matter of taste, render short candidates playing the same phrase and let the human pick.
+Prefer factory presets by name. Transpose presets tagged `octave -1` (or flagged "C4 sounds C3" on a card). **Check every melodic preset over the range you will write for it** before committing (AGENTS.md explains how): presets voiced for the mod wheel sound dull and fade on high notes, and aggressive ones hide distortion and OTT compression. When the choice is a matter of taste, render short candidates playing the same phrase and let the human pick.
 
 ## 4. Write the song
 

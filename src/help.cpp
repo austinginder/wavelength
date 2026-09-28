@@ -140,6 +140,17 @@ Usage:
   wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
       Draws the arrangement before rendering: sections, bars and a lane per track with its notes
       (default: arrangement.png next to the job). render --png draws the full picture with levels.
+  wavelength card <plugin> [<preset>...] [+ <plugin> [<preset>...]]... [--state FILE] [--out FILE.png] [--width PX] [--jobs N] [--probe DIR] [--json]
+      A patch card: how a preset sounds, for an agent that reads images. Every patch plays one probe
+      (a held C4, C2 C3 C4 C5, a C minor chord, eight 16ths at 120 BPM) in a child render; the card
+      shows the held note zoomed (spectrum with note names and the harmonics of the sounding note,
+      level, attack, note-off and tail), its pitch over time and waveform, the four octaves, the
+      chord and the run, with the numbers and flags: sounds an octave down (and the transpose that
+      fixes it), slow attack, long tail, percussive, silent at C2, pitch moving, noise before the
+      first note, a blurred run. One patch = a full card (card.png); several = a contact sheet of
+      compact cards to compare (cards.png). "+" starts the next plugin's presets:
+        wavelength card Vaporizer2 "SY Basic Hypersaw" "LD Mighty Lead" + Zebralette3 "Four by Two"
+      --json has the measurements per patch; --probe DIR keeps the probe's job, stems and report.
   wavelength timeline <job.json> [--every BARS] [--json]
       Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
       included), in song seconds and in file time (after the lead-in), with the tempo there,
@@ -233,6 +244,7 @@ const Summary kSummaries[] = {
     {"Find sounds", "presets", "A plugin's presets, to use by name"},
     {"Find sounds", "samples", "Sample libraries: multisamples, kits, SFZ, SoundFonts"},
     {"Find sounds", "audition", "Render every preset once and tag how it sounds"},
+    {"Find sounds", "card", "Picture of how presets sound: one full card, or a sheet to compare"},
     {"Find sounds", "compat", "Test every plugin: loads, renders, presets, state"},
     {"Find sounds", "params", "A plugin's parameters and their display text"},
     {"Find sounds", "state", "Save a preset from a state and parameter values"},

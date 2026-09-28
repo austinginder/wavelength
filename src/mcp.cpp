@@ -131,6 +131,19 @@ json tools() {
         "Draws a job's arrangement before rendering (sections, bars, every track's notes) and returns the image; the render tool "
         "draws the full picture with levels and spectrum.",
         {{"job", prop("string", "path to job.json")}, {"width", prop("number", "pixels, 800-3200 (default 1400)")}}, {"job"}, writes));
+    list.push_back(tool("patch_card", "See how presets sound",
+        "Plays each patch through one probe (a held C4, C2-C5, a C minor chord, 16ths) and returns a picture: one patch = a full card "
+        "(the held note's spectrum with note names and harmonics, level, attack and tail, pitch over time, waveform, the four octaves, "
+        "the chord and the run), several = a contact sheet to compare. With the numbers and flags: the note it really sounds (and the "
+        "transpose that fixes it), slow attack, long tail, percussive, silent low notes, noise before the first note. Use it to choose "
+        "sounds before writing them into a job.",
+        {{"patches", {{"type", "array"}, {"description", "the patches to draw"},
+                      {"items", {{"type", "object"}, {"properties", {{"plugin", prop("string", "the plugin's name or id, or builtin:synth")},
+                                                                     {"preset", prop("string", "a preset name (none: the default sound)")}}},
+                                 {"required", {"plugin"}}}}}},
+         {"out", prop("string", "the PNG to write (default: in Wavelength's cache folder)")},
+         {"width", prop("number", "pixels, 800-3200 (default 1400)")}},
+        {"patches"}, writes));
     list.push_back(tool("analyze", "Measure audio",
         "Measures a WAV, or a render folder (its mix, every stem and section): pitch, brightness, band balance, stereo width, "
         "onsets and envelope, and with peaks the strongest spectral peaks. For what the report doesn't say: an octave, a harsh band.",
@@ -486,6 +499,31 @@ private:
             if (a.contains("width") && a["width"].is_number()) { args.push_back("--width"); args.push_back(numArg(a["width"])); }
             if (!run(args, id, progress, 120, out, fail)) return fail;
             Result r = text("arrangement: " + out.value("file", ""));
+            r.content.push_back(image(out.value("file", "")));
+            return r;
+        }
+        if (name == "patch_card") {
+            if (!a.contains("patches") || !a["patches"].is_array() || a["patches"].empty()) return text("patches: give at least one {plugin, preset}", true);
+            std::vector<std::string> args = {"card"};
+            for (auto &p : a["patches"]) {
+                if (!p.is_object() || str(p, "plugin").empty()) return text("patches: every entry needs a plugin", true);
+                if (args.size() > 1) args.push_back("+");
+                args.push_back(str(p, "plugin"));
+                if (!str(p, "preset").empty()) args.push_back(str(p, "preset"));
+            }
+            std::string file = str(a, "out");
+            if (file.empty()) {
+                std::error_code ec;
+                const auto dir = platform::cacheDir() / "cards";
+                std::filesystem::create_directories(dir, ec);
+                file = (dir / ("card-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + ".png")).string();
+            }
+            args.insert(args.end(), {"--out", file, "--json"});
+            if (a.contains("width") && a["width"].is_number()) { args.push_back("--width"); args.push_back(numArg(a["width"])); }
+            if (!run(args, id, progress, 900, out, fail)) return fail;
+            json summary = out;
+            for (auto &p : summary["patches"]) p.erase("held");   // the picture shows it; keep the summary short
+            Result r = text(summary.dump(1));
             r.content.push_back(image(out.value("file", "")));
             return r;
         }

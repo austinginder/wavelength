@@ -43,6 +43,7 @@
 #include "vst2_plugin.hpp"
 #include "vst3_plugin.hpp"
 #include "job.hpp"
+#include "card.hpp"
 #include "picture.hpp"
 #include "docs.hpp"
 #include "fallback.hpp"
@@ -1447,6 +1448,49 @@ int cmdPicture(const Args &a) {
     return 0;
 }
 
+int cmdCard(const Args &a) {
+    const char *usage = "usage: wavelength card <plugin> [<preset>...] [+ <plugin> [<preset>...]]... [--state FILE] [--out FILE.png] [--width PX] [--jobs N] [--probe DIR] [--json]";
+    if (a.positional.size() < 2) return fail(a, usage);
+    CardOptions o;
+    std::string plugin;
+    bool wantPlugin = true, hadPreset = false;
+    auto flush = [&] { if (!plugin.empty() && !hadPreset) o.items.push_back({plugin, "", ""}); };
+    for (size_t i = 1; i < a.positional.size(); ++i) {
+        const std::string &s = a.positional[i];
+        if (s == "+") { flush(); wantPlugin = true; continue; }
+        if (wantPlugin) { plugin = s; wantPlugin = false; hadPreset = false; continue; }
+        o.items.push_back({plugin, s, ""});
+        hadPreset = true;
+    }
+    flush();
+    if (o.items.empty()) return fail(a, usage);
+    if (a.has("--state")) {
+        if (o.items.size() != 1 || !o.items[0].preset.empty()) return fail(a, "--state draws one plugin: wavelength card <plugin> --state FILE");
+        o.items[0].state = a.get("--state");
+    }
+    o.out = a.get("--out", o.items.size() == 1 ? "card.png" : "cards.png");
+    o.width = std::atoi(a.get("--width", "1400").c_str());
+    if (a.has("--jobs")) o.jobs = std::atoi(a.get("--jobs").c_str());
+    o.keep = a.get("--probe");
+    o.verbose = a.has("--verbose");
+    json rep;
+    std::string err;
+    if (!makeCards(o, rep, err)) return fail(a, err);
+    if (a.has("--json")) { emit(rep.dump(2)); return 0; }
+    std::fprintf(OUT, "%s (%d x %d)\n", rep["file"].get<std::string>().c_str(), rep["width"].get<int>(), rep["height"].get<int>());
+    for (auto &p : rep["patches"]) {
+        std::string name = p.value("preset", p.value("state", std::string("default")));
+        std::fprintf(OUT, "  %s / %s: ", p.value("name", std::string()).c_str(), name.c_str());
+        if (!p.value("ok", false)) { std::fprintf(OUT, "failed: %s\n", p.value("error", std::string()).c_str()); continue; }
+        const json &h = p["held"];
+        std::fprintf(OUT, "C4 sounds %s, %.1f LUFS, attack %.0f ms, tail %.2f s, width %.2f, brightness %.0f Hz\n",
+                     p["sounds"].is_string() ? p["sounds"].get<std::string>().c_str() : "no pitch", h.value("lufs", -120.0),
+                     p.value("attackMs", 0.0), p.value("tailMs", 0.0) / 1000, h["stereo"].value("width", 0.0), h["spectrum"].value("centroidHz", 0.0));
+        for (auto &f : p["flags"]) std::fprintf(OUT, "      %s\n", f.get<std::string>().c_str());
+    }
+    return 0;
+}
+
 int cmdTimeline(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength timeline <job.json> [--every BARS] [--json]");
     const std::string path = a.positional[1];
@@ -1821,6 +1865,7 @@ int run(int argc, char **argv) {
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},
             {"timeline", {"--every", "--json"}},
             {"picture", {"--out", "--width", "--json"}},
+            {"card", {"--out", "--width", "--state", "--jobs", "--probe", "--json", "--verbose"}},
             {"docs", {"--section", "--json"}},
             {"kit", {"--force", "--json"}},
             {"mcp", {}},
@@ -1863,6 +1908,7 @@ int run(int argc, char **argv) {
         }
         if (cmd == "timeline") return cmdTimeline(a);
         if (cmd == "picture") return cmdPicture(a);
+        if (cmd == "card") return cmdCard(a);
         if (cmd == "docs") return cmdDocs(a);
         if (cmd == "kit") return cmdKit(a);
         if (cmd == "mcp") return runMcp(OUT);

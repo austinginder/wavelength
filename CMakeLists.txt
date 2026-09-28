@@ -188,7 +188,8 @@ add_executable(wavelength
   src/encode.cpp
   src/audio_codecs.cpp
   src/image_codecs.cpp
-  src/picture.cpp)
+  src/picture.cpp
+  src/card.cpp)
 # the single-file decoders compile inside audio_codecs.cpp; their own warnings are not ours
 set_source_files_properties(src/audio_codecs.cpp src/image_codecs.cpp PROPERTIES COMPILE_OPTIONS "-w")
 # "-dev" between releases; cleared when a release is cut
