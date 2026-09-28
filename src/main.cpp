@@ -94,7 +94,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks", "--check", "--help"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--help"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1114,6 +1114,7 @@ int cmdRender(const Args &a) {
     job.sourcePath = subsetPath.empty() ? fs::absolute(path).string() : subsetPath;
     for (size_t k = 0; k < stemNumbers.size() && k < job.tracks.size(); ++k) job.tracks[k].stemNumber = stemNumbers[k];
     if (a.has("--jobs")) job.parallel = std::atoi(a.get("--jobs").c_str());
+    job.trackCache = a.has("--cache");
     if (a.has("--level-from")) {   // play at the level of an earlier render (a full mix): its master gains, not a new target
         std::ifstream rin(a.get("--level-from"));
         json rep;
@@ -1185,6 +1186,7 @@ int cmdRender(const Args &a) {
                           {"latencyCompensatedMs", std::round(t.latencySamples * 1000.0 / r.sampleRate * 100) / 100},
                           {"sections", labelled(t.sectionLufs)}, {"sectionLufs", bare(t.sectionLufs)},
                           {"levels", levelsJson(t.levels)}, {"automation", t.automation}, {"warnings", t.warnings}});
+    for (size_t i = 0; i < r.tracks.size(); ++i) if (r.tracks[i].cached) tracks[i]["cached"] = true;
     json buses = json::array();
     for (auto &b : r.buses)
         buses.push_back({{"name", b.name}, {"fx", b.fx}, {"file", b.file}, {"lufs", r1(b.lufs)}, {"sections", labelled(b.sectionLufs)},
@@ -1843,7 +1845,7 @@ int run(int argc, char **argv) {
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
             {"compat", {"--format", "--jobs", "--presets", "--timeout", "--report", "--rebuild", "--json", "--verbose"}},
-            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop", "--keep", "--fallbacks"}},
+            {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--loop", "--keep", "--fallbacks", "--cache"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
             {"import", {"--out", "--json", "--bitwig", "--instrument", "--list"}},

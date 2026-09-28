@@ -55,7 +55,7 @@ Usage:
       prints the plugin's display text for a plain value (or the value it reads for display
       text, "Name=800 Hz", or a note name); --map "Name" tabulates value -> display across the
       range (21 rows, or --steps N). Neither changes anything.
-  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--from BAR --to BAR [--loop]] [--png] [--keep] [--fallbacks] [--json] [--verbose]
+  wavelength render <job.json> [--out DIR] [--stems float|24|16|none] [--deliver mp3,flac,...] [--jobs N] [--tracks "A,B"] [--level-from report.json] [--from BAR --to BAR [--loop]] [--png] [--keep] [--fallbacks] [--cache] [--json] [--verbose]
       Render a job to DIR/stems/*.wav and DIR/mix.wav (default DIR: ./out). Plugin tracks render
       in worker processes, N at once (default: half the cores, up to 4; --jobs 0 = one process);
       a worker whose plugin crashes is started again (job "retries", default 2); a track that
@@ -81,6 +81,11 @@ Usage:
       go to render/ and the manifest's "render" names them, so the song can be heard without rendering.
       --fallbacks plays every track's first available fallback, as a computer without its plugins would
       (`wavelength fallbacks --suggest` proposes them).
+      --cache reuses each track whose audio can't have changed since an earlier --cache render (its
+      notes, sound, effects and files, the tempo and the window): a mixer change (gain, pan, mute,
+      sends, rides) renders no track again, a note change renders that track. The report marks reused
+      tracks "cached". A plugin update or a changed preset file named by "preset" isn't noticed. Kept
+      in the cache folder (tracks/), oldest first out past $WAVELENGTH_TRACK_CACHE_GB (default 4).
       --deliver mp3,flac (mp3:256, flac:16, wav:16, wav:24; none) replaces the job's "deliver": files
       written next to mix.wav, decoded again and measured (report mix.deliveries). MP3 needs LAME
       (libmp3lame, or $WAVELENGTH_LAME; "none" = use ffmpeg) or ffmpeg. --tracks and --from renders skip it.

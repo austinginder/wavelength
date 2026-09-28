@@ -304,6 +304,34 @@ if (cd out/check/song && "$w" save -m first >/dev/null && "$w" render job.json -
 else
   echo "FAIL song format"; fail=1
 fi
+# render --cache: a second render reuses every track (the same mix), a mixer change renders none, a note change
+# renders only that track
+rm -rf out/check/cache && mkdir -p out/check/cache && cp examples/synth-tour.json out/check/cache/job.json
+if (cd out/check/cache && python3 -c 'import json;j=json.load(open("job.json"));j["cacheCheck"]=__import__("time").time();json.dump(j,open("job.json","w"))' &&
+    "$w" render job.json --cache --stems none --out a --json > a.json 2>/dev/null && "$w" render job.json --cache --stems none --out b --json > b.json 2>/dev/null &&
+    python3 -c 'import json;j=json.load(open("job.json"));t=j["tracks"][0];t["gain"]=t.get("gain",0)-3;t["pan"]=0.4;json.dump(j,open("mix.json","w"))' &&
+    "$w" render mix.json --cache --stems none --out c --json > c.json 2>/dev/null &&
+    python3 -c 'import json;j=json.load(open("job.json"));n=j["tracks"][1]["notes"][0];n["key"]=(n["key"] if isinstance(n["key"],int) else 60)+1;json.dump(j,open("note.json","w"))' &&
+    "$w" render note.json --cache --stems none --out d --json > d.json 2>/dev/null &&
+    python3 - <<'PY'
+import json, struct, sys
+def mix(p):
+    f = open(p + "/mix.wav", "rb").read(); i = 12
+    while i < len(f):
+        n = struct.unpack("<I", f[i + 4:i + 8])[0]
+        if f[i:i + 4] == b"data": return struct.unpack("<%df" % (n // 4), f[i + 8:i + 8 + n])
+        i += 8 + n + (n & 1)
+cached = lambda p: [t.get("cached", False) for t in json.load(open(p))["tracks"]]
+a, b, c, d = cached("a.json"), cached("b.json"), cached("c.json"), cached("d.json")
+same = max(abs(x - y) for x, y in zip(mix("a"), mix("b"))) < 1e-5
+ok = not any(a) and all(b) and all(c) and same and d[1] is False and all(x for k, x in enumerate(d) if k != 1)
+sys.exit(0 if ok else 1)
+PY
+); then
+  echo "ok   render --cache: reused tracks give the same mix, a mixer change renders none, a note change renders one"
+else
+  echo "FAIL render --cache"; fail=1
+fi
 # purge: a render's mix.wav, stems and preview cache go, an MP3 is made first, the song's other files stay,
 # and a second run finds nothing
 chmod -R u+w out/check/purge 2>/dev/null; rm -rf out/check/purge && mkdir -p out/check/purge/media && cp examples/synth-tour.json out/check/purge/job.json

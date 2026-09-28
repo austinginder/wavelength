@@ -1,4 +1,5 @@
 #include "render.hpp"
+#include "track_cache.hpp"
 
 #include "builtins.hpp"
 #include "picture.hpp"
@@ -623,6 +624,13 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         for (size_t i = 0; i < job.tracks.size(); ++i)
             if (!acyclic(i)) { err = "track '" + job.tracks[i].name + "': sidechain (or rendered-clip) sources form a loop"; return false; }
     }
+    // render --cache: a key per track for what shapes its audio (a track that renders others into a clip isn't cached)
+    std::vector<std::string> cacheKeys;
+    if (job.trackCache) {
+        std::set<size_t> uncached;
+        for (auto &c : captures) uncached.insert(c.track);
+        cacheKeys = trackcache::keys(job, deps, uncached, frames);
+    }
     FxContext ctx{job, verbose, [&](const std::string &name) -> const Audio * {
         auto it = byName.find(name);
         if (it == byName.end()) return nullptr;
@@ -806,6 +814,23 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         for (size_t i = 0; i < job.tracks.size() && !failed; ++i) {
             if (trackDone[i] || started[i] || !ready(i)) continue;
             const Track &track = job.tracks[i];
+            if (!cacheKeys.empty() && !cacheKeys[i].empty()) {   // unchanged since an earlier render: its audio as it was
+                const auto tt = std::chrono::steady_clock::now();
+                nlohmann::json res;
+                Audio audio;
+                if (trackcache::load(cacheKeys[i], frames, audio, res)) {
+                    started[i] = true;
+                    progressed = true;
+                    TrackResult &tr = trackResults[i];
+                    tr.name = track.name;
+                    trackFromJson(res, tr);
+                    tr.cached = true;
+                    if (!finish(i, audio)) { failed = true; break; }
+                    tr.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - tt).count();
+                    progress(track.name);
+                    continue;
+                }
+            }
             if (isolate && !isBuiltin(track.plugin)) {   // plugin tracks: a worker process each
                 if (running.size() < (size_t)parallel) {
                     startTrack(i);
@@ -825,7 +850,9 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             progress(track.name);
             std::map<size_t, Audio> rendered;   // this track's render clips, by clip index
             for (auto &c : captures) if (c.track == i) rendered[c.clip] = std::move(c.audio);
-            if (!renderTrackAudio(job, i, trackChains[i], ctx, audio, tr, verbose, err, &rendered) || !finish(i, audio)) { failed = true; break; }
+            if (!renderTrackAudio(job, i, trackChains[i], ctx, audio, tr, verbose, err, &rendered)) { failed = true; break; }
+            if (!cacheKeys.empty()) trackcache::store(cacheKeys[i], audio, trackToJson(tr));
+            if (!finish(i, audio)) { failed = true; break; }
             tr.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - tt).count();
         }
         if (failed) break;
@@ -863,6 +890,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 pin.read(reinterpret_cast<char *>(audio.right.data()), (std::streamsize)(frames * sizeof(float)));
                 if (!pin) { err = "track '" + tr.name + "': worker output is incomplete"; failed = true; }
                 else if (!finish(i, audio)) failed = true;
+                else if (!cacheKeys.empty()) { pin.close(); trackcache::storeFiles(cacheKeys[i], prefix); }
             } else if (res.is_object() && res.contains("error")) {   // a job mistake (unknown preset, bad state): the render fails
                 err = res["error"].get<std::string>();
                 failed = true;
@@ -903,6 +931,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     }
     cleanup();
     if (failed) return false;
+    if (job.trackCache) trackcache::prune();
     for (auto &tr : trackResults) result.tracks.push_back(std::move(tr));
     progress("buses and master");
     if (!job.window.on) {   // a window is too short to judge the mix or the arrangement

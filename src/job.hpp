@@ -55,6 +55,7 @@ struct Track {
     std::string output;                                          // bus to feed instead of the master ("" = master)
     std::vector<std::pair<std::string, Envelope>> sendAutomation;   // bus name → send dB over time
     std::vector<std::string> warnings;                           // found while parsing (range, articulations)
+    nlohmann::json source;                                       // the track as parsed (after note edits): the render cache's key
 };
 
 struct Bus {
@@ -127,6 +128,9 @@ struct Job {
     int retries = 2;            // times a worker whose plugin crashed is started again before the track counts as failed
     bool picture = false;       // render --png / "picture": draw song.png next to mix.wav
     int pictureWidth = 1400;
+    bool trackCache = false;    // render --cache: reuse tracks whose audio can't have changed (track_cache.hpp)
+    nlohmann::json settings;    // the job's top-level settings as parsed (defaults and window included), without
+                                // tracks, buses, master and the report-only keys: what every track's audio shares
 };
 
 // `useDefaults`: fill in the user's job defaults (off for jobs Wavelength builds internally).

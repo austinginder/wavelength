@@ -27,6 +27,7 @@ struct TrackResult {
     // of the side signal, and the sums behind the left/right correlation
     std::vector<float> lowMid, lowSide;
     double sumLR = 0, sumLL = 0, sumRR = 0;
+    bool cached = false;   // render --cache: the track's audio came from the track cache
 };
 
 struct BusResult {
