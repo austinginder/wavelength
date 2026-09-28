@@ -831,6 +831,13 @@
 		if (d.toSec(Math.max(...ns.map(n => n[0]))) - d.toSec(t0) > 8) return hearInfo('Pick fewer notes to hear (8 seconds at most).', true);
 		hear(ti, ns.map(n => ({ key: n[2], vel: n[3], start: d.toSec(n[0]) - d.toSec(t0), dur: Math.min(4, d.toSec(n[0] + n[1]) - d.toSec(n[0])) })));
 	}
+	// the earliest note of a selection (the lowest when several start together), where it is after the draft moves
+	function firstNote(list) {
+		return list.reduce((best, q) => {
+			const n = eff(q.t, q.n), m = eff(best.t, best.n);
+			return n[0] < m[0] - 1e-9 || (Math.abs(n[0] - m[0]) < 1e-9 && n[2] < m[2]) ? q : best;
+		});
+	}
 	function hearEdits() {
 		hearNotes([...E.edits.keys()].map(k => { const [t, n] = k.split(':').map(Number); return { t, n }; }));
 	}
@@ -958,7 +965,7 @@
 				if (!ed.dk && !ed.db) E.edits.delete(id); else E.edits.set(id, ed);
 			}
 			editsChanged();
-			if (dk) hearNotes(E.sel.notes);
+			if (dk) hearNotes(E.sel.notes.length > 1 ? [firstNote(E.sel.notes)] : E.sel.notes);   // a group: its first note is enough
 			return;
 		}
 		if (e.code === 'Space') { e.preventDefault(); $d('#ed-play').click(); }
@@ -1031,8 +1038,18 @@
 			else fetch('api/review?song=' + encodeURIComponent(state.slug)).then(r => r.json()).then(r => { E.comments = r.comments || []; badge(); }).catch(() => {});
 		},
 		redraw() { dirty(); if (dlg?.open) syncAudioSelect(); },
-		// select beats b0..b1 (whole bars), as dragging across the ruler does
-		select(b0, b1) { if (!E.data) return; const bpb = E.data.bpb; E.sel = { b0: Math.floor(b0 / bpb) * bpb, b1: Math.ceil(b1 / bpb) * bpb, tracks: new Set(), notes: [] }; selChanged(); },
+		// select beats b0..b1 (whole bars), as dragging across the ruler does; with track names, their notes there too
+		select(b0, b1, tracks = []) {
+			if (!E.data) return;
+			const bpb = E.data.bpb, sel = { b0: Math.floor(b0 / bpb) * bpb, b1: Math.ceil(b1 / bpb) * bpb, tracks: new Set(), notes: [] };
+			for (const name of tracks) {
+				const t = E.data.tracks.findIndex(x => x.name === name);
+				if (t < 0) continue;
+				sel.tracks.add(t);
+				E.data.tracks[t].beatsNotes.forEach((n, i) => { if (n[0] >= sel.b0 && n[0] < sel.b1) sel.notes.push({ t, n: i }); });
+			}
+			E.sel = sel; selChanged();
+		},
 		reset() { E.sel = { b0: null, b1: null, tracks: new Set(), notes: [] }; E.expanded = new Set(); E.edits = new Map(); E.adds = []; E.keys.track = null; E.harmony = null; E.comments = []; E.loop = false; badge(); },
 	};
 })();

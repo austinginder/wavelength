@@ -31,6 +31,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - Reaktor 6 ensembles load by name: every `.ens` and `.rkplr` in Native Instruments' installed libraries (found through the ContentDir NI's installers register) and the user's Ensembles folder, with its snapshots (`"preset": "Lazerbass"`, `"The Needle"`, `"Carbon 2/AphexTone"`), in the VST3, VST2 and AU builds. As `state`, an ensemble file is the new `reaktor` format (`"<ensemble>.ens#<snapshot>"` picks a snapshot): Wavelength writes a Reaktor state that points at the file, and Reaktor opens it itself. Snapshots come from each ensemble's first bank (the one Reaktor lists as programs).
 
 ### Changed
+- `serve` editor: moving a group of notes with the arrow keys previews only its first note (the earliest; the lowest when several start together) instead of playing every selected note on each key press. A single note still sounds as it moves, and "Hear these notes" plays the whole selection. `WLEditor.select(b0, b1, tracks)` also selects those tracks' notes in the bars.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
