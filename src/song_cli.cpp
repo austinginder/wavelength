@@ -45,7 +45,7 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"validate", {{"--json", false}}},
     {"fallbacks", {{"--json", false}, {"--suggest", false}, {"--write", false}, {"--no-measure", false}}},
     {"migrate", {{"--json", false}, {"--license", true}, {"--author", true}, {"--dry-run", false}, {"--no-copy", false}}},
-    {"purge", {{"--json", false}, {"--dry-run", false}}},
+    {"purge", {{"--json", false}, {"--dry-run", false}, {"--masters", false}}},
     {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
 };
 
@@ -586,6 +586,7 @@ int cmdMigrate(const CliArgs &a, const Out &o) {
 int cmdPurge(const CliArgs &a, const Out &o) {
     purge::Options opt;
     opt.dryRun = a.has("--dry-run");
+    opt.masters = a.has("--masters");
     std::vector<std::string> folders(a.pos.begin() + 1, a.pos.end());
     json r;
     std::string err;
@@ -605,6 +606,7 @@ int cmdPurge(const CliArgs &a, const Out &o) {
         const int previews = e.value("previews", 0);
         if (previews) what += (what.empty() ? "" : ", ") + std::to_string(previews) + (previews == 1 ? " preview" : " previews");
         if (e.value("preview", false)) what = "preview cache";
+        if (e.value("master", false)) what = "master: " + what;
         if (e.contains("madeMp3")) what += std::string(opt.dryRun ? ", would make " : ", made ") + e["madeMp3"].get<std::string>() +
                                          (e.value("replacedMp3", false) ? " (the one there is from an older render)" : "");
         const std::string size = purge::bytesText(e["bytes"].get<double>());
@@ -620,6 +622,12 @@ int cmdPurge(const CliArgs &a, const Out &o) {
     if (made) line += std::string(opt.dryRun ? " (would make " : " (made ") + std::to_string(made) + (made == 1 ? " MP3" : " MP3s") + " first, so each still plays)";
     if (!n) line = opt.dryRun ? "nothing to purge" : "nothing to purge: no render WAVs here";
     done(o, line);
+    if (r["mastersKept"]["count"].get<int>()) {
+        const int m = r["mastersKept"]["count"].get<int>();
+        const std::string text = "kept " + std::to_string(m) + (m == 1 ? " master" : " masters") + " (`wavelength master` outputs, " +
+                                 purge::bytesText(r["mastersKept"]["bytes"].get<double>()) + "): --masters deletes them too, after making an MP3";
+        std::fprintf(o.f, "%s\n", (st.on ? st.dim(text) : text).c_str());
+    }
     const json &other = r["otherWav"];
     if (other["files"].get<size_t>()) {
         std::string where;

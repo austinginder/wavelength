@@ -26,13 +26,16 @@ std::string lower(std::string s) {
     return s;
 }
 
-// A render's report: the object `render` writes (a mix and its tracks), not any report.json
-bool readReport(const fs::path &p, json &rep) {
+// The report a render wrote ("mix" and its "tracks") or `wavelength master` wrote ("input" and "output"),
+// not any report.json. `mixKey` names the object that holds the mix file and its deliveries.
+bool readReport(const fs::path &p, json &rep, std::string &mixKey) {
     std::ifstream in(p, std::ios::binary);
     if (!in) return false;
     rep = json::parse(in, nullptr, false);
-    return !rep.is_discarded() && rep.is_object() && rep.contains("mix") && rep["mix"].is_object() && rep.contains("tracks") &&
-           rep["tracks"].is_array();
+    if (rep.is_discarded() || !rep.is_object()) return false;
+    if (rep.contains("mix") && rep["mix"].is_object() && rep.contains("tracks") && rep["tracks"].is_array()) { mixKey = "mix"; return true; }
+    if (rep.contains("output") && rep["output"].is_object() && rep.contains("input") && rep.contains("masterFx")) { mixKey = "output"; return true; }
+    return false;
 }
 
 std::string key(const fs::path &p) {
@@ -90,8 +93,8 @@ void protect(const fs::path &songDir, std::set<std::string> &keep) {
 
 // An MP3 of this render (not an older one left in the folder): one its report lists as a delivery, or
 // one written after its mix.wav.
-bool currentMp3(const fs::path &dir, const fs::path &mix, const json &rep) {
-    for (auto &d : rep["mix"].value("deliveries", json::array()))
+bool currentMp3(const fs::path &dir, const fs::path &mix, const json &out) {
+    for (auto &d : out.value("deliveries", json::array()))
         if (d.is_object() && d.value("format", std::string()) == "mp3" &&
             plainFile(dir / fs::u8path(d.value("file", std::string())).filename()))
             return true;
@@ -169,12 +172,14 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
     json list = json::array(), skipped = json::array();
     std::map<std::string, size_t> at;   // render folder -> its entry in `list` (previews fold into their render)
     std::set<std::string> renderKeys;   // every file found as render output (purged or skipped): not "left alone"
-    double freed = 0;
-    int mp3s = 0;
+    double freed = 0, masterBytes = 0;
+    int mp3s = 0, masters = 0;
     for (auto &f : renders) {
         const fs::path &R = f.dir;
         json rep;
-        if (!readReport(R / "report.json", rep)) continue;   // some other report.json
+        std::string mk;
+        if (!readReport(R / "report.json", rep, mk)) continue;   // some other report.json
+        const bool master = mk == "output";
         const bool preview = R.parent_path().filename() == "preview";
         std::vector<fs::path> files;
         auto add = [&](const fs::path &p) {
@@ -182,11 +187,11 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
             for (auto &q : files) if (q == p) return;
             files.push_back(p);
         };
-        std::string mixName = fs::u8path(rep["mix"].value("file", std::string())).filename().u8string();
+        std::string mixName = fs::u8path(rep[mk].value("file", std::string())).filename().u8string();
         if (lower(fs::u8path(mixName).extension().string()) != ".wav") mixName = "mix.wav";
         const fs::path mix = R / fs::u8path(mixName);
         add(mix);
-        for (auto &d : rep["mix"].value("deliveries", json::array()))   // lossless deliveries: FLAC, 16/24-bit WAV
+        for (auto &d : rep[mk].value("deliveries", json::array()))   // lossless deliveries: FLAC, 16/24-bit WAV
             if (d.is_object() && d.value("format", std::string()) != "mp3" && !d.value("file", std::string()).empty())
                 add(R / fs::u8path(d.value("file", std::string())).filename());
         std::set<std::string> stems;
@@ -203,6 +208,11 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
         if (preview) { add(R / "report.json"); add(R / "song.png"); }   // a cache entry goes whole
         if (files.empty()) continue;
         for (auto &p : files) renderKeys.insert(key(p));
+        if (master && !opt.masters) {   // a finished master: kept unless asked
+            ++masters;
+            for (auto &p : files) masterBytes += sizeOf(p);
+            continue;
+        }
 
         double newest = 1e12;
         for (auto &p : files) newest = std::min(newest, ageSeconds(p));
@@ -213,9 +223,10 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
         }
 
         json e = {{"dir", shown(R, f.root)}, {"removed", json::array()}, {"bytes", 0}, {"previews", 0}};
+        if (master) e["master"] = true;
         // a render that would be left without anything to play gets an MP3 of its mix first
         const bool mixGoes = std::find(files.begin(), files.end(), mix) != files.end();
-        if (!preview && mixGoes && !currentMp3(R, mix, rep)) {
+        if (!preview && mixGoes && !currentMp3(R, mix, rep[mk])) {
             if (plainFile(R / "mix.mp3")) e["replacedMp3"] = true;   // an older render's: it would play the wrong mix
             if (opt.dryRun) { e["madeMp3"] = "mix.mp3"; ++mp3s; }
             else {
@@ -227,13 +238,13 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
                 std::vector<std::string> warnings;
                 bool ok = readAudio(mix.string(), a, sr, why) && parseDeliverySpec("mp3", spec, why);
                 spec.file = "mix.mp3";
-                const double peak = rep["mix"].contains("truePeakDb") && rep["mix"]["truePeakDb"].is_number() ? rep["mix"]["truePeakDb"].get<double>() : -120.0;
+                const double peak = rep[mk].contains("truePeakDb") && rep[mk]["truePeakDb"].is_number() ? rep[mk]["truePeakDb"].get<double>() : -120.0;
                 ok = ok && writeDeliveries({spec}, a, sr, 0, 0, R.string(), mix.string(), peak, made, warnings, why);
                 if (ok && !made.empty()) {
                     e["madeMp3"] = "mix.mp3";
                     ++mp3s;
-                    if (!rep["mix"].contains("deliveries") || !rep["mix"]["deliveries"].is_array()) rep["mix"]["deliveries"] = json::array();
-                    for (auto &d : deliveriesJson(made)) rep["mix"]["deliveries"].push_back(d);
+                    if (!rep[mk].contains("deliveries") || !rep[mk]["deliveries"].is_array()) rep[mk]["deliveries"] = json::array();
+                    for (auto &d : deliveriesJson(made)) rep[mk]["deliveries"].push_back(d);
                 } else {   // nothing to play without it: keep the WAV
                     files.erase(std::remove(files.begin(), files.end(), mix), files.end());
                     e["keptMix"] = true;
@@ -301,6 +312,7 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
         top.push_back({{"dir", shown(d, root)}, {"bytes", big[i].first}});
     }
     r = {{"ok", true}, {"dryRun", opt.dryRun}, {"renders", list}, {"skipped", skipped}, {"freedBytes", freed}, {"mp3sMade", mp3s},
+         {"mastersKept", {{"count", masters}, {"bytes", masterBytes}}},
          {"otherWav", {{"files", otherFiles}, {"bytes", otherBytes}, {"folders", top}}}};
     return true;
 }
