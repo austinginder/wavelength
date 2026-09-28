@@ -20,7 +20,7 @@ struct Options {
 };
 
 // Purges every render folder under `folders` (default "."). `r`: {"ok", "dryRun", "renders": [{"dir",
-// "removed": [..], "bytes", "previews", "master", "madeMp3", "replacedMp3", "keptMix", "error"}], "skipped":
+// "removed": [..], "bytes", "previews", "master", "madeMp3", "replacedMp3", "keptMix", "errors": [..]}], "skipped":
 // [{"dir", "why"}], "freedBytes", "mp3sMade", "mastersKept": {"count", "bytes"}, "otherWav": {"files",
 // "bytes", "folders": [{"dir", "bytes"}]}}.
 bool run(const std::vector<std::string> &folders, const Options &opt, nlohmann::json &r, std::string &err);

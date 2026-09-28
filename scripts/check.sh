@@ -306,14 +306,15 @@ else
 fi
 # purge: a render's mix.wav, stems and preview cache go, an MP3 is made first, the song's other files stay,
 # and a second run finds nothing
-rm -rf out/check/purge && mkdir -p out/check/purge/media && cp examples/synth-tour.json out/check/purge/job.json
+chmod -R u+w out/check/purge 2>/dev/null; rm -rf out/check/purge && mkdir -p out/check/purge/media && cp examples/synth-tour.json out/check/purge/job.json
 if (cd out/check/purge && "$w" render job.json --out out --stems 16 >/dev/null 2>&1 && cp out/mix.wav media/keep.wav &&
     mkdir -p out/preview/x && cp out/mix.wav out/report.json out/preview/x/ &&
     touch -t 202601010000 out/mix.wav out/report.json out/stems/*.wav out/preview/x/* &&
+    mkdir kept && cp -Rp out/mix.wav out/report.json kept/ && chmod -R a-w kept &&
     "$w" purge . --json | python3 -c 'import json,sys; r=json.load(sys.stdin); sys.exit(0 if r["mp3sMade"] == 1 and r["renders"][0]["previews"] == 1 else 1)' &&
     [ ! -e out/mix.wav ] && [ ! -e out/stems ] && [ ! -e out/preview ] && [ -s out/mix.mp3 ] && [ -s out/report.json ] && [ -s media/keep.wav ] &&
-    grep -q '"purged"' out/report.json && "$w" purge . | grep -q "nothing to purge"); then
-  echo "ok   purge: WAVs, stems and previews go, an MP3 first, other files stay, a second run finds nothing"
+    [ -s kept/mix.wav ] && grep -q '"purged"' out/report.json && "$w" purge . | grep -q "nothing to purge"); then
+  echo "ok   purge: WAVs, stems and previews go, an MP3 first, other files and read-only folders stay, a second run finds nothing"
 else
   echo "FAIL purge"; fail=1
 fi

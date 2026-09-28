@@ -612,7 +612,8 @@ int cmdPurge(const CliArgs &a, const Out &o) {
         const std::string size = purge::bytesText(e["bytes"].get<double>());
         std::fprintf(o.f, "  %s  %s  %s\n", (st.on ? st.bold(term::pad(e["dir"].get<std::string>(), 44)) : term::pad(e["dir"].get<std::string>(), 44)).c_str(),
                      term::pad(size, 8).c_str(), (st.on ? st.dim(what) : what).c_str());
-        if (e.contains("error")) std::fprintf(o.f, "%s%s\n", st.on ? ("    " + st.warn() + " ").c_str() : "    note: ", e["error"].get<std::string>().c_str());
+        for (auto &er : e.value("errors", json::array()))
+            std::fprintf(o.f, "%s%s\n", st.on ? ("    " + st.warn() + " ").c_str() : "    note: ", er.get<std::string>().c_str());
     }
     for (auto &s : r["skipped"])
         std::fprintf(o.f, "%s%s: %s\n", st.on ? (st.warn() + " ").c_str() : "skipped ", s["dir"].get<std::string>().c_str(), s["why"].get<std::string>().c_str());

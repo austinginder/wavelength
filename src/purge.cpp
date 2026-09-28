@@ -214,6 +214,16 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
             continue;
         }
 
+        auto readOnly = [](const fs::path &d) {
+            std::error_code ec;
+            const auto st = fs::status(d, ec);
+            return !ec && (st.permissions() & fs::perms::owner_write) == fs::perms::none;
+        };
+        std::error_code sec;
+        if (readOnly(R) || (fs::is_directory(R / "stems", sec) && readOnly(R / "stems"))) {   // preserved on purpose
+            skipped.push_back({{"dir", shown(R, f.root)}, {"why", "read-only folder: left as it is"}});
+            continue;
+        }
         double newest = 1e12;
         for (auto &p : files) newest = std::min(newest, ageSeconds(p));
         newest = std::min(newest, ageSeconds(R / "report.json"));
@@ -222,7 +232,7 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
             continue;
         }
 
-        json e = {{"dir", shown(R, f.root)}, {"removed", json::array()}, {"bytes", 0}, {"previews", 0}};
+        json e = {{"dir", shown(R, f.root)}, {"removed", json::array()}, {"bytes", 0}, {"previews", 0}, {"errors", json::array()}};
         if (master) e["master"] = true;
         // a render that would be left without anything to play gets an MP3 of its mix first
         const bool mixGoes = std::find(files.begin(), files.end(), mix) != files.end();
@@ -248,7 +258,7 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
                 } else {   // nothing to play without it: keep the WAV
                     files.erase(std::remove(files.begin(), files.end(), mix), files.end());
                     e["keptMix"] = true;
-                    e["error"] = "kept " + mixName + ": no MP3 could be made (" + (why.empty() ? "no encoder" : why) + ")";
+                    e["errors"].push_back("kept " + mixName + ": no MP3 could be made (" + (why.empty() ? "no encoder" : why) + ")");
                 }
             }
         }
@@ -257,7 +267,7 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
             const double n = sizeOf(p);
             std::error_code rm;
             if (!opt.dryRun) fs::remove(p, rm);
-            if (rm) { e["error"] = "cannot delete " + p.filename().u8string() + ": " + rm.message(); continue; }
+            if (rm) { e["errors"].push_back("cannot delete " + p.lexically_relative(R).generic_u8string() + ": " + rm.message()); continue; }
             bytes += n;
             e["removed"].push_back(p.lexically_relative(R).generic_u8string());
         }
@@ -269,10 +279,10 @@ bool run(const std::vector<std::string> &folders, const Options &opt, json &r, s
                 if (fs::is_empty(R, rm) && !rm) fs::remove(R, rm);
                 rm.clear();
                 if (fs::is_empty(R.parent_path(), rm) && !rm) fs::remove(R.parent_path(), rm);
-            } else {   // the report says what went, so nobody looks for the files
+            } else if (!e["removed"].empty() || e.contains("madeMp3")) {   // the report says what went, so nobody looks for the files
                 rep["purged"] = {{"at", nowRfc3339()}, {"removed", e["removed"]}};
                 std::string why;
-                if (!writeText(R / "report.json", rep.dump(2, ' ', false, json::error_handler_t::replace) + "\n", why)) e["error"] = why;
+                if (!writeText(R / "report.json", rep.dump(2, ' ', false, json::error_handler_t::replace) + "\n", why)) e["errors"].push_back(why);
             }
         }
         e["bytes"] = bytes;
