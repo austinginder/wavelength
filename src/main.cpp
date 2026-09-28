@@ -767,19 +767,6 @@ int cmdParams(const Args &a) {
     return 0;
 }
 
-json deliveriesJson(const std::vector<Delivery> &ds) {
-    auto r1 = [](double v) { return std::round(v * 10) / 10; };
-    json out = json::array();
-    for (auto &d : ds) {
-        json o = {{"format", d.spec.format}, {"file", d.file}, {"encoder", d.encoder}, {"lufs", r1(d.lufs)},
-                  {"truePeakDb", r1(d.truePeakDb)}, {"overshootDb", r1(d.overshootDb)}};
-        if (d.spec.format == "mp3") o["bitrate"] = d.spec.bitrate;
-        else o["bits"] = d.spec.bits;
-        out.push_back(o);
-    }
-    return out;
-}
-
 // ---- master ----------------------------------------------------------------------------
 // A finished mix through a master chain, without re-rendering the song: the file plays on a
 // builtin:audio track and the chain runs as the job's master (loudness target included).

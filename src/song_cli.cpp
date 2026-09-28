@@ -9,6 +9,7 @@
 #include "songdiff.hpp"
 #include "term.hpp"
 #include "migrate.hpp"
+#include "purge.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -44,6 +45,7 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"validate", {{"--json", false}}},
     {"fallbacks", {{"--json", false}, {"--suggest", false}, {"--write", false}, {"--no-measure", false}}},
     {"migrate", {{"--json", false}, {"--license", true}, {"--author", true}, {"--dry-run", false}, {"--no-copy", false}}},
+    {"purge", {{"--json", false}, {"--dry-run", false}}},
     {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
 };
 
@@ -581,6 +583,55 @@ int cmdMigrate(const CliArgs &a, const Out &o) {
     return 0;
 }
 
+int cmdPurge(const CliArgs &a, const Out &o) {
+    purge::Options opt;
+    opt.dryRun = a.has("--dry-run");
+    std::vector<std::string> folders(a.pos.begin() + 1, a.pos.end());
+    json r;
+    std::string err;
+    if (!purge::run(folders, opt, r, err)) return o.fail(err);
+    if (o.json) { o.emit(r); return 0; }
+    const term::Style &st = term::out();
+    const std::string verb = opt.dryRun ? "would free" : "freed";
+    for (auto &e : r["renders"]) {
+        std::string what;
+        int stems = 0;
+        for (auto &f : e["removed"]) {
+            const std::string p = f.get<std::string>();
+            if (p.rfind("stems/", 0) == 0) ++stems;
+            else if (p != "report.json" && p != "song.png") what += (what.empty() ? "" : ", ") + p;
+        }
+        if (stems) what += (what.empty() ? "" : ", ") + std::to_string(stems) + (stems == 1 ? " stem" : " stems");
+        const int previews = e.value("previews", 0);
+        if (previews) what += (what.empty() ? "" : ", ") + std::to_string(previews) + (previews == 1 ? " preview" : " previews");
+        if (e.value("preview", false)) what = "preview cache";
+        if (e.contains("madeMp3")) what += std::string(opt.dryRun ? ", would make " : ", made ") + e["madeMp3"].get<std::string>() +
+                                         (e.value("replacedMp3", false) ? " (the one there is from an older render)" : "");
+        const std::string size = purge::bytesText(e["bytes"].get<double>());
+        std::fprintf(o.f, "  %s  %s  %s\n", (st.on ? st.bold(term::pad(e["dir"].get<std::string>(), 44)) : term::pad(e["dir"].get<std::string>(), 44)).c_str(),
+                     term::pad(size, 8).c_str(), (st.on ? st.dim(what) : what).c_str());
+        if (e.contains("error")) std::fprintf(o.f, "%s%s\n", st.on ? ("    " + st.warn() + " ").c_str() : "    note: ", e["error"].get<std::string>().c_str());
+    }
+    for (auto &s : r["skipped"])
+        std::fprintf(o.f, "%s%s: %s\n", st.on ? (st.warn() + " ").c_str() : "skipped ", s["dir"].get<std::string>().c_str(), s["why"].get<std::string>().c_str());
+    const size_t n = r["renders"].size();
+    const int made = r["mp3sMade"].get<int>();
+    std::string line = verb + " " + purge::bytesText(r["freedBytes"].get<double>()) + " in " + std::to_string(n) + (n == 1 ? " render" : " renders");
+    if (made) line += std::string(opt.dryRun ? " (would make " : " (made ") + std::to_string(made) + (made == 1 ? " MP3" : " MP3s") + " first, so each still plays)";
+    if (!n) line = opt.dryRun ? "nothing to purge" : "nothing to purge: no render WAVs here";
+    done(o, line);
+    const json &other = r["otherWav"];
+    if (other["files"].get<size_t>()) {
+        std::string where;
+        for (auto &f : other["folders"]) where += std::string(where.empty() ? "" : ", ") + f["dir"].get<std::string>() + " " + purge::bytesText(f["bytes"].get<double>());
+        const std::string text = "left alone: " + std::to_string(other["files"].get<size_t>()) + " other WAVs (" + purge::bytesText(other["bytes"].get<double>()) +
+                                 "): sources, files a song uses, masters, bounces. Biggest: " + where;
+        std::fprintf(o.f, "%s\n", (st.on ? st.dim(text) : text).c_str());
+    }
+    if (opt.dryRun && n) std::fprintf(o.f, "dry run: nothing deleted\n");
+    return 0;
+}
+
 } // namespace
 
 bool isSongCommand(const std::string &cmd) { return kCommands.count(cmd) > 0; }
@@ -602,6 +653,7 @@ int runSongCommand(int argc, char **argv, std::FILE *f) {
     if (cmd == "comments") return cmdComments(a, o);
     if (cmd == "migrate") return cmdMigrate(a, o);
     if (cmd == "fallbacks") return cmdFallbacks(a, o);
+    if (cmd == "purge") return cmdPurge(a, o);
     return cmdStep(a, o);
 }
 

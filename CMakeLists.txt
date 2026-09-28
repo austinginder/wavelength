@@ -167,6 +167,7 @@ add_executable(wavelength
   src/review.cpp
   src/package.cpp
   src/migrate.cpp
+  src/purge.cpp
   src/mcp.cpp
   src/render.cpp
   src/state_file.cpp

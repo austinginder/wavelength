@@ -177,6 +177,7 @@ A song is a folder: `wavelength.json` (title, authors, licence, the job and its 
 - Paths in the job are relative to the song. Files the job uses live in `media/`; installed sounds go by name (`"preset"`, a library's `kit`/`multisample`/`soundfont`, `lib:` samples). `wavelength migrate <song>` converts an older folder: it writes the manifest, fixes paths, names presets and library samples, and lists what it could not fix.
 - `render job.json --keep` keeps that render with the song (render/mix.mp3, song.png with `--png`, report.json). `wavelength pack <song>` makes one `.wavelength` file to share (it refuses files from outside the song and lists the plugins it needs); `unpack` and `render song.wavelength` open one.
 - Run `wavelength validate <song>` before sharing.
+- `wavelength purge [folder] [--dry-run]` frees the disk renders take: in every render folder under it (where a render wrote report.json) it deletes mix.wav, the stems, FLAC/WAV deliveries and the review page's preview cache, making mix.mp3 first when the render has no current MP3, so every song still plays. Reports, pictures, MP3s, the song's files (media/, render/, anything the job names) and WAVs no render wrote stay; renders from the last 5 minutes are skipped. Render again for stems.
 
 ## Reviewing with a human: `wavelength serve`
 

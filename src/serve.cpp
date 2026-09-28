@@ -473,6 +473,11 @@ json Server::startPreview(const std::string &slug, std::vector<std::string> trac
     const std::string id = fnv(sig);
     std::lock_guard<std::mutex> lock(mu_);
     auto it = previews_.find(id);
+    std::error_code gone;
+    if (it != previews_.end() && it->second.status == "ready" && !fs::exists(dir / it->second.path, gone)) {   // `purge` took it: render again
+        previews_.erase(it);
+        it = previews_.end();
+    }
     if (it != previews_.end() && it->second.status != "failed" && it->second.status != "cancelled") return previewJson(it->second);
     Preview p;
     p.id = id;

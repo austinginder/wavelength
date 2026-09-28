@@ -557,4 +557,17 @@ bool writeDeliveries(const std::vector<DeliverySpec> &specs, const Audio &mix, i
     return true;
 }
 
+nlohmann::json deliveriesJson(const std::vector<Delivery> &ds) {
+    auto r1 = [](double v) { return std::round(v * 10) / 10; };
+    nlohmann::json out = nlohmann::json::array();
+    for (auto &d : ds) {
+        nlohmann::json o = {{"format", d.spec.format}, {"file", d.file}, {"encoder", d.encoder}, {"lufs", r1(d.lufs)},
+                            {"truePeakDb", r1(d.truePeakDb)}, {"overshootDb", r1(d.overshootDb)}};
+        if (d.spec.format == "mp3") o["bitrate"] = d.spec.bitrate;
+        else o["bits"] = d.spec.bits;
+        out.push_back(o);
+    }
+    return out;
+}
+
 } // namespace wl

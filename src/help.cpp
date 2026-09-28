@@ -203,6 +203,14 @@ Usage:
       media/, names library samples ("lib:Legend 909/Kick.wav") and preset files (by preset name), copies
       other outside files into media/ (--no-copy: only reports them), updates review.json, keeps the last
       render when it matches the job, and saves a revision. Lists what it could not fix.
+  wavelength purge [folder...] [--dry-run] [--json]
+      Frees the disk renders take while every song stays playable: in each render folder under the
+      folders (default the current one; a render folder is where a render wrote report.json: out/, a
+      shootout's out folders, the review page's previews) it deletes mix.wav, the stems, FLAC and WAV
+      deliveries and the preview cache. A render with no MP3 gets mix.mp3 first. Reports and pictures
+      stay; so does anything the song's job or manifest names (media/, render/) and every WAV no render
+      wrote (listed at the end). Renders written in the last 5 minutes may still be running and are
+      skipped. Render again to get stems and mix.wav back.
   wavelength serve [SONGS_DIR] [--port 7400] [--host 127.0.0.1] [--open] [--ui DIR]
       A local web UI for reviewing songs (a folder of song folders, default the current one): the
       arrangement with its chords and harmony problems, loudness, stems, and quick previews: any
@@ -259,6 +267,7 @@ const Summary kSummaries[] = {
     {"Songs", "unpack", "Unpack a .wavelength file, checking it first"},
     {"Songs", "validate", "Check a song or package against the format"},
     {"Songs", "migrate", "Bring an older song folder up to the format"},
+    {"Songs", "purge", "Delete render WAVs and stems, keep MP3s playable"},
     {"Import and export", "import", "A job from MIDI, MusicXML, DAWproject or a Bitwig project"},
     {"Import and export", "export", "A job as a MIDI file or a DAWproject"},
     {"People and agents", "serve", "A local review page for listening together"},

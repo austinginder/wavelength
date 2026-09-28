@@ -4,6 +4,8 @@
 // and loudness a listener gets (lossy encoding raises true peak).
 #include "wav.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <string>
 #include <vector>
 
@@ -36,6 +38,9 @@ std::string deliveryPath(const DeliverySpec &spec, const std::string &outDir);
 bool writeDeliveries(const std::vector<DeliverySpec> &specs, const Audio &mix, int sampleRate, size_t leadFrames, size_t skipFrames,
                      const std::string &outDir, const std::string &wavPath, double mixTruePeakDb, std::vector<Delivery> &out,
                      std::vector<std::string> &warnings, std::string &err);
+
+// The report's mix.deliveries entries: format, file, encoder, loudness, true peak, overshoot, bitrate or bits.
+nlohmann::json deliveriesJson(const std::vector<Delivery> &ds);
 
 // A FLAC file (16 or 24 bit, fixed predictors, stereo decorrelation, partitioned Rice residuals).
 bool writeFlac(const std::string &path, const Audio &a, int sampleRate, int bits, size_t leadFrames, size_t skipFrames, std::string &err);
