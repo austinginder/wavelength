@@ -94,7 +94,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--help"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
