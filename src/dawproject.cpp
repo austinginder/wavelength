@@ -1086,7 +1086,10 @@ bool buildJob(Ctx &c, const xml::Node &rootNode, const std::string &path, const 
             }
             continue;
         }
-        if (instrument.is_null()) { res.notes.push_back(r.name + ": no instrument the file can describe; left out"); continue; }
+        if (instrument.is_null()) {   // a DAW's own instrument (Bitwig's FM-4, Polymer...): keep the notes, heard on builtin:synth
+            instrument = {{"plugin", "builtin:synth"}, {"preset", "Init"}};
+            res.notes.push_back(r.name + ": no instrument the file can describe; its notes play on builtin:synth (Init)");
+        }
         json t = instrument;
         t["name"] = r.name;
         t["gain"] = vol <= 1e-6 ? -60.0 : r3(linToDb(vol));
