@@ -409,7 +409,12 @@ else
 fi
 # a free port each run: two checkouts (or agents) running the check at once must not answer for each other
 sport=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-mkdir -p out/check/serve-songs/demo && cp examples/hello.json out/check/serve-songs/demo/job.json
+mkdir -p out/check/serve-songs/demo out/check/serve-songs/kitmap && cp examples/hello.json out/check/serve-songs/demo/job.json
+# a sampler kit given as a key -> file map (not a library name) once made /api/song throw: an empty 500
+cat > out/check/serve-songs/kitmap/job.json <<'JOB'
+{"tempo": 120, "tracks": [{"name": "Kit", "plugin": "builtin:sampler", "sampler": {"kit": {"36": "kick.wav", "38": "snare.wav"}},
+  "notes": [{"beat": 0, "dur": 0.5, "key": 36}]}]}
+JOB
 "./$build/wavelength" serve out/check/serve-songs --port $sport 2>/dev/null &
 spid=$!
 for _ in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:$sport/ && break; sleep 0.1; done   # up to 5 s on a busy machine
@@ -418,8 +423,9 @@ page=$(curl -s -w '\nHTTP %{http_code}' http://127.0.0.1:$sport/)
 echo "$page" | grep -q 'wavelength-token' || serve_why="the page has no token ($(echo "$page" | tail -1); $(echo "$page" | head -c 160 | tr '\n' ' '))"
 [ -z "$serve_why" ] && { curl -s http://127.0.0.1:$sport/api/songs | grep -q '"demo"' || serve_why="the song list lacks demo: $(curl -s http://127.0.0.1:$sport/api/songs | head -c 200)"; }
 [ -z "$serve_why" ] && { code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' "http://127.0.0.1:$sport/api/review?song=demo"); [ "$code" = "403" ] || serve_why="a POST without the token got $code, not 403"; }
+[ -z "$serve_why" ] && { curl -s "http://127.0.0.1:$sport/api/song?song=kitmap" | grep -q '"custom kit"' || serve_why="a song with a kit map: $(curl -s -w ' HTTP %{http_code}' "http://127.0.0.1:$sport/api/song?song=kitmap" | head -c 200)"; }
 if [ -z "$serve_why" ]; then
-  echo "ok   serve: UI, song list, token check"
+  echo "ok   serve: UI, song list, token check, a song with a kit map"
 else
   echo "FAIL serve: $serve_why"; fail=1
 fi

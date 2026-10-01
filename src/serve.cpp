@@ -109,6 +109,16 @@ json filesJson(const FileMap &files) {
     return o;
 }
 
+// what a builtin:sampler track plays, for the track list: a library or file name, or "custom kit" for a key -> file map
+std::string samplerLabel(const json &s) {
+    if (!s.is_object()) return "";
+    for (const char *k : {"kit", "multisample", "sfz", "exs", "soundfont"})
+        if (s.contains(k) && s[k].is_string()) return s[k].get<std::string>();
+    if (s.contains("kit") && s["kit"].is_object()) return "custom kit";
+    if (s.contains("sample") && s["sample"].is_string()) return fs::path(s["sample"].get<std::string>()).stem().string();
+    return "";
+}
+
 // the job trimmed to what the timeline draws: notes as [start, length, key, vel, inSeconds]
 json jobSummary(const json &job) {
     json tracks = json::array();
@@ -130,8 +140,7 @@ json jobSummary(const json &job) {
         for (auto &f : t.value("fx", json::array())) fx.push_back(f.is_object() ? f.value("type", f.value("plugin", std::string("?"))) : std::string("?"));
         std::string preset = t.value("preset", std::string());
         if (preset.empty() && t.contains("state")) preset = t["state"].is_object() ? t["state"].value("file", std::string()) : (t["state"].is_string() ? t["state"].get<std::string>() : "");
-        if (preset.empty() && t.contains("sampler") && t["sampler"].is_object())
-            preset = t["sampler"].value("kit", t["sampler"].value("multisample", std::string()));
+        if (preset.empty() && t.contains("sampler")) preset = samplerLabel(t["sampler"]);
         tracks.push_back({{"name", t.value("name", "track" + std::to_string(i))}, {"plugin", t.value("plugin", std::string())}, {"preset", preset},
                           {"fx", fx}, {"gain", t.contains("gain") && t["gain"].is_number() ? t["gain"] : json(0)},
                           {"pan", t.contains("pan") && t["pan"].is_number() ? t["pan"] : json(0)}, {"output", t.value("output", std::string())},
@@ -1008,6 +1017,14 @@ int Server::run() {
         res.set_header("Cache-Control", "no-store");
         res.set_content(j.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
     };
+    // a handler that throws (a song whose files have a shape it didn't expect) answers with the reason, not an empty 500
+    http_.set_exception_handler([](const httplib::Request &, httplib::Response &res, std::exception_ptr ep) {
+        std::string why = "unknown error";
+        try { std::rethrow_exception(ep); } catch (const std::exception &e) { why = e.what(); } catch (...) {}
+        res.status = 500;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(json{{"error", why}}.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
+    });
     auto slugOf = [this](const httplib::Request &req, std::string &slug) { slug = req.get_param_value("song"); return songExists(slug); };
     auto songFrom = [&](const json &in, std::string &slug) { slug = in.value("song", std::string()); return songExists(slug); };
 

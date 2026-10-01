@@ -35,6 +35,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
+- `serve`: a song with a sampler track whose `kit` is a key -> file map (as the job format allows) opened as an empty page: `/api/song` threw and answered an empty 500. The track list now calls such a kit "custom kit" (a single-sample track shows the sample's name), and any API route that fails answers with the reason as JSON.
 - `import song.bwproject --list` works as its help says: `--list` took the next argument as its value, so `--list` alone failed with "--list needs a value" and `--list` before the path swallowed the path.
 - Instruments that fill only one channel of their stereo output play in the centre: when one side stays at digital silence for the whole render while the other sounds (FigBug's RP2A03 and SID write their mono chip into the left channel), the sounding side is copied across, with a warning. Every render, preview and editor note goes through it. `compat` notes such plugins (test version 5, so the next sweep tests every plugin again).
 - The song picture's header gives the song's tempo range, lowest to highest (96-160 BPM), not the first and last tempo: a song that sped up to 160 and broadened back to 144 read "96-144".
