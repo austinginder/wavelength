@@ -741,6 +741,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             if (!job.markers.empty() || job.picture) post.resize(frames);
             float postPeak = 0;
             const size_t levelHop = (size_t)std::llround(0.05 * sr);   // the picture's level lane
+            LoudnessMeter postMeter(job.sampleRate);   // post-fader loudness on every render, windows included
             if (job.picture) tr.levelTimeline.assign(frames / levelHop + 1, 0.f);
             // mix checks: the low end (below 120 Hz) of mid and side per 50 ms. 8-sample averages first, so the
             // 4th-order low-pass runs at an eighth of the rate (the average's nulls sit on the folding frequencies).
@@ -762,6 +763,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                 dest->left[f] += l; dest->right[f] += r;
                 postPeak = std::max({postPeak, std::fabs(l), std::fabs(r)});
                 if (!post.left.empty()) { post.left[f] = l; post.right[f] = r; }
+                postMeter.add(l, r);
                 if (!tr.levelTimeline.empty()) tr.levelTimeline[f / levelHop] += l * l + r * r;
                 tr.sumLR += (double)l * r; tr.sumLL += (double)l * l; tr.sumRR += (double)r * r;
                 accM += l + r; accS += l - r;
@@ -780,7 +782,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
                     }
             }
             tr.postPeakDb = dsp::linToDb(postPeak);
-            if (!post.left.empty()) tr.postLufs = integratedLufs(post, job.sampleRate, 0, frames);
+            tr.postLufs = postMeter.integrated();
             for (auto &v : tr.levelTimeline) v /= (float)(2 * levelHop);
             for (size_t m = 0; m < job.markers.size(); ++m) {
                 const double a0 = job.markers[m].sec, b0 = m + 1 < job.markers.size() ? job.markers[m + 1].sec : seconds;

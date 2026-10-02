@@ -95,6 +95,36 @@ std::vector<double> loudnessTimeline(const Audio &a, int sampleRate, double wind
     return out;
 }
 
+LoudnessMeter::LoudnessMeter(int sampleRate) : hop_((size_t)(0.1 * sampleRate)), rate_(sampleRate) {
+    kWeighting(sampleRate, sl_, hl_);
+    kWeighting(sampleRate, sr_, hr_);
+}
+
+void LoudnessMeter::add(float left, float right) {
+    const double yl = hl_.process(sl_.process(left)), yr = hr_.process(sr_.process(right));
+    const double p = yl * yl + yr * yr;
+    acc_ += p; total_ += p; ++frames_;
+    if (++inHop_ == hop_) { hops_.push_back(acc_); acc_ = 0; inHop_ = 0; }
+}
+
+double LoudnessMeter::integrated() const {
+    const size_t block = (size_t)(0.4 * rate_);
+    if (frames_ < block) {   // shorter than one gating block: its plain K-weighted loudness, as integratedLufs
+        if (frames_ < (size_t)(0.01 * rate_)) return -120;
+        const double l = lufs(total_ / frames_);
+        return l > -70.0 ? l : -120;
+    }
+    std::vector<double> z;   // mean power of each 400 ms block (four hops)
+    for (size_t k = 0; k + 4 <= hops_.size(); ++k) z.push_back((hops_[k] + hops_[k + 1] + hops_[k + 2] + hops_[k + 3]) / (4.0 * hop_));
+    double sum = 0; size_t cnt = 0;
+    for (double p : z) if (lufs(p) > -70.0) { sum += p; ++cnt; }
+    if (!cnt) return -120;
+    const double relGate = lufs(sum / cnt) - 10.0;
+    sum = 0; cnt = 0;
+    for (double p : z) if (lufs(p) > -70.0 && lufs(p) > relGate) { sum += p; ++cnt; }
+    return cnt ? lufs(sum / cnt) : -120;
+}
+
 double loudnessRange(const Audio &a, int sampleRate, size_t from, size_t to) {
     to = std::min(to, a.frames());
     if (to <= from) return 0;
