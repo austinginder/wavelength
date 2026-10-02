@@ -419,9 +419,16 @@ json Server::song(const std::string &slug) {
     const bool hasReport = !reportPath.empty() && readJson(dir / reportPath, report);
     std::vector<std::string> audio;
     for (auto &[p, f] : files) if (isAudio(p)) audio.push_back(p);
+    // the song's own render first (next to its report, or the kept render/), then MP3 before WAV, then the
+    // shallower path: a set's mix ahead of the records' renders in its subfolders, however recent theirs are
+    const std::string ownDir = reportPath.empty() ? "out" : fs::path(reportPath).parent_path().generic_string();
+    auto own = [&](const std::string &p) { const std::string d = fs::path(p).parent_path().generic_string(); return d == ownDir || d == "render"; };
+    auto depth = [](const std::string &p) { return std::count(p.begin(), p.end(), '/'); };
     std::sort(audio.begin(), audio.end(), [&](const std::string &a, const std::string &b) {
+        if (own(a) != own(b)) return own(a);
         const bool am = a.substr(a.size() - 4) == ".mp3", bm = b.substr(b.size() - 4) == ".mp3";
         if (am != bm) return am;
+        if (depth(a) != depth(b)) return depth(a) < depth(b);
         return files.at(a).mtime > files.at(b).mtime;
     });
     json docs = json::object();
