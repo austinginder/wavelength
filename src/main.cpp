@@ -551,17 +551,24 @@ int cmdAnalyze(const Args &a) {
         json mix;
         if (!one((dir / "mix.wav").string(), start, end, true, mix)) return fail(a, err);
         result = {{"ok", true}, {"mix", mix}, {"stems", json::array()}, {"sections", json::array()}};
+        // the report names stems as the render was told (relative to where it ran): find them in this folder too
+        auto locate = [&](const std::string &f) {
+            if (f.empty() || fs::exists(f, ec)) return f;
+            for (const fs::path &c : {dir / "stems" / fs::path(f).filename(), dir / fs::path(f).filename()})
+                if (fs::exists(c, ec)) return c.string();
+            return std::string();
+        };
         if (report.is_object() && report.contains("tracks"))
             for (auto &t : report["tracks"]) {
-                const std::string f = t.value("file", "");
-                if (f.empty() || !fs::exists(f, ec)) continue;
+                const std::string f = locate(t.value("file", ""));
+                if (f.empty()) continue;
                 json s;
                 if (one(f, start, end, false, s)) { s["track"] = t.value("name", ""); result["stems"].push_back(s); }
             }
         if (report.is_object() && report.contains("buses"))   // bus stems ("stem": true on the bus)
             for (auto &b : report["buses"]) {
-                const std::string f = b.value("file", "");
-                if (f.empty() || !fs::exists(f, ec)) continue;
+                const std::string f = locate(b.value("file", ""));
+                if (f.empty()) continue;
                 json s;
                 if (one(f, start, end, false, s)) { s["bus"] = b.value("name", ""); result["stems"].push_back(s); }
             }

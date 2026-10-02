@@ -36,6 +36,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
+- `analyze <render folder>` finds the stems of a render made from another directory: the report names them relative to where the render ran, so they were all skipped.
 - `tracks[].postFaderLufs` is measured on every render: it read -120 for every track in a render without markers or a picture and in every `--from/--to` window. A streaming meter (`LoudnessMeter`, equal to the full-buffer measurement) needs no copy of the track's audio.
 - `serve`: a song with a sampler track whose `kit` is a key -> file map (as the job format allows) opened as an empty page: `/api/song` threw and answered an empty 500. The track list now calls such a kit "custom kit" (a single-sample track shows the sample's name), and any API route that fails answers with the reason as JSON.
 - `import song.bwproject --list` works as its help says: `--list` took the next argument as its value, so `--list` alone failed with "--list needs a value" and `--list` before the path swallowed the path.

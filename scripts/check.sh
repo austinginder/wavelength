@@ -95,6 +95,15 @@ sys.exit(0 if ok else 1)'; then
 else
   echo "ok   window render: clips-tour bars 3-4"
 fi
+# analyze finds a render's stems when the render ran elsewhere (the report names them relative to where it ran)
+(cd examples && "../$build/wavelength" render clips-tour.json --from 3 --to 5 --stems 16 --out "../out/check/window-rel/$build" --json >/dev/null 2>&1)
+if "./$build/wavelength" analyze "out/check/window-rel/$build" --json 2>/dev/null | python3 -c '
+import json, sys
+sys.exit(0 if len(json.load(sys.stdin)["stems"]) == 3 else 1)'; then
+  echo "ok   analyze: a render folder's stems found from another directory"
+else
+  echo "FAIL analyze: stems of a render made from another directory"; fail=1
+fi
 # MusicXML: repeats, endings and D.S. al Fine play in order; transposition, dynamics, ties, chords and voices
 if ! { "./$build/wavelength" import examples/scores/repeats.musicxml --out out/check/mx-repeats --json > /dev/null &&
        "./$build/wavelength" import examples/scores/dynamics.musicxml --out out/check/mx-dynamics --json > /dev/null &&
