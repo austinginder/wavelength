@@ -221,6 +221,16 @@ void trackFromJson(const nlohmann::json &j, TrackResult &t) {
 
 } // namespace
 
+// the share of a track's post-fader energy below 120 Hz (0..1): the mix checks' mid and side low ends against the
+// left/right sums (mid and side are half-sums, so their energies add up to half of left plus right)
+double lowShare(const TrackResult &t) {
+    const double all = t.sumLL + t.sumRR;
+    if (all <= 0) return 0;
+    double low = 0;
+    for (size_t k = 0; k < t.lowMid.size(); ++k) low += t.lowMid[k] + (k < t.lowSide.size() ? t.lowSide[k] : 0);
+    return std::min(1.0, 2 * low / all);
+}
+
 int renderTrackWorker(const std::string &jobPath, size_t index, const std::string &prefix, const std::vector<std::string> &sidechains) {
     auto fail = [&](const std::string &e) { std::ofstream(prefix + ".json") << nlohmann::json{{"ok", false}, {"error", e}}.dump(); return 1; };
     std::ifstream in(jobPath);
@@ -294,6 +304,20 @@ bool drumTrack(const Track &t) {
     for (const char *w : {"kick", "drum", "bd", "909", "808", "707", "kit", "beat"})
         if (n.find(w) != std::string::npos) return true;
     return false;
+}
+
+// a part that plays the bass line: named like one (bass, sub, reese) or written mostly below C3; not drums,
+// effects or unpitched material
+bool bassTrack(const Track &t) {
+    if (t.notes.empty() || !t.harmony || drumTrack(t) || t.plugin == "builtin:fx" || t.plugin == "builtin:shepard") return false;
+    std::string n = t.name;
+    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+    for (const char *w : {"bass", "sub", "reese"})
+        if (n.find(w) != std::string::npos) return true;
+    std::vector<int> keys;
+    for (const auto &x : t.notes) keys.push_back(x.key);
+    std::nth_element(keys.begin(), keys.begin() + keys.size() / 2, keys.end());
+    return keys[keys.size() / 2] < 48;
 }
 
 // Mix checks on what each track sends to the mix (after its effects and fader): a kick buried under
@@ -386,6 +410,32 @@ void mixChecks(const Job &job, const std::vector<TrackResult> &tracks, double se
                           kit ? ", \"keys\": [35, 36]" : "", bt.name.c_str(), bt.name.c_str());
             warnings.push_back(buf);
         }
+    }
+    // a thin bass: the bass parts together (a mid-heavy bass with a sub under it passes) put little of their energy
+    // below 120 Hz. Faders set by loudness can't see it: LUFS counts the mids, so such a bass reads as loud as a full
+    // one and sounds weak. Measured on 16 trance basses: full ones 44-77%, one a listener heard as weak 3%.
+    double bassLow = 0, bassAll = 0;
+    std::vector<std::pair<double, std::string>> parts;
+    for (size_t i = 0; i < tracks.size() && i < job.tracks.size(); ++i) {
+        if (job.tracks[i].mute || !bassTrack(job.tracks[i])) continue;
+        const double all = tracks[i].sumLL + tracks[i].sumRR;
+        if (all <= 0) continue;
+        const double share = lowShare(tracks[i]);
+        bassLow += share * all; bassAll += all;
+        parts.push_back({share, job.tracks[i].name});
+    }
+    if (!parts.empty() && bassAll >= 0.05 * mixAll && bassLow < 0.15 * bassAll) {
+        std::sort(parts.begin(), parts.end());
+        std::string names;
+        for (size_t p = 0; p < parts.size(); ++p) names += (p ? (p + 1 == parts.size() ? "' and '" : "', '") : "'") + parts[p].second;
+        names += "'";
+        char buf[720];
+        std::snprintf(buf, sizeof buf, "the bass is thin: %s %s only %.0f%% of %s energy below 120 Hz (full basses carry 40-75%%). "
+                      "Loudness counts the mids, so a thin bass reads as loud as a full one and sounds weak. Layer a sub on the same notes "
+                      "({\"plugin\": \"builtin:synth\", \"preset\": \"BA Sub\"}, low-passed near 160 Hz and ducked like the bass, in E1-D#2 when the "
+                      "bass sits higher) or pick a bass with more low end; a low shelf only lifts what the patch already has",
+                      names.c_str(), parts.size() == 1 ? "carries" : "carry", 100 * bassLow / bassAll, parts.size() == 1 ? "its" : "their");
+        warnings.push_back(buf);
     }
 }
 

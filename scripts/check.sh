@@ -54,6 +54,37 @@ w = [x for x in json.load(sys.stdin)["warnings"] if "automation starts at beat" 
 sys.exit(0 if len(w) == 2 and w[0].startswith("bus '"'"'Music'"'"'") and w[1].startswith("master:") else 1)'; then
   echo "FAIL late-curves: bus/master late automation warnings"; fail=1
 fi
+# thin bass: a bass whose energy sits in its mids (an FM bass high-passed at 200 Hz) warns; the same bass with a sine sub
+# layered on its notes doesn't; tracks[].lowShare reports each part's share below 120 Hz
+mkdir -p out/check/thin-bass
+python3 - <<'PY'
+import json
+kick = [{"beat": b, "dur": 0.5, "key": 36, "vel": 0.9} for b in range(32)]
+line = [{"beat": b + 0.5, "dur": 0.4, "key": 40 if (b // 4) % 2 == 0 else 36, "vel": 0.9} for b in range(32)]
+bass = {"name": "Bass", "plugin": "builtin:synth", "preset": "BA FM", "gain": 6, "notes": line,
+        "fx": [{"type": "eq", "bands": [{"type": "highpass", "freq": 200}]}]}
+base = {"tempo": 120, "stems": "none", "tracks": [{"name": "Kick", "plugin": "builtin:drums", "notes": kick}, bass]}
+json.dump(base, open("out/check/thin-bass/thin.json", "w"))
+base["tracks"].append({"name": "Sub", "plugin": "builtin:synth", "preset": "BA Sub", "notes": line})
+json.dump(base, open("out/check/thin-bass/full.json", "w"))
+PY
+thin_why=""
+for v in thin full; do
+  "./$build/wavelength" render out/check/thin-bass/$v.json --out "out/check/thin-bass/$build-$v" --json 2>/dev/null > "out/check/thin-bass/$v.out" || thin_why="$v did not render"
+done
+[ -z "$thin_why" ] && thin_why=$(python3 -c '
+import json
+t = json.load(open("out/check/thin-bass/thin.out")); f = json.load(open("out/check/thin-bass/full.out"))
+tw = [w for w in t["warnings"] if w.startswith("the bass is thin")]; fw = [w for w in f["warnings"] if w.startswith("the bass is thin")]
+share = {x["name"]: x["lowShare"] for x in t["tracks"]}
+if len(tw) != 1 or "'"'"'Bass'"'"'" not in tw[0]: print("no thin-bass warning:", t["warnings"])
+elif fw: print("warned with a sub:", fw)
+elif not share["Bass"] < 0.15: print("Bass lowShare", share["Bass"])')
+if [ -z "$thin_why" ]; then
+  echo "ok   mix check: thin bass warns, a sub layer passes"
+else
+  echo "FAIL thin bass: $thin_why"; fail=1
+fi
 # render --from/--to: a window of the clips tour (a clip starts before it) renders, and its file is the window's length
 if ! "./$build/wavelength" render examples/clips-tour.json --from 3 --to 5 --stems none --out out/check/window/$build --json 2>/dev/null | python3 -c '
 import json, sys, wave

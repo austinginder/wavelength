@@ -1209,6 +1209,7 @@ int cmdRender(const Args &a) {
         tracks.push_back({{"name", t.name}, {"plugin", t.plugin}, {"pluginName", t.pluginName}, {"file", t.file},
                           {"preset", t.preset}, {"notes", t.notes}, {"paramsApplied", t.paramsApplied}, {"automatedParams", t.automated},
                           {"stateFormat", t.stateFormat}, {"fx", t.fx}, {"lufs", r1(t.lufs)}, {"postFaderLufs", r1(t.postLufs)}, {"postFaderPeakDb", r1(t.postPeakDb)},
+                          {"lowShare", std::round(lowShare(t) * 100) / 100},
                           {"renderSeconds", std::round(t.seconds * 100) / 100},
                           {"latencyCompensatedMs", std::round(t.latencySamples * 1000.0 / r.sampleRate * 100) / 100},
                           {"sections", labelled(t.sectionLufs)}, {"sectionLufs", bare(t.sectionLufs)},

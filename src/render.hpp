@@ -30,6 +30,8 @@ struct TrackResult {
     bool cached = false;   // render --cache: the track's audio came from the track cache
 };
 
+double lowShare(const TrackResult &t);   // the share of a track's post-fader energy below 120 Hz (0..1)
+
 struct BusResult {
     std::string name, file;           // file: its stem ("stem": true)
     std::vector<std::string> fx;
