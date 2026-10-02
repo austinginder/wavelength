@@ -113,6 +113,14 @@ json tools() {
     list.push_back(tool("lint", "Check a job's harmony",
         "Before rendering: wrong notes, out-of-key chords, clashes between parts, parallel fifths and octaves, from the job's notes.",
         {{"job", prop("string", "path to job.json")}}, {"job"}, readOnly));
+    list.push_back(tool("stage", "Set every fader from its loudness",
+        "Gain staging: renders the job once and sets each track's fader to target - its stem LUFS, the target from the track's role "
+        "(a word of its name: Kick -12, Bass -15.5, Sub -19, Lead -16, Pad -22, Arp -21 ...) or targets.json beside the job. Writes "
+        "gains.json beside the job (for a generator script); apply also sets the gains in the job. Lists tracks no role fits and tracks "
+        "that peak over 0 dBFS after their fader.",
+        {{"job", prop("string", "path to job.json")}, {"apply", prop("boolean", "also set the gains in the job file")},
+         {"report", prop("string", "measure this render's report.json instead of rendering")}},
+        {"job"}, writes));
     list.push_back(tool("render", "Render a song",
         "Renders a job through its instruments and effects and returns the report's summary (loudness of the mix, each section "
         "and track, warnings with their fixes) and the picture of the song (sections, loudness contour, spectrum, every track's "
@@ -465,6 +473,13 @@ private:
             }
             if (total > shown) lines += "... " + std::to_string(total - shown) + " more: narrow with search\n";
             return text(lines.empty() ? "no parameters match" : lines);
+        }
+        if (name == "stage") {
+            std::vector<std::string> args = {"stage", need(a, "job"), "--json"};
+            if (a.value("apply", false)) args.push_back("--apply");
+            if (a.contains("report") && a["report"].is_string()) { args.push_back("--report"); args.push_back(a["report"].get<std::string>()); }
+            if (!run(args, id, progress, 7200, out, fail)) return fail;
+            return text(out.dump(1));
         }
         if (name == "lint") {   // the harmony check, then voice leading (parallel fifths and octaves)
             if (!run({"lint", need(a, "job"), "--harmony", "--json"}, id, progress, 300, out, fail)) return fail;

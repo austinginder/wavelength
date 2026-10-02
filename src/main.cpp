@@ -44,6 +44,7 @@
 #include "vst3_plugin.hpp"
 #include "job.hpp"
 #include "card.hpp"
+#include "stage.hpp"
 #include "picture.hpp"
 #include "docs.hpp"
 #include "fallback.hpp"
@@ -94,7 +95,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help", "--apply", "--dry-run"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1472,6 +1473,38 @@ int cmdPicture(const Args &a) {
     return 0;
 }
 
+int cmdStage(const Args &a) {
+    const char *usage = "usage: wavelength stage <job.json> [--targets FILE] [--report FILE] [--out DIR] [--write FILE] [--apply] [--dry-run] [--jobs N] [--json]";
+    if (a.positional.size() < 2) return fail(a, usage);
+    StageOptions o;
+    o.job = a.positional[1];
+    o.targets = a.get("--targets");
+    o.report = a.get("--report");
+    o.out = a.get("--out");
+    o.write = a.get("--write");
+    o.apply = a.has("--apply");
+    o.dryRun = a.has("--dry-run");
+    o.verbose = a.has("--verbose");
+    if (a.has("--jobs")) o.jobs = std::atoi(a.get("--jobs").c_str());
+    json rep;
+    std::string err;
+    if (!stageGains(o, rep, err)) return fail(a, err);
+    if (a.has("--json")) { emit(rep.dump(2)); return 0; }
+    std::fprintf(OUT, "Faders from %s (targets: role defaults%s)\n", rep["report"].get<std::string>().c_str(),
+                 rep["targets"].empty() ? "" : (" + " + rep["targets"].back().get<std::string>()).c_str());
+    for (auto &t : rep["tracks"])
+        std::fprintf(OUT, "  %-16s %-11s stem %6.1f LUFS  target %6.1f  gain %+5.1f (was %+.1f)%s\n", t["name"].get<std::string>().c_str(),
+                     t["role"].get<std::string>().c_str(), t["lufs"].get<double>(), t["target"].get<double>(), t["gain"].get<double>(),
+                     t["was"].get<double>(), t.contains("cappedByPeak") ? "  (peak cap)" : "");
+    for (auto &b : rep["buses"])
+        std::fprintf(OUT, "  bus %-12s             stem %6.1f LUFS  target %6.1f  gain %+5.1f (was %+.1f)\n", b["name"].get<std::string>().c_str(),
+                     b["lufs"].get<double>(), b["target"].get<double>(), b["gain"].get<double>(), b["was"].get<double>());
+    if (rep["gainsFile"].is_string()) std::fprintf(OUT, "Wrote %s%s\n", rep["gainsFile"].get<std::string>().c_str(), rep["applied"].get<bool>() ? " and set the gains in the job" : "");
+    else std::fprintf(OUT, "Dry run: nothing written\n");
+    for (auto &w : rep["warnings"]) std::fprintf(OUT, "warning: %s\n", w.get<std::string>().c_str());
+    return 0;
+}
+
 int cmdCard(const Args &a) {
     const char *usage = "usage: wavelength card <plugin> [<preset>...] [+ <plugin> [<preset>...]]... [--state FILE] [--out FILE.png] [--width PX] [--jobs N] [--probe DIR] [--json]";
     if (a.positional.size() < 2) return fail(a, usage);
@@ -1890,6 +1923,7 @@ int run(int argc, char **argv) {
             {"timeline", {"--every", "--json"}},
             {"picture", {"--out", "--width", "--json"}},
             {"card", {"--out", "--width", "--state", "--jobs", "--probe", "--json", "--verbose"}},
+            {"stage", {"--targets", "--report", "--out", "--write", "--apply", "--dry-run", "--jobs", "--json", "--verbose"}},
             {"docs", {"--section", "--json"}},
             {"kit", {"--force", "--json"}},
             {"mcp", {}},
@@ -1933,6 +1967,7 @@ int run(int argc, char **argv) {
         if (cmd == "timeline") return cmdTimeline(a);
         if (cmd == "picture") return cmdPicture(a);
         if (cmd == "card") return cmdCard(a);
+        if (cmd == "stage") return cmdStage(a);
         if (cmd == "docs") return cmdDocs(a);
         if (cmd == "kit") return cmdKit(a);
         if (cmd == "mcp") return runMcp(OUT);

@@ -52,7 +52,7 @@ Prefer factory presets by name. Transpose presets tagged `octave -1` (or flagged
 Songs live in their own folder, never inside the engine checkout: `~/wavelength-songs/<slug>/` unless the user keeps music somewhere else.
 
 - `make-job.py` builds `job.json`: the theme and chords as data, helper functions that voice and vary them, one list of notes per track, sounds, effects, sends, buses, markers and rides. Generating notes in code keeps variations consistent and edits cheap.
-- `targets.json`: target LUFS per track (leads -18, brass -17, drums -15, pads -23, arps -23).
+- `targets.json` (optional): target LUFS for tracks whose role targets don't fit (`wavelength stage` picks a target from each track's name: Kick -12, Bass -15.5, Lead -16, Pad -22, Arp -21 ...).
 - `gains.json`: faders from measurement (step 5).
 - Set `"stems": "none"` (or `"16"`) in the job unless you need stem files: float stems are big.
 
@@ -61,8 +61,7 @@ Songs live in their own folder, never inside the engine checkout: `~/wavelength-
 ```sh
 python3 make-job.py
 "$WAVELENGTH" lint job.json --harmony --json            # wrong notes and key clashes, before rendering
-"$WAVELENGTH" render job.json --out out --json
-python3 "$WAVELENGTH_SCRIPTS/stage-gains.py" .        # faders = target - stem LUFS
+"$WAVELENGTH" stage job.json                          # renders once; faders = target - stem LUFS by role or targets.json -> gains.json
 python3 make-job.py && "$WAVELENGTH" render job.json --out out --png --json   # out/song.png: look at it
 "$WAVELENGTH" analyze out --json                      # pitch, brightness, bands, width per stem and section
 ```

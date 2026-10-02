@@ -107,6 +107,25 @@ if [ -z "$thin_why" ]; then
 else
   echo "FAIL thin bass: $thin_why"; fail=1
 fi
+# stage: faders from stem loudness by role (Kick -12, Bass -15.5, Sub -19), written to gains.json; --apply puts them
+# in the job, and the next render (from the track cache) has each track at its target
+mkdir -p out/check/stage && cp out/check/thin-bass/full.json out/check/stage/job.json && rm -f out/check/stage/gains.json
+stage_why=""
+"./$build/wavelength" stage out/check/stage/job.json --apply --json > out/check/stage/stage.json 2>/dev/null || stage_why="stage failed: $(head -c 300 out/check/stage/stage.json)"
+[ -z "$stage_why" ] && { "./$build/wavelength" render out/check/stage/job.json --out "out/check/stage/$build" --cache --json > out/check/stage/after.json 2>/dev/null || stage_why="the staged job did not render"; }
+[ -z "$stage_why" ] && stage_why=$(python3 -c '
+import json
+s = json.load(open("out/check/stage/stage.json")); g = json.load(open("out/check/stage/gains.json")); r = json.load(open("out/check/stage/after.json"))
+want = {"Kick": ("Kick", -12), "Bass": ("Bass", -15.5), "Sub": ("Sub", -19)}
+roles = {t["name"]: t["role"] for t in s["tracks"]}
+post = {t["name"]: t["postFaderLufs"] for t in r["tracks"]}
+bad = [n for n, (role, lufs) in want.items() if roles.get(n) != role or n not in g or abs(post[n] - lufs) > 0.3]
+print(("roles " + str(roles) + " post " + str(post)) if bad else "")')
+if [ -z "$stage_why" ]; then
+  echo "ok   stage: faders by role into gains.json and the job, tracks land on their targets"
+else
+  echo "FAIL stage: $stage_why"; fail=1
+fi
 # render --from/--to: a window of the clips tour (a clip starts before it) renders, and its file is the window's length
 if ! "./$build/wavelength" render examples/clips-tour.json --from 3 --to 5 --stems none --out out/check/window/$build --json 2>/dev/null | python3 -c '
 import json, sys, wave
@@ -335,7 +354,7 @@ guide = call(3, "tools/call", {"name": "guide", "arguments": {"section": "The lo
 r = call(4, "tools/call", {"name": "render", "arguments": {"job": "examples/sfz-tour.json", "out": sys.argv[2]}})["result"]
 png = base64.b64decode(r["content"][1]["data"])[:8]
 p.stdin.close(); p.wait(timeout=10)
-ok = (init["protocolVersion"] == "2025-06-18" and {"guide", "render", "list_presets"} <= set(names) and "## The loop" in guide["content"][0]["text"]
+ok = (init["protocolVersion"] == "2025-06-18" and {"guide", "render", "list_presets", "stage"} <= set(names) and "## The loop" in guide["content"][0]["text"]
       and not r["isError"] and r["content"][0]["text"].startswith("ok") and png == b"\x89PNG\r\n\x1a\n")
 sys.exit(0 if ok else 1)
 PY

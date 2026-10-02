@@ -159,6 +159,16 @@ Usage:
       compact cards to compare (cards.png). "+" starts the next plugin's presets:
         wavelength card Vaporizer2 "SY Basic Hypersaw" "LD Mighty Lead" + Zebralette3 "Four by Two"
       --json has the measurements per patch; --probe DIR keeps the probe's job, stems and report.
+  wavelength stage <job.json> [--targets FILE] [--report FILE] [--out DIR] [--write FILE] [--apply] [--dry-run] [--jobs N] [--json]
+      Gain staging: every fader from its stem loudness. One render (no stems, picture or deliveries;
+      tracks cached for your next render) measures each track before its fader; its gain becomes
+      target - stem LUFS. Targets come from the track's role, a word of its name (Kick -12, Clap -17.5,
+      Hats -20, Bass -15.5, Sub -19, Lead -16, Layer -21, Arp -21, Pad -22, Keys -18, FX -22 ...),
+      then targets.json beside the job and --targets FILE: {"Lead": -17, "Kick": {"lufs": -12, "peak": -1},
+      "role:Pad": -23, "bus:Hall": -24}. The gains go to gains.json beside the job (what a generator
+      script reads; --write elsewhere); --apply also sets them in the job; --report FILE measures an
+      existing render instead. Tracks whose peak lands over 0 dBFS after the fader and tracks no role
+      fits are listed.
   wavelength timeline <job.json> [--every BARS] [--json]
       Song time of every marker and of every BARS bars (default 8) from the tempo map (ramps
       included), in song seconds and in file time (after the lead-in), with the tempo there,
@@ -252,6 +262,7 @@ struct Entry { std::string name; std::vector<Block> blocks; };
 struct Summary { const char *group, *name, *text; };
 const Summary kSummaries[] = {
     {"Make music", "render", "Render a job: stems, a mix, a report and the song picture"},
+    {"Make music", "stage", "Set every fader from its stem loudness (gains.json)"},
     {"Make music", "lint", "Check harmony and voice leading before rendering"},
     {"Make music", "picture", "Draw the arrangement before rendering"},
     {"Make music", "timeline", "Song time of bars and markers from the tempo map"},
