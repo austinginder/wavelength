@@ -38,6 +38,28 @@ s = sorted(x["track"] for x in j["skipped"])
 sys.exit(0 if p == [("key excursion", [10, 10])] and i == [("secondary dominant", [19, 19])] and s == ["Snare Roll", "Tritone Ping"] else 1)'; then
   echo "FAIL harmony-tour: lint --harmony"; fail=1
 fi
+# lint: a long pitched kick sample (0.8 s of decaying 55 Hz) is a drum by its name, not a run of C notes
+mkdir -p out/check/lint-kick
+python3 - <<'PY'
+import json, math, struct, wave
+sr = 48000
+with wave.open("out/check/lint-kick/kick-long.wav", "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+    w.writeframes(b"".join(struct.pack("<h", int(30000 * math.exp(-5 * i / sr) * math.sin(2 * math.pi * 55 * i / sr))) for i in range(int(0.8 * sr))))
+pad = [{"beat": b * 4, "dur": 3.9, "key": k, "vel": 0.7} for b in range(4) for k in (64, 68, 71)]
+json.dump({"tempo": 120, "tracks": [{"name": "Kick", "plugin": "builtin:sampler", "sampler": {"sample": "kick-long.wav", "root": 36, "oneShot": True},
+                                     "notes": [{"beat": q, "dur": 0.5, "key": 36} for q in range(16)]},
+                                    {"name": "Pad", "plugin": "builtin:synth", "preset": "PD Warm", "notes": pad}]},
+          open("out/check/lint-kick/job.json", "w"))
+PY
+if "./$build/wavelength" lint out/check/lint-kick/job.json --harmony --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if any(x.get("track") == "Kick" and x.get("reason") == "drum sample" for x in d.get("skipped", [])) else 1)'; then
+  echo "ok   lint: a long kick sample is a drum, not notes"
+else
+  echo "FAIL lint: the long kick sample was read as pitched notes"; fail=1
+fi
 # late curves on buses and the master warn like on tracks; a bus fed only after its curve starts does not
 mkdir -p out/check/late-curves
 cat > out/check/late-curves/job.json <<'JOB'

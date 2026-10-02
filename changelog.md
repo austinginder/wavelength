@@ -36,6 +36,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
+- `lint --harmony` reads a one-shot sample named like a drum (kick, snare, clap, hat, crash, ride, tom, perc...) as a drum, by its file name or its track's name: a 909 kick or ride that rings past 0.4 s with a clear pitch counted as notes and gave false key excursions (9 on one song).
 - `analyze <render folder>` finds the stems of a render made from another directory: the report names them relative to where the render ran, so they were all skipped.
 - `tracks[].postFaderLufs` is measured on every render: it read -120 for every track in a render without markers or a picture and in every `--from/--to` window. A streaming meter (`LoudnessMeter`, equal to the full-buffer measurement) needs no copy of the track's audio.
 - `serve`: a song with a sampler track whose `kit` is a key -> file map (as the job format allows) opened as an empty page: `/api/song` threw and answered an empty 500. The track list now calls such a kit "custom kit" (a single-sample track shows the sample's name), and any API route that fails answers with the reason as JSON.

@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <tuple>
@@ -431,16 +432,35 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
     return out;
 }
 
+// a drum hit by its name: a word of the sample's file name or of the track's name is a drum's
+// ("Kick Legend 909 15.wav", "Cymbal Ride Legend 909 accent.wav", a track named "Crash")
+bool drumWords(const std::string &text) {
+    static const std::set<std::string> words = {"kick", "kicks", "bd", "snare", "snares", "sd", "clap", "claps", "hat", "hats", "hihat",
+                                                "hh", "oh", "ch", "crash", "ride", "cymbal", "cym", "tom", "toms", "perc", "percussion",
+                                                "shaker", "tambourine", "tamb", "rim", "rimshot", "cowbell", "conga", "bongo", "drum", "drums"};
+    std::string w;
+    for (size_t i = 0; i <= text.size(); ++i) {
+        const char c = i < text.size() ? (char)std::tolower((unsigned char)text[i]) : ' ';
+        if (std::isalpha((unsigned char)c)) { w += c; continue; }
+        if (words.count(w)) return true;
+        w.clear();
+    }
+    return false;
+}
+
 // Why a track is not melodic material for lint ("" = it is): drums, effects, audio, kits, an explicit
-// "harmony": false, or a builtin:sampler playing one sample that has no pitch of its own (noise, or a
-// short drum hit: a pitched snare roll is a riser, not a chord).
+// "harmony": false, or a builtin:sampler playing one sample that has no pitch of its own (noise, a drum
+// hit by name, or a short one-shot: a pitched snare roll is a riser, not a chord).
 std::string unpitchedReason(const Track &t, const std::string &baseDir) {
     if (!t.harmony) return "\"harmony\": false";
     if (t.plugin == "builtin:drums" || t.plugin == "builtin:fx" || t.plugin == "builtin:audio" || t.plugin == "builtin:shepard") return t.plugin;
     if (!t.sampler.is_object()) return "";
     if (t.sampler.contains("kit") || t.sampler.contains("map")) return "drum kit";
     if (t.sampler.contains("multisample") || !t.sampler.contains("sample") || !t.sampler["sample"].is_string()) return "";
-    const std::string file = resolveSampleFile(t.sampler["sample"].get<std::string>(), baseDir);
+    const std::string sample = t.sampler["sample"].get<std::string>();
+    // a long kick, crash or ride rings past the one-shot test below with a clear pitch: its name says it's a drum
+    if (drumWords(std::filesystem::path(sample).stem().string()) || drumWords(t.name)) return "drum sample";
+    const std::string file = resolveSampleFile(sample, baseDir);
     Audio a;
     int sr = 0;
     std::string err;
