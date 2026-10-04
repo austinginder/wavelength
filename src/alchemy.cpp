@@ -764,10 +764,9 @@ struct Decoder {
     std::vector<Route> routes;
     std::array<AdElement, 4> adds;      // each audible additive source's element
     std::array<std::string, 4> adWhy;   // why one can't play here ("" = it can)
-    // Additive and granular patches (new to this mapping) play an Amp effect an envelope opens at its held level, and
-    // of several source racks (A-D) only the one carrying the most level; virtual-analog and sampler patches keep the
-    // earlier at-rest reading for now (switching would change about 35 of them)
-    bool held = false;
+    // An Amp effect an envelope opens plays at its held level, and of several source racks (A-D) only the one carrying
+    // the most level (read at rest, such Amps silenced patches like Artificial Persona and stacked racks cut others)
+    bool held = true;
 
     Decoder(const Preset &p, const std::string &n) : P(p), C(p), name(n) { decode(); }
 
@@ -2005,7 +2004,6 @@ AlchemyPatch alchemyPatch(const std::string &text, const std::string &name) {
         out.why = D.refusal(samples, out.what);
         out.arp = D.arp(out.arpNotes);
         if (!out.why.empty()) return out;
-        D.held = out.what == "additive" || out.what == "granular";
         if (samples) {
             out.kind = AlchemyPatch::Sampler;
             D.toSampler(out);
