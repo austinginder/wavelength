@@ -282,6 +282,40 @@ sys.exit(0 if abs(a["mix"]["lufs"] - r["mix"]["lufs"]) < 0.3 and abs(a["duration
 fi
 unset WAVELENGTH_APPLE_LOOPS
 if [ -n "$loops_why" ]; then echo "FAIL apple loops: $loops_why"; fail=1; else echo "ok   apple loops: tempo, key, repeat, notes, import, AAC"; fi
+# Logic and GarageBand instruments: a generated EXS instrument (scripts/make-test-exs.py) plays A4 from its one zone
+# with its own envelope (release 64 = 0.65 s past a 1 s note) unless the track sets "release"; a GarageBand patch whose
+# Sampler slot stores that instrument plays it the same; a patch on Retro Synth is refused, naming it
+rm -rf out/check/exs && mkdir -p out/check/exs
+python3 scripts/make-test-exs.py out/check/exs
+cat > out/check/exs/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 2, "stems": "16",
+ "tracks": [{"name": "Exs", "plugin": "builtin:sampler", "sampler": {"exs": "Test Instrument.exs"}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]},
+            {"name": "Patch", "plugin": "builtin:sampler", "sampler": {"patch": "Test Patch"}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]},
+            {"name": "Short", "plugin": "builtin:sampler", "sampler": {"exs": "Test Instrument.exs", "release": 0.05}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]}]}
+JOB
+cat > out/check/exs/synth.json <<'JOB'
+{"tempo": 60, "tracks": [{"name": "Synth", "plugin": "builtin:sampler", "sampler": {"patch": "Test Synth"}, "notes": [{"beat": 0, "dur": 1, "key": 60}]}]}
+JOB
+export WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches"
+exs_why=""
+if ! "./$build/wavelength" render out/check/exs/job.json --out out/check/exs/out --json > out/check/exs/report.json 2>/dev/null; then
+  exs_why="the instrument job did not render"
+else
+  for t in 01-exs 02-patch 03-short; do "./$build/wavelength" analyze "out/check/exs/out/stems/$t.wav" --json > "out/check/exs/$t.json" 2>/dev/null; done
+  python3 -c '
+import json, sys
+a = {t: json.load(open("out/check/exs/%s.json" % t)) for t in ("01-exs", "02-patch", "03-short")}
+ok = all(x["pitch"]["note"] == "A4" for x in a.values())
+ok &= abs(a["01-exs"]["lufs"] - a["02-patch"]["lufs"]) < 0.1
+ok &= 1.4 < a["01-exs"]["envelope"]["lastSound"] < 1.8 and a["03-short"]["envelope"]["lastSound"] < 1.15
+sys.exit(0 if ok else 1)' || exs_why="the instrument or the patch played wrong (pitch, level or release): $(python3 -c 'import json; print([(t, json.load(open("out/check/exs/%s.json" % t))["envelope"]["lastSound"]) for t in ("01-exs", "02-patch", "03-short")])')"
+fi
+synth_out=$("./$build/wavelength" render out/check/exs/synth.json --out out/check/exs/synth --json 2>/dev/null || true)
+if [ -z "$exs_why" ] && ! echo "$synth_out" | grep "Retro Synth" > /dev/null; then
+  exs_why="a Retro Synth patch was not refused by name"
+fi
+unset WAVELENGTH_LOGIC_PATCHES
+if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument, synth patches refused"; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)

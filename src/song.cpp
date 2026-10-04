@@ -315,10 +315,10 @@ std::vector<FileRef> fileRefs(json &job) {
         json &sm = o["sampler"];
         // file or library name, by key (docs/song-format.md section 4.2): a sample is always a file
         if (sm.contains("sample") && sm["sample"].is_string()) add(where + " sampler.sample", sm["sample"], o);
-        for (const char *k : {"multisample", "sfz", "soundfont"})
+        for (const char *k : {"multisample", "sfz", "soundfont", "exs"})
             if (sm.contains(k) && sm[k].is_string()) {
                 const std::string v = sm[k].get<std::string>();
-                if (v.find('/') != std::string::npos || hasExt(v, {".multisample", ".sfz", ".sf2", ".sf3"})) add(where + " sampler." + k, sm[k], o);
+                if (v.find('/') != std::string::npos || hasExt(v, {".multisample", ".sfz", ".sf2", ".sf3", ".exs"})) add(where + " sampler." + k, sm[k], o);
             }
         const bool namedKit = sm.contains("kit") && sm["kit"].is_string();
         if (namedKit && sm["kit"].get<std::string>().find('/') != std::string::npos) add(where + " sampler.kit", sm["kit"], o);

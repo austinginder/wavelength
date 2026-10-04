@@ -1,6 +1,7 @@
 #include "sampler.hpp"
 
 #include "apple_loops.hpp"
+#include "logic_patches.hpp"
 
 #include "audio_file.hpp"
 #include "dsp.hpp"
@@ -425,20 +426,30 @@ std::string findSample(const Sample &s, const fs::path &exsDir) {
     return it == idx.end() ? "" : it->second;
 }
 
-bool parse(const std::string &path, std::vector<Zone> &zones, int &swLow, int &swHigh, int &swDefault, std::vector<std::string> &articulations,
-           std::vector<std::string> &warnings, std::string &err) {
-    std::vector<uint8_t> d;
-    if (!readFile(path, d)) { err = "cannot read " + path; return false; }
-    if (d.size() < 84 || (std::memcmp(d.data() + 16, "TBOS", 4) && std::memcmp(d.data() + 16, "SOBT", 4) && std::memcmp(d.data() + 16, "JBOS", 4) &&
-                          std::memcmp(d.data() + 16, "SOBJ", 4))) { err = "is not a Logic Sampler (EXS24) instrument"; return false; }
-    const bool big = !std::memcmp(d.data() + 16, "SOBT", 4) || !std::memcmp(d.data() + 16, "SOBJ", 4);
-    auto u32 = [&](size_t at) -> uint32_t { const uint8_t *q = d.data() + at; return big ? (uint32_t)q[0] << 24 | q[1] << 16 | q[2] << 8 | q[3] : (uint32_t)q[3] << 24 | q[2] << 16 | q[1] << 8 | q[0]; };
-    auto s8 = [&](size_t at) { return (int)(int8_t)d[at]; };
-    auto str = [&](size_t at, size_t max) { std::string o; for (size_t k = 0; k < max && at + k < d.size() && d[at + k]; ++k) o += (char)d[at + k]; return o; };
+bool magicAt(const std::vector<uint8_t> &d, size_t p) {
+    return p + 84 <= d.size() && (!std::memcmp(d.data() + p + 16, "TBOS", 4) || !std::memcmp(d.data() + p + 16, "SOBT", 4) ||
+                                  !std::memcmp(d.data() + p + 16, "JBOS", 4) || !std::memcmp(d.data() + p + 16, "SOBJ", 4));
+}
+
+// Envelope times of the instrument's parameters: 0-127 on a fourth-power curve up to 10 s (19 = 5 ms,
+// 53 = 0.3 s, 94 = 3 s), as ConvertWithMoss measured them against Logic
+double envSeconds(int v) { const double n = std::clamp(v, 0, 127) / 127.0; return 10 * n * n * n * n; }
+
+// An instrument's chunks from `at` in `d` (an .exs file, or one inside a patch's channel strip) up to the
+// first that isn't one; samples are looked for beside `dir` and then by name
+bool parseData(const std::vector<uint8_t> &d, size_t at, const fs::path &dir, std::vector<Zone> &zones, int &swLow, int &swHigh, int &swDefault,
+               std::vector<std::string> &articulations, std::vector<std::string> &warnings, std::string &err) {
+    if (!magicAt(d, at)) { err = "is not a Logic Sampler (EXS24) instrument"; return false; }
+    const bool big = !std::memcmp(d.data() + at + 16, "SOBT", 4) || !std::memcmp(d.data() + at + 16, "SOBJ", 4);
+    auto u32 = [&](size_t o) -> uint32_t { const uint8_t *q = d.data() + o; return big ? (uint32_t)q[0] << 24 | q[1] << 16 | q[2] << 8 | q[3] : (uint32_t)q[3] << 24 | q[2] << 16 | q[1] << 8 | q[0]; };
+    auto u16 = [&](size_t o) -> uint16_t { const uint8_t *q = d.data() + o; return big ? (uint16_t)(q[0] << 8 | q[1]) : (uint16_t)(q[1] << 8 | q[0]); };
+    auto s8 = [&](size_t o) { return (int)(int8_t)d[o]; };
+    auto str = [&](size_t o, size_t max) { std::string r; for (size_t k = 0; k < max && o + k < d.size() && d[o + k]; ++k) r += (char)d[o + k]; return r; };
     std::vector<RawZone> raw;
     std::vector<Group> groups;
     std::vector<Sample> samples;
-    for (size_t p = 0; p + 84 <= d.size();) {
+    std::map<int, int> params;   // the instrument's parameters (chunk type 4): id -> value
+    for (size_t p = at; magicAt(d, p);) {
         const uint32_t sig = u32(p);
         uint32_t size = u32(p + 4);
         if ((sig >> 24) & 0x80) size &= 0x7FFF;   // newer files ("JBOS") flag the type and the size
@@ -446,6 +457,16 @@ bool parse(const std::string &path, std::vector<Zone> &zones, int &swLow, int &s
         const size_t b = p + 84;
         if (b + size > d.size()) break;
         const std::string name = str(p + 20, 64);
+        if (type == 4 && size >= 4) {   // u32 n, n u8 ids, n s16 values; then u32 m and m (u16 id, s16 value) pairs for ids over 255
+            const size_t n = u32(b);
+            if (4 + 3 * n <= size) {
+                for (size_t i = 0; i < n; ++i) if (d[b + 4 + i]) params[d[b + 4 + i]] = (int16_t)u16(b + 4 + n + 2 * i);
+                const size_t q = b + 4 + 3 * n;
+                if (q + 4 <= b + size)
+                    for (size_t i = 0, m = u32(q); i < m && q + 4 + 4 * i + 4 <= b + size; ++i)
+                        if (const int id = u16(q + 4 + 4 * i)) params[id] = (int16_t)u16(q + 6 + 4 * i);
+            }
+        }
         if (type == 1 && size >= 96) {
             RawZone z;
             z.opts = d[b]; z.key = d[b + 1]; z.fine = s8(b + 2); z.pan = s8(b + 3); z.vol = s8(b + 4);
@@ -488,7 +509,6 @@ bool parse(const std::string &path, std::vector<Zone> &zones, int &swLow, int &s
     }
     std::vector<int> channels;   // per zone: the group's MIDI channel, -1 = any
     std::set<int> otherEnable;
-    const fs::path dir = fs::path(path).parent_path();
     std::map<int, std::string> files;   // sample index -> path ("" = not installed)
     size_t missing = 0, disabled = 0;
     for (auto &r : raw) {
@@ -552,11 +572,58 @@ bool parse(const std::string &path, std::vector<Zone> &zones, int &swLow, int &s
         }
         zones.swap(kept);
     }
-    if (missing) warnings.push_back("exs: " + std::to_string(missing) + " zone(s) left out: their samples aren't installed (Logic's additional sound content)");
+    // the instrument's own level, tuning, velocity response and amplitude envelope (ENV1). Its filter isn't
+    // played: its cutoff scale and the modulation that opens it (a piano's velocity) aren't known
+    auto param = [&](int id, int def) { auto it = params.find(id); return it == params.end() ? def : it->second; };
+    if (!params.empty()) {
+        const double tune = param(0x2d, 0) + param(0x0e, 0) + param(0x0f, 0) / 100.0;
+        const double attack = envSeconds(param(0x52, 0)), hold = envSeconds(param(0x58, 0)), decay = envSeconds(param(0x54, 0));
+        const double sustain = std::clamp(param(0x51, 127), 0, 127) / 127.0, release = std::max(0.003, envSeconds(param(0x55, 0)));
+        const double velTrack = std::clamp(param(0x5a, -60) / -60.0, 0.0, 1.0);
+        for (auto &z : zones) {
+            z.gainDb += param(0x07, 0);
+            z.tune += tune;
+            z.velTrack = velTrack;
+            z.attack = attack; z.hold = hold; z.decay = sustain < 1 ? decay : 0; z.sustain = sustain; z.release = release;
+            z.delay = envSeconds(param(0x16d, 0));
+        }
+    }
+    if (missing) warnings.push_back("exs: " + std::to_string(missing) + " zone(s) left out: their samples aren't installed (GarageBand's Sound Library or Logic's additional content has them)");
     if (!otherEnable.empty()) warnings.push_back("exs: groups enabled by something other than a controller or articulation play all the time");
     (void)disabled;
-    if (zones.empty()) { err = "none of its samples are installed"; return false; }
+    if (zones.empty()) { err = "none of its samples are installed (download them in GarageBand: Sound Library > Download All Available Sounds)"; return false; }
     return true;
+}
+
+bool parse(const std::string &path, std::vector<Zone> &zones, int &swLow, int &swHigh, int &swDefault, std::vector<std::string> &articulations,
+           std::vector<std::string> &warnings, std::string &err) {
+    std::vector<uint8_t> d;
+    if (!readFile(path, d)) { err = "cannot read " + path; return false; }
+    return parseData(d, 0, fs::path(path).parent_path(), zones, swLow, swHigh, swDefault, articulations, warnings, err);
+}
+
+// How many of an instrument's sample files are installed, of how many
+void sampleCount(const std::vector<uint8_t> &d, size_t at, const fs::path &dir, size_t &installed, size_t &total) {
+    installed = total = 0;
+    if (!magicAt(d, at)) return;
+    const bool big = !std::memcmp(d.data() + at + 16, "SOBT", 4) || !std::memcmp(d.data() + at + 16, "SOBJ", 4);
+    auto u32 = [&](size_t o) -> uint32_t { const uint8_t *q = d.data() + o; return big ? (uint32_t)q[0] << 24 | q[1] << 16 | q[2] << 8 | q[3] : (uint32_t)q[3] << 24 | q[2] << 16 | q[1] << 8 | q[0]; };
+    auto str = [&](size_t o, size_t max) { std::string r; for (size_t k = 0; k < max && o + k < d.size() && d[o + k]; ++k) r += (char)d[o + k]; return r; };
+    for (size_t p = at; magicAt(d, p);) {
+        const uint32_t sig = u32(p);
+        uint32_t size = u32(p + 4);
+        if ((sig >> 24) & 0x80) size &= 0x7FFF;
+        const size_t b = p + 84;
+        if (b + size > d.size()) break;
+        if (((sig >> 24) & 0x0F) == 3) {
+            Sample s;
+            s.name = size >= 592 && d[b + 336] ? str(b + 336, 256) : str(p + 20, 64);
+            s.dir = size >= 336 ? str(b + 80, 256) : "";
+            ++total;
+            if (!findSample(s, dir).empty()) ++installed;
+        }
+        p = b + size;
+    }
 }
 } // namespace exs
 
@@ -673,7 +740,7 @@ std::string resolveIn(const std::string &name, const std::string &baseDir) {
 
 // find a library entry by exact name, then by path suffix, then by unique substring
 bool findEntry(const std::string &kind, const std::string &query, std::string &path, std::string &err) {
-    const auto &lib = sampleLibrary();
+    const auto &lib = kind == "patch" ? patchLibrary() : sampleLibrary();
     const std::string q = lower(query);
     std::vector<const SampleLibraryEntry *> exact;
     for (auto &e : lib) if (e.kind == kind && lower(e.name) == q) exact.push_back(&e);
@@ -1034,6 +1101,39 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
     return lib;
 }
 
+const std::vector<SampleLibraryEntry> &patchLibrary() {
+    static std::vector<SampleLibraryEntry> lib;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::set<std::string> seen;
+        // GarageBand's and Logic's patches that play on Logic's samplers, when some of their samples are installed
+        for (auto &pt : logicPatches()) {
+            if (!pt.sampler || !seen.insert(lower(pt.name)).second) continue;
+            std::vector<PatchChannel> chans;
+            std::string e;
+            if (!readPatchChannels(pt.path, chans, e)) continue;
+            size_t installed = 0;
+            for (auto &c : chans) {
+                if (!c.sampler) continue;
+                size_t i = 0, t = 0;
+                if (c.exsAt) exs::sampleCount(c.data, c.exsAt, fs::path(pt.path), i, t);
+                else if (!c.exs.empty()) {
+                    const std::string stem = lower(fs::path(c.exs).stem().string());
+                    for (auto &x : sampleLibrary())
+                        if (x.kind == "exs" && lower(x.name) == stem) {
+                            std::vector<uint8_t> d;
+                            if (readFile(x.path, d)) exs::sampleCount(d, 0, fs::path(x.path).parent_path(), i, t);
+                            break;
+                        }
+                }
+                installed += i;
+            }
+            if (installed) lib.push_back({"patch", pt.name, pt.path, pt.category, installed});
+        }
+    });
+    return lib;
+}
+
 // "Snare 01.wav" and "Snare 02.wav" are takes of one sound: the name without its trailing number
 std::string takeGroup(const std::string &file) {
     std::string n = fs::path(file).stem().string();
@@ -1109,7 +1209,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
                                                 "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz",
-                                                "soundfont", "program", "bank", "preset", "exs"};
+                                                "soundfont", "program", "bank", "preset", "exs", "patch"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
@@ -1141,6 +1241,50 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (!soundfont->zones(*pr, sz, err)) return false;
         sf2Zones(sz, zones);
         source = path;
+    } else if (cfg.contains("patch")) {   // a GarageBand or Logic patch: the sampler instruments of its channels
+        isExs = true;
+        const std::string q = cfg["patch"].get<std::string>();
+        std::string dir = resolveIn(q, job.baseDir);
+        if (dir.empty() || !fs::is_directory(dir)) {
+            std::string e2;
+            if (!findEntry("patch", q, dir, e2)) {
+                const LogicPatch *named = logicPatchNamed(q);
+                if (!named) { err = e2; return false; }
+                if (!named->sampler) { err = "patch '" + named->name + "' plays " + named->instrument + ", an instrument only GarageBand and Logic can play (patches on Sampler, EXS24 and Drum Kit Designer play here)"; return false; }
+                dir = named->path;   // its samples may be missing: the error below names them
+            }
+        }
+        std::vector<PatchChannel> chans;
+        if (!readPatchChannels(dir, chans, err)) return false;
+        std::vector<std::string> others;
+        std::string firstErr;
+        size_t played = 0;
+        for (auto &c : chans) {
+            if (!c.sampler) { if (!c.instrument.empty()) others.push_back(c.instrument); continue; }
+            std::vector<Zone> zs;
+            int lo = 128, hi = -1, def = -1;
+            std::vector<std::string> articulations, w;
+            std::string e2;
+            bool ok = false;
+            if (c.exsAt) ok = exs::parseData(c.data, c.exsAt, fs::path(dir), zs, lo, hi, def, articulations, w, e2);
+            else if (!c.exs.empty()) {
+                std::string path;
+                ok = findEntry("exs", fs::path(c.exs).stem().string(), path, e2) && exs::parse(path, zs, lo, hi, def, articulations, w, e2);
+                if (!ok) e2 = "its instrument " + c.exs + ": " + (e2.rfind("no exs", 0) == 0 ? "not installed (GarageBand's Sound Library has it)" : e2);
+            } else e2 = "its " + c.instrument + " channel names no instrument";
+            if (!ok) { if (firstErr.empty()) firstErr = e2; continue; }
+            if (!played) { swLow = lo; swHigh = hi; swDefault = def; }
+            zones.insert(zones.end(), zs.begin(), zs.end());
+            for (auto &x : w) if (std::find(warnings.begin(), warnings.end(), x) == warnings.end()) warnings.push_back(x);
+            ++played;
+        }
+        if (!played) { err = "patch '" + fs::path(dir).stem().string() + "': " + (firstErr.empty() ? "no channel plays a sampler instrument" : firstErr); return false; }
+        if (!others.empty()) {
+            std::string l;
+            for (auto &o : others) l += (l.empty() ? "" : ", ") + o;
+            warnings.push_back("patch: channels on " + l + " left out (instruments only GarageBand and Logic can play)");
+        }
+        source = dir;
     } else if (cfg.contains("exs")) {
         isExs = true;
         const std::string q = cfg["exs"].get<std::string>();
@@ -1243,6 +1387,11 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     const bool oneShot = cfg.value("oneShot", isKit || allOneShot);
     const double attack = cfg.value("attack", isKit ? 0.0 : 0.002);
     const double release = cfg.value("release", isKit ? 0.05 : 0.25);
+    if (isExs)   // a Logic instrument brings its envelope; the track's own "attack" / "release" replace it
+        for (auto &z : zones) {
+            if (cfg.contains("attack")) z.attack = -1;
+            if (cfg.contains("release")) z.release = -1;
+        }
     const int select = std::clamp(cfg.value("select", 0), 0, 127);
     const double transpose = cfg.value("transpose", 0.0);
     const double velSens = std::clamp(cfg.value("velocity", 1.0), 0.0, 1.0);

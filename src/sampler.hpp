@@ -12,7 +12,10 @@
 //               and the *sine/*saw/*square/*triangle/*noise generators.
 //  exs          a Logic / GarageBand Sampler instrument (.exs, EXS24): zones, groups (velocity layers,
 //               key ranges, controller-enabled groups at rest, articulations as keyswitches from MIDI 0),
-//               loops; samples found where Logic keeps them, consolidated CAF samples read by range.
+//               loops, the instrument's level, tuning and amplitude envelope; samples found where Logic
+//               keeps them, consolidated CAF samples read by range.
+//  patch        a GarageBand / Logic patch (logic_patches.hpp) whose channels play Sampler, EXS24 or Drum
+//               Kit Designer: the instruments of those channels, merged (the patch's effects are not played).
 //  kit          a folder of one-shot samples (any format audio_file.hpp reads), mapped to General MIDI keys from the file names
 //               (kick 36, snare 38, clap 39, closed hat 42, open hat 46, crash 49, ...), or an
 //               explicit {"key": "file"} map.
@@ -30,13 +33,16 @@ namespace wl {
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 
 struct SampleLibraryEntry {
-    std::string kind;       // "multisample", "sfz", "soundfont", "exs", "kit" or "loops"
+    std::string kind;       // "multisample", "sfz", "soundfont", "exs", "patch", "kit" or "loops"
     std::string name, path, category;
-    size_t count = 0;       // zones (multisample), regions (sfz), presets (soundfont) or sample files (kit)
+    size_t count = 0;       // zones (multisample), regions (sfz), presets (soundfont), installed samples (patch) or sample files (kit)
 };
 
 // Every multisample and kit folder under the sample roots (cached per process).
 const std::vector<SampleLibraryEntry> &sampleLibrary();
+// The GarageBand and Logic patches the sampler plays ("patch"), with how many of their samples are
+// installed: only patches with some (cached per process, built on first use).
+const std::vector<SampleLibraryEntry> &patchLibrary();
 // A sample file by path (absolute, relative to baseDir, or relative to a sample root); "" if missing.
 std::string resolveSampleFile(const std::string &name, const std::string &baseDir);
 std::vector<std::string> sampleRoots();

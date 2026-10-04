@@ -102,7 +102,8 @@ json tools() {
         {{"plugin", prop("string", "the plugin's name or id, or builtin:synth")}, {"search", prop("string", "only presets matching this")}},
         {"plugin"}, readOnly));
     list.push_back(tool("list_samples", "List sample libraries",
-        "Sample libraries builtin:sampler plays: Bitwig multisamples, drum kits, SFZ instruments, SoundFonts and loops.",
+        "Sample libraries builtin:sampler plays: Bitwig multisamples, drum kits, SFZ instruments, SoundFonts, Logic and GarageBand "
+        "instruments (exs) and patches (patch), and loops.",
         {{"search", prop("string", "only libraries matching this")}}, {}, readOnly));
     list.push_back(tool("list_loops", "List Apple Loops",
         "The Apple Loops GarageBand and Logic install (macOS): category, key, tempo and length in beats. A builtin:audio clip "
@@ -458,7 +459,7 @@ private:
             }
             if (list.size() > 300) lines += "... " + std::to_string(list.size() - 300) + " more: narrow with search\n";
             return text(lines.empty() ? "no sample libraries match (samples --install-soundfont adds General MIDI sounds)"
-                                      : lines + "\nUse with \"plugin\": \"builtin:sampler\" and \"sampler\": {\"multisample\"|\"kit\"|\"sfz\"|\"soundfont\": \"<name>\"}.");
+                                      : lines + "\nUse with \"plugin\": \"builtin:sampler\" and \"sampler\": {\"<kind>\": \"<name>\"} (multisample, kit, sfz, exs, patch, soundfont).");
         }
         if (name == "list_loops") {
             std::vector<std::string> args = {"loops", "--json"};

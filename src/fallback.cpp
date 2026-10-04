@@ -34,7 +34,7 @@ bool available(const json &sound, const std::string &baseDir, std::string &why) 
             if (c.is_object() && c.contains("file") && libMissing(c["file"], "clip")) return false;
     if (plugin == "builtin:sampler") {
         const json s = sound.value("sampler", json::object());
-        for (const char *kind : {"multisample", "kit", "sfz", "soundfont"})
+        for (const char *kind : {"multisample", "kit", "sfz", "soundfont", "exs", "patch"})
             if (s.contains(kind) && s[kind].is_string()) {
                 std::string path, err;
                 if (!findSampleEntry(kind, s[kind].get<std::string>(), baseDir, path, err)) {
@@ -138,7 +138,7 @@ json suggestFallback(const json &track) {
     const std::string plugin = track.value("plugin", std::string());
     const json sampler = track.value("sampler", json::object());
     bool named = false;   // a sampler playing a named library, which another computer may not have
-    for (const char *k : {"multisample", "kit", "soundfont", "sfz", "sample"})
+    for (const char *k : {"multisample", "kit", "soundfont", "sfz", "exs", "patch", "sample"})
         if (sampler.contains(k) && sampler[k].is_string()) {
             const std::string v = sampler[k].get<std::string>();
             named |= v.rfind("lib:", 0) == 0 || (v.find('/') == std::string::npos && v.find('.') == std::string::npos);
@@ -152,7 +152,7 @@ json suggestFallback(const json &track) {
         stateName = std::filesystem::path(f).stem().string();
     }
     std::string sampleName;
-    for (const char *k : {"multisample", "kit", "soundfont", "sfz", "sample"})
+    for (const char *k : {"multisample", "kit", "soundfont", "sfz", "exs", "patch", "sample"})
         if (sampler.contains(k) && sampler[k].is_string()) sampleName += " " + sampler[k].get<std::string>();
     std::string spaced;   // "ChipKick" reads as "chip kick"
     for (char c : track.value("name", std::string())) {
