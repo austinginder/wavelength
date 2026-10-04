@@ -1,4 +1,6 @@
 #include "job.hpp"
+
+#include "arp.hpp"
 #include "harmony.hpp"
 
 #include "platform.hpp"
@@ -538,7 +540,14 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             for (auto &[name, key] : artMap.items()) arts[name] = parseKey(key);
             std::vector<int> noteArt;                    // keyswitch per note (-1 = none)
             std::vector<json> ordered;
-            for (auto &n : t.value("notes", json::array())) ordered.push_back(n);
+            json written = t.value("notes", json::array());
+            if (t.contains("arp") && !(t["arp"].is_boolean() && !t["arp"].get<bool>())) {   // the held notes as an arpeggio
+                json played;
+                std::string aerr;
+                if (!arpeggiate(written, t["arp"], played, aerr)) throw std::runtime_error("track '" + tr.name + "': " + aerr);
+                written = played;
+            }
+            for (auto &n : written) ordered.push_back(n);
             if (roll != 0)   // strum from the lowest note up (or down for negative roll)
                 std::stable_sort(ordered.begin(), ordered.end(), [](const json &a, const json &b) {
                     return parseKey(a.at("key")) < parseKey(b.at("key"));

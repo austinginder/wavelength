@@ -132,7 +132,7 @@ int lastBarOf(const Job &job) {
 }
 
 const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "drum", "transpose", "articulations",
-                            "velocityTo", "fallback", "warmup", "bendRange", "roll"};
+                            "velocityTo", "fallback", "warmup", "bendRange", "roll", "arp"};
 const char *kMixKeys[] = {"gain", "pan", "mute", "output", "sends", "stem", "harmony", "groove"};
 
 // a setting's change, naming the keys of an object that changed

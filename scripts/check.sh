@@ -455,6 +455,22 @@ a = json.load(sys.stdin)
 sys.exit(0 if a["pitch"]["note"] == "C3" and a["lufs"] > -30 and a["stereo"]["width"] > 0.1 else 1)' || gate_why="${gate_why:+$gate_why; }the phaser lost the pitch, the level or its width"
 fi
 if [ -n "$gate_why" ]; then echo "FAIL gate/phaser: $gate_why"; fail=1; else echo "ok   gate/phaser: a noise gate closes on a quiet tone, a phaser keeps pitch and widens"; fi
+# arp: a C major chord held two beats at 1/16 up-and-down over two octaves plays C4 E4 G4 C5 E5 G5 E5 C5 (read back
+# from a MIDI export)
+mkdir -p out/check/arp
+cat > out/check/arp/job.json <<'JOB'
+{"tempo": 120, "stems": "none", "tracks": [{"name": "Arp", "plugin": "builtin:synth", "preset": "PL Pluck",
+  "arp": {"rate": "1/16", "order": "updown", "octaves": 2},
+  "notes": [{"beat": 0, "dur": 2, "key": "C4"}, {"beat": 0, "dur": 2, "key": "E4"}, {"beat": 0, "dur": 2, "key": "G4"}]}]}
+JOB
+if "./$build/wavelength" export out/check/arp/job.json --out out/check/arp/arp.mid > /dev/null 2>&1 &&
+   "./$build/wavelength" import out/check/arp/arp.mid --out out/check/arp/in > /dev/null 2>&1 &&
+   python3 -c '
+import json, sys
+n = json.load(open("out/check/arp/in/job.json"))["tracks"][0]["notes"]
+sys.exit(0 if [(x["beat"], x["key"]) for x in n] == [(i * 0.25, k) for i, k in enumerate([60, 64, 67, 72, 76, 79, 76, 72])] else 1)'; then
+  echo "ok   arp: up-and-down over two octaves on the grid"
+else echo "FAIL arp: the arpeggio's notes are wrong"; fail=1; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)
