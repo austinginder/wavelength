@@ -6,6 +6,7 @@
 
 #include "audio_file.hpp"
 #include "dsp.hpp"
+#include "effects.hpp"
 #include "platform.hpp"
 #include "sf2.hpp"
 #include "sfz.hpp"
@@ -1299,6 +1300,20 @@ std::string impulseForRoom(const std::string &room) {
     return "";
 }
 
+// The effects a patch puts after its instrument, as Wavelength effects: the instrument channel's own (when one
+// channel plays) and then the root channel's when that's a summing stack around it
+json patchChainFor(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes) {
+    const PatchChannel *inst = nullptr;
+    int n = 0;
+    for (auto &c : chans)
+        if (c.sampler || c.instrument == "Ultrabeat") { if (!inst) inst = &c; ++n; }
+    std::vector<PatchPlugin> chain;
+    if (n == 1) chain = inst->chain;
+    else if (n > 1) notes.push_back("several instrument channels: their own effects are left out");
+    if (!chans.empty() && chans.front().instrument.empty() && &chans.front() != inst) chain.insert(chain.end(), chans.front().chain.begin(), chans.front().chain.end());
+    return patchEffects(chain, notes);
+}
+
 json describePatch(const std::string &query, const std::string &baseDir, std::string &err) {
     std::string dir = resolveIn(query, baseDir);
     if (dir.empty() || !fs::is_directory(dir)) {
@@ -1336,6 +1351,9 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     out["plays"] = installed > 0 || !kit.empty();
     if (!out["plays"].get<bool>())
         out["why"] = synth && !installed ? "its instrument runs only inside GarageBand and Logic" : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
+    std::vector<std::string> notes;
+    out["effects"] = patchChainFor(chans, notes);
+    out["effectNotes"] = notes;
     for (auto &s : readPatchSends(dir)) {
         json j = {{"channel", s.channel}, {"aux", s.aux}, {"room", s.room}, {"db", std::round(s.db * 10) / 10}};
         const std::string ir = impulseForRoom(s.room);
@@ -1416,6 +1434,8 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
 
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
     json kitCfg;   // an Ultrabeat patch plays as its kit
+    json patchFx = json::array();   // the patch's own effects, played after the instrument ("effects": false leaves them out)
+    std::vector<std::string> patchFxNotes;
     if (track.sampler.is_object() && track.sampler.contains("patch") && track.sampler["patch"].is_string()) {
         const std::string q = track.sampler["patch"].get<std::string>();
         std::string dir = resolveIn(q, job.baseDir), e2;
@@ -1428,8 +1448,9 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                 kitCfg = track.sampler;
                 kitCfg.erase("patch");
                 kitCfg["kit"] = kit;
-                warnings.push_back("patch '" + fs::path(dir).stem().string() + "' plays Ultrabeat: its kit's samples play ('" + kit + "'), without Ultrabeat's synthesis and effects");
+                warnings.push_back("patch '" + fs::path(dir).stem().string() + "' plays Ultrabeat: its kit's samples play ('" + kit + "'), without Ultrabeat's synthesis");
             }
+            if (!kit.empty() || sampled) patchFx = patchChainFor(chans, patchFxNotes);
         }
     }
     const json &cfg = kitCfg.is_null() ? track.sampler : kitCfg;
@@ -1437,7 +1458,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
                                                 "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz",
-                                                "soundfont", "program", "bank", "preset", "exs", "patch"};
+                                                "soundfont", "program", "bank", "preset", "exs", "patch", "effects"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
@@ -1843,6 +1864,14 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     for (auto &[k, c] : missed) { silent += c; keys += (keys.empty() ? "" : ", ") + std::to_string(k); }
     if (silent) warnings.push_back(std::to_string(silent) + " note(s) matched no sample zone (keys " + keys + ")" +
                                    (isKit ? "; run `wavelength samples --kit <name>` for the key map" : ""));
+    if (cfg.value("effects", true) && !patchFx.empty()) {   // a GarageBand patch's EQ, compressor and delay, as built-in effects
+        const FxContext ctx{job, false, nullptr};
+        for (size_t i = 0; i < patchFx.size(); ++i) {
+            auto fx = makeEffect(patchFx[i], job, "patch effect " + std::to_string(i + 1), err);
+            if (!fx || !fx->process(out, ctx, err)) return false;
+            for (auto &w : fx->warnings) warnings.push_back("patch effect: " + w);
+        }
+    }
     return true;
 }
 

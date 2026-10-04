@@ -50,6 +50,29 @@ bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
     return !out.empty();
 }
 
+// the settings block inside a plug-in record's payload [a, b)
+PatchPlugin settingsOf(const std::vector<uint8_t> &d, size_t a, size_t b, const std::string &name) {
+    PatchPlugin p;
+    p.name = name;
+    for (size_t g = a + 12; g + 12 <= b; ++g) {
+        const bool le = !std::memcmp(&d[g], "GAMETSPP", 8), be = !le && !std::memcmp(&d[g], "EMAGPPST", 8);
+        if (!le && !be) continue;
+        auto u32 = [&](size_t o) { return be ? (uint32_t)d[o] << 24 | (uint32_t)d[o + 1] << 16 | (uint32_t)d[o + 2] << 8 | d[o + 3] : le32(&d[o]); };
+        const size_t s = g - 12;
+        const uint32_t count = u32(s + 8);
+        if (count > 4096 || s + 24 + 4 * (size_t)count > b) break;
+        p.id = u32(g + 8);
+        for (uint32_t i = 1; i < count; ++i) {   // value 0 is reserved: params[n] = parameter #n
+            const uint32_t bits = u32(s + 24 + 4 * (size_t)i);
+            float f;
+            std::memcpy(&f, &bits, 4);
+            p.params.push_back(std::isfinite(f) ? f : 0.f);
+        }
+        break;
+    }
+    return p;
+}
+
 bool readWhole(const std::string &path, std::vector<uint8_t> &d) {
     std::ifstream in(fs::u8path(path), std::ios::binary);
     if (!in) return false;
@@ -78,6 +101,87 @@ std::vector<std::string> channelFiles(const std::string &patchDir) {
     return files;
 }
 } // namespace
+
+namespace {
+using nlohmann::json;
+double r2(double v) { return std::round(v * 100) / 100; }
+double r4(double v) { return std::round(v * 10000) / 10000; }
+
+// an Apple low or high cut (6-48 dB/oct, Q as resonance) as 12 dB/oct biquads: Butterworth stages, the sharpest
+// one taking the Q; an odd order gets a Q 0.5 stage (Wavelength's eq has no first-order band)
+void cutStages(json &bands, const char *type, double freq, int slopeDb, double q) {
+    static const std::map<int, std::vector<double>> butter = {{2, {0.7071}}, {4, {0.5412, 1.3066}}, {6, {0.5176, 0.7071, 1.9319}},
+                                                              {8, {0.5098, 0.6013, 0.9, 2.5629}}};
+    int order = std::max(1, (int)std::lround(slopeDb / 6.0));
+    if (order % 2) { bands.push_back({{"type", type}, {"freq", r2(freq)}, {"q", 0.5}}); --order; }
+    if (!order) return;
+    std::vector<double> qs = butter.count(order) ? butter.at(order) : butter.at(8);
+    qs.back() = r4(qs.back() * (q > 0 ? q : 0.7071) / 0.7071);
+    for (double x : qs) bands.push_back({{"type", type}, {"freq", r2(freq)}, {"q", x}});
+}
+} // namespace
+
+json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes) {
+    json fx = json::array();
+    for (auto &p : chain) {
+        auto v = [&](size_t n, double def = 0) { return n < p.params.size() ? (double)p.params[n] : def; };
+        if (p.params.empty()) { notes.push_back(p.name + ": no settings saved, left out"); continue; }
+        if (p.name == "Channel EQ") {   // 8 bands of (on, Hz, gain dB or slope n = 6n dB/oct, Q) from #0; master gain #32
+            json bands = json::array();
+            if (v(0)) cutStages(bands, "highpass", v(1), (int)std::lround(v(2)) * 6, v(3));
+            const char *kinds[6] = {"lowshelf", "peak", "peak", "peak", "peak", "highshelf"};
+            for (int b = 1; b <= 6; ++b)
+                if (v(4 * b) && v(4 * b + 2) != 0)
+                    bands.push_back({{"type", kinds[b - 1]}, {"freq", r2(v(4 * b + 1))}, {"gain", r2(v(4 * b + 2))}, {"q", r4(v(4 * b + 3))}});
+            if (v(28)) cutStages(bands, "lowpass", v(29), (int)std::lround(v(30)) * 6, v(31));
+            if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
+            if (v(32) != 0) fx.push_back({{"type", "gain"}, {"db", r2(v(32))}});
+            if (v(41) && std::any_of(bands.begin(), bands.end(), [](const json &b) { return b["type"] != "highpass" && b["type"] != "lowpass"; }))
+                notes.push_back("Channel EQ: Gain-Q coupling is on in GarageBand (Q as saved here)");
+        } else if (p.name == "Single EQ") {   // Single Band EQ, as channel strips name it
+            const int mode = (int)std::lround(v(0));
+            json bands = json::array();
+            if (mode == 0) cutStages(bands, "highpass", v(1), (int)std::lround(v(2)) * 6, v(4));
+            else if (mode == 4) cutStages(bands, "lowpass", v(1), (int)std::lround(v(2)) * 6, v(4));
+            else if (v(3) != 0) bands.push_back({{"type", mode == 1 ? "lowshelf" : mode == 3 ? "highshelf" : "peak"}, {"freq", r2(v(1))}, {"gain", r2(v(3))}, {"q", r4(v(5, 0.7071))}});
+            if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
+        } else if (p.name == "Compressor") {
+            // #0 threshold, #1 ratio, #2 attack ms, #3 release ms, #4 make-up, #5 knee 0-1, #7 auto gain (off / 0 dB / -12 dB),
+            // #8 output distortion (off / soft / hard / clip), #11 limiter threshold, #12 limiter, #24 mix %, #26/#27 in/out gain
+            const double T = v(0, -20), R = std::max(1.0, v(1, 2));
+            double makeup = v(4);
+            const int autoGain = (int)std::lround(v(7));
+            if (autoGain == 1 || autoGain == 2) makeup += -T * (1 - 1 / R) - (autoGain == 2 ? 12 : 0);   // the gain reduction of a full-scale input
+            if (v(26) != 0) fx.push_back({{"type", "gain"}, {"db", r2(v(26))}});
+            json c = {{"type", "compressor"}, {"threshold", r2(T)}, {"ratio", r2(R)}, {"attack", r2(std::max(0.05, v(2, 10)))},
+                      {"release", r2(v(3, 100))}, {"knee", r2(10 * v(5, 0.7))}, {"makeup", r2(makeup)}};
+            if (p.params.size() > 24 && v(24) < 100) c["mix"] = r4(v(24) / 100);
+            fx.push_back(c);
+            if (v(27) != 0) fx.push_back({{"type", "gain"}, {"db", r2(v(27))}});
+            const int dist = (int)std::lround(v(8));
+            if (dist >= 1 && dist <= 3) fx.push_back({{"type", "clip"}, {"ceiling", 0}, {"kneeDb", dist == 1 ? 3.0 : dist == 2 ? 1.0 : 0.1}, {"intended", true}});
+            if (v(12)) fx.push_back({{"type", "limiter"}, {"ceiling", r2(v(11))}});
+            if (v(9) != 0) notes.push_back("Compressor: its circuit type's character is not modelled");
+        } else if (p.name == "Tape Delay") {
+            // #3 feedback %, #4 high cut, #5 low cut (in the loop), #6 sync, #7 note (1/x of a whole note), #19 dry %, #20 wet %,
+            // #22 time ms (unsynced; the legacy 23-value layout has coarse #1 + fine #2 instead)
+            const bool legacy = p.params.size() < 25;
+            const double dry = (legacy ? 100 : v(19, 100)) / 100, wet = (legacy ? v(0, 30) : v(20)) / 100;
+            if (wet <= 0) { notes.push_back("Tape Delay: Wet is 0 as saved (GarageBand's Delay knob raises it), left out"); continue; }
+            json d = {{"type", "delay"}, {"feedback", r4(std::min(v(3) / 100, 0.97))}, {"highpass", r2(v(5, 20))}, {"lowpass", r2(v(4, 20000))},
+                      {"mix", r4(wet / (dry + wet))}};
+            if (v(6) && v(7) > 0) d["time"] = r4(4 / v(7));
+            else d["ms"] = r2(std::max(1.0, legacy ? v(1) + v(2) : v(22, 200)));
+            fx.push_back(d);
+            if (std::fabs(dry + wet - 1) > 1e-3) fx.push_back({{"type", "gain"}, {"db", r2(20 * std::log10(dry + wet))}});
+            if (std::fabs(v(8)) > 0.5 && !legacy) notes.push_back("Tape Delay: its groove (swung repeats) is not played");
+            if (v(11) || v(13)) notes.push_back("Tape Delay: wow and flutter are not played");
+        } else {
+            notes.push_back(p.name + ": GarageBand's own effect, not played");
+        }
+    }
+    return fx;
+}
 
 std::vector<PatchSend> readPatchSends(const std::string &patchDir) {
     std::vector<PatchSend> out;
@@ -168,7 +272,11 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         c.file = f;
         const Record *r = instrumentOf(recs);
         if (r) { c.instrument = r->name; c.preset = r->preset; }
-        for (auto &x : recs) if (!x.name.empty() && &x != r) c.effects.push_back(x.name);
+        for (auto &x : recs) {
+            if (x.name.empty() || &x == r) continue;
+            c.effects.push_back(x.name);
+            if (!r || x.at > r->at) c.chain.push_back(settingsOf(d, x.at, std::min(d.size(), x.at + x.size), x.name));
+        }
         c.sampler = r && isSamplerInstrument(r->name);
         if (c.sampler) {
             c.data.swap(d);

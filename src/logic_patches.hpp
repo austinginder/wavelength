@@ -7,11 +7,22 @@
 // patches carry a whole EXS instrument), or named ("MELC" "PMAS" + 4 bytes + "<name>.exs"). Apple's
 // synths (Alchemy, Retro Synth, ES2, Sculpture, the Vintage keyboards) run only inside GarageBand and Logic.
 #include <cstddef>
+#include <nlohmann/json.hpp>
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace wl {
+
+// A plug-in's saved settings: Apple parameter #n is params[n] (from the "TSPP" block: u32 size, u16 version,
+// u8 big-endian flag, u8, u32 count, "GAME" "TSPP" ("EMAG" "PPST" big-endian), u32 plug-in id, count float32
+// values of which the first is reserved)
+struct PatchPlugin {
+    std::string name;            // as the channel strip names it ("Channel EQ", "Compressor", "Tape Delay", ...)
+    uint32_t id = 0;             // Apple's plug-in id (Channel EQ 236, Compressor 154, Tape Delay 147, Single Band EQ 311)
+    std::vector<float> params;   // empty when the slot holds no settings block
+};
 
 struct PatchChannel {
     std::string file;            // the channel strip (.cst)
@@ -21,7 +32,8 @@ struct PatchChannel {
     std::vector<uint8_t> data;   // the channel strip, read whole for sampler channels
     size_t exsAt = 0;            // where an instrument stored inside it starts (0 = none)
     std::string exs;             // else the .exs file it names ("Steinway Piano 2.exs")
-    std::vector<std::string> effects;   // the other plugins on the channel, in order (GarageBand's own: not played)
+    std::vector<std::string> effects;   // the other plugins on the channel, in order
+    std::vector<PatchPlugin> chain;     // the same plug-ins with their settings (after the instrument)
 };
 
 // A send from a patch's channel to a GarageBand aux (data.plist): "Large Hall/6.6s Botta Church", its level
@@ -44,6 +56,12 @@ const std::vector<LogicPatch> &logicPatches();
 const LogicPatch *logicPatchNamed(const std::string &name);
 // A patch folder's channels (root channel first) with their instruments; sampler channels read whole.
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err);
+// Wavelength effects for the plug-ins of a channel that have built-in counterparts: Channel EQ and Single Band EQ
+// (eq bands; cuts as cascaded biquads), Compressor (compressor with its gain stages, distortion as a clip, its
+// limiter) and Tape Delay (delay; a Wet of 0 is left out). `notes` names what is approximated or left out
+// (Gain-Q coupling, circuit types, groove, wow and flutter, and every other plug-in). From the parameter maps
+// decoded from GarageBand's patches and Logic's presets (docs in the changelog for 0.5.0).
+nlohmann::json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes);
 // A patch's sends (macOS: data.plist is a binary property list); empty when it has none or can't be read.
 std::vector<PatchSend> readPatchSends(const std::string &patchDir);
 // "Sampler", "EXS24", "Drum Kit" (Drum Kit Designer): instruments built on Logic's samplers.

@@ -294,8 +294,9 @@ python3 scripts/make-test-exs.py out/check/exs
 cat > out/check/exs/job.json <<'JOB'
 {"tempo": 60, "leadIn": 0, "tail": 2, "stems": "16",
  "tracks": [{"name": "Exs", "plugin": "builtin:sampler", "sampler": {"exs": "Test Instrument.exs"}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]},
-            {"name": "Patch", "plugin": "builtin:sampler", "sampler": {"patch": "Test Patch"}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]},
-            {"name": "Short", "plugin": "builtin:sampler", "sampler": {"exs": "Test Instrument.exs", "release": 0.05}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]}]}
+            {"name": "Patch", "plugin": "builtin:sampler", "sampler": {"patch": "Test Patch", "effects": false}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]},
+            {"name": "Short", "plugin": "builtin:sampler", "sampler": {"exs": "Test Instrument.exs", "release": 0.05}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]},
+            {"name": "PatchFx", "plugin": "builtin:sampler", "sampler": {"patch": "Test Patch"}, "notes": [{"beat": 0, "dur": 1, "key": 69, "vel": 1}]}]}
 JOB
 cat > out/check/exs/synth.json <<'JOB'
 {"tempo": 60, "tracks": [{"name": "Synth", "plugin": "builtin:sampler", "sampler": {"patch": "Test Synth"}, "notes": [{"beat": 0, "dur": 1, "key": 60}]}]}
@@ -312,6 +313,8 @@ a = {t: json.load(open("out/check/exs/%s.json" % t)) for t in ("01-exs", "02-pat
 ok = all(x["pitch"]["note"] == "A4" for x in a.values())
 ok &= abs(a["01-exs"]["lufs"] - a["02-patch"]["lufs"]) < 0.1
 ok &= 1.4 < a["01-exs"]["envelope"]["lastSound"] < 1.8 and a["03-short"]["envelope"]["lastSound"] < 1.15
+r = {t["name"]: t["lufs"] for t in json.load(open("out/check/exs/report.json"))["tracks"]}
+ok &= -4.2 < r["PatchFx"] - r["Patch"] < -3.0   # its Channel EQ: -3 dB master, a 200 Hz low cut under the 440 Hz sine
 sys.exit(0 if ok else 1)' || exs_why="the instrument or the patch played wrong (pitch, level or release): $(python3 -c 'import json; print([(t, json.load(open("out/check/exs/%s.json" % t))["envelope"]["lastSound"]) for t in ("01-exs", "02-patch", "03-short")])')"
 fi
 synth_out=$("./$build/wavelength" render out/check/exs/synth.json --out out/check/exs/synth --json 2>/dev/null || true)
@@ -327,10 +330,11 @@ import json, sys
 a, b = json.loads(sys.argv[1])["patch"], json.loads(sys.argv[2])["patch"]
 c = a["channels"][0]
 sys.exit(0 if a["plays"] and c["instrument"] == "Sampler" and c["samples"] == {"installed": 1, "total": 1} and "Channel EQ" in c["effects"]
+         and a["effects"] == [{"type": "eq", "bands": [{"type": "highpass", "freq": 200, "q": 0.71}]}, {"type": "gain", "db": -3}]
          and not b["plays"] and "GarageBand" in b["why"] else 1)' "$p1" "$p2" || exs_why="samples --patch described the test patches wrong"
 fi
 unset WAVELENGTH_LOGIC_PATCHES
-if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument, synth patches refused, --patch"; fi
+if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused, --patch"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir

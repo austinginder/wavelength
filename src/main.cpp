@@ -512,8 +512,10 @@ int cmdSamples(const Args &a) {
         for (auto &s : d["sends"])
             std::fprintf(OUT, "  send %-34s %6.1f dB%s\n", s["aux"].get<std::string>().c_str(), s["db"].get<double>(),
                          s.contains("ir") ? ("   room: \"" + s["ir"].get<std::string>() + "\"").c_str() : "");
+        if (!d["effects"].empty()) std::fprintf(OUT, "  effects played as: %s\n", d["effects"].dump().c_str());
+        for (auto &n : d["effectNotes"]) std::fprintf(OUT, "  ! %s\n", n.get<std::string>().c_str());
         if (!d["plays"].get<bool>()) { std::fprintf(OUT, "\nDoesn't play here: %s.\n", d["why"].get<std::string>().c_str()); return 0; }
-        std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:sampler\", \"sampler\": {\"patch\": \"%s\"}. Its effects are GarageBand's own and don't play.\n",
+        std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:sampler\", \"sampler\": {\"patch\": \"%s\"} (\"effects\": false for the dry instrument).\n",
                      d["name"].get<std::string>().c_str());
         if (!d["sends"].empty())
             std::fprintf(OUT, "For its sends, a bus per room: {\"name\": \"Hall\", \"fx\": [{\"type\": \"convolve\", \"ir\": \"<room>\", \"mix\": 1}]} and \"sends\": {\"Hall\": <dB>}.\n");
