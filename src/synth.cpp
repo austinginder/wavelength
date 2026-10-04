@@ -541,6 +541,8 @@ bool isSynthExpParam(const std::string &name) {
     return i >= 0 && kParams[(size_t)i].exp;
 }
 
+bool isBuiltinSynthPatch(const std::string &name) { return patchBank().contains(name); }
+
 bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
     const double sr = job.sampleRate;
     Patch P;

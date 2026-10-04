@@ -37,7 +37,8 @@ struct PatchChannel {
     std::string exs;             // else the .exs file it names ("Steinway Piano 2.exs")
     std::vector<std::string> effects;   // the other plugins on the channel
     std::vector<PatchPlugin> chain;     // its audio effects with their settings, in insert order (the payload's u16 at +6)
-    std::vector<std::string> midiEffects;   // its MIDI effects (Arpeggiator, Chord Trigger, ...): not played
+    std::vector<std::string> midiEffects;   // its MIDI effects (Arpeggiator, Chord Trigger, ...) by name
+    std::vector<PatchPlugin> midiChain;     // and with their settings, in slot order (the Arpeggiator plays as the track's "arp")
     PatchPlugin settings;               // the instrument's own settings (Retro Synth's parameters)
 };
 
@@ -51,6 +52,7 @@ struct LogicPatch {
     std::string name, path, category;   // the folder name without ".patch", its path, the folder under Instrument it is in
     std::string instrument;             // the instrument it plays (its first sampler channel's, else the first one's)
     bool sampler = false;               // some channel plays an instrument the sampler can play
+    bool arpeggiator = false;           // its notes go through an Arpeggiator (switched on)
 };
 
 // Where patches are installed: GarageBand's and Logic's own, Logic's library, the user's.
@@ -77,5 +79,18 @@ nlohmann::json patchChainEffects(const std::vector<PatchChannel> &chans, std::ve
 std::vector<PatchSend> readPatchSends(const std::string &patchDir);
 // "Sampler", "EXS24", "Drum Kit" (Drum Kit Designer): instruments built on Logic's samplers.
 bool isSamplerInstrument(const std::string &name);
+
+// Where plug-in settings (.pst) are installed: GarageBand's and Logic's "Plug-In Settings" folders, the user's,
+// plus $WAVELENGTH_PLUGIN_SETTINGS. A plug-in's presets sit in a folder named after it ("Arpeggiator").
+std::vector<std::string> pluginSettingsRoots();
+// The Arpeggiator presets installed (names without ".pst", sorted, cached per process).
+const std::vector<std::pair<std::string, std::string>> &arpeggiatorPresets();
+// Apple's Arpeggiator settings (plug-in 300: parameter #n = params[n], the rhythm grid in the block's "UGCD" chunk)
+// as a track "arp" object (arp.hpp); null when it's switched off. `notes` names what is left out (latch, keyboard
+// split, scale snapping, (de-)crescendo).
+nlohmann::json arpeggiatorSettings(const PatchPlugin &p, std::vector<std::string> &notes);
+// The "arp" of a patch's Arpeggiator (`preset` false: the first one switched on in its channels) or of an
+// Arpeggiator preset (`preset` true), by name (any case). False with err when there is none.
+bool appleArpeggiator(const std::string &name, bool preset, nlohmann::json &arp, std::vector<std::string> &notes, std::string &err);
 
 } // namespace wl

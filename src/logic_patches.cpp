@@ -1,5 +1,6 @@
 #include "logic_patches.hpp"
 
+#include "bplist.hpp"
 #include "platform.hpp"
 
 #include <nlohmann/json.hpp>
@@ -385,7 +386,9 @@ json patchChainEffects(const std::vector<PatchChannel> &chans, std::vector<std::
     std::vector<PatchPlugin> chain;
     if (n == 1) {
         chain = inst->chain;
-        for (auto &m : inst->midiEffects) notes.push_back(m + ": a MIDI effect, not played (the notes play as written)");
+        for (auto &m : inst->midiChain)
+            if (m.name == "Arpeggiator") { if (!m.bypassed) notes.push_back("Arpeggiator: plays as the track's \"arp\" (\"arp\": false plays the notes as written)"); }
+            else notes.push_back(m.name + ": a MIDI effect, not played (the notes play as written)");
     } else if (n > 1) notes.push_back("several instrument channels: their own effects are left out");
     if (!chans.empty() && chans.front().instrument.empty() && &chans.front() != inst) chain.insert(chain.end(), chans.front().chain.begin(), chans.front().chain.end());
     return patchEffects(chain, notes);
@@ -450,6 +453,7 @@ const std::vector<LogicPatch> &logicPatches() {
                     std::vector<uint8_t> d;
                     std::vector<Record> recs;
                     if (!readWhole(f, d) || !records(d, recs)) continue;
+                    for (auto &x : recs) p.arpeggiator |= x.midiFx && x.name == "Arpeggiator" && !x.bypassed;
                     const Record *r = instrumentOf(recs);
                     if (!r) continue;
                     if (p.instrument.empty() || (!p.sampler && isSamplerInstrument(r->name))) p.instrument = r->name;
@@ -485,7 +489,10 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         for (auto &x : recs) {
             if (x.name.empty() || &x == r) continue;
             c.effects.push_back(x.name);
-            if (!x.midiFx) fx.push_back(&x); else c.midiEffects.push_back(x.name);
+            if (!x.midiFx) { fx.push_back(&x); continue; }
+            c.midiEffects.push_back(x.name);
+            c.midiChain.push_back(settingsOf(d, x.at, std::min(d.size(), x.at + x.size), x.name));
+            c.midiChain.back().bypassed = x.bypassed;
         }
         std::stable_sort(fx.begin(), fx.end(), [](const Record *a, const Record *b) { return a->order < b->order; });
         for (auto *x : fx) {
@@ -516,6 +523,135 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
     }
     if (out.empty()) { err = patchDir + " has no channel strips"; return false; }
     return true;
+}
+
+std::vector<std::string> pluginSettingsRoots() {
+    std::vector<std::string> out;
+#if defined(__APPLE__)
+    std::error_code ec;
+    for (const fs::path &p : {fs::path("/Applications/GarageBand.app/Contents/Resources/Plug-In Settings"),
+                              fs::path("/Applications/Logic Pro.app/Contents/Resources/Plug-In Settings"),
+                              fs::path("/Library/Application Support/Logic/Plug-In Settings"),
+                              platform::homeDir() / "Music/Audio Music Apps/Plug-In Settings"})
+        if (fs::is_directory(p, ec)) out.push_back(p.string());
+#endif
+    for (auto &p : platform::envPathList("WAVELENGTH_PLUGIN_SETTINGS")) out.push_back(p);
+    return out;
+}
+
+const std::vector<std::pair<std::string, std::string>> &arpeggiatorPresets() {
+    static std::vector<std::pair<std::string, std::string>> list;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::set<std::string> seen;
+        for (auto &root : pluginSettingsRoots()) {
+            std::error_code ec;
+            for (auto &e : fs::directory_iterator(fs::path(root) / "Arpeggiator", ec))
+                if (e.is_regular_file(ec) && lower(e.path().extension().string()) == ".pst" && seen.insert(lower(e.path().stem().u8string())).second)
+                    list.push_back({e.path().stem().u8string(), e.path().string()});
+        }
+        std::sort(list.begin(), list.end(), [](auto &a, auto &b) { return lower(a.first) < lower(b.first); });
+    });
+    return list;
+}
+
+json arpeggiatorSettings(const PatchPlugin &p, std::vector<std::string> &notes) {
+    auto v = [&](size_t n, double def = 0) { return n < p.params.size() && p.params[n] < 1e29f ? (double)p.params[n] : def; };
+    if (p.bypassed || v(0, 1) < 0.5) return nullptr;   // #0 Play/Stop
+    json a = json::object();
+    // #4 rate: numerator + denominator / 1000 (1.016 = 1/16, 1.024 = 1/16 triplet, 3.016 = dotted 1/16)
+    const double rate = v(4, 1.016);
+    const int num = (int)std::floor(rate + 1e-4), den = (int)std::lround((rate - num) * 1000);
+    if (num < 1 || den < 1) a["rate"] = "1/16";
+    else if (num == 1 && (den & (den - 1)) == 0) a["rate"] = "1/" + std::to_string(den);
+    else if (num == 1 && den % 3 == 0) a["rate"] = "1/" + std::to_string(den / 3 * 2) + "T";
+    else if (num == 3 && den % 2 == 0) a["rate"] = "1/" + std::to_string(den / 2) + "D";
+    else a["rate"] = r4(4.0 * num / den);
+    static const char *orders[] = {"up", "down", "updown", "outsidein", "random", "played"};   // #6 Note Order
+    a["order"] = orders[std::clamp((int)std::lround(v(6)), 0, 5)];
+    if (const int var = std::clamp((int)std::lround(v(7, 1)), 1, 4); var != 1) a["variation"] = var;   // #7 Variation (1-4)
+    if (const int oct = std::clamp((int)std::lround(v(9, 1)), 1, 4); oct != 1) a["octaves"] = oct;     // #9 Octave Range
+    if (v(10) != 0) a["inversions"] = true;   // #10 Octaving Mode: 1 = inversions (5, in two patches, read as inversions)
+    a["gate"] = r4(std::clamp(v(15, 90), 1.0, 150.0) / 100);   // #15 Note Length %
+    if (v(16) > 0) a["lengthRandom"] = r4(std::min(100.0, v(16)) / 100);   // #16 Note Length Random %
+    if (v(18, 50) > 50) a["swing"] = r4(std::min(99.0, v(18)) / 100);       // #18 Swing (50 = straight)
+    // #19 velocity base, #20 range %, #21 alteration (0 random, 1 (de-)crescendo), #23 random %
+    const double range = std::clamp(v(20, 100), 0.0, 100.0), random = v(21) < 0.5 ? std::clamp(v(23), 0.0, 100.0) : 0;
+    if (range < 100 || random > 0) a["velocity"] = {{"base", r4(std::clamp(v(19, 80), 1.0, 127.0) / 127)}, {"range", r4(range / 100)}, {"random", r4(random / 100)}};
+    if (v(21) >= 0.5 && v(22) != 0) notes.push_back("Arpeggiator: its velocity (de-)crescendo is left out");
+    if (const int cyc = (int)std::lround(v(14)); cyc < 0) a["cycle"] = "grid";   // #14 Cycle Length: 0 as played, -1 by grid, 1-32 notes
+    else if (cyc > 0) a["cycle"] = std::min(cyc, 32);
+    if (v(11) >= 0.5) {   // #11 Grid: the rhythm grid in the "UGCD" chunk (a binary property list) after the values
+        json grid;
+        const size_t count = p.values.size();
+        for (size_t at = 24 + 4 * count; at + 8 <= p.block.size();) {
+            const uint32_t size = le32(&p.block[at + 4]);
+            if (size < 8 || at + size > p.block.size()) break;
+            if (!std::memcmp(&p.block[at], "DCGU", 4) && parseBinaryPlist(&p.block[at + 8], size - 8, grid)) break;
+            at += size;
+        }
+        if (grid.is_object() && grid.contains("Steps") && grid["Steps"].is_array()) {
+            // each step fills ceil(Length) slots (a Length over 1 ties), the first #13 Active Grid Length slots play
+            const int active = std::clamp((int)std::lround(v(13, grid.value("ActiveSteps", 16.0))), 1, 128);
+            json steps = json::array();
+            int slot = 0;
+            for (auto &st : grid["Steps"]) {
+                if (slot >= active || !st.is_object()) break;
+                const std::string type = st.value("Type", std::string("Rest"));
+                double len = std::clamp(st.value("Length", 1.0), 0.01, 4.0);
+                const int span = std::max(1, (int)std::ceil(len - 1e-6));
+                len = std::min(len, (double)(active - slot));
+                const double vel = r4(std::clamp(st.value("Velocity", 80.0), 1.0, 127.0) / 127);
+                if (type == "Rest") steps.push_back("rest");
+                else if (type == "Chord") steps.push_back({{"chord", true}, {"vel", vel}, {"len", r4(len)}});
+                else if (std::fabs(len - 1) < 1e-6) steps.push_back(vel);
+                else steps.push_back({{"vel", vel}, {"len", r4(len)}});
+                if (type == "Rest") for (int k = 1; k < span && slot + k < active; ++k) steps.push_back("rest");
+                slot += span;
+            }
+            for (; slot < active; ++slot) steps.push_back("rest");
+            a["steps"] = steps;
+        } else notes.push_back("Arpeggiator: its rhythm grid couldn't be read (plays every step)");
+    }
+    if (v(2) >= 0.5) notes.push_back("Arpeggiator: Latch is left out (the arpeggio plays while notes are held)");
+    if (v(37) >= 0.5) notes.push_back("Arpeggiator: its keyboard split is left out");
+    if ((int)std::lround(v(27, 3)) != 3) notes.push_back("Arpeggiator: its scale snapping is left out");
+    return a;
+}
+
+bool appleArpeggiator(const std::string &name, bool preset, json &arp, std::vector<std::string> &notes, std::string &err) {
+    if (preset) {
+        const std::string q = lower(name);
+        for (auto &[n, path] : arpeggiatorPresets()) {
+            if (lower(n) != q) continue;
+            std::vector<uint8_t> d;
+            if (!readWhole(path, d)) { err = "can't read " + path; return false; }
+            PatchPlugin p = settingsOf(d, 0, d.size(), "Arpeggiator");
+            if (p.id != 300) { err = path + " isn't Arpeggiator settings"; return false; }
+            arp = arpeggiatorSettings(p, notes);
+            if (arp.is_null()) { err = "the Arpeggiator preset '" + n + "' is switched off"; return false; }
+            return true;
+        }
+        err = "no Arpeggiator preset '" + name + "' (`wavelength presets arp` lists them)";
+        return false;
+    }
+    std::error_code ec;
+    std::string dir = name, shown = fs::u8path(name).stem().u8string();   // a patch folder, or a patch by name
+    if (!fs::is_directory(fs::u8path(name), ec)) {
+        const LogicPatch *lp = logicPatchNamed(name);
+        if (!lp) { err = "no GarageBand or Logic patch '" + name + "'"; return false; }
+        dir = lp->path, shown = lp->name;
+    }
+    std::vector<PatchChannel> chans;
+    if (!readPatchChannels(dir, chans, err)) return false;
+    for (auto &c : chans)
+        for (auto &m : c.midiChain)
+            if (m.name == "Arpeggiator" && m.id == 300 && !m.bypassed) {
+                arp = arpeggiatorSettings(m, notes);
+                if (!arp.is_null()) return true;
+            }
+    err = "the patch '" + shown + "' has no Arpeggiator switched on";
+    return false;
 }
 
 } // namespace wl

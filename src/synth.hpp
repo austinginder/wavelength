@@ -22,6 +22,8 @@ struct SynthPatchInfo {
     std::string name, category, description;
 };
 std::vector<SynthPatchInfo> synthPatches();
+// One of the synth's own patches (exact name), not a GarageBand one it re-creates.
+bool isBuiltinSynthPatch(const std::string &name);
 
 struct SynthParamInfo {
     std::string name, unit, description;

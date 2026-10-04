@@ -11,8 +11,11 @@
   <dir>/patches/Test Retro.patch/   a channel strip on Retro Synth: Analog mode, one saw, filter off, transposed +12
   <dir>/patches/Test Organ.patch/   a channel strip on Vintage B3: only the upper 8' drawbar out (a sine at the note),
                                     its 234 preset-key ints before the values as Vintage B3 stores them
+  <dir>/patches/Test Arp.patch/     Test Retro's Retro Synth after an Arpeggiator: 1/16 up over 2 octaves, note length
+                                    50 %, swing 60, a 6-step grid (note 127, rest, chord 64, note 100 tied over 2, note 64)
+  <dir>/settings/Arpeggiator/Test Arp.pst   the same Arpeggiator settings as a preset
 Usage: make-test-exs.py <dir>"""
-import math, os, struct, sys
+import math, os, plistlib, struct, sys
 
 out = sys.argv[1]
 os.makedirs(os.path.join(out, 'patches', 'Test Patch.patch'), exist_ok=True)
@@ -20,6 +23,8 @@ os.makedirs(os.path.join(out, 'patches', 'Test Synth.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Retro.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Organ.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Arp.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'settings', 'Arpeggiator'), exist_ok=True)
 wav = os.path.abspath(os.path.join(out, 'Test Sine.wav'))
 rate, n = 48000, 96000
 pcm = struct.pack('<%dh' % n, *[int(16000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n)])
@@ -99,3 +104,22 @@ b3[1 + 105] = -6      # volume dB
 block = struct.pack('<IHBBI', 24 + 936 + 4 * len(b3), 2, 0, 0, len(b3)) + b'GAMETSPP' + struct.pack('<I', 216) + bytes(936) + struct.pack('<%df' % len(b3), *b3)
 organ = struct.pack('<I', 216) + bytes(8) + struct.pack('<I', len(block)) + bytes(16) + block
 strip(os.path.join(out, 'patches', 'Test Organ.patch', '#Root.cst'), [record(3, 'Vintage B3', b'GAME', organ)])
+# Arpeggiator (plug-in id 300, a MIDI effect: flags 0x02000000 in the prefix): parameter #n = value n+1, then chunks
+# (tag stored byte-reversed, size counting the 8-byte header): "L13a" empty, "UGCD" the grid as a binary property list
+arp = [1e30] * 64
+for n, v in {0: 1, 2: 0, 4: 1.016, 5: 1, 6: 0, 7: 1, 9: 2, 10: 0, 11: 1, 13: 6, 14: 0, 15: 50, 16: 0, 18: 60, 19: 80, 20: 100,
+             21: 0, 23: 0, 27: 3, 37: 0}.items():
+    arp[n] = v
+grid = plistlib.dumps({'Version': 1, 'UUID': 'TEST-GRID', 'ActiveSteps': 6, 'Steps': [
+    {'Type': 'Note', 'Velocity': 127, 'Length': 1.0}, {'Type': 'Rest', 'Velocity': 80, 'Length': 1.0},
+    {'Type': 'Chord', 'Velocity': 64, 'Length': 1.0}, {'Type': 'Note', 'Velocity': 100, 'Length': 2.0},
+    {'Type': 'Note', 'Velocity': 64, 'Length': 1.0}]}, fmt=plistlib.FMT_BINARY)
+grid += bytes(-len(grid) % 4)
+chunks = b'a31L' + struct.pack('<I', 8) + b'DCGU' + struct.pack('<I', 8 + len(grid)) + grid
+vals = [0.0] + arp
+block = struct.pack('<IHBBI', 24 + 4 * len(vals) + len(chunks), 1, 0, 0, len(vals)) + b'GAMETSPP' + struct.pack('<I', 300) + struct.pack('<%df' % len(vals), *vals) + chunks
+with open(os.path.join(out, 'settings', 'Arpeggiator', 'Test Arp.pst'), 'wb') as f:
+    f.write(block)
+arpeggiator = struct.pack('<III', 300, 0, 0x02000000) + struct.pack('<I', len(block)) + bytes(16) + block
+strip(os.path.join(out, 'patches', 'Test Arp.patch', '#Root.cst'),
+      [record(0, 'Arpeggiator', b'GAME', arpeggiator), record(3, 'Retro Synth', b'GAME', settings(279, retro))])

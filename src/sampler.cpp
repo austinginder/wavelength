@@ -1347,6 +1347,13 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     std::vector<std::string> notes;
     if (!out.contains("effects")) out["effects"] = patchChainEffects(chans, notes);
     out["effectNotes"] = notes;
+    for (auto &c : chans)   // its Arpeggiator, played as the track's "arp"
+        for (auto &m : c.midiChain)
+            if (m.name == "Arpeggiator" && m.id == 300 && !out.contains("arp")) {
+                std::vector<std::string> an;
+                json a = arpeggiatorSettings(m, an);
+                if (!a.is_null()) out["arp"] = a;
+            }
     for (auto &s : readPatchSends(dir)) {
         json j = {{"channel", s.channel}, {"aux", s.aux}, {"room", s.room}, {"db", std::round(s.db * 10) / 10}};
         const std::string ir = impulseForRoom(s.room);

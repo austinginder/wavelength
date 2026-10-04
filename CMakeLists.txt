@@ -190,6 +190,7 @@ add_executable(wavelength
   src/retro_synth.cpp
   src/apple_synths.cpp
   src/arp.cpp
+  src/bplist.cpp
   src/sfz.cpp
   src/sf2.cpp
   src/encode.cpp

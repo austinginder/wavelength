@@ -182,7 +182,8 @@ const std::vector<std::pair<std::string, std::string>> &garageBandSynthPatches()
         for (auto &p : logicPatches()) {
             if (p.sampler) continue;
             GarageBandSynth g;
-            if (garageBandSynthPatch(p.name, g)) list.push_back({p.name, g.instrument + (g.engine.empty() ? "" : " (" + g.engine + " mode)")});
+            if (garageBandSynthPatch(p.name, g))
+                list.push_back({p.name, g.instrument + (g.engine.empty() ? "" : " (" + g.engine + " mode)") + (p.arpeggiator ? ", arpeggiated" : "")});
         }
     });
     return list;

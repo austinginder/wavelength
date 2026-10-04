@@ -455,12 +455,14 @@ a = json.load(sys.stdin)
 sys.exit(0 if a["pitch"]["note"] == "C3" and a["lufs"] > -30 and a["stereo"]["width"] > 0.1 else 1)' || gate_why="${gate_why:+$gate_why; }the phaser lost the pitch, the level or its width"
 fi
 if [ -n "$gate_why" ]; then echo "FAIL gate/phaser: $gate_why"; fail=1; else echo "ok   gate/phaser: a noise gate closes on a quiet tone, a phaser keeps pitch and widens"; fi
-# arp: a C major chord held two beats at 1/16 up-and-down over two octaves plays C4 E4 G4 C5 E5 G5 E5 C5 (read back
-# from a MIDI export)
+# arp: a C major chord held two beats at 1/16 up-and-down (top and bottom once) over two octaves plays C4 E4 G4 C5
+# E5 G5 E5 C5 (read back from a MIDI export); a patch's Arpeggiator (make-test-exs.py's Test Arp: 1/16 up over two
+# octaves, note length 50 %, swing 60, the grid note 127, rest, chord 64, note 100 tied over 2, note 64) plays by
+# itself, "arp": false turns it off, and its preset plays on another track with one octave
 mkdir -p out/check/arp
 cat > out/check/arp/job.json <<'JOB'
 {"tempo": 120, "stems": "none", "tracks": [{"name": "Arp", "plugin": "builtin:synth", "preset": "PL Pluck",
-  "arp": {"rate": "1/16", "order": "updown", "octaves": 2},
+  "arp": {"rate": "1/16", "order": "updown", "variation": 2, "octaves": 2},
   "notes": [{"beat": 0, "dur": 2, "key": "C4"}, {"beat": 0, "dur": 2, "key": "E4"}, {"beat": 0, "dur": 2, "key": "G4"}]}]}
 JOB
 if "./$build/wavelength" export out/check/arp/job.json --out out/check/arp/arp.mid > /dev/null 2>&1 &&
@@ -469,8 +471,27 @@ if "./$build/wavelength" export out/check/arp/job.json --out out/check/arp/arp.m
 import json, sys
 n = json.load(open("out/check/arp/in/job.json"))["tracks"][0]["notes"]
 sys.exit(0 if [(x["beat"], x["key"]) for x in n] == [(i * 0.25, k) for i, k in enumerate([60, 64, 67, 72, 76, 79, 76, 72])] else 1)'; then
-  echo "ok   arp: up-and-down over two octaves on the grid"
-else echo "FAIL arp: the arpeggio's notes are wrong"; fail=1; fi
+  arp_why=""
+else arp_why="up-and-down over two octaves played the wrong notes"; fi
+python3 scripts/make-test-exs.py out/check/arp/fx
+cat > out/check/arp/patch.json <<'JOB'
+{"tempo": 120, "stems": "none", "tracks": [
+ {"name": "Auto", "plugin": "builtin:synth", "preset": "Test Arp", "notes": [{"beat": 0, "dur": 2, "key": "C4"}, {"beat": 0, "dur": 2, "key": "E4"}, {"beat": 0, "dur": 2, "key": "G4"}]},
+ {"name": "Off", "plugin": "builtin:synth", "preset": "Test Arp", "arp": false, "notes": [{"beat": 0, "dur": 2, "key": "C4"}, {"beat": 0, "dur": 2, "key": "E4"}, {"beat": 0, "dur": 2, "key": "G4"}]},
+ {"name": "Preset", "plugin": "builtin:synth", "preset": "PL Pluck", "arp": {"preset": "Test Arp", "octaves": 1}, "notes": [{"beat": 0, "dur": 2, "key": "C4"}, {"beat": 0, "dur": 2, "key": "E4"}, {"beat": 0, "dur": 2, "key": "G4"}]}]}
+JOB
+if [ -z "$arp_why" ] && ! { WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/arp/fx/patches" WAVELENGTH_PLUGIN_SETTINGS="$PWD/out/check/arp/fx/settings" \
+     "./$build/wavelength" export out/check/arp/patch.json --out out/check/arp/patch.mid --no-print > /dev/null 2>&1 &&
+   "./$build/wavelength" import out/check/arp/patch.mid --out out/check/arp/patch-in > /dev/null 2>&1 &&
+   python3 -c '
+import json, sys
+t = {x["name"]: [(x2["beat"], x2["key"], round(x2.get("vel", 0) * 127), x2["dur"]) for x2 in x["notes"]] for x in json.load(open("out/check/arp/patch-in/job.json"))["tracks"]}
+grid = [(0.0, 60, 127, 0.125), (0.5, 60, 64, 0.125), (0.5, 64, 64, 0.125), (0.5, 67, 64, 0.125), (0.8, 64, 100, 0.25), (1.3, 67, 64, 0.125)]
+ok = t["Auto"] == grid + [(1.5, 72, 127, 0.125)] and t["Preset"] == grid + [(1.5, 60, 127, 0.125)]
+ok &= [(b, k) for b, k, v, d in t["Off"]] == [(0.0, 60), (0.0, 64), (0.0, 67)]
+sys.exit(0 if ok else 1)'; }; then arp_why="the Test Arp patch or preset played the wrong arpeggio"; fi
+if [ -n "$arp_why" ]; then echo "FAIL arp: $arp_why"; fail=1
+else echo "ok   arp: up-and-down over two octaves on the grid; a patch's Arpeggiator grid, swing and chord step, its preset"; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)

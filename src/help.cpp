@@ -24,6 +24,8 @@ Usage:
   wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
+      `presets arp`: GarageBand's and Logic's Arpeggiator presets and the patches that
+      arpeggiate, for a track's "arp" (macOS).
   wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--patch NAME] [--install-soundfont [--force]] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ,
       SoundFonts, Logic and GarageBand instruments and patches, Apple Loops) and impulse responses

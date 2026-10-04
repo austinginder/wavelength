@@ -18,6 +18,8 @@
 #include "audio_file.hpp"
 #include "clips.hpp"
 #include "apple_loops.hpp"
+#include "arp.hpp"
+#include "logic_patches.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
 #include "help.hpp"
@@ -310,6 +312,32 @@ std::unique_ptr<Plugin> openForInspection(const Args &a, const std::string &spec
 // ---- presets ---------------------------------------------------------------------------
 int cmdPresets(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength presets <plugin> [--search TEXT]");
+    if (a.positional[1] == "arp") {   // GarageBand's and Logic's Arpeggiator presets, and the patches that arpeggiate
+        std::string q = a.get("--search");
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+        json list = json::array();
+        auto add = [&](const std::string &name, const std::string &kind, const json &arp) {
+            std::string hay = kind + " " + name + " " + arpSummary(arp);
+            std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
+            if (!q.empty() && hay.find(q) == std::string::npos) return;
+            if (a.has("--json")) list.push_back({{"name", name}, {"kind", kind}, {"arp", arp}});
+            else std::fprintf(OUT, "%-7s %-30s %s\n", kind.c_str(), name.c_str(), arpSummary(arp).c_str());
+        };
+        std::vector<std::string> ignored;
+        std::string e2;
+        for (auto &[name, path] : arpeggiatorPresets()) {
+            json arp;
+            if (appleArpeggiator(name, true, arp, ignored, e2)) add(name, "preset", arp);
+        }
+        for (auto &p : logicPatches()) {
+            json arp;
+            if (p.arpeggiator && appleArpeggiator(p.path, false, arp, ignored, e2)) add(p.name, "patch", arp);
+        }
+        if (a.has("--json")) emit(json{{"ok", true}, {"plugin", "arp"}, {"presets", list}}.dump(2));
+        else std::fprintf(OUT, "\nOn any track: \"arp\": \"<name>\" (or {\"preset\": \"<name>\"} / {\"patch\": \"<name>\"} with settings on top).\n"
+                               "A patch's own Arpeggiator plays by itself when the track uses the patch.\n");
+        return 0;
+    }
     if (a.positional[1] == "builtin:synth") {   // the synth's own patches
         std::string q = a.get("--search");
         std::transform(q.begin(), q.end(), q.begin(), ::tolower);
@@ -514,6 +542,7 @@ int cmdSamples(const Args &a) {
                          s.contains("ir") ? ("   room: \"" + s["ir"].get<std::string>() + "\"").c_str() : "");
         if (!d["effects"].empty()) std::fprintf(OUT, "  effects played as: %s\n", d["effects"].dump().c_str());
         for (auto &n : d["effectNotes"]) std::fprintf(OUT, "  ! %s\n", n.get<std::string>().c_str());
+        if (d.contains("arp")) std::fprintf(OUT, "  arpeggiator: %s\n    played as \"arp\": %s\n", arpSummary(d["arp"]).c_str(), d["arp"].dump().c_str());
         if (!d["plays"].get<bool>()) { std::fprintf(OUT, "\nDoesn't play here: %s.\n", d["why"].get<std::string>().c_str()); return 0; }
         if (d.contains("synth")) {   // a synth patch, re-created on builtin:synth
             for (auto &n : d["synth"]["notes"]) std::fprintf(OUT, "  ~ %s\n", n.get<std::string>().c_str());

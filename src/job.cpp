@@ -2,6 +2,7 @@
 
 #include "arp.hpp"
 #include "harmony.hpp"
+#include "logic_patches.hpp"
 
 #include "platform.hpp"
 #include "synth.hpp"
@@ -541,10 +542,25 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             std::vector<int> noteArt;                    // keyswitch per note (-1 = none)
             std::vector<json> ordered;
             json written = t.value("notes", json::array());
-            if (t.contains("arp") && !(t["arp"].is_boolean() && !t["arp"].get<bool>())) {   // the held notes as an arpeggio
+            json arp;   // the held notes as an arpeggio: the track's "arp", else its GarageBand patch's Arpeggiator
+            std::vector<std::string> arpNotes;
+            std::string aerr;
+            if (t.contains("arp") && !(t["arp"].is_boolean() && !t["arp"].get<bool>())) {
+                if (!resolveArp(t["arp"], arp, arpNotes, aerr)) throw std::runtime_error("track '" + tr.name + "': " + aerr);
+            } else if (!t.contains("arp") && !written.empty()) {
+                std::string patch;
+                if (tr.plugin == "builtin:synth" && !tr.preset.empty() && !isBuiltinSynthPatch(tr.preset)) patch = tr.preset;
+                else if (tr.plugin == "builtin:sampler" && tr.sampler.is_object() && tr.sampler.contains("patch") && tr.sampler["patch"].is_string())
+                    patch = tr.sampler["patch"].get<std::string>();
+                if (!patch.empty() && appleArpeggiator(patch, false, arp, arpNotes, aerr))
+                    tr.warnings.push_back("patch '" + patch + "' plays its notes through its Arpeggiator (" + arpSummary(arp) +
+                                          "); \"arp\": false plays them as written");
+                else arp = nullptr;
+            }
+            for (auto &w : arpNotes) tr.warnings.push_back(w);
+            if (!arp.is_null()) {
                 json played;
-                std::string aerr;
-                if (!arpeggiate(written, t["arp"], played, aerr)) throw std::runtime_error("track '" + tr.name + "': " + aerr);
+                if (!arpeggiate(written, arp, played, aerr)) throw std::runtime_error("track '" + tr.name + "': " + aerr);
                 written = played;
             }
             for (auto &n : written) ordered.push_back(n);

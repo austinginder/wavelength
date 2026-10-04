@@ -42,6 +42,7 @@ Never guess plugin or preset names. List them:
 "$WAVELENGTH" samples --search <text>               # sample libraries, SFZ, SoundFonts, drum kits (builtin:sampler)
 "$WAVELENGTH" loops --search <text>                 # macOS: GarageBand's Apple Loops by key and tempo (builtin:audio clips)
 "$WAVELENGTH" presets builtin:synth                 # the built-in synth's patches: always there, no plugin needed
+"$WAVELENGTH" presets arp                           # macOS: GarageBand's Arpeggiator presets and patches, for a track's "arp"
 ```
 
 On a machine with few or no plugins (a cloud container, CI), build the song from `builtin:synth` patches, `builtin:drums` and `builtin:fx`; `samples --install-soundfont` adds General MIDI sounds, and `"$WAVELENGTH" kit install` adds free synthesizers with their factory patches (Surge XT, OB-Xf, Dexed) into Wavelength's own folder. On Linux, install the system libraries it names for any plugin that won't load.
