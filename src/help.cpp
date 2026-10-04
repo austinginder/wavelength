@@ -25,9 +25,11 @@ Usage:
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
   wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--install-soundfont [--force]] [--json]
-      List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ and
-      SoundFonts); --kit shows the General MIDI key each of a kit's files is mapped to, --soundfont
-      a SoundFont's presets. --install-soundfont downloads MuseScore General (MIT), the General MIDI set.
+      List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ,
+      SoundFonts, Logic and GarageBand instruments and patches, Apple Loops) and impulse responses
+      for the convolve effect; --kit shows the General MIDI key each of a kit's files is mapped to,
+      --soundfont a SoundFont's presets. --install-soundfont downloads MuseScore General (MIT), the
+      General MIDI set.
   wavelength loops [--search TEXT] [--key KEY] [--midi] [--json] | loops --notes <name> [--key KEY] [--json]
       List the Apple Loops GarageBand and Logic install (macOS): category, key, tempo, length in
       beats, and "notes" for software-instrument loops. A clip plays one as {"file": "lib:Apple
@@ -277,7 +279,7 @@ const Summary kSummaries[] = {
     {"Make music", "master", "Put a finished mix through a master chain"},
     {"Find sounds", "plugins", "Installed plugins and built-in instruments"},
     {"Find sounds", "presets", "A plugin's presets, to use by name"},
-    {"Find sounds", "samples", "Sample libraries: multisamples, kits, SFZ, SoundFonts"},
+    {"Find sounds", "samples", "Sample libraries, GarageBand patches, reverb rooms"},
     {"Find sounds", "loops", "Apple Loops by category, key and tempo; their notes"},
     {"Find sounds", "audition", "Render every preset once and tag how it sounds"},
     {"Find sounds", "card", "Picture of how presets sound: one full card, or a sheet to compare"},

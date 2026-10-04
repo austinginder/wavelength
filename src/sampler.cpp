@@ -1,5 +1,6 @@
 #include "sampler.hpp"
 
+#include "analyze.hpp"
 #include "apple_loops.hpp"
 #include "logic_patches.hpp"
 
@@ -639,10 +640,12 @@ int gmKeyFor(const std::string &file, std::set<int> &taken, int *primary = nullp
         if (d != std::string::npos && d > 1 && t.substr(d) == "bpm") return -1;
         if (t == "bpm" || t == "loop" || t == "loops" || t == "fill" || t == "groove") return -1;
     }
+    // a short word matches a whole token, take numbers aside ("bd1", "hh2", "sd11": drum machine sample names)
+    auto bare = [](const std::string &t) { const size_t e = t.find_last_not_of("0123456789"); return e == std::string::npos ? t : t.substr(0, e + 1); };
     auto has = [&](std::initializer_list<const char *> words) {
         for (const char *w : words) {
             for (size_t i = 0; i < tok.size(); ++i) {
-                const bool match = strlen(w) <= 3 ? tok[i] == w : tok[i].find(w) != std::string::npos;
+                const bool match = strlen(w) <= 3 ? tok[i] == w || bare(tok[i]) == w : tok[i].find(w) != std::string::npos;
                 if (match && !(i > 0 && (tok[i - 1] == "no" || tok[i - 1] == "without"))) return true;   // "No Snare"
             }
             if (strlen(w) > 3 && strchr(w, ' ') && n.find(w) != std::string::npos) return true;
@@ -654,8 +657,8 @@ int gmKeyFor(const std::string &file, std::set<int> &taken, int *primary = nullp
         for (int k : keys) if (!taken.count(k)) { taken.insert(k); return k; }
         return -1;
     };
-    const bool hat = has({"hat", "hh", "hihat", "chh", "ohh", "oh", "ch"});
-    if (hat && has({"open", "ohh", "oh"})) return pick({46});
+    const bool hat = has({"hat", "hh", "hihat", "chh", "ohh", "oh", "ch", "hho", "hhc", "clshat", "ophat", "opnhat"});
+    if (hat && has({"open", "ohh", "oh", "hho", "ophat", "opnhat"})) return pick({46});
     if (hat && has({"pedal", "foot"})) return pick({44});
     if (hat) return pick({42, 44});
     if (has({"crash"})) return pick({49, 57});
@@ -716,6 +719,83 @@ std::vector<std::string> wavsIn(const std::string &dir) {
     return out;
 }
 
+// The note a sample's name gives ("Huge Saw C3.wav", "Amanda Aa F#4", "80s Digital Bass ff A#-1"): the last token
+// that is a capital note letter, an optional # or b and an octave, C4 = 60 (as SFZ); -1 when there is none
+int noteInName(const std::string &file) {
+    const std::string n = fs::path(file).stem().string();
+    static const int pcs[7] = {9, 11, 0, 2, 4, 5, 7};
+    auto sep = [](char c) { return c == ' ' || c == '_' || c == '-' || c == '.'; };
+    int found = -1;
+    for (size_t i = 0; i < n.size(); ++i) {
+        if (n[i] < 'A' || n[i] > 'G' || (i > 0 && !sep(n[i - 1]))) continue;
+        size_t j = i + 1;
+        int pc = pcs[n[i] - 'A'];
+        if (j < n.size() && (n[j] == '#' || n[j] == 'b')) pc += n[j++] == '#' ? 1 : -1;
+        const bool neg = j < n.size() && n[j] == '-';
+        if (neg) ++j;
+        if (j >= n.size() || !isdigit((unsigned char)n[j]) || (j + 1 < n.size() && !sep(n[j + 1]))) continue;
+        const int key = ((neg ? -(n[j] - '0') : n[j] - '0') + 1) * 12 + pc;
+        if (key >= 0 && key <= 127) found = key;
+    }
+    return found;
+}
+
+// A folder of pitched samples named by their notes: most of its files carry a note, at least two different ones
+bool looksLikeNoteFolder(const std::vector<std::string> &wavs) {
+    std::set<int> notes;
+    size_t named = 0;
+    for (auto &w : wavs) { const int k = noteInName(w); if (k >= 0) { ++named; notes.insert(k); } }
+    return notes.size() >= 2 && named * 10 >= wavs.size() * 8;
+}
+
+// Zones of such a folder: each sample from its own note, sharing the keys between neighbours (the nearest
+// sample plays each key), looping where the file says; several files on one note are takes, played as round
+// robins. Libraries count
+// octaves two ways (Alchemy's synths name middle C "C4", its vocals "C3" as Logic does), so a few samples'
+// measured pitch decides: names an octave below the sound move up an octave.
+bool noteFolderZones(const std::string &dir, std::vector<Zone> &zones, std::vector<std::string> &warnings, std::string &err) {
+    std::map<int, std::vector<std::string>> byNote;
+    for (auto &w : wavsIn(dir)) {
+        const int k = noteInName(w);
+        if (k >= 0) byNote[k].push_back(w);
+    }
+    if (byNote.empty()) { err = dir + " has no multisample.xml and no samples named by their notes (\"Lead C3.wav\")"; return false; }
+    std::vector<int> notes;
+    for (auto &[k, files] : byNote) notes.push_back(k);
+    std::map<int, int> votes;   // octave shift -> samples that measure so
+    for (size_t i : {notes.size() / 2, (size_t)0, notes.size() - 1}) {
+        Audio a;
+        int sr = 0;
+        std::string e;
+        if (!readAudio(byNote[notes[i]].front(), a, sr, e)) continue;
+        const Analysis x = analyzeAudio(a, sr, 0, 2.0);
+        if (x.pitchKey < 0 || x.pitchConfidence < 0.5) continue;
+        const int d = x.pitchKey - notes[i];
+        for (int shift : {0, 12, -12}) if (std::abs(d - shift) <= 1) ++votes[shift];
+    }
+    int shift = 0;
+    for (auto &[sh, n] : votes) if (n > votes[shift]) shift = sh;
+    (void)warnings;
+    for (size_t i = 0; i < notes.size(); ++i) {
+        const auto &files = byNote[notes[i]];
+        for (size_t t = 0; t < files.size(); ++t) {
+            Zone z;
+            z.file = files[t];
+            z.root = std::clamp(notes[i] + shift, 0, 127);
+            z.keyLow = std::clamp((i == 0 ? 0 : (notes[i - 1] + notes[i]) / 2 + 1) + shift, 0, 127);
+            z.keyHigh = std::clamp((i + 1 == notes.size() ? 127 : (notes[i] + notes[i + 1]) / 2) + shift, 0, 127);
+            if (i == 0) z.keyLow = 0;
+            if (i + 1 == notes.size()) z.keyHigh = 127;
+            z.roundRobin = files.size() > 1;
+            z.seq = (int)t;
+            z.loop = Zone::Always;   // on the file's own loop points (WAV smpl), when it has them: pads and organs hold
+            z.loopFromFile = true;
+            zones.push_back(z);
+        }
+    }
+    return true;
+}
+
 bool looksLikeKit(const std::vector<std::string> &wavs) {
     if (wavs.size() < 4 || wavs.size() > 400) return false;
     std::set<int> taken;
@@ -740,7 +820,7 @@ std::string resolveIn(const std::string &name, const std::string &baseDir) {
 
 // find a library entry by exact name, then by path suffix, then by unique substring
 bool findEntry(const std::string &kind, const std::string &query, std::string &path, std::string &err) {
-    const auto &lib = kind == "patch" ? patchLibrary() : sampleLibrary();
+    const auto &lib = kind == "patch" ? patchLibrary() : kind == "ir" ? impulseLibrary() : sampleLibrary();
     const std::string q = lower(query);
     std::vector<const SampleLibraryEntry *> exact;
     for (auto &e : lib) if (e.kind == kind && lower(e.name) == q) exact.push_back(&e);
@@ -1002,10 +1082,13 @@ std::vector<std::string> sampleRoots() {
     const fs::path userLib = fs::path(home()) / "Documents/Bitwig Studio/Library";
     if (fs::exists(userLib, ec)) roots.push_back(userLib.string());
 #if defined(__APPLE__)
-    // Logic's and GarageBand's Sampler instruments (.exs); their samples are found by the instruments
+    // Logic's and GarageBand's Sampler instruments (.exs; their samples are found by the instruments), and the
+    // sample folders of Alchemy (instruments named by their notes) and Ultrabeat (drum machine kits)
     for (const fs::path &dir : {fs::path("/Library/Application Support/Logic/Sampler Instruments"),
                                 fs::path("/Library/Application Support/GarageBand/Instrument Library/Sampler/Sampler Instruments"),
-                                fs::path(home()) / "Music/Audio Music Apps/Sampler Instruments"})
+                                fs::path(home()) / "Music/Audio Music Apps/Sampler Instruments",
+                                fs::path("/Library/Application Support/Logic/Alchemy Samples"),
+                                fs::path("/Library/Application Support/Logic/Ultrabeat Samples")})
         if (fs::is_directory(dir, ec)) roots.push_back(dir.string());
 #endif
     // Serum 2's multisamples are plain SFZ instruments (FLAC samples beside them)
@@ -1086,12 +1169,12 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                 std::sort(wavs.begin(), wavs.end());
                 size_t loops = 0;
                 for (auto &w : wavs) loops += looksLikeLoop(w);
-                const bool kit = looksLikeKit(wavs), loopDir = wavs.size() >= 2 && loops * 2 >= wavs.size();
-                if (!kit && !loopDir) continue;
+                const bool kit = looksLikeKit(wavs), loopDir = !kit && wavs.size() >= 2 && loops * 2 >= wavs.size(), notes = !kit && !loopDir && looksLikeNoteFolder(wavs);
+                if (!kit && !loopDir && !notes) continue;
                 const fs::path d(dir);
                 const std::string name = d.filename().string();
                 if (!seen.insert("k:" + d.parent_path().filename().string() + "/" + name).second) continue;
-                lib.push_back({kit ? "kit" : "loops", name, dir, d.parent_path().filename().string(), wavs.size()});
+                lib.push_back({kit ? "kit" : notes ? "multisample" : "loops", name, dir, d.parent_path().filename().string(), wavs.size()});
             }
         }
         // GarageBand's and Logic's Apple Loops: one library, every loop by its file name ("lib:Apple Loops/<name>.caf")
@@ -1132,6 +1215,49 @@ const std::vector<SampleLibraryEntry> &patchLibrary() {
         }
     });
     return lib;
+}
+
+std::vector<std::string> impulseRoots() {
+    std::vector<std::string> roots = platform::envPathList("WAVELENGTH_IR_PATH");
+#if defined(__APPLE__)
+    std::error_code ec;
+    for (const fs::path &p : {fs::path("/Library/Audio/Impulse Responses"), fs::path(home()) / "Library/Audio/Impulse Responses",
+                              fs::path("/Applications/GarageBand.app/Contents/Resources/Impulse Responses"),
+                              fs::path("/Applications/Logic Pro.app/Contents/Resources/Impulse Responses"),
+                              fs::path("/Applications/Logic Pro X.app/Contents/Resources/Impulse Responses")})
+        if (fs::is_directory(p, ec)) roots.push_back(p.string());
+#endif
+    return roots;
+}
+
+const std::vector<SampleLibraryEntry> &impulseLibrary() {
+    static std::vector<SampleLibraryEntry> lib;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::set<std::string> seen;
+        for (auto &root : impulseRoots()) {
+            std::error_code ec;
+            for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                const std::string ext = lower(it->path().extension().string());
+                if (!it->is_regular_file(ec) || (ext != ".sdir" && !isAudioFileName(it->path().string()))) continue;
+                Audio a;
+                int sr = 0;
+                std::string e;
+                if (!seen.insert(lower(it->path().stem().string())).second || !readAudio(it->path().string(), a, sr, e) || sr <= 0) continue;
+                lib.push_back({"ir", it->path().stem().string(), it->path().string(), it->path().parent_path().filename().string(),
+                               (size_t)std::lround(1000.0 * (double)a.frames() / sr)});
+            }
+        }
+        std::sort(lib.begin(), lib.end(), [](auto &a, auto &b) { return lower(a.name) < lower(b.name); });
+    });
+    return lib;
+}
+
+std::string findImpulseResponse(const std::string &query, const std::string &baseDir, std::string &err) {
+    std::string path = resolveIn(query, baseDir);
+    if (path.empty() && !findEntry("ir", query, path, err)) return "";
+    return path;
 }
 
 // "Snare 01.wav" and "Snare 02.wav" are takes of one sound: the name without its trailing number
@@ -1307,7 +1433,10 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         std::string path = resolveIn(q, job.baseDir);
         if (path.empty() && !findEntry("multisample", q, path, err)) return false;
         std::string xml;
-        if (fs::is_directory(path)) {
+        if (fs::is_directory(path) && !fs::exists(fs::path(path) / "multisample.xml")) {   // samples named by their notes
+            if (!noteFolderZones(path, zones, warnings, err)) return false;
+            source = path;
+        } else if (fs::is_directory(path)) {
             std::vector<uint8_t> x;
             if (!readFile((fs::path(path) / "multisample.xml").string(), x)) { err = path + " has no multisample.xml"; return false; }
             xml.assign(x.begin(), x.end());
@@ -1319,7 +1448,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             xml.assign(x.begin(), x.end());
             source = path;
         }
-        if (!parseMultisample(xml, zones, err)) { err = fs::path(path).filename().string() + ": " + err; return false; }
+        if (zones.empty() && !parseMultisample(xml, zones, err)) { err = fs::path(path).filename().string() + ": " + err; return false; }
     } else if (cfg.contains("kit") || cfg.contains("map")) {
         isKit = true;
         std::vector<std::pair<int, std::string>> map;

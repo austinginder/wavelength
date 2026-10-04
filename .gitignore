@@ -1,6 +1,7 @@
 build/
 out/
 *.wav
+!examples/ir/*.wav
 .DS_Store
 third_party/
 build-dev/

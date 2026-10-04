@@ -33,7 +33,7 @@ namespace wl {
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 
 struct SampleLibraryEntry {
-    std::string kind;       // "multisample", "sfz", "soundfont", "exs", "patch", "kit" or "loops"
+    std::string kind;       // "multisample", "sfz", "soundfont", "exs", "patch", "kit", "loops" or "ir"
     std::string name, path, category;
     size_t count = 0;       // zones (multisample), regions (sfz), presets (soundfont), installed samples (patch) or sample files (kit)
 };
@@ -43,6 +43,12 @@ const std::vector<SampleLibraryEntry> &sampleLibrary();
 // The GarageBand and Logic patches the sampler plays ("patch"), with how many of their samples are
 // installed: only patches with some (cached per process, built on first use).
 const std::vector<SampleLibraryEntry> &patchLibrary();
+// Impulse responses for the convolve effect ("ir"): Logic's and GarageBand's Space Designer rooms (.SDIR, AIFF
+// inside) and any audio file under /Library/Audio/Impulse Responses, ~/Library/Audio/Impulse Responses and
+// $WAVELENGTH_IR_PATH; count = length in ms (cached per process, built on first use).
+const std::vector<SampleLibraryEntry> &impulseLibrary();
+// An impulse response by path (relative to baseDir), lib: name or library name; "" with err when none.
+std::string findImpulseResponse(const std::string &query, const std::string &baseDir, std::string &err);
 // A sample file by path (absolute, relative to baseDir, or relative to a sample root); "" if missing.
 std::string resolveSampleFile(const std::string &name, const std::string &baseDir);
 std::vector<std::string> sampleRoots();

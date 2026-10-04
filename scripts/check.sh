@@ -316,6 +316,66 @@ if [ -z "$exs_why" ] && ! echo "$synth_out" | grep "Retro Synth" > /dev/null; th
 fi
 unset WAVELENGTH_LOGIC_PATCHES
 if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument, synth patches refused"; fi
+# convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
+# energy and nothing before the click; with predelay 100 ms it comes 100 ms later
+rm -rf out/check/ir && mkdir -p out/check/ir
+python3 scripts/make-test-ir.py out/check/ir
+cat > out/check/ir/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 1, "stems": "float",
+ "tracks": [{"name": "Wet", "plugin": "builtin:audio", "clips": [{"file": "click.wav", "beat": 0, "fadeIn": 0, "fadeOut": 0}],
+             "fx": [{"type": "convolve", "ir": "test-room.wav", "mix": 1, "highpass": 0}]},
+            {"name": "Late", "plugin": "builtin:audio", "clips": [{"file": "click.wav", "beat": 0, "fadeIn": 0, "fadeOut": 0}],
+             "fx": [{"type": "convolve", "ir": "test-room.wav", "mix": 1, "highpass": 0, "predelay": 100}]}]}
+JOB
+if "./$build/wavelength" render out/check/ir/job.json --out out/check/ir/out --json > /dev/null 2>&1 && python3 - <<'PY'
+import math, struct, sys
+def channels(p):
+    b = open(p, 'rb').read(); i = 12; fmt = data = None
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack('<I', b[i + 4:i + 8])[0]
+        if cid == b'fmt ': fmt = struct.unpack('<HHIIHH', b[i + 8:i + 24])
+        if cid == b'data': data = b[i + 8:i + 8 + n]
+        i += 8 + n + (n & 1)
+    v = struct.unpack('<%df' % (len(data) // 4), data) if fmt[0] == 3 else [x / 32767 for x in struct.unpack('<%dh' % (len(data) // 2), data)]
+    return [v[c::fmt[1]] for c in range(fmt[1])]
+ir = channels('out/check/ir/test-room.wav')
+ok = True
+for name, at in (('01-wet', 480), ('02-late', 480 + 4800)):
+    w = channels('out/check/ir/out/stems/%s.wav' % name)
+    for c in range(2):
+        h = ir[c]; e = math.sqrt(sum(x * x for x in h)); seg = w[c][at:at + len(h)]
+        na = math.sqrt(sum(x * x for x in seg))
+        corr = sum(a * b / e for a, b in zip(seg, h)) / na
+        ok &= corr > 0.9999 and abs(na * na - 1) < 0.01 and max(abs(x) for x in w[c][:at]) < 1e-4
+sys.exit(0 if ok else 1)
+PY
+then echo "ok   convolve: a click comes out as the IR, unit energy, predelay"
+else echo "FAIL convolve: the convolution did not reproduce the impulse response"; fail=1; fi
+# sample folders: note-named samples play as a multisample whichever way their names count octaves (a sample's
+# pitch decides: "Logic Notes C3" sounds C4), and a drum machine kit maps by its abbreviations (BD1, SD1, HH1, HHo)
+rm -rf out/check/folders && mkdir -p out/check/folders
+python3 scripts/make-test-sample-folders.py out/check/folders/lib
+cat > out/check/folders/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0, "stems": "16",
+ "tracks": [{"name": "Sci", "plugin": "builtin:sampler", "sampler": {"multisample": "Sci Notes"}, "notes": [{"beat": 0, "dur": 1, "key": 57}]},
+            {"name": "Logic", "plugin": "builtin:sampler", "sampler": {"multisample": "Logic Notes"}, "notes": [{"beat": 0, "dur": 1, "key": 57}]}]}
+JOB
+folders_why=""
+if ! WAVELENGTH_SAMPLES_PATH="$PWD/out/check/folders/lib" "./$build/wavelength" render out/check/folders/job.json --out out/check/folders/out --json > /dev/null 2>&1; then
+  folders_why="the note-named folders did not render"
+else
+  for t in 01-sci 02-logic; do
+    note=$("./$build/wavelength" analyze "out/check/folders/out/stems/$t.wav" --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
+    [ "$note" = "A3" ] || folders_why="$t played $note for A3"
+  done
+fi
+map=$(WAVELENGTH_SAMPLES_PATH="$PWD/out/check/folders/lib" "./$build/wavelength" samples --kit "Machine Kit" --json 2>/dev/null | python3 -c '
+import json, sys
+print(" ".join("%d=%s" % (m["key"], m["file"]) for m in json.load(sys.stdin)["map"]))')
+for want in 36=MK_BD1.wav 38=MK_SD1.wav 42=MK_HH1.wav 46=MK_HHo.wav 39=MK_Clap.wav; do
+  case " $map " in *" $want "*) ;; *) folders_why="kit map lacks $want ($map)";; esac
+done
+if [ -n "$folders_why" ]; then echo "FAIL sample folders: $folders_why"; fail=1; else echo "ok   sample folders: note-named multisamples (both octave namings), drum machine abbreviations"; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)

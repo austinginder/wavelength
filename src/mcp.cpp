@@ -103,7 +103,7 @@ json tools() {
         {"plugin"}, readOnly));
     list.push_back(tool("list_samples", "List sample libraries",
         "Sample libraries builtin:sampler plays: Bitwig multisamples, drum kits, SFZ instruments, SoundFonts, Logic and GarageBand "
-        "instruments (exs) and patches (patch), and loops.",
+        "instruments (exs) and patches (patch), loops, and impulse responses (ir) for the convolve effect.",
         {{"search", prop("string", "only libraries matching this")}}, {}, readOnly));
     list.push_back(tool("list_loops", "List Apple Loops",
         "The Apple Loops GarageBand and Logic install (macOS): category, key, tempo and length in beats. A builtin:audio clip "

@@ -4,9 +4,14 @@
 #include "dsp.hpp"
 #include "engine.hpp"
 #include "loudness.hpp"
+#include "sampler.hpp"
+#include "audio_file.hpp"
+
+#include <signalsmith-linear/fft.h>
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <deque>
 #include <filesystem>
@@ -310,6 +315,106 @@ struct Reverb : Effect {
             const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
             a.left[i] = blend(a.left[i], wl, m);
             a.right[i] = blend(a.right[i], wr, m);
+        }
+        return true;
+    }
+};
+
+// ------------------------------------------------------------------------------ convolve
+// A real room, plate or hall: the input convolved with an impulse response (Logic's and GarageBand's Space
+// Designer rooms by name, or any audio file), FFT overlap-add over the whole track. Each IR channel is
+// scaled to unit energy, so white noise comes out at its own level and "mix" sits like the reverb's.
+struct Convolve : Effect {
+    std::string path;
+    double predelayMs, lengthSec, hp, lp, width, gainDb;
+    Envelope mix;
+    Convolve(const json &j, const Job &job, std::string &err) {
+        label = "convolve";
+        if (!j.contains("ir") || !j["ir"].is_string()) { err = "convolve needs \"ir\": an impulse response (a name from `wavelength samples --search` or a file)"; return; }
+        path = findImpulseResponse(j["ir"].get<std::string>(), job.baseDir, err);
+        if (path.empty()) return;
+        predelayMs = std::clamp(j.value("predelay", 0.0), 0.0, 500.0);
+        lengthSec = std::max(0.0, j.value("length", 0.0));
+        hp = j.value("highpass", 150.0);
+        lp = j.value("lowpass", 0.0);
+        width = std::clamp(j.value("width", 1.0), 0.0, 1.5);
+        gainDb = j.value("gain", 0.0);
+        mix = param(j, "mix", 0.3, job.tempo);
+        checkKeys(j, {"ir", "predelay", "length", "highpass", "lowpass", "width", "gain", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
+        const double sr = c.job.sampleRate;
+        Audio ir;
+        int irRate = 0;
+        if (!readAudio(path, ir, irRate, err)) return false;
+        // to the job's rate (linear interpolation: the IR is noise-like), trimmed with a fade, pre-delayed
+        if (irRate != (int)sr && irRate > 0) {
+            const double ratio = (double)irRate / sr;
+            const size_t n = (size_t)((double)ir.frames() / ratio);
+            Audio r;
+            r.resize(n);
+            for (size_t i = 0; i < n; ++i) {
+                const double pos = (double)i * ratio;
+                const size_t i0 = std::min((size_t)pos, ir.frames() - 1), i1 = std::min(i0 + 1, ir.frames() - 1);
+                const double f = pos - (double)i0;
+                r.left[i] = (float)(ir.left[i0] * (1 - f) + ir.left[i1] * f);
+                r.right[i] = (float)(ir.right[i0] * (1 - f) + ir.right[i1] * f);
+            }
+            ir = std::move(r);
+        }
+        if (lengthSec > 0 && (size_t)(lengthSec * sr) < ir.frames()) {
+            const size_t n = (size_t)(lengthSec * sr), fade = std::max<size_t>(1, n / 5);
+            ir.left.resize(n); ir.right.resize(n);
+            for (size_t i = 0; i < fade; ++i) { const float g = (float)i / (float)fade; ir.left[n - 1 - i] *= g; ir.right[n - 1 - i] *= g; }
+        }
+        const size_t pre = (size_t)std::lround(predelayMs * 0.001 * sr);
+        const size_t L = ir.frames() + pre;
+        if (ir.frames() == 0) { err = "convolve: the impulse response is empty"; return false; }
+        size_t N = 1024;
+        while (N < 2 * L) N <<= 1;
+        const size_t B = N - L + 1, bins = N / 2;
+        signalsmith::linear::RealFFT<float> fft;
+        fft.resize(N);
+        const double g = dbToLin(gainDb);
+        std::vector<std::complex<float>> H[2];
+        for (int ch = 0; ch < 2; ++ch) {
+            const std::vector<float> &h = ch ? ir.right : ir.left;
+            double energy = 0;
+            for (float v : h) energy += (double)v * v;
+            const double scale = energy > 0 ? g / std::sqrt(energy) / (double)N : 0;   // unit energy, and the inverse FFT's 1/N
+            std::vector<float> t(N, 0.f);
+            for (size_t i = 0; i < h.size(); ++i) t[pre + i] = (float)(h[i] * scale);
+            H[ch].resize(bins);
+            fft.fft(t.data(), H[ch].data());
+        }
+        const size_t frames = a.frames();
+        std::vector<float> wet[2] = {std::vector<float>(frames + N, 0.f), std::vector<float>(frames + N, 0.f)};
+        std::vector<float> t(N), y(N);
+        std::vector<std::complex<float>> X(bins);
+        for (int ch = 0; ch < 2; ++ch) {
+            const std::vector<float> &x = ch ? a.right : a.left;
+            for (size_t s = 0; s < frames; s += B) {
+                const size_t n = std::min(B, frames - s);
+                std::fill(t.begin(), t.end(), 0.f);
+                std::copy(x.begin() + (long)s, x.begin() + (long)(s + n), t.begin());
+                fft.fft(t.data(), X.data());
+                X[0] = {X[0].real() * H[ch][0].real(), X[0].imag() * H[ch][0].imag()};   // DC and Nyquist, packed
+                for (size_t k = 1; k < bins; ++k) X[k] *= H[ch][k];
+                fft.ifft(X.data(), y.data());
+                for (size_t i = 0; i < N; ++i) wet[ch][s + i] += y[i];
+            }
+        }
+        Biquad hpL, hpR, lpL, lpR;
+        if (hp > 0) { hpL.set(Biquad::HighPass, hp, 0.7071, 0, sr); hpR = hpL; }
+        if (lp > 0) { lpL.set(Biquad::LowPass, lp, 0.7071, 0, sr); lpR = lpL; }
+        for (size_t i = 0; i < frames; ++i) {
+            double wl = wet[0][i], wr = wet[1][i];
+            if (hp > 0) { wl = hpL.process(wl); wr = hpR.process(wr); }
+            if (lp > 0) { wl = lpL.process(wl); wr = lpR.process(wr); }
+            const double mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * width;
+            const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+            a.left[i] = blend(a.left[i], mid + side, m);
+            a.right[i] = blend(a.right[i], mid - side, m);
         }
         return true;
     }
@@ -1299,7 +1404,7 @@ double truePeakDb(const Audio &a) {
 }
 
 std::vector<std::string> builtinEffectTypes() {
-    return {"gain", "eq", "filter", "delay", "reverb", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
+    return {"gain", "eq", "filter", "delay", "reverb", "convolve", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
             "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband"};
 }
 
@@ -1315,6 +1420,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "filter") fx = std::make_unique<Filter>(j, job, err);
             else if (t == "delay") fx = std::make_unique<Delay>(j, job, err);
             else if (t == "reverb") fx = std::make_unique<Reverb>(j, job);
+            else if (t == "convolve") fx = std::make_unique<Convolve>(j, job, err);
             else if (t == "compressor") fx = std::make_unique<Compressor>(j, job);
             else if (t == "limiter") fx = std::make_unique<Limiter>(j, job);
             else if (t == "saturate") fx = std::make_unique<Saturate>(j, job);
