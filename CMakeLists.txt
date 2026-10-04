@@ -187,6 +187,7 @@ add_executable(wavelength
   src/audio_file.cpp
   src/apple_loops.cpp
   src/logic_patches.cpp
+  src/retro_synth.cpp
   src/sfz.cpp
   src/sf2.cpp
   src/encode.cpp

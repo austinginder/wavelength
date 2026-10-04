@@ -5,9 +5,10 @@
                                     instrument parameters: volume -6 dB, release 64 (0.65 s), sustain 127
   <dir>/patches/Test Patch.patch/   a channel strip (#Root.cst) whose Sampler slot stores that instrument, then a
                                     Channel EQ (low cut 200 Hz 12 dB/oct, master -3 dB)
-  <dir>/patches/Test Synth.patch/   a channel strip on Retro Synth (an instrument only GarageBand plays)
+  <dir>/patches/Test Synth.patch/   a channel strip on Alchemy (an instrument only GarageBand plays)
   <dir>/patches/Test Beat GB.patch/ a channel strip on Ultrabeat with the settings "Machine Kit.pst" (its kit folder
                                     comes from make-test-sample-folders.py)
+  <dir>/patches/Test Retro.patch/   a channel strip on Retro Synth: Analog mode, one saw, filter off, transposed +12
 Usage: make-test-exs.py <dir>"""
 import math, os, struct, sys
 
@@ -15,6 +16,7 @@ out = sys.argv[1]
 os.makedirs(os.path.join(out, 'patches', 'Test Patch.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Synth.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Retro.patch'), exist_ok=True)
 wav = os.path.abspath(os.path.join(out, 'Test Sine.wav'))
 rate, n = 48000, 96000
 pcm = struct.pack('<%dh' % n, *[int(16000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n)])
@@ -79,5 +81,10 @@ ceq[0:4] = [1, 200, 2, 0.71]
 ceq[32] = -3
 strip(os.path.join(out, 'patches', 'Test Patch.patch', '#Root.cst'),
       [record(0, '', b'\0\0\0\0', bytes(8)), record(3, 'Sampler', b'MELC', bytes(120) + exs), record(4, 'Channel EQ', b'GAME', settings(236, ceq))])
-strip(os.path.join(out, 'patches', 'Test Synth.patch', '#Root.cst'), [record(3, 'Retro Synth', b'GAME', bytes(200))])
+strip(os.path.join(out, 'patches', 'Test Synth.patch', '#Root.cst'), [record(3, 'Alchemy', b'GAME', bytes(200))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
+# Retro Synth (plug-in id 279): parameter #n; unused ones hold 1e30
+retro = [1e30] * 902
+for n, v in {1: 8, 2: 0, 3: 12, 4: 0, 5: -6, 201: 0, 209: 0, 301: 1, 303: 1, 401: 0, 802: 1, 803: 100, 804: 1, 805: 100, 806: 0}.items():
+    retro[n] = v
+strip(os.path.join(out, 'patches', 'Test Retro.patch', '#Root.cst'), [record(3, 'Retro Synth', b'GAME', settings(279, retro))])

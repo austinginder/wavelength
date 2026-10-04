@@ -515,6 +515,12 @@ int cmdSamples(const Args &a) {
         if (!d["effects"].empty()) std::fprintf(OUT, "  effects played as: %s\n", d["effects"].dump().c_str());
         for (auto &n : d["effectNotes"]) std::fprintf(OUT, "  ! %s\n", n.get<std::string>().c_str());
         if (!d["plays"].get<bool>()) { std::fprintf(OUT, "\nDoesn't play here: %s.\n", d["why"].get<std::string>().c_str()); return 0; }
+        if (d.contains("synth")) {   // a synth patch, re-created on builtin:synth
+            for (auto &n : d["synth"]["notes"]) std::fprintf(OUT, "  ~ %s\n", n.get<std::string>().c_str());
+            std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:synth\", \"preset\": \"%s\": %s re-created on the built-in synth, an approximation.\n",
+                         d["name"].get<std::string>().c_str(), d["synth"]["instrument"].get<std::string>().c_str());
+            return 0;
+        }
         std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:sampler\", \"sampler\": {\"patch\": \"%s\"} (\"effects\": false for the dry instrument).\n",
                      d["name"].get<std::string>().c_str());
         if (!d["sends"].empty())

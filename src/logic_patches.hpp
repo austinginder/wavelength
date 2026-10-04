@@ -34,6 +34,7 @@ struct PatchChannel {
     std::string exs;             // else the .exs file it names ("Steinway Piano 2.exs")
     std::vector<std::string> effects;   // the other plugins on the channel, in order
     std::vector<PatchPlugin> chain;     // the same plug-ins with their settings (after the instrument)
+    PatchPlugin settings;               // the instrument's own settings (Retro Synth's parameters)
 };
 
 // A send from a patch's channel to a GarageBand aux (data.plist): "Large Hall/6.6s Botta Church", its level

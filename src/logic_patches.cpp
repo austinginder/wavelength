@@ -62,8 +62,11 @@ PatchPlugin settingsOf(const std::vector<uint8_t> &d, size_t a, size_t b, const 
         const uint32_t count = u32(s + 8);
         if (count > 4096 || s + 24 + 4 * (size_t)count > b) break;
         p.id = u32(g + 8);
+        // the values follow the header, except Vintage B3's: its 26 preset-key registrations (234 int32) come
+        // first, so its values end the block
+        const size_t blockEnd = std::min(b, s + (size_t)u32(s)), at = name == "Vintage B3" && blockEnd >= s + 24 + 4 * (size_t)count ? blockEnd - 4 * (size_t)count : s + 24;
         for (uint32_t i = 1; i < count; ++i) {   // value 0 is reserved: params[n] = parameter #n
-            const uint32_t bits = u32(s + 24 + 4 * (size_t)i);
+            const uint32_t bits = u32(at + 4 * (size_t)i);
             float f;
             std::memcpy(&f, &bits, 4);
             p.params.push_back(std::isfinite(f) ? f : 0.f);
@@ -271,7 +274,7 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         PatchChannel c;
         c.file = f;
         const Record *r = instrumentOf(recs);
-        if (r) { c.instrument = r->name; c.preset = r->preset; }
+        if (r) { c.instrument = r->name; c.preset = r->preset; c.settings = settingsOf(d, r->at, std::min(d.size(), r->at + r->size), r->name); }
         for (auto &x : recs) {
             if (x.name.empty() || &x == r) continue;
             c.effects.push_back(x.name);

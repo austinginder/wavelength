@@ -3,6 +3,7 @@
 #include "analyze.hpp"
 #include "apple_loops.hpp"
 #include "logic_patches.hpp"
+#include "retro_synth.hpp"
 
 #include "audio_file.hpp"
 #include "dsp.hpp"
@@ -1348,7 +1349,10 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     }
     const std::string kit = installed ? "" : ultrabeatKit(dir, chans);
     if (!kit.empty()) out["kit"] = kit;
-    out["plays"] = installed > 0 || !kit.empty();
+    GarageBandSynth gs;
+    const bool resynth = !installed && kit.empty() && garageBandSynthPatch(fs::path(dir).stem().string(), gs);
+    if (resynth) out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes}};
+    out["plays"] = installed > 0 || !kit.empty() || resynth;
     if (!out["plays"].get<bool>())
         out["why"] = synth && !installed ? "its instrument runs only inside GarageBand and Logic" : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
     std::vector<std::string> notes;
@@ -1499,7 +1503,12 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             if (!findEntry("patch", q, dir, e2)) {
                 const LogicPatch *named = logicPatchNamed(q);
                 if (!named) { err = e2; return false; }
-                if (!named->sampler) { err = "patch '" + named->name + "' plays " + named->instrument + ", an instrument only GarageBand and Logic can play (patches on Sampler, EXS24 and Drum Kit Designer play here)"; return false; }
+                GarageBandSynth gs;
+                if (!named->sampler && garageBandSynthPatch(named->name, gs)) {
+                    err = "patch '" + named->name + "' plays " + named->instrument + ", a synth: play it as \"plugin\": \"builtin:synth\", \"preset\": \"" + named->name + "\" (re-created there)";
+                    return false;
+                }
+                if (!named->sampler) { err = "patch '" + named->name + "' plays " + named->instrument + ", an instrument only GarageBand and Logic can play (patches on Sampler, EXS24 and Drum Kit Designer play here, and synth patches on builtin:synth)"; return false; }
                 dir = named->path;   // its samples may be missing: the error below names them
             }
         }

@@ -288,7 +288,7 @@ unset WAVELENGTH_APPLE_LOOPS
 if [ -n "$loops_why" ]; then echo "FAIL apple loops: $loops_why"; fail=1; else echo "ok   apple loops: tempo, key, repeat, notes (Drummer slices from 0), import, AAC"; fi
 # Logic and GarageBand instruments: a generated EXS instrument (scripts/make-test-exs.py) plays A4 from its one zone
 # with its own envelope (release 64 = 0.65 s past a 1 s note) unless the track sets "release"; a GarageBand patch whose
-# Sampler slot stores that instrument plays it the same; a patch on Retro Synth is refused, naming it
+# Sampler slot stores that instrument plays it the same; a patch on Alchemy is refused, naming it
 rm -rf out/check/exs && mkdir -p out/check/exs
 python3 scripts/make-test-exs.py out/check/exs
 cat > out/check/exs/job.json <<'JOB'
@@ -318,8 +318,8 @@ ok &= -4.2 < r["PatchFx"] - r["Patch"] < -3.0   # its Channel EQ: -3 dB master, 
 sys.exit(0 if ok else 1)' || exs_why="the instrument or the patch played wrong (pitch, level or release): $(python3 -c 'import json; print([(t, json.load(open("out/check/exs/%s.json" % t))["envelope"]["lastSound"]) for t in ("01-exs", "02-patch", "03-short")])')"
 fi
 synth_out=$("./$build/wavelength" render out/check/exs/synth.json --out out/check/exs/synth --json 2>/dev/null || true)
-if [ -z "$exs_why" ] && ! echo "$synth_out" | grep "Retro Synth" > /dev/null; then
-  exs_why="a Retro Synth patch was not refused by name"
+if [ -z "$exs_why" ] && ! echo "$synth_out" | grep "Alchemy" > /dev/null; then
+  exs_why="an Alchemy patch was not refused by name"
 fi
 # samples --patch: the stored instrument's sample is installed and the patch plays; the synth patch says why it doesn't
 if [ -z "$exs_why" ]; then
@@ -333,8 +333,19 @@ sys.exit(0 if a["plays"] and c["instrument"] == "Sampler" and c["samples"] == {"
          and a["effects"] == [{"type": "eq", "bands": [{"type": "highpass", "freq": 200, "q": 0.71}]}, {"type": "gain", "db": -3}]
          and not b["plays"] and "GarageBand" in b["why"] else 1)' "$p1" "$p2" || exs_why="samples --patch described the test patches wrong"
 fi
+# a Retro Synth patch plays on builtin:synth by name (its saw a C4 note sounds C5: the patch is transposed +12)
+if [ -z "$exs_why" ]; then
+  cat > out/check/exs/retro.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0, "stems": "16",
+ "tracks": [{"name": "Retro", "plugin": "builtin:synth", "preset": "Test Retro", "notes": [{"beat": 0, "dur": 1, "key": 60, "vel": 0.8}]}]}
+JOB
+  if ! "./$build/wavelength" render out/check/exs/retro.json --out out/check/exs/retro --json > /dev/null 2>&1 ||
+     [ "$("./$build/wavelength" analyze out/check/exs/retro/stems/01-retro.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C5" ]; then
+    exs_why="the Retro Synth patch did not play C5 on builtin:synth"
+  fi
+fi
 unset WAVELENGTH_LOGIC_PATCHES
-if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused, --patch"; fi
+if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created, --patch"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir

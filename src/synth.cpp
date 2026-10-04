@@ -2,6 +2,8 @@
 
 #include "automation.hpp"
 #include "dsp.hpp"
+#include "effects.hpp"
+#include "retro_synth.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -199,6 +201,8 @@ struct Osc {
     double level = 1, pitch = 0, pw = 0.5, decay = 0;   // pitch in semitones; decay: own amplitude decay (s), 0 = none
     bool fm = false;
     double fmRatio = 1, fmIndex = 0, fmDecay = 0, fmSustain = 0;
+    bool filtered = true;   // false: joins after the filter (Retro Synth's sine level)
+    bool sync = false;      // hard sync: restarts whenever the first oscillator starts a cycle
 };
 
 struct SynthLfo {
@@ -257,12 +261,12 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
     checkKeys(j, {"about", "osc", "sub", "noise", "unison", "filter", "amp", "filterEnv", "pitchEnv", "lfo", "glide", "mono", "legato", "level"}, "", warnings);
     const json oscs = j.contains("osc") ? j["osc"] : json::array({json{{"wave", "saw"}}});
     if (!oscs.is_array()) throw std::runtime_error("synth: 'osc' must be a list of oscillators, e.g. [{\"wave\": \"saw\"}]");
-    if (oscs.size() > 6) throw std::runtime_error("synth: at most 6 oscillators");
+    if (oscs.size() > 12) throw std::runtime_error("synth: at most 12 oscillators");
     for (size_t i = 0; i < oscs.size(); ++i) {
         const auto &o = oscs[i];
         const std::string w = "osc[" + std::to_string(i) + "].";
         if (!o.is_object()) throw std::runtime_error("synth: each oscillator is an object like {\"wave\": \"saw\"}");
-        checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm"}, w, warnings);
+        checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync"}, w, warnings);
         Osc x;
         const std::string wave = o.value("wave", "saw");
         if (wave == "saw") x.wave = Osc::Saw;
@@ -275,6 +279,9 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         x.pitch = 12 * num(o, "octave", 0, w) + num(o, "semi", 0, w) + num(o, "cents", 0, w) / 100;
         x.pw = std::clamp(num(o, "pw", 0.5, w), 0.02, 0.98);
         x.decay = std::max(0.0, num(o, "decay", 0, w));
+        x.filtered = o.value("filter", true);
+        x.sync = o.value("sync", false);
+        if (x.sync && i == 0) { warnings.push_back("synth: osc[0].sync: the first oscillator is the one others sync to; ignored"); x.sync = false; }
         if (o.contains("fm")) {
             const auto &f = o["fm"];
             if (!f.is_object()) throw std::runtime_error("synth: " + w + "fm is {\"ratio\": 2, \"index\": 1.5, \"decay\": 0.4}");
@@ -522,6 +529,8 @@ std::vector<SynthPatchInfo> synthPatches() {
     std::vector<SynthPatchInfo> out;
     for (auto &[name, p] : patchBank().items()) out.push_back({name, categoryOf(name), p.value("about", "")});
     std::stable_sort(out.begin(), out.end(), [](auto &a, auto &b) { return a.name == "Init" ? b.name != "Init" : (b.name != "Init" && a.name < b.name); });
+    for (auto &[name, what] : garageBandSynthPatches())   // GarageBand's synth patches, re-created here
+        out.push_back({name, "GarageBand", "GarageBand's " + what + " patch, re-created on builtin:synth: an approximation"});
     return out;
 }
 
@@ -538,6 +547,8 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
     std::vector<Envelope> autos((size_t)P_COUNT);   // parameter curves over song time
     std::vector<bool> automated((size_t)P_COUNT, false);
     bool pwParam = false;   // "pw" set by params or automation: it replaces every pulse oscillator's own width
+    double patchTranspose = 0;          // a GarageBand patch's own transposition (semitones)
+    json patchFx = json::array();       // and its effects, after the voices ("synth": {"effects": false} leaves them out)
     try {
         // the named patch, then the track's "synth" object merged over it
         json patch = json::object();
@@ -545,6 +556,14 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
         const json &bank = patchBank();
         std::string found;
         for (auto &[n, p] : bank.items()) if (n == preset) found = n;
+        GarageBandSynth gb;
+        if (found.empty() && garageBandSynthPatch(preset, gb)) {   // a GarageBand Retro Synth patch, re-created here
+            found = "Init";
+            patchTranspose = gb.transpose;
+            patchFx = gb.fx;
+            warnings.push_back("preset '" + gb.name + "' is GarageBand's " + gb.instrument + " patch" + (gb.engine.empty() ? "" : " (" + gb.engine + " mode)") +
+                               ", re-created on builtin:synth: an approximation");
+        }
         if (found.empty()) {
             std::string lower = preset;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -565,9 +584,12 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             found = hits[0];
         }
         patch = bank[found];
+        if (!gb.name.empty()) patch.merge_patch(gb.synth);
         if (!track.synth.is_null()) {
             if (!track.synth.is_object()) { err = "track '" + track.name + "': \"synth\" must be an object (see docs/job-format.md)"; return false; }
-            patch.merge_patch(track.synth);
+            json own = track.synth;
+            if (own.contains("effects")) { if (!own["effects"].get<bool>()) patchFx = json::array(); own.erase("effects"); }
+            patch.merge_patch(own);
         }
         P = parsePatch(patch, job, warnings);
         // "params": overrides by name
@@ -667,7 +689,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 }
                 // glide towards the target pitch (control rate)
                 v.key = glideCoef > 0 ? v.target + (v.key - v.target) * glideCoef : v.target;
-                double pitch = v.key + lfoPitch;
+                double pitch = v.key + patchTranspose + lfoPitch;
                 if (!track.bendAutomation.empty()) pitch += track.bendAutomation.at(t);
                 if (v.bend && !v.bend->empty()) {   // per-note bend: (seconds after the note start, semitones)
                     const double s = (double)(f - v.bendStart) / sr;
@@ -715,7 +737,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             const double a = v.amp.next(sr);
             v.fenv.next(sr);
             if (v.amp.stage == 4) { v.done = true; break; }
-            double L = 0, R = 0;
+            double L = 0, R = 0, postL = 0, postR = 0;   // post: oscillators that skip the filter
             for (size_t o = 0; o < P.osc.size(); ++o) {
                 const Osc &osc = P.osc[o];
                 double fmAmt = 0;
@@ -728,15 +750,20 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 if (osc.decay > 0) { own = v.oscDecayLevel[o]; v.oscDecayLevel[o] *= v.oscDecay[o]; }
                 const double pw = std::clamp((pwParam ? pwNow : osc.pw) + lfoPw, 0.02, 0.98);
                 const double g = osc.level * own * unitNorm;
+                double &sumL = osc.filtered ? L : postL, &sumR = osc.filtered ? R : postR;
                 for (int u = 0; u < U; ++u) {
                     const size_t idx = o * (size_t)U + (size_t)u;
                     Unit &x = v.units[idx];
                     const double s = osc.wave == Osc::Noise ? v.noise.next() : oscSample(osc, x, pw, fmAmt);
                     x.phase += x.inc;
-                    if (x.phase >= 1) x.phase -= 1;
+                    if (osc.sync) {   // restart with the first oscillator's cycle (its unit of the same unison voice)
+                        const Unit &m = v.units[(size_t)u];
+                        if (m.phase < m.inc && m.inc > 0) x.phase = m.phase * (x.inc / m.inc);
+                    }
+                    if (x.phase >= 1) x.phase -= std::floor(x.phase);
                     if (osc.fm) { x.fmPhase += x.inc * osc.fmRatio; x.fmPhase -= std::floor(x.fmPhase); }
-                    L += s * g * uL[idx];
-                    R += s * g * uR[idx];
+                    sumL += s * g * uL[idx];
+                    sumR += s * g * uR[idx];
                 }
             }
             if (sub > 0) {   // a square an octave below the voice
@@ -766,6 +793,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 }
                 L = oL; R = oR;
             }
+            L += postL; R += postR;
             const double velGain = 1 - P.ampVel * (1 - v.vel);
             const double g = a * velGain * level * baseGain * (1 - std::clamp(lfoAmp, 0.0, 1.0));
             out.left[f] += (float)(L * g * panL);
@@ -818,6 +846,14 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             }
         }
         if (alive) runVoice(v, pos, frames);
+    }
+    if (!patchFx.empty()) {   // a GarageBand patch's chorus or flanger and its own effects
+        const FxContext ctx{job, false, nullptr};
+        for (size_t i = 0; i < patchFx.size(); ++i) {
+            auto fx = makeEffect(patchFx[i], job, "patch effect " + std::to_string(i + 1), err);
+            if (!fx || !fx->process(out, ctx, err)) return false;
+            for (auto &w : fx->warnings) warnings.push_back("patch effect: " + w);
+        }
     }
     return true;
 }
