@@ -16,6 +16,11 @@
                                     its 234 preset-key ints before the values as Vintage B3 stores them
   <dir>/patches/Test Arp.patch/     Test Retro's Retro Synth after an Arpeggiator: 1/16 up over 2 octaves, note length
                                     50 %, swing 60, a 6-step grid (note 127, rest, chord 64, note 100 tied over 2, note 64)
+  <dir>/patches/Test EP.patch/      a channel strip on Vintage Electric Piano: a tine model, a little bell, its effects off
+  <dir>/patches/Test Clav.patch/    a channel strip on Vintage Clav: the classic model, both pickups, its effects bypassed
+  <dir>/patches/Test Sculpture.patch/       a channel strip on Sculpture: object 1 a Pick on a metal string, morph
+                                    off (its centre point holds the material), transposed +12
+  <dir>/patches/Test Sculpture Side.patch/  the same with object 2 External (side-chain audio): refused
   <dir>/settings/Arpeggiator/Test Arp.pst   the same Arpeggiator settings as a preset
 Usage: make-test-exs.py <dir>"""
 import math, os, plistlib, struct, sys
@@ -29,6 +34,10 @@ os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Retro.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Organ.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Arp.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test EP.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Clav.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Sculpture.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Sculpture Side.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'settings', 'Arpeggiator'), exist_ok=True)
 wav = os.path.abspath(os.path.join(out, 'Test Sine.wav'))
 rate, n = 48000, 96000
@@ -81,11 +90,11 @@ def strip(path, records):
     with open(path, 'wb') as f:
         f.write(b'OCuA' + bytes(220) + b''.join(records))
 
-def settings(plugin_id, values):
+def settings(plugin_id, values, version=1):
     # a plug-in's saved settings after the 32-byte prefix: the TSPP block (u32 size, u16 version, u8 big-endian flag,
     # u8, u32 count, "GAME" "TSPP", u32 plug-in id, count float32 values, the first one reserved)
     vals = [0.0] + values
-    block = struct.pack('<IHBBI', 24 + 4 * len(vals), 1, 0, 0, len(vals)) + b'GAMETSPP' + struct.pack('<I', plugin_id) + struct.pack('<%df' % len(vals), *vals)
+    block = struct.pack('<IHBBI', 24 + 4 * len(vals), version, 0, 0, len(vals)) + b'GAMETSPP' + struct.pack('<I', plugin_id) + struct.pack('<%df' % len(vals), *vals)
     return struct.pack('<I', plugin_id) + bytes(8) + struct.pack('<I', len(block)) + bytes(16) + block
 
 # Channel EQ: a 12 dB/oct low cut at 200 Hz (#0 on, #1 Hz, #2 slope 2 = 12 dB/oct, #3 Q) and -3 dB master gain (#32)
@@ -158,3 +167,32 @@ with open(os.path.join(out, 'settings', 'Arpeggiator', 'Test Arp.pst'), 'wb') as
 arpeggiator = struct.pack('<III', 300, 0, 0x02000000) + struct.pack('<I', len(block)) + bytes(16) + block
 strip(os.path.join(out, 'patches', 'Test Arp.patch', '#Root.cst'),
       [record(0, 'Arpeggiator', b'GAME', arpeggiator), record(3, 'Retro Synth', b'GAME', settings(279, retro))])
+# Vintage Electric Piano (plug-in id 0xd5, 40 parameters): model 0 (a tine), Decay 130, Release 100, Bell 0.5, 16 voices;
+# its EQ, drive, phaser, tremolo and chorus off
+ep = [0.0] * 40
+for n, v in {0: 0, 1: 130, 2: 100, 3: 0.5, 8: 16, 23: -2, 24: 2, 25: 2, 26: 0.7, 35: 50}.items():
+    ep[n] = v
+strip(os.path.join(out, 'patches', 'Test EP.patch', '#Root.cst'), [record(3, 'E-Piano', b'GAME', settings(0xd5, ep, 2))])
+# Vintage Clav (plug-in id 0xdf, 65 parameters): model 0 (classic), 8 voices, both pickups (mode 3) at 20/30 % and
+# 70/80 %, Brilliance 0.2, String Decay 0.1, the Treble switch on, the effects section bypassed (#55)
+clav = [0.0] * 65
+for n, v in {1: 8, 4: 2, 7: 0.1, 9: -3, 10: 0, 13: 0.2, 14: 0.2, 15: -1, 20: 0, 21: -0.1, 22: 0.1, 25: 0, 26: -1, 28: 3, 29: 1, 30: 1,
+             33: 20, 34: 30, 35: 70, 36: 80, 39: 1, 43: 720, 49: 1, 55: 1}.items():
+    clav[n] = v
+strip(os.path.join(out, 'patches', 'Test Clav.patch', '#Root.cst'), [record(3, 'Clav', b'GAME', settings(0xdf, clav, 4))])
+# Sculpture (plug-in id 0xde, 578 parameters): 8 voices, poly (keyboard mode 2), Transpose +12; object 1 a Pick
+# (type 4) at strength 0.6, velocity sensitivity 0.5; its filter, waveshaper, Body EQ and delay off; the amp
+# envelope 2 ms, 500 ms, 0.5, 200 ms; morph off, so the centre morph point (#443 + i, mirrored in the main
+# parameters) holds the material (stiffness 0.2, inner loss 0.3, media loss 0.2) and pickups (0.2, 0.3)
+sculpture = [0.0] * 578
+for n, v in {1: 8, 2: 2, 10: 12, 35: 200, 57: 1, 58: 4, 59: 0, 65: 0.5, 115: 2, 116: 2, 117: 500, 118: 0.5, 119: 200, 334: 0}.items():
+    sculpture[n] = v
+centre = {37: 0.2, 38: 0.3, 39: 0.2, 60: 0.15, 61: 0.6, 92: 0.2, 93: 0.3, 108: 1.0}
+for i, n in enumerate([37, 38, 39, 36, 60, 61, 62, 63, 72, 73, 74, 75, 84, 85, 86, 87, 92, 93, 102, 103, 108, 109]):
+    for k in range(5):   # the main parameters, then morph points 0 (the centre) to 4 (corners A-D) alike
+        sculpture[443 + 27 * k + i] = centre.get(n, 0.0)
+    sculpture[n] = centre.get(n, 0.0)
+strip(os.path.join(out, 'patches', 'Test Sculpture.patch', '#Root.cst'), [record(3, 'Sculpture', b'GAME', settings(0xde, sculpture, 6))])
+side = list(sculpture)
+side[69], side[70] = 1, 15   # object 2 on, External
+strip(os.path.join(out, 'patches', 'Test Sculpture Side.patch', '#Root.cst'), [record(3, 'Sculpture', b'GAME', settings(0xde, side, 6))])

@@ -1,6 +1,7 @@
 #include "retro_synth.hpp"
 
 #include "alchemy.hpp"
+#include "apple_keys.hpp"
 #include "apple_synths.hpp"
 #include "logic_patches.hpp"
 
@@ -173,7 +174,13 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::st
         else if (c.instrument == "ES2") out = es2Patch(c.settings.params);
         else if (c.instrument == "ES1") out = es1Patch(c.settings.params);
         else if (c.instrument == "EFM1") out = efm1Patch(c.settings.params);
-        else continue;
+        else if (c.instrument == "E-Piano") out = vintageEPPatch(c.settings.params);
+        else if (c.instrument == "Clav") out = vintageClavPatch(c.settings.params);
+        else if (c.instrument == "Sculpture") {   // refused when its sound is side-chain audio or movement a static voice can't play
+            std::string refused;
+            out = sculpturePatch(c.settings.params, refused);
+            if (!refused.empty()) { if (why) *why = refused; return false; }
+        } else continue;
         out.name = p->name;
         std::vector<std::string> fxNotes;
         for (auto &f : patchChainEffects(chans, fxNotes)) out.fx.push_back(f);
@@ -184,7 +191,7 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::st
 }
 
 std::string garageBandSynthKind(const GarageBandSynth &g) {
-    return g.instrument + (g.engine.empty() ? "" : " (" + g.engine + (g.instrument == "Alchemy" ? ")" : " mode)"));
+    return g.instrument + (g.engine.empty() ? "" : " (" + g.engine + (g.instrument == "Retro Synth" ? " mode)" : ")"));
 }
 
 const std::vector<std::pair<std::string, std::string>> &garageBandSynthPatches() {
