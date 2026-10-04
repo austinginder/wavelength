@@ -10,6 +10,9 @@
 //  sfz          an SFZ instrument (sfz.hpp): regions with key/velocity ranges, crossfades, round
 //               robins, keyswitches, loops (the file's own too), amp envelope, choke groups,
 //               and the *sine/*saw/*square/*triangle/*noise generators.
+//  dspreset     a DecentSampler instrument (decent_sampler.hpp: a .dspreset, a .dsbundle or a .dslibrary zip):
+//               its samples as SFZ regions with its controls' bindings at their saved values, its
+//               effects chain after it.
 //  exs          a Logic / GarageBand Sampler instrument (.exs, EXS24): zones, groups (velocity layers,
 //               key ranges, controller-enabled groups at rest, articulations as keyswitches from MIDI 0),
 //               loops, the instrument's level, tuning and amplitude envelope; samples found where Logic
@@ -35,9 +38,9 @@ namespace wl {
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 
 struct SampleLibraryEntry {
-    std::string kind;       // "multisample", "sfz", "soundfont", "exs", "patch", "kit", "loops" or "ir"
+    std::string kind;       // "multisample", "sfz", "dspreset", "soundfont", "exs", "patch", "kit", "loops" or "ir"
     std::string name, path, category;
-    size_t count = 0;       // zones (multisample), regions (sfz), presets (soundfont), installed samples (patch) or sample files (kit)
+    size_t count = 0;       // zones (multisample), regions (sfz), samples (dspreset), presets (soundfont), installed samples (patch) or sample files (kit)
 };
 
 // Every multisample and kit folder under the sample roots (cached per process).
@@ -64,8 +67,14 @@ std::vector<std::string> sampleRoots();
 std::string resolveLibraryFile(const std::string &ref);
 // The shortest "lib:" name of an installed library file (absolute path); "" when it is in no library.
 std::string libraryRef(const std::string &file);
-// A library entry of `kind` by path or name (as the sampler finds "multisample", "sfz", "soundfont")
+// A library entry of `kind` by path or name (as the sampler finds "multisample", "sfz", "soundfont", "dspreset")
 bool findSampleEntry(const std::string &kind, const std::string &query, const std::string &baseDir, std::string &path, std::string &err);
+// A DecentSampler preset by name (as `samples --search` lists it), by path (a .dspreset, a .dsbundle folder or a
+// .dslibrary) or as "<bundle or library>#<preset>"; `path` is what readDecentPreset() reads
+bool findDecentPreset(const std::string &query, const std::string &baseDir, std::string &path, std::string &err);
+// A DecentSampler preset as `samples --dspreset` shows it: its regions, key range, effects as played here and what is
+// approximated or left out; null with err when it can't be read
+nlohmann::json describeDecentPreset(const std::string &query, const std::string &baseDir, std::string &err);
 // Where `samples --install-soundfont` puts SoundFonts (a sample root when it exists)
 std::string soundFontDir();
 // The General MIDI SoundFont to fall back on: $WAVELENGTH_SOUNDFONT, else the installed one with the

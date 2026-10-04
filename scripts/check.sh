@@ -440,6 +440,52 @@ r = json.load(sys.stdin)
 sys.exit(0 if r.get("ok") and r["tracks"][0]["lufs"] > -60 and "Machine Kit" in " ".join(r["tracks"][0].get("warnings", [])) else 1)' ||
   folders_why="the Ultrabeat patch did not play its kit"
 if [ -n "$folders_why" ]; then echo "FAIL sample folders: $folders_why"; fail=1; else echo "ok   sample folders: note-named multisamples (both octave namings), drum machine abbreviations, Ultrabeat patch kits"; fi
+# DecentSampler: a generated preset (scripts/make-test-dspreset.py) plays each key from the sample its range maps (C4
+# from the A3 sample, E5 from the A5 one) with its 0.6 s release; its Volume knob at 0.5 sets the instrument 6 dB down
+# (and DecentSampler plays 5.3 dB under a sample's level), so it measures 11.3 dB under the raw sample; its reverb rings on
+# after the dry note's release
+rm -rf out/check/dspreset && mkdir -p out/check/dspreset
+python3 scripts/make-test-dspreset.py out/check/dspreset
+cat > out/check/dspreset/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 2, "stems": "16",
+ "tracks": [{"name": "Low", "plugin": "builtin:sampler", "sampler": {"dspreset": "Test Instrument.dspreset", "effects": false}, "notes": [{"beat": 0, "dur": 1, "key": 60, "vel": 1}]},
+            {"name": "High", "plugin": "builtin:sampler", "sampler": {"dspreset": "Test Instrument.dspreset", "effects": false}, "notes": [{"beat": 0, "dur": 1, "key": 76, "vel": 1}]},
+            {"name": "Raw", "plugin": "builtin:sampler", "sampler": {"sample": "Samples/Sine A3.wav", "root": 57}, "notes": [{"beat": 0, "dur": 1, "key": 60, "vel": 1}]},
+            {"name": "Wet", "plugin": "builtin:sampler", "sampler": {"dspreset": "Test Instrument.dspreset"}, "notes": [{"beat": 0, "dur": 1, "key": 60, "vel": 1}]}]}
+JOB
+ds_why=""
+if ! "./$build/wavelength" render out/check/dspreset/job.json --out out/check/dspreset/out --json > out/check/dspreset/report.json 2>/dev/null; then
+  ds_why="the preset did not render: $(python3 -c 'import json; print(json.load(open("out/check/dspreset/report.json")).get("error"))' 2>/dev/null)"
+else
+  for t in 01-low 02-high 04-wet; do "./$build/wavelength" analyze "out/check/dspreset/out/stems/$t.wav" --json > "out/check/dspreset/$t.json" 2>/dev/null; done
+  python3 - <<'PY' || ds_why="it played wrong (pitch, release, knob volume or reverb): $(cat out/check/dspreset/why.txt 2>/dev/null)"
+import json, math, struct, sys
+a = {t: json.load(open("out/check/dspreset/%s.json" % t)) for t in ("01-low", "02-high", "04-wet")}
+def rms(name, t0, t1):   # dB over [t0, t1) s of a 16-bit stem
+    b = open("out/check/dspreset/out/stems/%s.wav" % name, "rb").read(); i = 12; ch = 2; data = b""
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack("<I", b[i + 4:i + 8])[0]
+        if cid == b"fmt ": ch = struct.unpack("<H", b[i + 10:i + 12])[0]
+        if cid == b"data": data = b[i + 8:i + 8 + n]
+        i += 8 + n + (n & 1)
+    v = struct.unpack("<%dh" % (len(data) // 2), data)[int(t0 * 48000) * ch:int(t1 * 48000) * ch]
+    return 10 * math.log10(sum(x * x for x in v) / len(v) / 32768 ** 2 + 1e-12)
+knob = rms("01-low", 0.2, 0.8) - rms("03-raw", 0.2, 0.8)
+checks = {"Low plays C4": a["01-low"]["pitch"]["note"] == "C4", "High plays E5": a["02-high"]["pitch"]["note"] == "E5",
+          "0.6 s release": 1.3 < a["01-low"]["envelope"]["lastSound"] < 1.75, "knob volume -11.3 dB (%.2f)" % knob: abs(knob + 11.3) < 0.3,
+          "reverb tail": rms("04-wet", 1.7, 2.2) > rms("01-low", 1.7, 2.2) + 20}
+open("out/check/dspreset/why.txt", "w").write(", ".join(k for k, v in checks.items() if not v))
+sys.exit(0 if all(checks.values()) else 1)
+PY
+fi
+# samples --dspreset describes it: both samples play, the reverb and its make-up gain, no notes for a preset that plays whole
+if [ -z "$ds_why" ] && ! "./$build/wavelength" samples --dspreset out/check/dspreset/"Test Instrument.dspreset" --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)["dspreset"]
+sys.exit(0 if d["regions"] == 2 and d["keys"] == [0, 127] and [e["type"] for e in d["effects"]] == ["reverb", "gain"] and not d["notes"] else 1)'; then
+  ds_why="samples --dspreset described the test preset wrong"
+fi
+if [ -n "$ds_why" ]; then echo "FAIL dspreset: $ds_why"; fail=1; else echo "ok   dspreset: key split, release, a knob binding at its saved value, reverb, --dspreset"; fi
 # gate as a noise gate: a 220 Hz tone at -6 dB for a second, then at -50 dB: with a -30 dB threshold the quiet second goes
 # silent and the loud one stays; phaser: a saw through it keeps its pitch, sounds, and turns stereo
 rm -rf out/check/gate && mkdir -p out/check/gate

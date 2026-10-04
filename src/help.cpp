@@ -26,13 +26,14 @@ Usage:
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
       `presets arp`: GarageBand's and Logic's Arpeggiator presets and the patches that
       arpeggiate, for a track's "arp" (macOS).
-  wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--patch NAME] [--install-soundfont [--force]] [--json]
+  wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--patch NAME] [--dspreset NAME] [--install-soundfont [--force]] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ,
-      SoundFonts, Logic and GarageBand instruments and patches, Apple Loops) and impulse responses
-      for the convolve effect; --kit shows the General MIDI key each of a kit's files is mapped to,
-      --soundfont a SoundFont's presets, --patch a GarageBand or Logic patch (its channels, whether
-      and what it plays here, its effects and sends with their rooms for convolve). --install-soundfont
-      downloads MuseScore General (MIT), the General MIDI set.
+      DecentSampler presets, SoundFonts, Logic and GarageBand instruments and patches, Apple Loops)
+      and impulse responses for the convolve effect; --kit shows the General MIDI key each of a kit's
+      files is mapped to, --soundfont a SoundFont's presets, --patch a GarageBand or Logic patch (its
+      channels, whether and what it plays here, its effects and sends with their rooms for convolve),
+      --dspreset a DecentSampler preset (its samples, its effects as played here, what is left out).
+      --install-soundfont downloads MuseScore General (MIT), the General MIDI set.
   wavelength loops [--search TEXT] [--key KEY] [--midi] [--json] | loops --notes <name> [--key KEY] [--json]
       List the Apple Loops GarageBand and Logic install (macOS): category, key, tempo, length in
       beats, and "notes" for software-instrument loops. A clip plays one as {"file": "lib:Apple

@@ -557,6 +557,20 @@ int cmdSamples(const Args &a) {
             std::fprintf(OUT, "For its sends, a bus per room: {\"name\": \"Hall\", \"fx\": [{\"type\": \"convolve\", \"ir\": \"<room>\", \"mix\": 1}]} and \"sends\": {\"Hall\": <dB>}.\n");
         return 0;
     }
+    if (a.has("--dspreset")) {   // a DecentSampler preset: what plays here, its effects, what is left out
+        const json d = describeDecentPreset(a.get("--dspreset"), fs::current_path().string(), err);
+        if (d.is_null()) return fail(a, err);
+        if (a.has("--json")) { emit(json{{"ok", true}, {"dspreset", d}}.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+        std::fprintf(OUT, "%s\n%s\n  %zu of %zu samples play, keys %d-%d%s\n", d["name"].get<std::string>().c_str(), d["path"].get<std::string>().c_str(),
+                     d["regions"].get<size_t>(), d["samples"].get<size_t>(), d["keys"][0].get<int>(), d["keys"][1].get<int>(),
+                     d.contains("library") ? ", read from its .dslibrary" : "");
+        if (!d["effects"].empty()) std::fprintf(OUT, "  effects played as: %s\n", d["effects"].dump().c_str());
+        std::fprintf(OUT, "  then DecentSampler's output stage: a compressor on what passes -6 dBFS (4:1) and a limiter at 0 dBFS\n");
+        for (auto &n : d["notes"]) std::fprintf(OUT, "  ~ %s\n", n.get<std::string>().c_str());
+        std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:sampler\", \"sampler\": {\"dspreset\": \"%s\"} (\"effects\": false for the dry instrument).\n",
+                     d["name"].get<std::string>().c_str());
+        return 0;
+    }
     if (a.has("--kit")) {
         std::vector<std::pair<int, std::string>> map;
         std::vector<std::string> unmapped;
@@ -592,15 +606,15 @@ int cmdSamples(const Args &a) {
         if (a.has("--json")) list.push_back({{"kind", e.kind}, {"name", e.name}, {"category", e.category}, {"count", e.count}, {"path", e.path}});
         else if (term::out().on) {
             const term::Style &st = term::out();
-            const std::string unit = e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" ? "samples" : e.kind == "ir" ? "ms" : "zones";
+            const std::string unit = e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" || e.kind == "dspreset" ? "samples" : e.kind == "ir" ? "ms" : "zones";
             std::fprintf(OUT, "%s %s %s %s\n", st.cyan(col(e.kind, 12)).c_str(), st.dim(col(e.category, 22)).c_str(), st.bold(col(e.name, 44)).c_str(),
                          st.dim(std::to_string(e.count) + " " + unit).c_str());
         }
         else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
-                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" ? "samples" : e.kind == "ir" ? "ms" : "zones");
+                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" || e.kind == "dspreset" ? "samples" : e.kind == "ir" ? "ms" : "zones");
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2, ' ', false, json::error_handler_t::replace));
-    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"<kind>\": \"<name>\"} (multisample, sfz, exs, patch, kit), or {\"soundfont\": \"<name>\", \"program\": N}; an ir in a {\"type\": \"convolve\", \"ir\": \"<name>\"} effect.\n",
+    else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"<kind>\": \"<name>\"} (multisample, sfz, dspreset, exs, patch, kit), or {\"soundfont\": \"<name>\", \"program\": N}; an ir in a {\"type\": \"convolve\", \"ir\": \"<name>\"} effect.\n",
                       shown, lib.size());
     return 0;
 }
@@ -2064,7 +2078,7 @@ int run(int argc, char **argv) {
             {"plugins", {"--rescan", "--json", "--block", "--unblock", "--reason"}},
             {"params", {"--preset", "--state", "--format", "--all", "--map", "--steps", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
-            {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--patch", "--json"}},
+            {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--patch", "--dspreset", "--json"}},
             {"loops", {"--search", "--key", "--midi", "--notes", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},

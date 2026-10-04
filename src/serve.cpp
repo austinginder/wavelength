@@ -112,7 +112,7 @@ json filesJson(const FileMap &files) {
 // what a builtin:sampler track plays, for the track list: a library or file name, or "custom kit" for a key -> file map
 std::string samplerLabel(const json &s) {
     if (!s.is_object()) return "";
-    for (const char *k : {"kit", "multisample", "sfz", "exs", "patch", "soundfont"})
+    for (const char *k : {"kit", "multisample", "sfz", "dspreset", "exs", "patch", "soundfont"})
         if (s.contains(k) && s[k].is_string()) return s[k].get<std::string>();
     if (s.contains("kit") && s["kit"].is_object()) return "custom kit";
     if (s.contains("sample") && s["sample"].is_string()) return fs::path(s["sample"].get<std::string>()).stem().string();

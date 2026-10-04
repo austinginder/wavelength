@@ -3,6 +3,7 @@
 #include "alchemy.hpp"
 #include "analyze.hpp"
 #include "apple_loops.hpp"
+#include "decent_sampler.hpp"
 #include "logic_patches.hpp"
 #include "retro_synth.hpp"
 
@@ -140,8 +141,11 @@ struct Zone {
     enum Loop { Off, Always, Sustain } loop = Off;
     double loopStart = 0, loopStop = 0, loopFade = 0;   // loopFade: share of the loop (multisample)
     double loopFadeSec = 0;                             // SFZ loop_crossfade, seconds
+    double loopFadeFrames = 0;                          // the same in the file's frames (DecentSampler's loopCrossfade)
     bool reverse = false, roundRobin = false;
+    bool seqLayer = false;                   // round robin by SFZ seq_position: every zone at the chosen position plays
     double pan = 0;                          // kit map entries only
+    bool powerPan = false;                   // constant-power pan, unity in the centre (SoundFont zones always; DecentSampler)
     double startSec = 0;                     // extra start offset (sampler "start"), seconds
     double lengthSec = 0;                    // sampler "length": play at most this much from the start (0 = to the end)
     // SFZ regions
@@ -151,6 +155,11 @@ struct Zone {
     std::vector<std::pair<int, double>> velCurve;   // amp_velcurve_N points (velocity, gain 0..1); replaces velTrack
     double ampKeyTrackDb = 0; int ampKeyCenter = 60;   // amp_keytrack (dB per key from amp_keycenter)
     double attack = -1, hold = 0, decay = 0, sustain = 1, release = -1;   // ampeg_*; < 0 = the sampler's
+    // DecentSampler's envelope curves (wl_attack_curve & co., -100 logarithmic .. 100 exponential, as k = curve / 25):
+    // attack (1 - e^(k x)) / (1 - e^k), decay and release falling as 1 minus that with -k; off = linear attack,
+    // exponential decay, quadratic release
+    bool curves = false;
+    double attackCurve = 0, decayCurve = 0, releaseCurve = 0;
     int sw = -1;                             // keyswitch that selects this zone (sw_last), -1 = always
     int seq = 0;                             // round-robin order (seq_position, lorand)
     int group = 0, offBy = 0;                // choke groups
@@ -222,6 +231,9 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         "sw_lokey", "sw_hikey", "sw_last", "sw_default", "group", "off_by", "direction", "note_polyphony",
         "group_volume", "master_volume", "global_volume", "cutoff", "resonance", "fil_type", "fil_veltrack", "fil_keytrack",
         "fil_keycenter", "rt_decay", "ampeg_delay", "delay",
+        // Wavelength's own, for the regions decent_sampler.cpp writes: DecentSampler's envelope curves and its loop
+        // crossfade in frames
+        "wl_attack_curve", "wl_decay_curve", "wl_release_curve", "wl_loop_crossfade_frames",
         // no effect on the sound
         "lochan", "hichan", "off_mode", "sw_label", "region_label", "group_label", "master_label", "global_label",
         "polyphony", "note_selfmask", "sw_vel", "xf_velcurve"};
@@ -284,11 +296,13 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         else if (mode == "loop_continuous" || mode == "loop_sustain" || (mode.empty() && hasPoints)) {
             z.loop = mode == "loop_sustain" ? Zone::Sustain : Zone::Always;
             z.loopFadeSec = std::max(0.0, r.num("loop_crossfade", 0));
+            z.loopFadeFrames = std::max(0.0, r.num("wl_loop_crossfade_frames", 0));
             if (hasPoints) { z.loopStart = r.num("loop_start", 0); z.loopStop = r.num("loop_end", 0) + 1; }
             else z.loopFromFile = true;
         } else if (mode.empty()) {   // SFZ: loops that the file defines play unless told otherwise
             z.loop = Zone::Always;
             z.loopFromFile = true;
+            z.loopFadeFrames = std::max(0.0, r.num("wl_loop_crossfade_frames", 0));
         }
         z.velTrack = r.num("amp_veltrack", 100) / 100;
         for (auto &[k, v] : r.op)
@@ -305,7 +319,13 @@ bool sfzZones(const SfzFile &sfz, std::vector<Zone> &zones, int &swLow, int &swH
         z.hold = r.num("ampeg_hold", 0);
         z.decay = r.num("ampeg_decay", 0);
         z.sustain = std::clamp(r.num("ampeg_sustain", 100) / 100, 0.0, 1.0);
-        if (r.num("seq_length", 1) > 1) { z.roundRobin = true; z.seq = (int)r.num("seq_position", 1); }
+        if (r.has("wl_attack_curve") || r.has("wl_decay_curve") || r.has("wl_release_curve")) {
+            z.curves = true;
+            z.attackCurve = std::clamp(r.num("wl_attack_curve", 0), -100.0, 100.0) / 25;
+            z.decayCurve = std::clamp(r.num("wl_decay_curve", 0), -100.0, 100.0) / 25;
+            z.releaseCurve = std::clamp(r.num("wl_release_curve", 0), -100.0, 100.0) / 25;
+        }
+        if (r.num("seq_length", 1) > 1) { z.roundRobin = true; z.seqLayer = true; z.seq = (int)r.num("seq_position", 1); }
         else if (r.has("lorand") || r.has("hirand")) { z.roundRobin = true; z.seq = (int)std::lround(r.num("lorand", 0) * 1000); }
         if (r.has("sw_last")) z.sw = r.key("sw_last", -1) + off;
         if (r.has("sw_lokey")) { swLow = std::min(swLow, r.key("sw_lokey", 0) + off); swHigh = std::max(swHigh, r.key("sw_hikey", 127) + off); }
@@ -855,6 +875,19 @@ bool findEntry(const std::string &kind, const std::string &query, std::string &p
 }
 
 // ---- playback -----------------------------------------------------------------------------
+// The round-robin zones a note plays, `counter` its key's count so far: one take in turn, or, when the zones are SFZ
+// seq_position ones (SFZ's and DecentSampler's seqPosition), every zone at the position whose turn it is, so layered
+// round robins (several mics or stereo layers sharing a position) sound together
+void pickRobin(const std::vector<const Zone *> &robin, size_t &counter, std::vector<const Zone *> &play) {
+    if (robin.empty()) return;
+    if (!std::all_of(robin.begin(), robin.end(), [](const Zone *z) { return z->seqLayer; })) { play.push_back(robin[counter++ % robin.size()]); return; }
+    std::vector<int> seqs;
+    for (auto *z : robin) if (std::find(seqs.begin(), seqs.end(), z->seq) == seqs.end()) seqs.push_back(z->seq);
+    std::sort(seqs.begin(), seqs.end());
+    const int pick = seqs[counter++ % seqs.size()];
+    for (auto *z : robin) if (z->seq == pick) play.push_back(z);
+}
+
 struct Voice {
     const Zone *zone;
     std::shared_ptr<SampleData> data;
@@ -893,7 +926,7 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
     if (z.loopFromFile && s.loopEnd > s.loopStart && s.loopStart >= 0) { loopStart = s.loopStart; loopStop = s.loopEnd; }
     const double loopLen = loopStop - loopStart;
     const bool canLoop = z.loop != Zone::Off && loopLen > 16 && loopStop <= stop && !z.reverse;
-    const double fadeLen = canLoop ? std::min(std::min(std::max(z.loopFade * loopLen, z.loopFadeSec * s.rate), loopLen * 0.5), loopStart) : 0;
+    const double fadeLen = canLoop ? std::min(std::min(std::max({z.loopFade * loopLen, z.loopFadeSec * s.rate, z.loopFadeFrames}), loopLen * 0.5), loopStart) : 0;
     dsp::Biquad fl, fr;
     const bool filtered = z.filter && v.cutoffHz > 0;
     const auto ftype = z.filter == 2 ? dsp::Biquad::HighPass : z.filter == 3 ? dsp::Biquad::BandPass : dsp::Biquad::LowPass;
@@ -901,7 +934,8 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
     // a SoundFont filter lowers the level by half its resonance (SoundFont 2.01, as FluidSynth does)
     const double filterGain = filtered && z.sf2 ? 1 / std::sqrt(fq / 0.7071) : 1.0;
     const double pan = std::clamp(z.pan + v.panOffset, -1.0, 1.0);
-    // SoundFont zones pan at constant power, unity in the centre (a hard-panned stereo pair gets +3 dB a side, as in FluidSynth)
+    // SoundFont and DecentSampler zones pan at constant power, unity in the centre (a hard-panned stereo pair gets +3 dB a
+    // side, as in FluidSynth and DecentSampler)
     const double panL = std::sqrt(2.0) * std::cos((pan + 1) * M_PI / 4), panR = std::sqrt(2.0) * std::sin((pan + 1) * M_PI / 4);
     auto tc = [](double seconds, double cents) { return cents ? seconds * std::pow(2.0, cents / 1200) : seconds; };
     if (filtered) {
@@ -949,7 +983,16 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
         if (idx >= out.frames()) break;
         const double t = i / sr;
         double env = attack > 0 ? std::min(1.0, t / attack) : 1.0;
-        if (z.sf2) {   // SoundFont volume envelope: decay and release fall linearly in dB, 96 dB over their times
+        if (z.curves) {   // DecentSampler's curves (Zone::curves)
+            auto rise = [](double x, double k) { return std::fabs(k) < 1e-6 ? x : (1 - std::exp(k * x)) / (1 - std::exp(k)); };
+            if (attack > 0 && t < attack) env = rise(t / attack, z.attackCurve);
+            if (z.sustain < 1 && t > decayFrom) env *= decay > 0 && t < decayFrom + decay ? z.sustain + (1 - z.sustain) * (1 - rise((t - decayFrom) / decay, -z.decayCurve)) : z.sustain;
+            if (z.sustain <= 0 && t >= decayFrom + decay) break;
+            if (t > v.noteLen) {
+                if (release <= 0 || t >= v.noteLen + release) break;
+                env *= 1 - rise((t - v.noteLen) / release, -z.releaseCurve);
+            }
+        } else if (z.sf2) {   // SoundFont volume envelope: decay and release fall linearly in dB, 96 dB over their times
             const double td = std::min(t, v.noteLen);   // decay stops at note-off, release starts from there
             double db = 0;
             if (td > decayFrom) db = decay > 0 ? std::max(susDb, -96 * (td - decayFrom) / decay) : susDb;
@@ -998,7 +1041,7 @@ void play(const Voice &v, Audio &out, double sr, double attack, double release) 
             l = (float)fl.process(l); r = (float)fr.process(r);
         }
         const double g = v.amp * env * filterGain;
-        const double pl = z.sf2 ? panL : pan > 0 ? 1 - pan : 1, pr = z.sf2 ? panR : pan < 0 ? 1 + pan : 1;
+        const double pl = z.sf2 || z.powerPan ? panL : pan > 0 ? 1 - pan : 1, pr = z.sf2 || z.powerPan ? panR : pan < 0 ? 1 + pan : 1;
         out.left[idx] += (float)(l * g * pl);
         out.right[idx] += (float)(r * g * pr);
         pos += ratio;
@@ -1054,8 +1097,40 @@ std::string libraryRef(const std::string &file) {
 }
 
 bool findSampleEntry(const std::string &kind, const std::string &query, const std::string &baseDir, std::string &path, std::string &err) {
+    if (kind == "dspreset") return findDecentPreset(query, baseDir, path, err);
     path = resolveIn(query, baseDir);
     return !path.empty() || findEntry(kind, query, path, err);
+}
+
+bool findDecentPreset(const std::string &query, const std::string &baseDir, std::string &path, std::string &err) {
+    if (query.empty()) { err = "sampler: \"dspreset\" names a DecentSampler preset (`wavelength samples --search` lists them) or a file"; return false; }
+    const size_t hash = query.rfind('#');   // "<bundle or library>#<preset>"
+    if (hash != std::string::npos && hash > 0) {
+        const std::string container = resolveIn(query.substr(0, hash), baseDir);
+        if (!container.empty()) { path = container + query.substr(hash); return true; }
+    }
+    path = resolveIn(query, baseDir);
+    std::error_code ec;
+    // a plain folder of the same name (a library's top folder) is only the answer when no preset has the name
+    if (!path.empty() && fs::is_directory(path, ec) && lower(fs::path(path).extension().string()) != ".dsbundle") {
+        std::string named, e2;
+        if (findEntry("dspreset", query, named, e2)) path = named;
+        return true;
+    }
+    return !path.empty() || findEntry("dspreset", query, path, err);
+}
+
+json describeDecentPreset(const std::string &query, const std::string &baseDir, std::string &err) {
+    std::string path;
+    if (!findDecentPreset(query, baseDir, path, err)) return nullptr;
+    DecentPreset ds;
+    if (!readDecentPreset(path, ds, err)) return nullptr;
+    int lo = 127, hi = 0;
+    for (auto &r : ds.sfz.regions) { lo = std::min(lo, r.key("lokey", 0)); hi = std::max(hi, r.key("hikey", 127)); }
+    json out = {{"name", ds.name}, {"path", path}, {"regions", ds.samples}, {"samples", ds.total}, {"keys", {lo, hi}},
+                {"effects", ds.effects}, {"output", ds.output}, {"notes", ds.notes}, {"sampler", {{"dspreset", ds.name}}}};
+    if (!ds.zip.empty()) out["library"] = ds.zip;
+    return out;
 }
 
 std::string soundFontDir() { return (platform::dataDir() / "soundfonts").string(); }
@@ -1130,7 +1205,8 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
         for (auto &root : sampleRoots()) {
             std::error_code ec;
             std::map<std::string, std::vector<std::string>> dirWavs;
-            std::set<std::string> sfzSampleDirs;   // folders an SFZ plays from: its samples, not a kit of their own
+            std::set<std::string> sfzSampleDirs;   // folders an SFZ or a DecentSampler preset plays from: its samples, not a kit of their own
+            std::vector<fs::path> dsLibraries;      // .dslibrary zips, listed after the presets on disk (a library often comes as both)
             for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
                  it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 if (ec) break;
@@ -1176,8 +1252,38 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                             const fs::path dir = fs::weakly_canonical(p.parent_path() / v.substr(0, slash), ec2);
                             if (!ec2) sfzSampleDirs.insert(dir.string());
                         }
+                } else if (ext == ".dspreset") {   // DecentSampler: count = its <sample>s; category = its folder (or bundle)
+                    if (p.filename().string().rfind("._", 0) == 0) continue;
+                    std::vector<uint8_t> x;
+                    if (!readFile(p.string(), x)) continue;
+                    std::vector<std::string> dirs;
+                    const size_t n = decentSampleCount(std::string(x.begin(), x.end()), &dirs);
+                    std::string cat = p.parent_path().filename().string();
+                    if (lower(fs::path(cat).extension().string()) == ".dsbundle") cat = fs::path(cat).stem().string();
+                    if (seen.insert("ds:" + lower(cat) + "/" + lower(p.stem().string())).second) lib.push_back({"dspreset", p.stem().string(), p.string(), cat, n});
+                    for (auto &d : dirs) {
+                        std::error_code ec2;
+                        const fs::path dir = fs::weakly_canonical(p.parent_path() / fs::u8path(d), ec2);
+                        if (!ec2) sfzSampleDirs.insert(dir.string());
+                    }
+                } else if (ext == ".dslibrary") {
+                    dsLibraries.push_back(p);
                 } else if (isAudioFileName(p.string())) {
                     dirWavs[p.parent_path().string()].push_back(p.string());
+                }
+            }
+            for (auto &z : dsLibraries) {   // a zip of a bundle: each preset inside as "<library>#<entry>"
+                std::string e2;
+                Zip zip;
+                if (!zip.open(z.string(), e2)) continue;
+                for (auto &entry : decentLibraryPresets(z.string(), e2)) {
+                    std::vector<uint8_t> x;
+                    if (!zip.read(entry, x, e2)) continue;
+                    // its category: the library's name, or the folder it sits in when the library is named like the preset
+                    const std::string name = fs::u8path(entry).stem().u8string();
+                    const std::string cat = lower(z.stem().string()) == lower(name) ? z.parent_path().filename().string() : z.stem().string();
+                    if (seen.insert("ds:" + lower(cat) + "/" + lower(name)).second)
+                        lib.push_back({"dspreset", name, z.string() + "#" + entry, cat, decentSampleCount(std::string(x.begin(), x.end()))});
                 }
             }
             for (auto &[dir, wavs] : dirWavs) {
@@ -1523,6 +1629,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     double levelFix = 0;   // an Alchemy patch's move into its peers' level window
     json kitCfg;   // an Ultrabeat patch plays as its kit; an Alchemy patch with its own sampler settings
     json patchFx = json::array();   // the patch's own effects, played after the instrument ("effects": false leaves them out)
+    json outputFx = json::array();  // an instrument's own output stage, after those whatever "effects" says (DecentSampler's)
     std::vector<std::string> patchFxNotes;
     std::unique_ptr<AlchemyPatch> alchemy;   // an Alchemy patch that plays samples: its instrument as SFZ regions
     if (track.sampler.is_object() && track.sampler.contains("patch") && track.sampler["patch"].is_string()) {
@@ -1563,17 +1670,17 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         }
     }
     const json &cfg = kitCfg.is_null() ? track.sampler : kitCfg;
-    if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, soundfont, exs, kit or sample)"; return false; }
+    if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, dspreset, soundfont, exs, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",
                                                 "retrigger", "bpm", "reverse", "start", "length", "slices", "variants", "sfz",
-                                                "soundfont", "program", "bank", "preset", "exs", "patch", "effects"};
+                                                "soundfont", "program", "bank", "preset", "exs", "patch", "effects", "dspreset"};
     for (auto &[k, v] : cfg.items()) if (!known.count(k)) warnings.push_back("sampler: unknown setting '" + k + "'");
 
     std::vector<Zone> zones;
     std::unique_ptr<Zip> zip;
     std::string source;
-    bool isKit = false, isSfz = false, isExs = false;
+    bool isKit = false, isSfz = false, isExs = false, isDecent = false;
     int swLow = 128, swHigh = -1, swDefault = -1;
     bool notePolyOne = false;
     const bool sfzAsMultisample = cfg.contains("multisample") && cfg["multisample"].is_string() &&
@@ -1662,6 +1769,29 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         std::vector<std::string> articulations;
         if (!exs::parse(path, zones, swLow, swHigh, swDefault, articulations, warnings, err)) { err = fs::path(path).filename().string() + ": " + err; return false; }
         source = fs::path(path).parent_path().string();
+    } else if (cfg.contains("dspreset")) {   // a DecentSampler instrument: its samples as SFZ regions, its effects after it
+        isSfz = isDecent = true;
+        std::string path;
+        if (!findDecentPreset(cfg["dspreset"].is_string() ? cfg["dspreset"].get<std::string>() : "", job.baseDir, path, err)) return false;
+        DecentPreset ds;
+        if (!readDecentPreset(path, ds, err)) return false;
+        if (!sfzZones(ds.sfz, zones, swLow, swHigh, swDefault, notePolyOne, warnings, err)) { err = ds.name + ".dspreset: " + err; return false; }
+        // DecentSampler's output level: a sample in the centre comes out 5.3 dB under its own level (mono or stereo),
+        // panned on a constant-power law (measured on DecentSampler 1.11)
+        for (auto &z : zones) { z.powerPan = true; z.gainDb -= 5.28; }
+        if (!ds.zip.empty()) {   // a .dslibrary: its samples come out of the zip
+            zip = std::make_unique<Zip>();
+            if (!zip->open(ds.zip, err)) return false;
+        }
+        patchFx = ds.effects;
+        outputFx = ds.output;
+        if (!ds.notes.empty()) {
+            std::string l;
+            for (size_t i = 0; i < ds.notes.size() && i < 3; ++i) l += (i ? "; " : "") + ds.notes[i];
+            warnings.push_back("dspreset '" + ds.name + "' plays as SFZ regions with its effects re-created: " + l + (ds.notes.size() > 3 ? "; ..." : "") +
+                               " (`wavelength samples --dspreset \"" + ds.name + "\"` lists all)");
+        }
+        source = ds.sfz.dir;
     } else if (cfg.contains("sfz") || sfzAsMultisample) {
         isSfz = true;
         const std::string q = cfg.contains("sfz") ? cfg["sfz"].get<std::string>() : cfg["multisample"].get<std::string>();
@@ -1750,7 +1880,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             }
         } else zones.push_back(z);
     } else {
-        err = "track '" + track.name + "': the sampler needs \"multisample\", \"sfz\", \"kit\"/\"map\" or \"sample\"";
+        err = "track '" + track.name + "': the sampler needs \"multisample\", \"sfz\", \"dspreset\", \"kit\"/\"map\" or \"sample\"";
         return false;
     }
 
@@ -1759,7 +1889,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     const bool oneShot = cfg.value("oneShot", isKit || allOneShot);
     const double attack = cfg.value("attack", isKit ? 0.0 : 0.002);
     const double release = cfg.value("release", isKit ? 0.05 : 0.25);
-    if (isExs)   // a Logic instrument brings its envelope; the track's own "attack" / "release" replace it
+    if (isExs || isDecent)   // a Logic or DecentSampler instrument brings its envelope; the track's own "attack" / "release" replace it
         for (auto &z : zones) {
             if (cfg.contains("attack")) z.attack = -1;
             if (cfg.contains("release")) z.release = -1;
@@ -1883,7 +2013,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (hit.empty()) { missed[n.key] += (int)ph.notes.size(); continue; }
         std::vector<const Zone *> play1, robin;
         for (auto *z : hit) (z->roundRobin ? robin : play1).push_back(z);
-        if (!robin.empty()) play1.push_back(robin[rr[n.key]++ % robin.size()]);
+        pickRobin(robin, rr[n.key], play1);
 
         double cutAt = INFINITY;
         auto cutBy = [&](const Note &m) { if (m.start > n.start + 1e-6 && m.start - n.start < cutAt) cutAt = m.start - n.start; };
@@ -1974,7 +2104,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             for (auto &z : zones) if (z.releaseTrigger && n.key >= z.keyLow && n.key <= z.keyHigh && velOk(z) && selOk(z)) rel.push_back(&z);
             std::vector<const Zone *> relOne, relRobin;
             for (auto *z : rel) (z->roundRobin ? relRobin : relOne).push_back(z);
-            if (!relRobin.empty()) relOne.push_back(relRobin[rr[1000 + n.key]++ % relRobin.size()]);
+            pickRobin(relRobin, rr[1000 + n.key], relOne);
             for (auto *z : relOne)
                 if (!voice(z, end, INFINITY, -z->rtDecay * held)) return false;
         }
@@ -1984,7 +2114,9 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     for (auto &[k, c] : missed) { silent += c; keys += (keys.empty() ? "" : ", ") + std::to_string(k); }
     if (silent) warnings.push_back(std::to_string(silent) + " note(s) matched no sample zone (keys " + keys + ")" +
                                    (isKit ? "; run `wavelength samples --kit <name>` for the key map" : ""));
-    if (cfg.value("effects", true) && !patchFx.empty()) {   // a GarageBand patch's EQ, compressor and delay, as built-in effects
+    if (!cfg.value("effects", true)) patchFx = json::array();
+    for (auto &f : outputFx) patchFx.push_back(f);
+    if (!patchFx.empty()) {   // a GarageBand patch's EQ, compressor and delay, a DecentSampler preset's effects, as built-in effects
         const FxContext ctx{job, false, nullptr};
         for (size_t i = 0; i < patchFx.size(); ++i) {
             auto fx = makeEffect(patchFx[i], job, "patch effect " + std::to_string(i + 1), err);
