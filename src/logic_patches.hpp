@@ -65,7 +65,7 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
 // (eq bands; cuts as cascaded biquads), Compressor (compressor with its gain stages, distortion as a clip, its
 // limiter), Tape Delay, Stereo Delay and Delay Designer (delay), Space Designer (convolve with its room, or a
 // reverb), SilverVerb, PlatinumVerb and ChromaVerb (reverb), Overdrive and Clip Distortion (saturate), Bitcrusher,
-// Chorus, Ensemble and Flanger (chorus), Tremolo, Limiter, Gain and Enveloper's output level. Plug-ins switched off
+// Chorus, Ensemble and Flanger (chorus), Noise Gate (gate), Phaser, Tremolo, Limiter, Gain and Enveloper's output level. Plug-ins switched off
 // in the patch and silent ones (a Wet or Mix of 0) are left out. `notes` names what is approximated or left out.
 // From the parameter maps decoded from GarageBand's patches and Logic's presets.
 nlohmann::json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes);

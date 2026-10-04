@@ -359,8 +359,16 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (!bands.empty()) add({{"type", "eq"}, {"bands", bands}});
             if (v(13) != 0) add({{"type", "width"}, {"monoBelow", r2(v(14, 120))}});
             notes.push_back(p.name + ": its room type plays as the built-in reverb");
-        } else if (p.name == "Noise Gate" || p.name == "Phaser") {
-            notes.push_back(p.name + ": no built-in counterpart yet, not played");
+        } else if (p.name == "Noise Gate") {   // #0 threshold dB, #1 hysteresis dB, #2 reduction dB, #3 attack, #4 hold, #5 release ms, #8 lookahead
+            if (v(0, -100) > -90)
+                add({{"type", "gate"}, {"threshold", r2(v(0))}, {"hysteresis", r2(std::fabs(v(1, -3)))}, {"depth", r2(std::fabs(v(2, -100)))},
+                     {"attack", r2(std::max(0.1, v(3)))}, {"hold", r2(v(4))}, {"release", r2(std::max(0.5, v(5)))}, {"lookahead", r2(v(8))}});
+        } else if (p.name == "Phaser") {   // #0 LFO rate Hz, #3 feedback %, #4/#5 sweep floor/ceiling Hz, #6 stages, #9 output mix +-100
+            if (std::fabs(v(9)) > 0.5)
+                add({{"type", "phaser"}, {"rate", r4(std::max(0.02, v(0, 0.5)))}, {"floor", r2(std::max(20.0, v(4, 200)))},
+                     {"ceiling", r2(std::max(v(4, 200) * 1.05, v(5, 4000)))}, {"stages", (int)std::lround(std::clamp(v(6, 6), 2.0, 24.0))},
+                     {"feedback", r4(std::clamp(v(3) / 100, -0.95, 0.95))}, {"mix", r4(std::min(1.0, std::fabs(v(9)) / 100))}});
+            if (v(9) < 0) notes.push_back("Phaser: its phase-inverted mix plays in phase");
         } else {
             notes.push_back(p.name + ": GarageBand's own effect, not played");
         }

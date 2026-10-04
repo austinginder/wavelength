@@ -426,6 +426,35 @@ r = json.load(sys.stdin)
 sys.exit(0 if r.get("ok") and r["tracks"][0]["lufs"] > -60 and "Machine Kit" in " ".join(r["tracks"][0].get("warnings", [])) else 1)' ||
   folders_why="the Ultrabeat patch did not play its kit"
 if [ -n "$folders_why" ]; then echo "FAIL sample folders: $folders_why"; fail=1; else echo "ok   sample folders: note-named multisamples (both octave namings), drum machine abbreviations, Ultrabeat patch kits"; fi
+# gate as a noise gate: a 220 Hz tone at -6 dB for a second, then at -50 dB: with a -30 dB threshold the quiet second goes
+# silent and the loud one stays; phaser: a saw through it keeps its pitch, sounds, and turns stereo
+rm -rf out/check/gate && mkdir -p out/check/gate
+python3 - <<'PY'
+import math, struct
+rate = 48000
+x = [(0.5 if i < rate else 0.003) * math.sin(2 * math.pi * 220 * i / rate) for i in range(2 * rate)]
+d = struct.pack('<%dh' % len(x), *[int(v * 32767) for v in x])
+open('out/check/gate/tone.wav', 'wb').write(b'RIFF' + struct.pack('<I', 36 + len(d)) + b'WAVE' + b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, rate, rate * 2, 2, 16) + b'data' + struct.pack('<I', len(d)) + d)
+PY
+cat > out/check/gate/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0, "stems": "16",
+ "tracks": [{"name": "Gated", "plugin": "builtin:audio", "clips": [{"file": "tone.wav", "beat": 0, "fadeIn": 0, "fadeOut": 0}],
+             "fx": [{"type": "gate", "threshold": -30, "hold": 20, "release": 30}]},
+            {"name": "Phased", "plugin": "builtin:synth", "preset": "Init", "notes": [{"beat": 0, "dur": 2, "key": 48}],
+             "fx": [{"type": "phaser", "rate": 1, "stages": 6, "feedback": 0.5}]}]}
+JOB
+gate_why=""
+if ! "./$build/wavelength" render out/check/gate/job.json --out out/check/gate/out --json > /dev/null 2>&1; then gate_why="the job did not render"
+else
+  loud=$("./$build/wavelength" analyze out/check/gate/out/stems/01-gated.wav --start 0.2 --end 0.9 --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["lufs"])')
+  quiet=$("./$build/wavelength" analyze out/check/gate/out/stems/01-gated.wav --start 1.3 --end 1.9 --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["lufs"])')
+  python3 -c "import sys; sys.exit(0 if $loud > -10 and $quiet < -100 else 1)" || gate_why="the noise gate passed $quiet LUFS of the quiet second (loud $loud)"
+  "./$build/wavelength" analyze out/check/gate/out/stems/02-phased.wav --start 0.2 --end 1.8 --json 2>/dev/null | python3 -c '
+import json, sys
+a = json.load(sys.stdin)
+sys.exit(0 if a["pitch"]["note"] == "C3" and a["lufs"] > -30 and a["stereo"]["width"] > 0.1 else 1)' || gate_why="${gate_why:+$gate_why; }the phaser lost the pitch, the level or its width"
+fi
+if [ -n "$gate_why" ]; then echo "FAIL gate/phaser: $gate_why"; fail=1; else echo "ok   gate/phaser: a noise gate closes on a quiet tone, a phaser keeps pitch and widens"; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)

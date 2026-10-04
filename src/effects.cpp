@@ -938,12 +938,19 @@ struct Gate : Effect {
     std::string pattern, trigger;
     std::vector<int> keys;
     double stepBeats, attackMs, holdMs, releaseMs, floorDb;
+    bool level = false;                 // "threshold": opens on its own input's level (a noise gate)
+    double thresholdDb = -40, hysteresisDb = -3, lookaheadMs = 0;
     Envelope mix;
     Gate(const json &j, const Job &job, std::string &err) {
         label = "gate";
         pattern = j.value("pattern", "");
         trigger = j.value("trigger", "");
-        if (pattern.empty() == trigger.empty()) err = "gate needs either \"pattern\" (e.g. \"x-x-xx--\") or \"trigger\" (a track name)";
+        level = j.contains("threshold");
+        if ((int)!pattern.empty() + (int)!trigger.empty() + (int)level != 1)
+            err = "gate needs one of \"pattern\" (e.g. \"x-x-xx--\"), \"trigger\" (a track name) or \"threshold\" (dB: a noise gate)";
+        thresholdDb = j.value("threshold", -40.0);
+        hysteresisDb = -std::fabs(j.value("hysteresis", 3.0));
+        lookaheadMs = std::clamp(j.value("lookahead", 0.0), 0.0, 20.0);
         const auto &st = j.contains("step") ? j["step"] : json("1/16");
         stepBeats = st.is_number() ? st.get<double>() : Lfo::noteBeats(st.get<std::string>());
         for (auto &k : j.value("keys", json::array())) keys.push_back(parseKey(k));
@@ -952,10 +959,31 @@ struct Gate : Effect {
         releaseMs = std::max(0.5, j.value("release", 15.0));
         floorDb = -std::fabs(j.value("depth", 80.0));
         mix = param(j, "mix", 1, job.tempo);
-        checkKeys(j, {"pattern", "trigger", "keys", "step", "attack", "hold", "release", "depth", "mix"}, *this);
+        checkKeys(j, {"pattern", "trigger", "keys", "step", "attack", "hold", "release", "depth", "mix", "threshold", "hysteresis", "lookahead"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate, floor = dbToLin(floorDb);
+        if (level) {   // a noise gate: opens when the input (peak, both channels, read `lookahead` early) passes the threshold, closes once
+                       // it falls `hysteresis` under it and `hold` has passed
+            const double att = 1.0 - std::exp(-1.0 / (attackMs * 0.001 * sr)), rel = 1.0 - std::exp(-1.0 / (releaseMs * 0.001 * sr));
+            const double open = dbToLin(thresholdDb), close = dbToLin(thresholdDb + hysteresisDb), detRel = std::exp(-1.0 / (0.005 * sr));
+            const size_t ahead = (size_t)std::lround(lookaheadMs * 0.001 * sr), n = a.frames(), holdN = (size_t)(holdMs * 0.001 * sr);
+            double det = 0, g = floor;
+            bool isOpen = false;
+            size_t heldUntil = 0;
+            for (size_t i = 0; i < n; ++i) {
+                const size_t j = std::min(n - 1, i + ahead);
+                det = std::max((double)std::max(std::fabs(a.left[j]), std::fabs(a.right[j])), det * detRel);
+                if (det >= open) { isOpen = true; heldUntil = i + holdN; }
+                else if (isOpen && det < close && i >= heldUntil) isOpen = false;
+                const double target = isOpen ? 1.0 : floor;
+                g += (target - g) * (target > g ? att : rel);
+                const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+                a.left[i] = blend(a.left[i], a.left[i] * g, m);
+                a.right[i] = blend(a.right[i], a.right[i] * g, m);
+            }
+            return true;
+        }
         std::vector<double> times;
         if (!trigger.empty()) {
             const Track *src = nullptr;
@@ -985,6 +1013,50 @@ struct Gate : Effect {
             const double m = mix.constant() ? mix.at(0) : mix.at(t);
             a.left[i] = blend(a.left[i], a.left[i] * g, m);
             a.right[i] = blend(a.right[i], a.right[i] * g, m);
+        }
+        return true;
+    }
+};
+
+// phaser: a cascade of first-order all-pass stages whose corner sweeps between floor and ceiling (exponentially, a sine
+// LFO per channel, the right one `spread` of a cycle on), mixed with the dry signal into notches; feedback around it
+struct Phaser : Effect {
+    double rate, floorHz, ceilingHz, feedback, spread;
+    int stages;
+    Envelope mix;
+    Phaser(const json &j, const Job &job) {
+        label = "phaser";
+        const auto &rt = j.contains("rate") ? j["rate"] : json(0.5);
+        rate = rt.is_number() ? rt.get<double>() : 1.0 / std::max(1e-6, job.tempo.beatToSec(Lfo::noteBeats(rt.get<std::string>())) - job.tempo.beatToSec(0));
+        floorHz = std::max(20.0, j.value("floor", 200.0));
+        ceilingHz = std::max(floorHz * 1.01, j.value("ceiling", 4000.0));
+        stages = std::clamp(j.value("stages", 6), 2, 24);
+        feedback = std::clamp(j.value("feedback", 0.3), -0.95, 0.95);
+        spread = j.value("spread", 0.25);
+        mix = param(j, "mix", 0.5, job.tempo);
+        checkKeys(j, {"rate", "floor", "ceiling", "stages", "feedback", "spread", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate, ratio = std::log(ceilingHz / floorHz);
+        for (int ch = 0; ch < 2; ++ch) {
+            auto &x = ch ? a.right : a.left;
+            std::vector<double> xs((size_t)stages, 0.0), ys((size_t)stages, 0.0);
+            double last = 0, coef = 0;
+            for (size_t i = 0; i < x.size(); ++i) {
+                if (i % 16 == 0) {   // the corner frequency, refreshed every 16 samples
+                    const double lfo = 0.5 + 0.5 * std::sin(2 * dsp::kPi * (rate * i / sr + (ch ? spread : 0.0)));
+                    const double t = std::tan(dsp::kPi * std::min(floorHz * std::exp(ratio * lfo), sr * 0.45) / sr);
+                    coef = (t - 1) / (t + 1);
+                }
+                double v = x[i] + feedback * last;
+                for (int k = 0; k < stages; ++k) {   // y = coef x + x[n-1] - coef y[n-1]
+                    const double y = coef * v + xs[(size_t)k] - coef * ys[(size_t)k];
+                    xs[(size_t)k] = v; ys[(size_t)k] = y; v = y;
+                }
+                last = v;
+                const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+                x[i] = blend(x[i], v, m);
+            }
         }
         return true;
     }
@@ -1405,7 +1477,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "convolve", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband"};
+            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -1431,6 +1503,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "tremolo") fx = std::make_unique<Tremolo>(j, job);
             else if (t == "pan") fx = std::make_unique<Pan>(j, job);
             else if (t == "gate") fx = std::make_unique<Gate>(j, job, err);
+            else if (t == "phaser") fx = std::make_unique<Phaser>(j, job);
             else if (t == "rotary") fx = std::make_unique<Rotary>(j, job);
             else if (t == "autowah") fx = std::make_unique<AutoWah>(j, job, err);
             else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
