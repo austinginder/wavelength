@@ -407,8 +407,16 @@ int cmdLoops(const Args &a) {
                 notes.push_back(n);
             }
         std::sort(notes.begin(), notes.end(), [](const json &x, const json &y) { return x["beat"].get<double>() < y["beat"].get<double>(); });
+        // a Drummer loop's notes are a slice of a longer performance, starting a whole number of loops in: from beat 0
+        if (!notes.empty() && l->beats > 0) {
+            const double first = notes.front()["beat"].get<double>(), shift = std::floor((first + 0.25) / l->beats) * l->beats;   // a flam a 16th early still counts
+            if (shift > 0) for (auto &n : notes) n["beat"] = std::max(0.0, std::round((n["beat"].get<double>() - shift) * 1e6) / 1e6);
+        }
         if (a.has("--json")) { emit(json{{"ok", true}, {"loop", appleLoopJson(*l)}, {"shift", shift}, {"notes", notes}}.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
-        std::fprintf(OUT, "%s: %zu notes over %d beats (%s%s%s)%s\n", l->name.c_str(), notes.size(), l->beats, l->key.empty() ? "no key" : l->key.c_str(),
+        double span = 0;
+        for (auto &n : notes) span = std::max(span, n["beat"].get<double>() + n.value("dur", 0.0));
+        const int beats = std::max(l->beats, (int)std::ceil(span - 1e-6));   // a Drummer loop's notes run past its audio
+        std::fprintf(OUT, "%s: %zu notes over %d beats (%s%s%s)%s\n", l->name.c_str(), notes.size(), beats, l->key.empty() ? "no key" : l->key.c_str(),
                      l->scale.empty() ? "" : " ", l->scale.c_str(), shift ? (", moved " + std::string(shift > 0 ? "+" : "") + std::to_string(shift) + " to " + a.get("--key")).c_str() : "");
         std::string lines;
         for (size_t i = 0; i < notes.size(); ++i) lines += (i ? ",\n " : "[") + notes[i].dump();

@@ -265,6 +265,10 @@ import json, sys
 d = json.load(sys.stdin)
 sys.exit(0 if [n["key"] for n in d["notes"]] == [64, 68] and d["loop"]["bpm"] == 120 else 1)'; then
   loops_why="loops --notes did not give the notes moved into E"
+elif ! "./$build/wavelength" loops --notes "Test Drummer" --json 2>/dev/null | python3 -c '
+import json, sys
+sys.exit(0 if [n["beat"] for n in json.load(sys.stdin)["notes"]] == [0, 1] else 1)'; then
+  loops_why="loops --notes did not move a Drummer slice back to beat 0"
 elif ! "./$build/wavelength" import "out/check/loops/lib/Test Loop.caf" --out out/check/loops/imp > /dev/null 2>&1 ||
      ! python3 -c 'import json; j = json.load(open("out/check/loops/imp/job.json")); assert len(j["tracks"][0]["notes"]) == 2'; then
   loops_why="import of the loop's notes failed"
@@ -281,7 +285,7 @@ sys.exit(0 if abs(a["mix"]["lufs"] - r["mix"]["lufs"]) < 0.3 and abs(a["duration
     loops_why="an AAC CAF did not decode to the same length and loudness"
 fi
 unset WAVELENGTH_APPLE_LOOPS
-if [ -n "$loops_why" ]; then echo "FAIL apple loops: $loops_why"; fail=1; else echo "ok   apple loops: tempo, key, repeat, notes, import, AAC"; fi
+if [ -n "$loops_why" ]; then echo "FAIL apple loops: $loops_why"; fail=1; else echo "ok   apple loops: tempo, key, repeat, notes (Drummer slices from 0), import, AAC"; fi
 # Logic and GarageBand instruments: a generated EXS instrument (scripts/make-test-exs.py) plays A4 from its one zone
 # with its own envelope (release 64 = 0.65 s past a 1 s note) unless the track sets "release"; a GarageBand patch whose
 # Sampler slot stores that instrument plays it the same; a patch on Retro Synth is refused, naming it
