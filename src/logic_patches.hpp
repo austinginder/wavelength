@@ -22,6 +22,9 @@ struct PatchPlugin {
     std::string name;            // as the channel strip names it ("Channel EQ", "Compressor", "Tape Delay", ...)
     uint32_t id = 0;             // Apple's plug-in id (Channel EQ 236, Compressor 154, Tape Delay 147, Single Band EQ 311)
     std::vector<float> params;   // empty when the slot holds no settings block
+    std::vector<float> values;   // every value as stored, the reserved first one included (Delay Designer counts from it)
+    std::vector<uint8_t> block;  // the whole block, little-endian (Space Designer's IR name, Delay Designer's taps)
+    bool bypassed = false;       // switched off in the patch (payload byte +112; a Smart Control often switches it on)
 };
 
 struct PatchChannel {
@@ -32,8 +35,9 @@ struct PatchChannel {
     std::vector<uint8_t> data;   // the channel strip, read whole for sampler channels
     size_t exsAt = 0;            // where an instrument stored inside it starts (0 = none)
     std::string exs;             // else the .exs file it names ("Steinway Piano 2.exs")
-    std::vector<std::string> effects;   // the other plugins on the channel, in order
-    std::vector<PatchPlugin> chain;     // the same plug-ins with their settings (after the instrument)
+    std::vector<std::string> effects;   // the other plugins on the channel
+    std::vector<PatchPlugin> chain;     // its audio effects with their settings, in insert order (the payload's u16 at +6)
+    std::vector<std::string> midiEffects;   // its MIDI effects (Arpeggiator, Chord Trigger, ...): not played
     PatchPlugin settings;               // the instrument's own settings (Retro Synth's parameters)
 };
 
@@ -59,10 +63,16 @@ const LogicPatch *logicPatchNamed(const std::string &name);
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err);
 // Wavelength effects for the plug-ins of a channel that have built-in counterparts: Channel EQ and Single Band EQ
 // (eq bands; cuts as cascaded biquads), Compressor (compressor with its gain stages, distortion as a clip, its
-// limiter) and Tape Delay (delay; a Wet of 0 is left out). `notes` names what is approximated or left out
-// (Gain-Q coupling, circuit types, groove, wow and flutter, and every other plug-in). From the parameter maps
-// decoded from GarageBand's patches and Logic's presets (docs in the changelog for 0.5.0).
+// limiter), Tape Delay, Stereo Delay and Delay Designer (delay), Space Designer (convolve with its room, or a
+// reverb), SilverVerb, PlatinumVerb and ChromaVerb (reverb), Overdrive and Clip Distortion (saturate), Bitcrusher,
+// Chorus, Ensemble and Flanger (chorus), Tremolo, Limiter, Gain and Enveloper's output level. Plug-ins switched off
+// in the patch and silent ones (a Wet or Mix of 0) are left out. `notes` names what is approximated or left out.
+// From the parameter maps decoded from GarageBand's patches and Logic's presets.
 nlohmann::json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes);
+// The effects a patch puts after its instrument, as Wavelength effects: the instrument channel's own (when one
+// channel plays an instrument) and then the root channel's when that's a summing stack around it; its MIDI
+// effects are named in `notes`, not played.
+nlohmann::json patchChainEffects(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes);
 // A patch's sends (macOS: data.plist is a binary property list); empty when it has none or can't be read.
 std::vector<PatchSend> readPatchSends(const std::string &patchDir);
 // "Sampler", "EXS24", "Drum Kit" (Drum Kit Designer): instruments built on Logic's samplers.

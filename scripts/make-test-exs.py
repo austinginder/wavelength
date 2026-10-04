@@ -9,6 +9,8 @@
   <dir>/patches/Test Beat GB.patch/ a channel strip on Ultrabeat with the settings "Machine Kit.pst" (its kit folder
                                     comes from make-test-sample-folders.py)
   <dir>/patches/Test Retro.patch/   a channel strip on Retro Synth: Analog mode, one saw, filter off, transposed +12
+  <dir>/patches/Test Organ.patch/   a channel strip on Vintage B3: only the upper 8' drawbar out (a sine at the note),
+                                    its 234 preset-key ints before the values as Vintage B3 stores them
 Usage: make-test-exs.py <dir>"""
 import math, os, struct, sys
 
@@ -17,6 +19,7 @@ os.makedirs(os.path.join(out, 'patches', 'Test Patch.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Synth.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Retro.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Organ.patch'), exist_ok=True)
 wav = os.path.abspath(os.path.join(out, 'Test Sine.wav'))
 rate, n = 48000, 96000
 pcm = struct.pack('<%dh' % n, *[int(16000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n)])
@@ -88,3 +91,11 @@ retro = [1e30] * 902
 for n, v in {1: 8, 2: 0, 3: 12, 4: 0, 5: -6, 201: 0, 209: 0, 301: 1, 303: 1, 401: 0, 802: 1, 803: 100, 804: 1, 805: 100, 806: 0}.items():
     retro[n] = v
 strip(os.path.join(out, 'patches', 'Test Retro.patch', '#Root.cst'), [record(3, 'Retro Synth', b'GAME', settings(279, retro))])
+# Vintage B3 (plug-in id 216): 234 int32 preset-key registrations come first, then its 169 values (parameter #n = value n+1)
+b3 = [0.0] * 169
+b3[1 + 13] = 8        # upper 8' drawbar full; the other drawbars, percussion, vibrato, click, rotor and effects stay off
+b3[1 + 104] = 1       # expression
+b3[1 + 105] = -6      # volume dB
+block = struct.pack('<IHBBI', 24 + 936 + 4 * len(b3), 2, 0, 0, len(b3)) + b'GAMETSPP' + struct.pack('<I', 216) + bytes(936) + struct.pack('<%df' % len(b3), *b3)
+organ = struct.pack('<I', 216) + bytes(8) + struct.pack('<I', len(block)) + bytes(16) + block
+strip(os.path.join(out, 'patches', 'Test Organ.patch', '#Root.cst'), [record(3, 'Vintage B3', b'GAME', organ)])

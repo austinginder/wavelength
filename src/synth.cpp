@@ -851,7 +851,8 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
         const FxContext ctx{job, false, nullptr};
         for (size_t i = 0; i < patchFx.size(); ++i) {
             auto fx = makeEffect(patchFx[i], job, "patch effect " + std::to_string(i + 1), err);
-            if (!fx || !fx->process(out, ctx, err)) return false;
+            if (!fx) { warnings.push_back(err + ": left out"); err.clear(); continue; }   // e.g. a Space Designer room that isn't installed
+            if (!fx->process(out, ctx, err)) return false;
             for (auto &w : fx->warnings) warnings.push_back("patch effect: " + w);
         }
     }

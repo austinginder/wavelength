@@ -30,7 +30,7 @@ const std::set<std::string> &synthNames() {
     return s;
 }
 
-struct Record { size_t at, size; std::string name, preset; };
+struct Record { size_t at, size; std::string name, preset; bool bypassed = false, midiFx = false; int order = 0; };
 
 // The plugin records of a channel strip: where each payload is, its size and its plugin's name
 bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
@@ -38,11 +38,14 @@ bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
     const auto first = std::search(d.begin(), d.begin() + (long)std::min<size_t>(d.size(), 4096), magic, magic + 4);
     for (size_t pos = (size_t)(first - d.begin()); pos + 36 <= d.size() && !std::memcmp(&d[pos], "UCuA", 4);) {
         const uint32_t n = le32(&d[pos + 0x1c]);
-        Record r{pos + 36, n, "", ""};
+        Record r{pos + 36, n, "", "", false, false, 0};
         const uint8_t *pl = &d[pos + 36];
         if (n >= 140 && pos + 36 + 140 <= d.size() && (!std::memcmp(pl + 132, "MELC", 4) || !std::memcmp(pl + 132, "GAME", 4))) {
             for (size_t k = 0; k < 12 && pl[120 + k]; ++k) r.name += (char)pl[120 + k];
             for (size_t k = 14; k < 120 && pl[k] >= 32 && pl[k] < 127; ++k) r.preset += (char)pl[k];
+            r.bypassed = pl[112] != 0;
+            r.order = pl[6] | pl[7] << 8;          // the insert's position among the audio effects (1, 2, ...)
+            r.midiFx = n >= 152 && (le32(pl + 148) & 0x02000000);   // the plug-in's flags: MIDI effect (Arpeggiator, ...)
         }
         out.push_back(r);
         pos += 36 + (size_t)n;
@@ -65,12 +68,14 @@ PatchPlugin settingsOf(const std::vector<uint8_t> &d, size_t a, size_t b, const 
         // the values follow the header, except Vintage B3's: its 26 preset-key registrations (234 int32) come
         // first, so its values end the block
         const size_t blockEnd = std::min(b, s + (size_t)u32(s)), at = name == "Vintage B3" && blockEnd >= s + 24 + 4 * (size_t)count ? blockEnd - 4 * (size_t)count : s + 24;
-        for (uint32_t i = 1; i < count; ++i) {   // value 0 is reserved: params[n] = parameter #n
+        for (uint32_t i = 0; i < count; ++i) {   // value 0 is reserved: params[n] = parameter #n
             const uint32_t bits = u32(at + 4 * (size_t)i);
             float f;
             std::memcpy(&f, &bits, 4);
-            p.params.push_back(std::isfinite(f) ? f : 0.f);
+            p.values.push_back(std::isfinite(f) ? f : 0.f);
+            if (i) p.params.push_back(p.values.back());
         }
+        if (le) p.block.assign(d.begin() + (long)s, d.begin() + (long)blockEnd);
         break;
     }
     return p;
@@ -122,12 +127,29 @@ void cutStages(json &bands, const char *type, double freq, int slopeDb, double q
     qs.back() = r4(qs.back() * (q > 0 ? q : 0.7071) / 0.7071);
     for (double x : qs) bands.push_back({{"type", type}, {"freq", r2(freq)}, {"q", x}});
 }
+double dbLin(double db) { return db <= -96 ? 0.0 : std::pow(10.0, db / 20); }
+// independent dry and wet levels (linear) as Wavelength's crossfade mix and a make-up gain (0 = none)
+std::pair<double, double> mixGain(double dry, double wet) {
+    if (dry + wet <= 0) return {0, 0};
+    const double g = 20 * std::log10(dry + wet);
+    return {r4(wet / (dry + wet)), std::fabs(g) > 0.05 ? r2(g) : 0};
+}
+// a reverb's damping from its high cut: 1 kHz and below fully damped, 10 kHz and up open
+double damping(double highCutHz) { return r2(std::clamp(1 - std::log10(std::max(highCutHz, 1000.0) / 1000), 0.0, 1.0)); }
 } // namespace
 
 json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes) {
     json fx = json::array();
     for (auto &p : chain) {
         auto v = [&](size_t n, double def = 0) { return n < p.params.size() ? (double)p.params[n] : def; };
+        auto add = [&](const json &e) { fx.push_back(e); };
+        auto addMixGain = [&](json e, double dry, double wet) {
+            const auto [mix, g] = mixGain(dry, wet);
+            e["mix"] = mix;
+            add(e);
+            if (g != 0) add({{"type", "gain"}, {"db", g}});
+        };
+        if (p.bypassed) { notes.push_back(p.name + ": switched off in the patch (a Smart Control knob turns it on), left out"); continue; }
         if (p.params.empty()) { notes.push_back(p.name + ": no settings saved, left out"); continue; }
         if (p.name == "Channel EQ") {   // 8 bands of (on, Hz, gain dB or slope n = 6n dB/oct, Q) from #0; master gain #32
             json bands = json::array();
@@ -137,7 +159,10 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
                 if (v(4 * b) && v(4 * b + 2) != 0)
                     bands.push_back({{"type", kinds[b - 1]}, {"freq", r2(v(4 * b + 1))}, {"gain", r2(v(4 * b + 2))}, {"q", r4(v(4 * b + 3))}});
             if (v(28)) cutStages(bands, "lowpass", v(29), (int)std::lround(v(30)) * 6, v(31));
-            if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
+            const bool onlyLowCut = v(0) && std::all_of(bands.begin(), bands.end(), [](const json &b) { return b["type"] == "highpass"; });
+            if ((int)std::lround(v(45)) == 4 && onlyLowCut)   // #45 = 4 read as side-only processing: a low cut on the sides = mono below it
+                fx.push_back({{"type", "width"}, {"monoBelow", r2(v(1))}});
+            else if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
             if (v(32) != 0) fx.push_back({{"type", "gain"}, {"db", r2(v(32))}});
             if (v(41) && std::any_of(bands.begin(), bands.end(), [](const json &b) { return b["type"] != "highpass" && b["type"] != "lowpass"; }))
                 notes.push_back("Channel EQ: Gain-Q coupling is on in GarageBand (Q as saved here)");
@@ -179,11 +204,183 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (std::fabs(dry + wet - 1) > 1e-3) fx.push_back({{"type", "gain"}, {"db", r2(20 * std::log10(dry + wet))}});
             if (std::fabs(v(8)) > 0.5 && !legacy) notes.push_back("Tape Delay: its groove (swung repeats) is not played");
             if (v(11) || v(13)) notes.push_back("Tape Delay: wow and flutter are not played");
+        } else if (p.name == "Overdrive") {   // #0 drive (dB of tanh drive: a guess), #1 tone (a low-pass after it: a guess), #2 output dB
+            if (v(0) > 0) add({{"type", "saturate"}, {"drive", r2(v(0))}});
+            else notes.push_back("Overdrive: Drive 0 as saved (a Smart Control knob raises it)");
+            if (v(1, 20000) < 19000) add({{"type", "eq"}, {"bands", json::array({{{"type", "lowpass"}, {"freq", r2(v(1))}, {"q", 0.7071}}})}});
+            if (v(2) != 0) add({{"type", "gain"}, {"db", r2(v(2))}});
+        } else if (p.name == "Bitcrusher") {   // #0 drive dB, #1 clip level dB, #3 bits, #4 downsampling, #5 mix %
+            if (v(0) != 0) add({{"type", "gain"}, {"db", r2(v(0))}});
+            if (v(0) != 0 || v(1) < 0) add({{"type", "clip"}, {"ceiling", r2(v(1))}, {"kneeDb", 0.1}, {"intended", true}});
+            const double mix = v(5, 100) / 100;
+            if (mix > 0 && (v(3, 24) < 24 || v(4, 1) > 1)) {
+                json b = {{"type", "bitcrush"}, {"bits", r2(v(3, 24))}, {"downsample", r2(v(4, 1))}};
+                if (mix < 1) b["mix"] = r4(mix);
+                add(b);
+            }
+        } else if (p.name == "Chorus") {   // #0 mix %, #1 intensity % (0.08 ms of depth per %: a guess), #2 rate Hz
+            if (v(0) > 0) add({{"type", "chorus"}, {"rate", r4(v(2, 0.5))}, {"depth", r2(v(1) * 0.08)}, {"delay", 10}, {"mix", r4(v(0) / 100)}});
+            else notes.push_back("Chorus: Mix 0 as saved (a Smart Control knob raises it)");
+        } else if (p.name == "Ensemble") {   // #0 mix %, #3 LFO 1 rate, #4 LFO 1 intensity, #10 spread %
+            if (v(0) > 0) {
+                add({{"type", "chorus"}, {"rate", r4(v(3, 0.5))}, {"depth", r2(v(4, 20) * 0.1)}, {"delay", 12}, {"mix", r4(v(0) / 100)}});
+                if (v(10, 100) > 100) add({{"type", "width"}, {"amount", r2(std::min(2.0, v(10) / 100))}});
+                notes.push_back("Ensemble: its voices and second LFO play as one chorus");
+            }
+        } else if (p.name == "Flanger") {   // #0 mix %, #1 intensity %, #2 rate Hz, #3 feedback % (no feedback here)
+            if (v(0) > 0) {
+                add({{"type", "chorus"}, {"rate", r4(v(2, 0.2))}, {"depth", r2(0.5 + v(1, 50) * 0.05)}, {"delay", 0.5}, {"mix", r4(v(0) / 100)}});
+                notes.push_back("Flanger: played as a short chorus, without its feedback");
+            }
+        } else if (p.name == "Tremolo") {   // #0 depth %, #1 rate Hz (a note index when synced, #8), #3 smoothing %, #4 stereo phase degrees
+            if (v(0) > 0) {
+                json t = {{"type", "tremolo"}, {"depth", r4(v(0) / 100)}, {"shape", v(3, 100) >= 50 ? "sine" : "square"},
+                          {"spread", r4(std::fmod(v(4), 360.0) / 360)}};
+                if (v(8) != 0) { t["rate"] = "1/8"; notes.push_back("Tremolo: its synced rate plays as 1/8"); }
+                else t["rate"] = r4(v(1, 1));
+                add(t);
+            }
+        } else if (p.name == "ClipDist") {   // Clip Distortion: #0 drive dB, #1 tone Hz (high-pass before), #3 mix %, #4 clip filter, #5 LP filter,
+                                             // #6/#7 high shelf dB/Hz, #8/#9 input/output gain
+            const double mix = v(3, 50) / 100;
+            const bool wetOnly = mix >= 0.99;
+            if (v(8) != 0) add({{"type", "gain"}, {"db", r2(v(8))}});
+            if (wetOnly && v(1, 20) > 25) add({{"type", "eq"}, {"bands", json::array({{{"type", "highpass"}, {"freq", r2(v(1))}, {"q", 0.5}}})}});
+            if (mix > 0) add({{"type", "saturate"}, {"drive", r2(v(0))}, {"mix", r4(mix)}});
+            if (wetOnly && v(4, 20000) < 19000) add({{"type", "eq"}, {"bands", json::array({{{"type", "lowpass"}, {"freq", r2(v(4))}, {"q", 0.5}}})}});
+            json bands = json::array();
+            if (v(5, 20000) < 19000) bands.push_back({{"type", "lowpass"}, {"freq", r2(v(5))}, {"q", 0.7071}});
+            if (v(6) != 0) bands.push_back({{"type", "highshelf"}, {"freq", r2(v(7, 3100))}, {"gain", r2(v(6))}, {"q", 0.7071}});
+            if (!bands.empty()) add({{"type", "eq"}, {"bands", bands}});
+            if (v(9) != 0) add({{"type", "gain"}, {"db", r2(v(9))}});
+        } else if (p.name == "Limiter") {   // #0 gain dB, #1 lookahead ms, #3 release ms, #4 output dB, #6 inter-sample peaks
+            if (v(0) != 0) add({{"type", "gain"}, {"db", r2(v(0))}});
+            add({{"type", "limiter"}, {"ceiling", r2(v(4))}, {"release", r2(std::max(1.0, v(3, 80)))}, {"lookahead", r2(v(1, 5))}, {"truePeak", v(6) != 0}});
+        } else if (p.name == "Gain") {   // #2 balance, #4 gain dB, #8 mono (polarity and swap aren't played)
+            if (v(4) != 0) add({{"type", "gain"}, {"db", r2(v(4))}});
+            if (v(8) != 0) add({{"type", "width"}, {"amount", 0}});
+            if (v(2) != 0) add({{"type", "pan"}, {"position", r4(v(2) / 100)}});
+            if (v(5) != 0 || v(6) != 0) notes.push_back("Gain: its polarity flip is not played");
+        } else if (p.name == "Enveloper") {   // transient shaping isn't played: only its output level (#6)
+            if (v(6) != 0) add({{"type", "gain"}, {"db", r2(v(6))}});
+            notes.push_back("Enveloper: its transient shaping is not played");
+        } else if (p.name == "St-Delay") {   // Stereo Delay: one delay from the left side; ping-pong when its crossfeed bounces
+            const double mix = (v(0) + v(1)) / 200;
+            if (mix <= 0) { notes.push_back("Stereo Delay: Mix 0 as saved (a Smart Control knob raises it), left out"); continue; }
+            json d = {{"type", "delay"}};
+            if (v(10) != 0 && v(11) > 0) d["time"] = r4(4 / v(11) * (1 + v(12) / 100));
+            else d["ms"] = r2(std::max(1.0, v(2)));
+            double fb = (v(4) + v(5)) / 200;
+            const double xf = std::max(v(6), v(7)) / 100;
+            const int inL = (int)std::lround(v(15, 1)), inR = (int)std::lround(v(16, 2));   // 0 off, 1 left, 2 right, 3 L+R, 4 L-R
+            const bool pingpong = xf >= 0.5 && (inL == 0 || inR == 0 || (inL == 3 && inR == 3));
+            if (pingpong) fb = std::max({v(4), v(5), std::sqrt(std::max(0.0, v(6) * v(7)))}) / 100;
+            d["feedback"] = r4(std::min(fb, 0.97));
+            d["highpass"] = r2(v(23) > 0 ? v(23) : v(9) > 0 ? v(9) : 20);
+            d["lowpass"] = r2(v(22) > 0 ? v(22) : v(8) > 0 ? v(8) : 20000);
+            d["pingpong"] = pingpong;
+            d["mix"] = r4(mix);
+            add(d);
+            if (std::fabs(v(2) - v(3)) > 1 || std::fabs(v(11) - v(13)) > 1e-3) notes.push_back("Stereo Delay: its two sides' times differ, the left one plays");
+        } else if (p.name == "Delay D") {   // Delay Designer: values[0..7] = sync, grid, swing, feedback on, feedback tap, feedback dB, dry dB,
+                                            // wet dB; then chunks "TapA".."TapZ" of 20 floats (ms, steps, level dB, mute, pan, ..., HP, LP, filter on)
+            auto val = [&](size_t i, double def = 0) { return i < p.values.size() ? (double)p.values[i] : def; };
+            struct Tap { double ms, steps, hp, lp; bool mute, filter; };
+            std::vector<Tap> taps;
+            for (size_t i = 24 + 4 * p.values.size(); i + 8 <= p.block.size();) {
+                const uint32_t n = le32(&p.block[i + 4]);
+                if (n < 8 || i + n > p.block.size()) break;
+                const bool tap = p.block[i + 3] == 'T' && p.block[i + 2] == 'a' && p.block[i + 1] == 'p';   // "TapX", stored reversed
+                if (tap && n >= 8 + 80) {
+                    float f[20];
+                    std::memcpy(f, &p.block[i + 8], 80);
+                    taps.push_back({f[0], f[1], f[13], f[14], f[3] != 0, f[15] != 0});
+                }
+                i += n;
+            }
+            const double dry = dbLin(val(6, -6)), wet = dbLin(val(7, -12));
+            const bool fbOn = val(3) != 0;
+            const size_t idx = (size_t)std::max(0.0, val(4));
+            const Tap *t = fbOn && idx < taps.size() ? &taps[idx] : nullptr;
+            for (auto &x : taps) if (!t && !x.mute) t = &x;
+            if (!t || wet <= 0) { notes.push_back("Delay Designer: no tap or Wet off as saved, left out"); continue; }
+            json d = {{"type", "delay"}};
+            if (val(0) != 0 && t->steps > 0 && val(1) > 0) d["time"] = r4(t->steps * val(1) * 4);
+            else d["ms"] = r2(std::max(1.0, t->ms));
+            d["feedback"] = fbOn ? r4(std::min(dbLin(val(5, -100)), 0.97)) : 0.0;
+            d["highpass"] = t->filter ? r2(t->hp) : 20.0;
+            d["lowpass"] = t->filter ? r2(t->lp) : 20000.0;
+            addMixGain(d, dry, wet);
+            if (taps.size() > 1) notes.push_back("Delay Designer: " + std::to_string(taps.size()) + " taps, one plays");
+        } else if (p.name == "Space D") {   // Space Designer: its room by name (the IR file, as convolve plays it) or, synthesized, a reverb
+            auto w = [&](size_t i) -> double {   // word i of the block (words past its values sit in the trailing structure)
+                if (24 + 4 * i + 4 > p.block.size()) return 0;
+                float f;
+                std::memcpy(&f, &p.block[24 + 4 * i], 4);
+                return std::isfinite(f) ? f : 0;
+            };
+            std::string ir;
+            if (p.block.size() > 31) ir.assign(reinterpret_cast<const char *>(&p.block[31]), std::min<size_t>(p.block[30], p.block.size() - 31));
+            if (const size_t dot = ir.rfind('.'); dot != std::string::npos) ir.resize(dot);
+            const double dry = dbLin(w(20)), wet = dbLin(w(21)), predelay = w(22), length = w(23);
+            if (w(111) != 0 && !ir.empty()) {   // a sampled IR: Length is % of it
+                json c = {{"type", "convolve"}, {"ir", ir}};
+                if (predelay > 0) c["predelay"] = r2(std::min(predelay, 500.0));
+                const double secs = std::atof(ir.c_str());   // "06.6s Botta Church-OST": 6.6 s
+                if (length > 0 && length < 99.5 && secs > 0) c["length"] = r2(secs * length / 100);
+                addMixGain(c, dry, wet);
+            } else addMixGain({{"type", "reverb"}, {"decay", r2(length > 0 ? length : 2.0)}, {"predelay", r2(predelay)}}, dry, wet);
+            if (w(28) != 0) notes.push_back("Space Designer: its reversed IR plays forwards");
+        } else if (p.name == "SilverVerb") {   // #1 predelay, #3 room size, #4 high cut, #5 low cut, #6 density/time, #10 dry, #11 wet
+            const double size = v(3, 70), decay = 0.3 + 3.2 * (size / 200) * (0.3 + 0.7 * v(6, 100) / 100);
+            const double dry = (p.params.size() > 10 ? v(10) : 100 - v(0, 30)) / 100, wet = (p.params.size() > 11 ? v(11) : v(0, 30)) / 100;
+            addMixGain({{"type", "reverb"}, {"decay", r2(decay)}, {"size", r2(std::min(1.0, size / 200))}, {"predelay", r2(v(1, 20))},
+                        {"damping", damping(v(4, 12000))}, {"highpass", r2(v(5, 20))}}, dry, wet);
+        } else if (p.name == "PtVerb") {   // PlatinumVerb: #1 predelay, #2 room size m, #5 ER/reverb balance, #6 initial delay, #7 spread, #8 time,
+                                           // #12 high cut, #18 dry %, #19 wet %
+            addMixGain({{"type", "reverb"}, {"decay", r2(v(8, 2))}, {"size", r2(std::min(1.0, v(2, 20) / 100))},
+                        {"predelay", r2(v(1) + v(6) * v(5, 50) / 100)}, {"damping", damping(v(12, 6000))}, {"width", r2(std::min(1.0, v(7, 100) / 100))}},
+                       v(18, 100) / 100, v(19, 20) / 100);
+        } else if (p.name == "ChromaVerb" || p.name == "AlgoVerb") {   // #0 dry %, #1 wet %, #3 predelay, #5 decay s, #8 size, #12 width,
+                                                                        // #13/#14 mono maker, #33 damping high-shelf ratio, #36.. output EQ
+            const double dry = v(0) / 100, wet = v(1, 100) / 100;
+            addMixGain({{"type", "reverb"}, {"decay", r2(v(5, 2))}, {"size", r2(std::min(1.0, v(8, 50) / 100))}, {"predelay", r2(v(3))},
+                        {"damping", r2(std::clamp(1 - v(33, 1) * 0.5, 0.0, 1.0))}, {"width", r2(std::min(1.0, v(12, 100) / 100))}}, dry, wet);
+            json bands = json::array();
+            if (v(36) != 0 && dry == 0) {   // the output EQ shapes the wet signal: with no dry signal it applies to all of it
+                if (v(37) != 0) bands.push_back({{"type", "highpass"}, {"freq", r2(v(38, 20))}, {"q", r4(v(40, 0.71))}});
+                const char *kinds[4] = {"lowshelf", "peak", "peak", "highshelf"};
+                for (size_t k = 0; k < 4; ++k) {
+                    const size_t b = 41 + 4 * k;
+                    if (v(b) != 0 && v(b + 2) != 0) bands.push_back({{"type", kinds[k]}, {"freq", r2(v(b + 1))}, {"gain", r2(v(b + 2))}, {"q", r4(v(b + 3, 0.71))}});
+                }
+                if (v(57) != 0) bands.push_back({{"type", "lowpass"}, {"freq", r2(v(58, 20000))}, {"q", r4(v(60, 0.71))}});
+            }
+            if (!bands.empty()) add({{"type", "eq"}, {"bands", bands}});
+            if (v(13) != 0) add({{"type", "width"}, {"monoBelow", r2(v(14, 120))}});
+            notes.push_back(p.name + ": its room type plays as the built-in reverb");
+        } else if (p.name == "Noise Gate" || p.name == "Phaser") {
+            notes.push_back(p.name + ": no built-in counterpart yet, not played");
         } else {
             notes.push_back(p.name + ": GarageBand's own effect, not played");
         }
     }
     return fx;
+}
+
+
+json patchChainEffects(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes) {
+    const PatchChannel *inst = nullptr;
+    int n = 0;
+    for (auto &c : chans)
+        if (!c.instrument.empty()) { if (!inst) inst = &c; ++n; }
+    std::vector<PatchPlugin> chain;
+    if (n == 1) {
+        chain = inst->chain;
+        for (auto &m : inst->midiEffects) notes.push_back(m + ": a MIDI effect, not played (the notes play as written)");
+    } else if (n > 1) notes.push_back("several instrument channels: their own effects are left out");
+    if (!chans.empty() && chans.front().instrument.empty() && &chans.front() != inst) chain.insert(chain.end(), chans.front().chain.begin(), chans.front().chain.end());
+    return patchEffects(chain, notes);
 }
 
 std::vector<PatchSend> readPatchSends(const std::string &patchDir) {
@@ -275,10 +472,17 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         c.file = f;
         const Record *r = instrumentOf(recs);
         if (r) { c.instrument = r->name; c.preset = r->preset; c.settings = settingsOf(d, r->at, std::min(d.size(), r->at + r->size), r->name); }
+        // the audio effects in their insert order (records aren't stored in it); MIDI effects are named, not played
+        std::vector<const Record *> fx;
         for (auto &x : recs) {
             if (x.name.empty() || &x == r) continue;
             c.effects.push_back(x.name);
-            if (!r || x.at > r->at) c.chain.push_back(settingsOf(d, x.at, std::min(d.size(), x.at + x.size), x.name));
+            if (!x.midiFx) fx.push_back(&x); else c.midiEffects.push_back(x.name);
+        }
+        std::stable_sort(fx.begin(), fx.end(), [](const Record *a, const Record *b) { return a->order < b->order; });
+        for (auto *x : fx) {
+            c.chain.push_back(settingsOf(d, x->at, std::min(d.size(), x->at + x->size), x->name));
+            c.chain.back().bypassed = x->bypassed;
         }
         c.sampler = r && isSamplerInstrument(r->name);
         if (c.sampler) {

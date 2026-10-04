@@ -1301,20 +1301,6 @@ std::string impulseForRoom(const std::string &room) {
     return "";
 }
 
-// The effects a patch puts after its instrument, as Wavelength effects: the instrument channel's own (when one
-// channel plays) and then the root channel's when that's a summing stack around it
-json patchChainFor(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes) {
-    const PatchChannel *inst = nullptr;
-    int n = 0;
-    for (auto &c : chans)
-        if (c.sampler || c.instrument == "Ultrabeat") { if (!inst) inst = &c; ++n; }
-    std::vector<PatchPlugin> chain;
-    if (n == 1) chain = inst->chain;
-    else if (n > 1) notes.push_back("several instrument channels: their own effects are left out");
-    if (!chans.empty() && chans.front().instrument.empty() && &chans.front() != inst) chain.insert(chain.end(), chans.front().chain.begin(), chans.front().chain.end());
-    return patchEffects(chain, notes);
-}
-
 json describePatch(const std::string &query, const std::string &baseDir, std::string &err) {
     std::string dir = resolveIn(query, baseDir);
     if (dir.empty() || !fs::is_directory(dir)) {
@@ -1351,12 +1337,15 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     if (!kit.empty()) out["kit"] = kit;
     GarageBandSynth gs;
     const bool resynth = !installed && kit.empty() && garageBandSynthPatch(fs::path(dir).stem().string(), gs);
-    if (resynth) out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes}};
+    if (resynth) {
+        out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes}};
+        out["effects"] = gs.fx;
+    }
     out["plays"] = installed > 0 || !kit.empty() || resynth;
     if (!out["plays"].get<bool>())
         out["why"] = synth && !installed ? "its instrument runs only inside GarageBand and Logic" : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
     std::vector<std::string> notes;
-    out["effects"] = patchChainFor(chans, notes);
+    if (!out.contains("effects")) out["effects"] = patchChainEffects(chans, notes);
     out["effectNotes"] = notes;
     for (auto &s : readPatchSends(dir)) {
         json j = {{"channel", s.channel}, {"aux", s.aux}, {"room", s.room}, {"db", std::round(s.db * 10) / 10}};
@@ -1454,7 +1443,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                 kitCfg["kit"] = kit;
                 warnings.push_back("patch '" + fs::path(dir).stem().string() + "' plays Ultrabeat: its kit's samples play ('" + kit + "'), without Ultrabeat's synthesis");
             }
-            if (!kit.empty() || sampled) patchFx = patchChainFor(chans, patchFxNotes);
+            if (!kit.empty() || sampled) patchFx = patchChainEffects(chans, patchFxNotes);
         }
     }
     const json &cfg = kitCfg.is_null() ? track.sampler : kitCfg;
@@ -1877,7 +1866,8 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         const FxContext ctx{job, false, nullptr};
         for (size_t i = 0; i < patchFx.size(); ++i) {
             auto fx = makeEffect(patchFx[i], job, "patch effect " + std::to_string(i + 1), err);
-            if (!fx || !fx->process(out, ctx, err)) return false;
+            if (!fx) { warnings.push_back(err + ": left out"); err.clear(); continue; }   // e.g. a Space Designer room that isn't installed
+            if (!fx->process(out, ctx, err)) return false;
             for (auto &w : fx->warnings) warnings.push_back("patch effect: " + w);
         }
     }

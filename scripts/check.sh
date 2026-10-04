@@ -333,7 +333,8 @@ sys.exit(0 if a["plays"] and c["instrument"] == "Sampler" and c["samples"] == {"
          and a["effects"] == [{"type": "eq", "bands": [{"type": "highpass", "freq": 200, "q": 0.71}]}, {"type": "gain", "db": -3}]
          and not b["plays"] and "GarageBand" in b["why"] else 1)' "$p1" "$p2" || exs_why="samples --patch described the test patches wrong"
 fi
-# a Retro Synth patch plays on builtin:synth by name (its saw a C4 note sounds C5: the patch is transposed +12)
+# a Retro Synth patch plays on builtin:synth by name (its saw a C4 note sounds C5: the patch is transposed +12), and so
+# does a Vintage B3 patch
 if [ -z "$exs_why" ]; then
   cat > out/check/exs/retro.json <<'JOB'
 {"tempo": 60, "leadIn": 0, "tail": 0, "stems": "16",
@@ -342,6 +343,12 @@ JOB
   if ! "./$build/wavelength" render out/check/exs/retro.json --out out/check/exs/retro --json > /dev/null 2>&1 ||
      [ "$("./$build/wavelength" analyze out/check/exs/retro/stems/01-retro.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C5" ]; then
     exs_why="the Retro Synth patch did not play C5 on builtin:synth"
+  fi
+  # and a Vintage B3 patch whose only drawbar is the upper 8' plays the note itself
+  sed -e 's/"Retro"/"Organ"/' -e 's/Test Retro/Test Organ/' out/check/exs/retro.json > out/check/exs/organ.json
+  if [ -z "$exs_why" ] && { ! "./$build/wavelength" render out/check/exs/organ.json --out out/check/exs/organ --json > /dev/null 2>&1 ||
+     [ "$("./$build/wavelength" analyze out/check/exs/organ/stems/01-organ.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C4" ]; }; then
+    exs_why="the Vintage B3 patch did not play C4 on builtin:synth"
   fi
 fi
 unset WAVELENGTH_LOGIC_PATCHES

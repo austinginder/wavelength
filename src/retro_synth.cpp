@@ -1,5 +1,6 @@
 #include "retro_synth.hpp"
 
+#include "apple_synths.hpp"
 #include "logic_patches.hpp"
 
 #include <algorithm>
@@ -160,10 +161,14 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out) {
     for (auto &c : chans) {
         if (c.settings.params.empty()) continue;
         if (c.instrument == "Retro Synth") out = retroSynthPatch(c.settings.params);
+        else if (c.instrument == "Vintage B3") out = vintageB3Patch(c.settings.params);
+        else if (c.instrument == "ES2") out = es2Patch(c.settings.params);
+        else if (c.instrument == "ES1") out = es1Patch(c.settings.params);
+        else if (c.instrument == "EFM1") out = efm1Patch(c.settings.params);
         else continue;
         out.name = p->name;
         std::vector<std::string> fxNotes;
-        for (auto &f : patchEffects(c.chain, fxNotes)) out.fx.push_back(f);
+        for (auto &f : patchChainEffects(chans, fxNotes)) out.fx.push_back(f);
         out.notes.insert(out.notes.end(), fxNotes.begin(), fxNotes.end());
         return true;
     }
