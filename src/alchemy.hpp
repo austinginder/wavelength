@@ -13,8 +13,12 @@
 //     pad, unison, hard sync, the filter that covers most of the level with its envelope, key and velocity follow,
 //     the amplitude AHDSR, a decaying pitch envelope, LFOs to pitch, cutoff, amp, pulse width and pan, mono, glide,
 //     level) and Alchemy's own effects racks as Wavelength effects;
-//   - installed samples (Alchemy's sampler element): SFZ regions for builtin:sampler, its VA layers as generators;
-//   - additive, spectral and granular sources, and content that isn't installed, are refused with the reason.
+//   - additive sources (drawn partials or installed .aaz analysis data): their partials at rest on builtin:synth, as the
+//     waves they amount to or an additive oscillator;
+//   - installed samples (Alchemy's sampler element, and granular sources whose grains stand still): SFZ regions for
+//     builtin:sampler, its VA layers as generators;
+//   - spectral sources, moving grains, undecoded additive effect units or .aaz forms, additive sources layered with
+//     samples, and content that isn't installed, are refused with the reason.
 // Its arpeggiator becomes a track "arp" (rate, order, octaves, note length). Scales that await reference renders
 // (guesses): cutoff 1.0 = 20 kHz over 128/12 octaves, AHDSR times 20 s x v^4, LFO rates 220 Hz x v^6, synced rates
 // 2^(10.5 (0.5 - v)) beats, glide 1 s, unison 1-16 voices and its detune, sync 48 semitones, the filter type order and
@@ -33,7 +37,7 @@ namespace wl {
 struct AlchemyPatch {
     enum Kind { Refused, Synth, Sampler } kind = Refused;
     std::string why;             // Refused: the reason ("its sounds come from Alchemy's spectral synthesis, ...")
-    std::string what;            // its class in words: "virtual analog", "samples", "additive", ...
+    std::string what;            // its class in words: "virtual analog", "samples", "additive", "granular", ...
     GarageBandSynth synth;       // Synth: the builtin:synth patch; both: fx (Alchemy's own effects) and notes
     SfzFile sfz;                 // Sampler: the instrument as SFZ regions (installed samples, VA layers as generators)
     nlohmann::json sampler = nlohmann::json::object();   // Sampler: the sampler settings around them ("mono", "glide")

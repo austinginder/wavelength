@@ -1,15 +1,19 @@
 #include "alchemy.hpp"
 
+#include "dsp.hpp"
 #include "platform.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -445,6 +449,14 @@ struct Source {
     std::string noiseShape;
     double noiseVolDb = 0, lowcut = 0, highcut = 1;
     bool analysis = false;   // additive: from analysis data (else drawn partials)
+    bool adComplex = false;  // additive: each partial plays the Shape wave (else a sine)
+    std::string adShape;
+    Eff adNosc, adSym, adVol;
+    double adPvar = 0;
+    struct AdUnit { bool on = false; int type = 0; std::array<Eff, 4> p; };
+    std::array<AdUnit, 3> adUnits;   // the additive element's three effect units: levels, tunings, pan or output
+    bool stereo = false, formant = false;
+    Eff grSpeed, grSize, grRand, pos;   // granular: Speed (0.5 = 100%), grain size, random position, Position
     double sampVolDb = 0, position = 0;
     bool reverse = false;
     std::vector<AZone> zones;
@@ -466,6 +478,274 @@ struct Effect {
 struct ArpBlock { std::string order, rate; bool free = false; int octaves = 1; double gate = 0; };
 struct Route { std::string src, tgt; double d; };
 
+// ---- additive elements -----------------------------------------------------------------------------
+// An additive element starts as Num Partials oscillators on the harmonic series at equal levels (the guide: "None
+// results in an equal volume level for all partials"), each a sine (Sine mode) or the Shape wave (Complex mode, by
+// the shape its name gives, as the VA oscillators); its .aaz analysis data, when it has some, sets their levels. Three
+// effect units then shape them: unit 1 the levels, unit 2 the tunings, unit 3 pans the partials or filters the
+// element. Their types are global ids (0 None, 1 Harmonic, 2 Pulse/Saw, 3 Saw+Noise, 5 Beating, 6 Stretch, 7 Shift,
+// 9 and 11 Alchemy 1.x's Harmonic and Unison pitch profiles, 10 and 12 two other 1.x pitch profiles (unidentified),
+// 13 Comb, 14 Filter, 15-17 1.x pan profiles, 20 pitch Noise, 21 Strum, 22 EQ; 18 and 23-25 unidentified), inferred from
+// the factory patches and the guide's and Camel Audio's manual's descriptions; the scales marked "a guess" await
+// reference renders. Num Partials = 1 + 117.6 v up to v = 0.34 (calibrated on drawn .aaz files whose knob the
+// designers set to their partial count), then a guessed curve up to the guide's 600.
+double numPartials(double v) {
+    v = std::min(1.0, std::max(0.0, v));
+    return 1 + 117.6 * v + 481.4 * std::pow(std::max(0.0, (v - 0.34) / 0.66), 2.5);
+}
+
+// harmonics 1..M of one cycle of f sampled at 2048 points, as complex amplitudes (a sine at harmonic m gives 1)
+std::vector<std::complex<double>> cycleSpectrum(const std::function<double(double)> &f, size_t M) {
+    const size_t n = 2048;
+    std::vector<std::complex<double>> a(n);
+    for (size_t i = 0; i < n; ++i) a[i] = f((i + 0.5) / n);
+    dsp::fft(a);   // the samples sit half a step into the cycle: e^(-pi i m / n)
+    std::vector<std::complex<double>> out;
+    for (size_t m = 1; m <= M; ++m)
+        out.push_back(2.0 * (a[m % n] * std::polar(1.0, -dsp::kPi * (double)m / n)) / (double)n * std::complex<double>(0, 1));
+    return out;
+}
+
+// the shape wave of a Complex element over one cycle: a basic wave (sine partials for "Sine - Add1248"), its
+// symmetry lengthening one half of the cycle and shortening the other (0.5 = unchanged)
+std::function<double(double)> shapeCycle(const Wave &w, double sym) {
+    std::function<double(double)> f;
+    const double pw = std::isnan(w.pw) || w.pw == 0 ? 0.5 : w.pw;
+    if (!w.partials.empty()) f = [p = w.partials](double ph) { double s = 0; for (int h : p) s += std::sin(2 * dsp::kPi * h * ph); return s / (double)p.size(); };
+    else if (w.wave == "saw") f = [](double ph) { return ph > 0 ? 2 * ph - 1 : 0.0; };
+    else if (w.wave == "square") f = [pw](double ph) { return (ph < pw ? 1.0 : -1.0) - (2 * pw - 1); };
+    else if (w.wave == "triangle") f = [](double ph) { return 1 - 4 * std::fabs(ph - 0.5); };
+    else f = [](double ph) { return std::sin(2 * dsp::kPi * ph); };
+    const double s = std::min(0.98, std::max(0.02, sym));
+    if (std::fabs(s - 0.5) < 1e-4) return f;
+    return [f, s](double ph) { return f(ph < s ? ph / (2 * s) : 0.5 + (ph - s) / (2 * (1 - s))); };
+}
+
+// Odd/Even (Harmonic, Pulse/Saw): low values raise the odd partials (the fundamental too), high ones the even ones
+// while the fundamental stays; unity at 0.5
+double oddEven(int h, double v) {
+    if (h == 1) return v < 0.5 ? 2 * (1 - v) : 1.0;
+    return h % 2 == 0 ? 2 * v : 2 * (1 - v);
+}
+bool powerOf3(int h) { while (h % 3 == 0) h /= 3; return h == 1; }
+// oscillator k's place in a stack of K, -1..1: the centre first, then alternating sides outwards
+double stackPos(int k, int K) {
+    if (K <= 1 || !k) return 0.0;
+    const int half = std::max(1, K / 2), j = (k + 1) / 2;
+    return (double)j / half * (k % 2 ? 1 : -1);
+}
+
+struct AdElement {
+    double n = 1;                                   // Num Partials
+    std::vector<std::array<double, 3>> oscs;        // the partial oscillators: level, ratio, pan
+    std::vector<std::array<double, 3>> partials;    // as sine partials, every oscillator's wave spread out: level (loudest 1), ratio, pan
+    double shiftHz = 0;
+    Wave wave;
+    double sym = 0.5;
+    bool simple = true;                             // plain sine partials (a sine shape, no symmetry)
+    bool pulseSaw = false;                          // unit 1 is Pulse/Saw: ps (0 pulse, 1 saw), sync, odd/even, tone
+    double ps = 1, sync = 0, oddEven = 0.5, tone = 0.5;
+    bool othersOn = false;                          // units 2 and 3 hold something besides None, Comb, Filter and EQ
+    std::vector<std::string> notes, unexpressed, unknown;
+    std::vector<std::string> profiles;              // unit 2 holds one of the two unidentified 1.x pitch profiles
+    json post = json::array();                      // unit 3 as effects after the voices (Comb, Filter, EQ)
+    std::vector<std::complex<double>> shape;        // the shape wave's harmonics (Complex mode)
+};
+
+// One additive element as partials. base: harmonic number -> level from its .aaz data (null = none: equal levels).
+AdElement decodeAdditive(const Source &s, const std::map<int, double> *base) {
+    AdElement e;
+    double N = numPartials(s.adNosc.v);
+    if (base && !base->empty()) N = std::min(N, (double)base->rbegin()->first);
+    const int K = std::max(1, std::min(600, (int)std::ceil(N - 1e-9)));
+    e.n = N;
+    std::vector<double> amp((size_t)K), ratio((size_t)K), pan((size_t)K, 0.0);
+    for (int k = 0; k < K; ++k) {
+        amp[(size_t)k] = std::min(1.0, std::max(0.0, N - k));   // partial k+1 fades in with the knob
+        if (base) { auto it = base->find(k + 1); amp[(size_t)k] *= it == base->end() ? 0.0 : it->second; }
+        ratio[(size_t)k] = k + 1;
+    }
+    for (size_t u = 0; u < 3; ++u) {
+        const auto &unit = s.adUnits[u];
+        if (!unit.on || unit.type == 0) continue;
+        const int t = unit.type;
+        double p[4];
+        for (int j = 0; j < 4; ++j) p[j] = unit.p[(size_t)j].v;
+        if (u > 0 && t != 13 && t != 14 && t != 22) e.othersOn = true;
+        if (t == 1) {   // Harmonic: Fundamental, Octaves, Odd/Even, Fifths, each a pair of profiles crossfaded (unity at 0.5)
+            for (int k = 0; k < K; ++k) {
+                const int h = k + 1;
+                double g = h == 1 ? 2 * p[0] : 2 * (1 - p[0]);
+                g *= (h & (h - 1)) == 0 ? 2 * p[1] : 2 * (1 - p[1]);
+                g *= oddEven(h, p[2]);
+                g *= powerOf3(h) ? 2 * p[3] : 2 * (1 - p[3]);
+                amp[(size_t)k] *= g;
+            }
+        } else if (t == 2 || t == 3) {   // Pulse/Saw (1.0 a saw's 1/k, 0 a pulse: odd partials only), Saw+Noise; Odd/Even, Tone tilt
+            double PS = 1, SY = 0, OE = 0.5, TN = p[3];
+            if (t == 2) {
+                PS = p[0], SY = p[1], OE = p[2];
+                e.pulseSaw = true, e.ps = PS, e.sync = SY, e.oddEven = OE, e.tone = TN;
+            } else if (p[0] > 0.005) e.unexpressed.push_back("Saw+Noise: noise " + fmt("%.2f", p[0]) + " on the partial levels (random, moving)");
+            if (SY > 0.002) {   // the levels of a hard-synced wave, its slave Sync x 48 semitones up (a guess, as the VA sync)
+                const double R = std::pow(2.0, 48 * SY / 12);
+                const auto spec = cycleSpectrum([R, PS](double ph) { const double q = std::fmod(ph * R, 1.0); return PS * (2 * q - 1) + (1 - PS) * (q < 0.5 ? 1.0 : -1.0); },
+                                                (size_t)std::max(K, 1));
+                for (int k = 0; k < K; ++k) amp[(size_t)k] *= std::abs(spec[(size_t)k]) / std::max(1e-9, std::abs(spec[0]));
+                e.notes.push_back("Pulse/Saw sync " + fmt("%.2f", SY) + " (about " + fmt("%.0f", 48 * SY) + " semitones, a guess): levels of a hard-synced wave");
+            } else
+                for (int k = 0; k < K; ++k) amp[(size_t)k] *= ((k + 1) % 2 ? 1.0 : PS) / (k + 1);
+            for (int k = 0; k < K; ++k) amp[(size_t)k] *= oddEven(k + 1, OE) * std::pow((double)(k + 1), 2 * (TN - 0.5));
+        } else if (t == 5) {   // Beating: every step-th partial retuned (Partial: every 2nd .. 16th, a guess)
+            const int step = 2 + ri(14 * p[1]);
+            for (int k = 0; k < K; ++k)
+                if ((k + 1) % step == 0) ratio[(size_t)k] = p[2] >= 0.5 ? (k + 1) - 2 * (1 - p[0]) : (k + 1) - 2 + 3 * p[0];
+            e.notes.push_back("Beating: partials " + std::to_string(step) + ", " + std::to_string(2 * step) + ", ... retuned (Amount " + fmt("%.2f", p[0]) +
+                              ", Tuned " + (p[2] >= 0.5 ? "on" : "off") + "; scales from the guide's text)");
+        } else if (t == 6) {   // Stretch: intervals scaled (0.5 harmonic, 0 unison, 1 = 2n-1); String a stiff string's inharmonicity (a guess)
+            const double B = 0.002 * p[1] * p[1];
+            for (int k = 0; k < K; ++k) ratio[(size_t)k] = (1 + (ratio[(size_t)k] - 1) * 2 * p[0]) * std::sqrt(1 + B * ((double)(k + 1) * (k + 1) - 1));
+            if (std::fabs(p[0] - 0.5) > 0.01 || p[1] > 0.01) e.notes.push_back("Stretch Amount " + fmt("%.2f", p[0]) + ", String " + fmt("%.2f", p[1]) + " (the scales are a guess)");
+        } else if (t == 7) {   // Shift: Pitch (+-12 semitones, key-tracked) and Frequency (+-1000 Hz), guesses
+            const double d = std::pow(2.0, 24 * (p[0] - 0.5) / 12) - 1;
+            for (auto &x : ratio) x += d;
+            e.shiftHz += 2000 * (p[1] - 0.5);
+        } else if (t == 9) {   // 1.x Harmonic pitch profile: 0 unison, 0.5 harmonic, 1.0 partial n at 2n-1
+            for (auto &x : ratio) x = 1 + (x - 1) * 2 * p[0];
+        } else if (t == 11) {   // 1.x Unison pitch profile: a stack detuned over 50 cents at 1.0 (a guess)
+            for (int k = 0; k < K; ++k) ratio[(size_t)k] = std::pow(2.0, 50 * p[0] * stackPos(k, K) / 2 / 1200);
+            e.notes.push_back("Unison profile " + fmt("%.2f", p[0]) + ": " + std::to_string(K) + " oscillators detuned over " + fmt("%.0f", 50 * p[0]) + " cents (a guess)");
+        } else if (t == 10 || t == 12) {
+            e.profiles.push_back("unit 2: an unidentified Alchemy 1.x pitch profile (type " + std::to_string(t) + ") at " + fmt("%.2f", p[0]));
+        } else if (t == 20) {
+            if (p[0] > 0.005) e.unexpressed.push_back("pitch Noise " + fmt("%.2f", p[0]) + " (random partial detuning, moving)");
+        } else if (t >= 15 && t <= 17) {   // 1.x pan profiles: the stack spread, odd and even apart, or low to high
+            const double w = 2 * (p[0] - 0.5);
+            for (int k = 0; k < K; ++k)
+                pan[(size_t)k] = t == 17 ? w * stackPos(k, K) : t == 16 ? ((k + 1) % 2 ? -w : w) : w * (2.0 * k / std::max(1, K - 1) - 1);
+            if (std::fabs(w) > 0.02 && !s.stereo) std::fill(pan.begin(), pan.end(), 0.0);   // a mono source: no effect
+        } else if (t == 13) {   // Comb: 16 Hz - 20 kHz (exponential, a guess) as a short feedback delay
+            if (p[0] > 0.005) {
+                const double fq = 16 * std::pow(1250.0, p[2]);
+                e.post.push_back({{"type", "delay"}, {"ms", r(1000 / fq, 1000)}, {"feedback", r(std::min(0.95, std::fabs(2 * p[3] - 1)))}, {"mix", r(std::min(1.0, p[0]))},
+                                  {"pingpong", false}, {"highpass", 20.0}, {"lowpass", 20000.0}});
+                e.notes.push_back("Comb " + fmt("%.0f", fq) + " Hz as a feedback delay (damping not played)");
+            }
+        } else if (t == 14) {   // Filter: LP-HP 0 low-pass, 0.5 band-pass, 1 high-pass; cutoff as Comb's
+            if (p[0] > 0.005)
+                e.post.push_back({{"type", "filter"}, {"mode", p[1] < 0.33 ? "lowpass" : p[1] < 0.67 ? "bandpass" : "highpass"},
+                                  {"cutoff", r(std::min(20000.0, 16 * std::pow(1250.0, p[2])), 10)}, {"resonance", r(0.7071 + 8 * p[3] * p[3])}, {"mix", r(std::min(1.0, p[0]))}});
+        } else if (t == 22) {   // EQ: four bands of +-18 dB (a guess)
+            json bands = json::array();
+            const std::pair<double, const char *> at[4] = {{120, "lowshelf"}, {310, "peak"}, {2000, "peak"}, {5000, "highshelf"}};
+            for (int j = 0; j < 4; ++j)
+                if (std::fabs(36 * (p[j] - 0.5)) > 0.2) bands.push_back({{"type", at[j].second}, {"freq", at[j].first}, {"gain", r(36 * (p[j] - 0.5), 10)}, {"q", 0.7}});
+            if (!bands.empty()) e.post.push_back({{"type", "eq"}, {"bands", bands}});
+        } else if (t == 21) {
+            if (p[0] > 0.005) e.unexpressed.push_back("Strum " + fmt("%.2f", p[0]) + " (partial levels moving with the chosen partial)");
+        } else if (std::fabs(p[0]) > 0.005 || std::fabs(p[1]) > 0.005 || std::fabs(p[2]) > 0.005 || std::fabs(p[3]) > 0.005) {
+            const std::string msg = "unit " + std::to_string(u + 1) + ": type " + std::to_string(t) + " at " + fmt("%.2f", p[0]) + ", " + fmt("%.2f", p[1]) + ", " + fmt("%.2f", p[2]) + ", " + fmt("%.2f", p[3]);
+            if (K == 1 && t >= 23 && t <= 25) e.unexpressed.push_back(msg + " (on one oscillator it can only pan or scale it)");
+            else e.unknown.push_back(msg);
+        }
+    }
+    // the wave each partial oscillator plays
+    if (s.adComplex) {
+        e.wave = mapWave(s.adShape);
+        if (!e.wave.exact) e.notes.push_back("shape " + replaceAll(replaceAll(s.adShape, "Alchemy/Libraries/WaveOsc/", ""), ".raw", "") + " plays as " + e.wave.wave);
+    } else e.wave = Wave{"sine", kNone, {}, true};
+    e.sym = s.adSym.v;
+    e.simple = e.wave.wave == "sine" && e.wave.partials.empty() && std::fabs(e.sym - 0.5) < 1e-4;
+    for (int k = 0; k < K; ++k)
+        if (amp[(size_t)k] > 1e-9) e.oscs.push_back({amp[(size_t)k], ratio[(size_t)k], pan[(size_t)k]});
+    // as sine partials: oscillator k's harmonic m sits at ratio r_k x m (harmonics up to ratio 600)
+    e.shape = e.simple ? std::vector<std::complex<double>>{1.0} : cycleSpectrum(shapeCycle(e.wave, e.sym), 256);
+    struct Acc { std::complex<double> z; double w = 0, pan = 0; };
+    std::map<double, Acc> comp;
+    for (auto &[a, rt, pn] : e.oscs)
+        for (size_t m = 1; m <= e.shape.size(); ++m) {
+            const std::complex<double> c = e.shape[m - 1];
+            if (std::abs(c) < 1e-6 || rt * (double)m > 600 + 1e-9) continue;
+            Acc &x = comp[r(rt * (double)m, 1e6)];
+            x.z += a * c;
+            x.w += a * std::abs(c);
+            x.pan += a * std::abs(c) * pn;
+        }
+    double top = 0;
+    for (auto &[rt, x] : comp) top = std::max(top, std::abs(x.z));
+    if (top <= 0) top = 1;
+    for (auto &[rt, x] : comp)
+        if (std::abs(x.z) / top >= 1e-3) e.partials.push_back({std::abs(x.z) / top, rt, x.w ? x.pan / x.w : 0.0});   // down to 60 dB under the loudest
+    return e;
+}
+
+// An .aaz file's partials at rest: their levels averaged over its loop, by harmonic number (the loudest 1). The layout
+// (inferred from the bytes of the installed files and the CSV form in Camel's manual, ch. 22: AttackPeakTime, LoopStart,
+// LoopEnd, Length, PitchOffset, NumPartials, then per partial StartPhase, Time, Amp, Pitch, Pan), little-endian:
+// "AAZ", version 8, a name ("EditorData" = drawn in the editor), u32 0, f32 attack peak, loop start, loop end, length
+// (seconds), u32 has-partials, a level envelope and a pitch envelope (u32 n, n f32 times, n f32 values each), u32
+// partial count, then per partial f32 start phase, u32 n, n f32 breakpoint times, f32 peak level, f32, u8 coding (0:
+// what is read here), n level bytes (0-255 of the peak), ceil(5n / 4) bytes of pitch and pan codes (not read: drawn
+// data holds zeros, and with Pitch Variation 0 Alchemy keeps the partials harmonic). Files in other versions or
+// codings return false with the reason.
+struct Aaz { std::map<int, double> levels; bool drawn = false, moving = false; std::string why; };
+bool readAaz(const std::string &path, Aaz &out) {
+    std::ifstream in(fs::u8path(path), std::ios::binary);
+    std::vector<uint8_t> b((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    size_t o = 0;
+    auto need = [&](size_t n) { if (o + n > b.size()) throw std::runtime_error("it ends early"); };
+    auto u32 = [&]() { need(4); uint32_t v; std::memcpy(&v, b.data() + o, 4); o += 4; return v; };
+    auto f32 = [&]() { need(4); float v; std::memcpy(&v, b.data() + o, 4); o += 4; return (double)v; };
+    try {
+        if (b.size() < 8 || std::memcmp(b.data(), "AAZ", 3) != 0) { out.why = "not an .aaz file"; return false; }
+        if (b[3] != 8) { out.why = "version " + std::to_string(b[3]); return false; }
+        o = 4;
+        while (o < b.size() && b[o]) ++o;
+        out.drawn = std::string(b.begin() + 4, b.begin() + (long)o) == "EditorData";
+        ++o;
+        u32();
+        f32();
+        const double loopStart = f32(), loopEnd = f32();
+        f32();
+        if (!u32()) { out.why = "it holds no partials (spectral data only)"; return false; }
+        for (int env = 0; env < 2; ++env) { const uint32_t n = u32(); need(8 * (size_t)n); o += 8 * (size_t)n; }
+        const uint32_t count = u32();
+        std::vector<double> lv;
+        for (uint32_t k = 0; k < count; ++k) {
+            f32();
+            const uint32_t n = u32();
+            if (n > 200000) throw std::runtime_error("a partial has " + std::to_string(n) + " breakpoints");
+            std::vector<double> times;
+            for (uint32_t i = 0; i < n; ++i) times.push_back(f32());
+            const double peak = f32();
+            f32();
+            need(1);
+            if (b[o++]) { out.why = "its partials use a wider pitch coding"; return false; }
+            need(n + (5 * (size_t)n + 3) / 4);
+            const uint8_t *a = b.data() + o;
+            o += n + (5 * (size_t)n + 3) / 4;
+            double sum = 0, lo = 255, hi = 0, top = 0;
+            size_t inLoop = 0;
+            for (uint32_t i = 0; i < n; ++i) {
+                top = std::max(top, (double)a[i]);
+                if (times[i] >= loopStart - 0.002 && times[i] <= loopEnd + 0.002) { sum += a[i]; lo = std::min(lo, (double)a[i]); hi = std::max(hi, (double)a[i]); ++inLoop; }
+            }
+            if (!inLoop) sum = lo = hi = top, inLoop = 1;
+            lv.push_back(peak * sum / (double)inLoop / 255);
+            out.moving |= peak * top / 255 > 1e-3 && hi - lo > 25;
+        }
+        double top = 0;
+        for (double x : lv) top = std::max(top, x);
+        for (size_t k = 0; k < lv.size(); ++k)
+            if (top > 0 && lv[k] / top > 1e-3) out.levels[(int)k + 1] = lv[k] / top;
+        if (out.levels.empty()) { out.why = "its partials are silent"; return false; }
+        return true;
+    } catch (const std::exception &e) {
+        out.why = e.what();
+        return false;
+    }
+}
+
 struct Decoder {
     const Preset &P;
     Ctx C;
@@ -482,6 +762,12 @@ struct Decoder {
     std::map<std::string, std::vector<Effect>> racks;
     std::vector<ArpBlock> arps;
     std::vector<Route> routes;
+    std::array<AdElement, 4> adds;      // each audible additive source's element
+    std::array<std::string, 4> adWhy;   // why one can't play here ("" = it can)
+    // Additive and granular patches (new to this mapping) play an Amp effect an envelope opens at its held level, and
+    // of several source racks (A-D) only the one carrying the most level; virtual-analog and sampler patches keep the
+    // earlier at-rest reading for now (switching would change about 35 of them)
+    bool held = false;
 
     Decoder(const Preset &p, const std::string &n) : P(p), C(p), name(n) { decode(); }
 
@@ -565,13 +851,34 @@ struct Decoder {
                 s.lowcut = r(E("SNsHp").v);
                 s.highcut = r(E("SNsLp").v);
             }
-            if (is1(at(d, "SAdOn"))) { s.additive = true; s.analysis = is1(at(d, "SAdMode")); }
+            if (is1(at(d, "SAdOn"))) {
+                s.additive = true;
+                s.analysis = is1(at(d, "SAdMode"));
+                s.adComplex = is1(at(d, "SAdShMd"));
+                s.adShape = at(d, "SAdShpe") ? at(d, "SAdShpe")->raw : "";
+                s.adNosc = E("SAdNOsc");
+                s.adSym = E("SAdSym");
+                s.adVol = E("SAdVol");
+                s.adPvar = E("SAdPVar").v;
+                for (int k = 0; k < 3; ++k) {
+                    auto &u = s.adUnits[(size_t)k];
+                    u.on = is1(at(d, "SAdE" + std::to_string(k + 1) + "On"));
+                    u.type = (int)numOf(at(d, "SAdEfT" + std::to_string(k + 1)));
+                    for (int j = 0; j < 4; ++j) u.p[(size_t)j] = E(("SAdEP" + std::to_string(4 * k + j + 1)).c_str());
+                }
+            }
+            s.stereo = is1(at(d, "SStereo"));
+            s.formant = is1(at(d, "SFmtAOn"));
             if (is1(at(d, "SSpOn"))) s.spectral = true;
             if (is1(at(d, "SGrOn"))) {
                 (is1(at(d, "SGrMode")) ? s.sampler : s.granular) = true;
                 s.sampVolDb = r(linDb(E(s.sampler ? "SSampVl" : "SGrVol").v), 100);
                 s.position = r(E("SPos").v);
                 s.reverse = is1(at(d, "SGrSRev"));
+                s.grSpeed = E("SStrtch");
+                s.grSize = E("SGrSize");
+                s.grRand = E("SGrRTim");
+                s.pos = E("SPos");
             }
             // its content: each zone's file (found where the preset says, else by name), keys, level, tuning, loop
             for (auto *z : zones) {
@@ -615,7 +922,7 @@ struct Decoder {
             auto it = routeOf.find(rot ? (int)numOf(rot) : 0);
             if (it != routeOf.end()) s.first = it->second.first, s.second = it->second.second;
             s.send = r(E("SFilMix").v);
-            for (const char *k : {"SAmp", "STunCrs", "STunFin", "SPan", "SVASym", "SVASync", "SVANOsc", "SVAVol", "SNsVol"})
+            for (const char *k : {"SAmp", "STunCrs", "STunFin", "SPan", "SVASym", "SVASync", "SVANOsc", "SVAVol", "SNsVol", "SAdVol"})
                 if (at(d, k)) s.dyn[k] = E(k).dyn;
             const bool sounds = s.va || s.noise || s.additive || s.spectral || s.granular || s.sampler;
             s.audible = s.on && s.weight >= 0.05 && sv >= 0.01 && sounds;
@@ -694,6 +1001,41 @@ struct Decoder {
                 if (!p.mods.empty())
                     for (auto &x : C.eff(&p).dyn) routes.push_back({srcName(x.t, x.i), sec.name + "." + p.key, r(x.d)});
         }
+        for (size_t si = 0; si < 4; ++si)
+            if (src[si].audible && src[si].additive) additive(si);
+    }
+
+    // an audible additive source's element, its .aaz data read when it has some, and why it can't play here. On drawn
+    // or analysed data an unidentified 1.x pitch profile is noted and the partials stay harmonic (the data's own tuning;
+    // Pitch Variation 0 or drawn data keeps them harmonic, so pitch correction changes nothing either); with no data the
+    // profile alone tunes the partials, so the sound is unclear.
+    void additive(size_t si) {
+        const Source &s = src[si];
+        const std::string L(1, s.letter);
+        std::string &why = adWhy[si];
+        Aaz data;
+        std::string file;
+        if (s.analysis) {
+            const AZone *z = nullptr;
+            for (auto &x : s.zones) if (!x.found.empty()) { z = &x; break; }
+            if (!z) { if (s.zones.empty()) why = "its additive source " + L + " names no analysis data, so only GarageBand and Logic can play it"; return; }
+            file = fs::u8path(z->found).filename().u8string();
+            if (!readAaz(z->found, data)) {
+                why = "its additive source " + L + " plays analysis data (\"" + file + "\") in a form not read here (" + data.why + "), so only GarageBand and Logic play it";
+                return;
+            }
+        }
+        AdElement &e = adds[si] = decodeAdditive(s, s.analysis ? &data.levels : nullptr);
+        if (s.analysis) {
+            e.notes.insert(e.notes.begin(), std::string(data.drawn ? "partials drawn in" : "partials analysed from a sample in") + " \"" + file + "\"" +
+                                                (data.moving ? ": their levels move over time, played as their loop's average" : ""));
+            if (s.zones.size() > 1) e.notes.push_back("its other " + std::to_string(s.zones.size() - 1) + " analysis zones play as the first");
+            if (!data.drawn && s.adPvar > 0.005) e.notes.push_back("Pitch Variation " + fmt("%.2f", s.adPvar) + ": the analysed pitch drift is not played");
+            for (auto &x : e.profiles) e.notes.push_back(x + " is unidentified: the partials stay harmonic");
+        } else e.unknown.insert(e.unknown.end(), e.profiles.begin(), e.profiles.end());
+        if (s.formant) why = "its additive source " + L + " goes through Alchemy's formant filter, which isn't decoded, so only GarageBand and Logic play it";
+        else if (!e.unknown.empty())
+            why = "its additive source " + L + " has an effect unit that isn't decoded (" + e.unknown[0] + "), so only GarageBand and Logic play it";
     }
 
     // ---- what reaches what
@@ -766,11 +1108,50 @@ struct Decoder {
                                   " installed here (such as \"" + example + "\")";
             return synthesis.empty() ? n + ": GarageBand's Sound Library has them" : n + " and it plays them with " + synthesis + ", which only GarageBand and Logic play";
         }
-        if (!kinds.empty()) {
+        if (spectral) {
             what = kinds[0].substr(0, kinds[0].find(' '));
             return "its sounds come from Alchemy's " + synthesis + ", which only GarageBand and Logic play";
         }
-        what = samples ? "samples" : "virtual analog";
+        // additive sources play on builtin:synth, granular ones as samples on builtin:sampler: one or the other
+        const bool additive = analysis || scratch;
+        if (additive && (samples || granular)) {
+            what = "additive";
+            return "it layers Alchemy's additive synthesis with samples: builtin:synth plays the one and builtin:sampler the other, not both in one patch, "
+                   "so only GarageBand and Logic play it";
+        }
+        if (granular) {
+            const std::string why = granularWhy();
+            what = "granular";
+            samples = why.empty();
+            return why;
+        }
+        for (size_t si = 0; si < 4; ++si)
+            if (src[si].audible && src[si].additive && !adWhy[si].empty()) { what = "additive"; return adWhy[si]; }
+        what = additive ? "additive" : samples ? "samples" : "virtual analog";
+        return "";
+    }
+
+    // Granular sources play as their samples when the grains stand still: at Speed 100% (0.5) the zone itself, frozen
+    // (Speed 0) a short loop at Position, a slow scan the zone at its own rate. Moving Position or grain size, Speed
+    // above 100%, grains of a few milliseconds and random grain positions need a grain engine: the reason, else "".
+    std::string granularWhy() const {
+        for (auto *s : audible()) {
+            if (!s->granular) continue;
+            std::vector<std::string> issues;
+            for (auto [what, e] : {std::pair<const char *, const Eff *>{"its grain position", &s->pos}, {"its grain size", &s->grSize}})
+                if (!e->dyn.empty()) {
+                    std::string by;
+                    for (auto &d : e->dyn) by += (by.empty() ? "" : " and ") + srcName(d.t, d.i);
+                    issues.push_back(std::string("moves ") + what + " with " + by);
+                }
+            if (s->grSpeed.v > 0.75) issues.push_back("scans its sample faster than 100% (Speed " + fmt("%.2f", s->grSpeed.v) + ")");
+            if (s->grSize.v < 0.05) issues.push_back("plays grains of a few milliseconds (a buzz)");
+            if (s->grRand.v > 0.5) issues.push_back("starts its grains at random positions");
+            if (issues.empty()) continue;
+            std::string l;
+            for (size_t k = 0; k < issues.size(); ++k) l += (k ? k + 1 == issues.size() ? " and " : ", " : "") + issues[k];
+            return std::string("its granular source ") + s->letter + " " + l + ", which needs Alchemy's grain engine: only GarageBand and Logic play it";
+        }
         return "";
     }
 
@@ -868,7 +1249,7 @@ struct Decoder {
     }
 
     // ---- the moving modulations builtin:synth can't play, for the notes
-    std::vector<std::string> unmapped(bool minor) const {
+    std::vector<std::string> unmapped(bool minor, bool additive = false) const {
         static const std::map<std::string, std::set<std::string>> mappable = {
             {"master.Amp", {"ahdsr", "velocity", "lfo"}}, {"source.SAmp", {"ahdsr", "lfo", "velocity"}}, {"master.Volume", {"velocity", "lfo"}},
             {"master.TuneFine", {"lfo", "ahdsr", "mseg"}}, {"master.TuneCrs", {"lfo", "ahdsr", "mseg"}}, {"source.STunFin", {"lfo", "ahdsr", "mseg"}},
@@ -893,7 +1274,7 @@ struct Decoder {
                 continue;
             auto it = mappable.find(rt.tgt);
             if (it != mappable.end() && (it->second.count(kind) || (kind.rfind("random", 0) == 0 && it->second.count("random")))) continue;
-            if (kind == "ahdsr" && (rt.tgt == "source.SNsVol" || rt.tgt == "source.SVAVol" || rt.tgt == "source.SAmp") && rt.d > 0) {
+            if (kind == "ahdsr" && (rt.tgt == "source.SNsVol" || rt.tgt == "source.SVAVol" || rt.tgt == "source.SAmp" || (additive && rt.tgt == "source.SAdVol")) && rt.d > 0) {
                 const Adsr e = ahdsr(std::atoi(rt.src.c_str() + 5) - 1);
                 if (e.ok && e.sustain < 0.05) continue;   // a decaying level: the oscillator's own decay
             }
@@ -908,7 +1289,21 @@ struct Decoder {
         auto g = [&](const char *k, double def = 0) { return e.g(k, def); };
         std::string moving;
         for (auto &[k, v] : e.dyn) moving += (moving.empty() ? "" : ", ") + k;
-        if (!moving.empty()) {
+        // an Amp whose level an envelope opens plays at the level it holds while a note is held, or at its peak when the
+        // envelope decays to nothing (held: see `held`)
+        double heldAmp = g("AmpAmp", 0.5);
+        bool envAmp = false, decays = false;
+        if (held && e.type == 10 && e.dyn.count("AmpAmp") && e.dyn.size() == 1) {
+            envAmp = true;
+            for (auto &[src, d] : e.dyn.at("AmpAmp")) {
+                if (src.rfind("ahdsr", 0) != 0) { envAmp = false; continue; }
+                const Adsr x = ahdsr(std::atoi(src.c_str() + 5) - 1);
+                if (x.ok) heldAmp += d * (x.sustain < 0.05 ? 1.0 : x.sustain), decays |= x.sustain < 0.05;
+            }
+            heldAmp = std::min(1.0, std::max(0.0, heldAmp));
+            if (envAmp) notes.push_back(decays ? "Amp: its level follows a decaying envelope, played at its peak" : "Amp: its level follows an envelope, played where it holds");
+        }
+        if (!moving.empty() && !envAmp) {
             bool levelsOnly = true, open = false;
             for (auto &[k, v] : e.dyn) levelsOnly &= k.size() > 3 && (k.compare(k.size() - 3, 3, "Mix") == 0 || k.compare(k.size() - 3, 3, "Wet") == 0);
             for (auto &[k, v] : e.params) open |= k.size() > 3 && (k.compare(k.size() - 3, 3, "Mix") == 0 || k.compare(k.size() - 3, 3, "Wet") == 0) && v > 0.005;
@@ -982,7 +1377,7 @@ struct Decoder {
             return std::fabs(pos) > 0.02 ? json{{"type", "pan"}, {"position", r(pos)}} : json(nullptr);
         }
         if (t == 10) {   // Amp: 0.5 = unity (the default; a guess)
-            const double db = linDb(std::max(g("AmpAmp", 0.5) * 2, 1e-4));
+            const double db = linDb(std::max((envAmp ? heldAmp : g("AmpAmp", 0.5)) * 2, 1e-4));
             return std::fabs(db) > 0.1 ? json{{"type", "gain"}, {"db", r(std::max(-60.0, std::min(24.0, db)), 100)}} : json(nullptr);
         }
         if (t == 12) {   // 3-Band EQ: +-18 dB (a guess)
@@ -1028,6 +1423,26 @@ struct Decoder {
         }
         std::vector<std::string> order;
         for (const char *k : {"A", "B", "C", "D", "Main"}) if (rk.count(k)) order.push_back(k);
+        if (held && order.size() > 2) {   // racks A-D each serve their own sources: in series one's pan or filter would cut the others
+            std::map<std::string, double> lv;
+            for (auto *s : audible())
+                if (s->send > 0.01 && s->second.rfind("FX ", 0) == 0) lv[s->second.substr(3)] += std::pow(10.0, s->ampDb / 20) * s->weight * s->send;
+            std::string keep = order[0];
+            for (auto &k : order) if (k != "Main" && lv[k] > lv[keep]) keep = k;
+            std::vector<std::string> kept, all, left;
+            for (auto &k : order) {
+                if (k != "Main") all.push_back(k);
+                if (k == "Main" || k == keep) kept.push_back(k);
+                else left.push_back(k);
+            }
+            auto list = [](const std::vector<std::string> &v) {
+                std::string l;
+                for (size_t k = 0; k < v.size(); ++k) l += (k ? k + 1 == v.size() ? " and " : ", " : "") + v[k];
+                return l;
+            };
+            notes.push_back("effects racks " + list(all) + " each serve their own sources in Alchemy: rack " + keep + " (the most level) plays, " + list(left) + " left out");
+            order = kept;
+        }
         const double frac = fxFraction();
         if (!order.empty() && frac < 0.2) { notes.push_back("the effects racks get " + fmt("%.0f", 100 * frac) + "% of the signal (the rest is dry): left out"); return fx; }
         if (!order.empty() && frac < 0.8) notes.push_back("the effects racks get " + fmt("%.0f", 100 * frac) + "% of the signal: wet mixes scaled, inline effects kept");
@@ -1064,8 +1479,10 @@ struct Decoder {
         double level = 0, pw = kNone, cents = 0, decay = 0;
         int octave = 0, semi = 0;
         bool hasCents = false, sync = false, hasDecay = false;
+        json extra = json::object();   // an additive oscillator's partials and shift
         json j() const {
             json o = {{"wave", wave}, {"level", level}};
+            for (auto &[k, v] : extra.items()) o[k] = v;
             if (octave) o["octave"] = octave;
             if (semi) o["semi"] = semi;
             if (hasCents) o["cents"] = cents;
@@ -1081,6 +1498,116 @@ struct Decoder {
         const double c = (pitch - 12 * o.octave - o.semi) * 100;
         o.hasCents = std::fabs(c) > 0.5;
         o.cents = o.hasCents ? r(c, 10) : 0;
+    }
+
+    // a source's oscillators (VA and noise), or an additive element's
+    struct Group {
+        char letter;
+        std::vector<Osc> oscs;
+        int n = 1;
+        double det = 0;
+        bool wide = false, synced = false;
+        double base = 0;
+        const AdElement *el = nullptr;   // additive: its element, pitch, level, own decay, how it plays
+        double pitch = 0, gain = 0, decay = 0, spread = -1;
+        std::string how;
+    };
+
+    // An additive element as builtin:synth oscillators: the waves it amounts to where it amounts to some (a saw or
+    // square spectrum as that wave, a Pulse/Saw synced as a hard-synced saw, one basic wave, a detuned stack as
+    // unison, up to 12 sines or waves at their ratios), else one additive oscillator holding its partials (`one`: always).
+    void additiveOscs(Group &gp, bool one) const {
+        const AdElement &e = *gp.el;
+        gp.oscs.clear();
+        gp.n = 1, gp.det = 0, gp.spread = -1, gp.synced = false;
+        const bool exact = e.wave.partials.empty() && (e.wave.wave == "square" || std::fabs(e.sym - 0.5) < 1e-3);   // a basic wave plays the shape
+        auto wave = [&](const std::string &w, double ratio, double level) {
+            Osc o;
+            o.wave = w;
+            o.level = level;
+            splitPitch(o, gp.pitch + 12 * std::log2(ratio));
+            if (w == "square" && w == e.wave.wave) {
+                const double pw = (std::isnan(e.wave.pw) || e.wave.pw == 0 ? 0.5 : e.wave.pw) + (e.sym - 0.5);
+                if (std::fabs(pw - 0.5) > 0.005) o.pw = r(std::min(0.95, std::max(0.05, pw)));
+            }
+            return o;
+        };
+        auto additive = [&](const std::vector<std::array<double, 3>> &parts, double pitch) {
+            Osc o;
+            o.wave = "additive";
+            o.level = gp.gain;
+            splitPitch(o, pitch);
+            bool panned = false;
+            for (auto &p : parts) panned |= std::fabs(p[2]) > 0.01;
+            json list = json::array();
+            for (auto &p : parts)
+                if (p[1] > 1e-6) list.push_back(panned ? json{r(p[0], 10000), r(p[1], 100000), r(p[2])} : json{r(p[0], 10000), r(p[1], 100000)});
+            o.extra["partials"] = list;
+            if (e.shiftHz != 0) o.extra["shiftHz"] = r(e.shiftHz, 10);
+            return o;
+        };
+        double lo = 1e300, hi = 0, amax = 0, spread = 0;
+        for (auto &o : e.oscs) lo = std::min(lo, o[1]), hi = std::max(hi, o[1]), amax = std::max(amax, o[0]), spread = std::max(spread, std::fabs(o[2]));
+        bool panned = false;
+        for (auto &p : e.partials) panned |= std::fabs(p[2]) > 0.01;
+        const bool stack = e.oscs.size() > 1 && lo > 0 && hi / lo < std::pow(2.0, 1.0 / 12);
+        bool harmonic = true;   // every partial oscillator on a whole multiple of the note: one table holds them all
+        for (auto &o : e.oscs) harmonic &= std::fabs(o[1] - std::round(o[1])) < 1e-6;
+        std::vector<std::array<double, 3>> shape;   // one partial oscillator's own harmonics (its shape wave)
+        double ctop = 0;
+        for (auto &c : e.shape) ctop = std::max(ctop, std::abs(c));
+        for (size_t m = 0; m < e.shape.size(); ++m)
+            if (ctop > 0 && std::abs(e.shape[m]) / ctop >= 1e-3) shape.push_back({std::abs(e.shape[m]) / ctop, (double)(m + 1), 0.0});
+        bool saw = false, sq = false;   // N >= 48 sines at a saw's or a square's levels
+        if (e.simple && e.n >= 48) {
+            std::map<double, double> lv;
+            for (auto &o : e.oscs) lv[r(o[1], 1e6)] = o[0];
+            const double a1 = lv.count(1.0) ? lv[1.0] : 0;
+            saw = sq = a1 > 0;
+            for (int h = 1; h <= 48 && a1 > 0; ++h) {
+                const double v = (lv.count(h) ? lv[h] : 0.0) * h / a1;
+                saw &= std::fabs(v - 1) < 0.03;
+                sq &= std::fabs(v - h % 2) < 0.03;
+            }
+        }
+        const bool synced = e.simple && e.pulseSaw && e.sync > 0.002 && e.n >= 32 && !e.othersOn && std::min(std::fabs(e.ps), std::fabs(e.ps - 1)) < 0.02 &&
+                            std::fabs(e.oddEven - 0.5) < 0.02;
+        if (one || e.shiftHz != 0 || e.partials.empty()) {
+            if (!e.partials.empty()) gp.oscs.push_back(additive(e.partials, gp.pitch));
+            gp.how = std::to_string(e.partials.size()) + " sine partials as an additive oscillator" + (e.shiftHz != 0 ? ", shifted " + fmt("%+.1f", e.shiftHz) + " Hz" : "");
+        } else if (saw || sq) {
+            gp.oscs.push_back(wave(saw ? "saw" : "square", 1, gp.gain));
+            gp.how = fmt("%.0f", e.n) + " partials of a " + (saw ? "saw" : "square") + " spectrum: a band-limited " + (saw ? "saw" : "square");
+        } else if (synced) {   // a hard-synced wave Sync x 48 semitones above the master (a guess, as the VA sync)
+            Osc o = wave(e.ps > 0.5 ? "saw" : "square", std::pow(2.0, syncSemis(e.sync) / 12), gp.gain);
+            o.sync = true;
+            gp.oscs.push_back(o);
+            gp.synced = true, gp.base = gp.pitch;
+            gp.how = std::string("a Pulse/Saw spectrum with Sync: a hard-synced ") + o.wave + (std::fabs(e.tone - 0.5) > 0.02 ? " (its Tone tilt is not played)" : "");
+        } else if (e.oscs.size() == 1 && (exact || e.partials.size() > 12)) {
+            gp.oscs.push_back(exact ? wave(e.wave.wave, e.oscs[0][1], gp.gain) : additive(shape, gp.pitch + 12 * std::log2(e.oscs[0][1])));
+            gp.how = exact ? "one " + e.wave.wave + " oscillator" : "one additive oscillator playing its " + e.wave.wave + " shape";
+        } else if (stack) {   // detuned copies of the shape: unison around their middle, their levels evened
+            const double mid = std::sqrt(lo * hi);
+            gp.oscs.push_back(exact ? wave(e.wave.wave, mid, gp.gain) : additive(shape, gp.pitch + 12 * std::log2(mid)));
+            gp.n = std::min(16, (int)e.oscs.size());
+            gp.det = 1200 * std::log2(hi / lo);
+            gp.spread = r(spread, 100);
+            gp.how = "a stack of " + std::to_string(e.oscs.size()) + " detuned " + (exact ? e.wave.wave : "additive " + e.wave.wave) + " oscillators as unison (their levels evened)";
+        } else if (e.partials.size() <= 12) {
+            for (auto &p : e.partials) if (p[1] > 1e-6) gp.oscs.push_back(wave("sine", p[1], gp.gain * p[0]));
+            gp.how = std::to_string(gp.oscs.size()) + " sine partials as sine oscillators" + (panned ? " (their pan not played)" : "");
+        } else if (e.oscs.size() <= 12 && (exact || !harmonic)) {   // each oscillator as the wave, or (inharmonic) an additive one playing its shape
+            for (auto &o : e.oscs)
+                gp.oscs.push_back(exact ? wave(e.wave.wave, o[1], gp.gain * o[0] / amax) : additive(shape, gp.pitch + 12 * std::log2(o[1])));
+            if (!exact) for (size_t k = 0; k < e.oscs.size(); ++k) gp.oscs[k].level = gp.gain * e.oscs[k][0] / amax;
+            gp.how = std::to_string(e.oscs.size()) + (exact ? " " + e.wave.wave + " oscillators" : " additive oscillators playing its " + e.wave.wave + " shape") +
+                     " at their ratios" + (spread > 0.01 ? " (their pan not played)" : "");
+        } else {
+            gp.oscs.push_back(additive(e.partials, gp.pitch));
+            gp.how = std::to_string(e.partials.size()) + " sine partials as an additive oscillator";
+        }
+        for (auto &o : gp.oscs) if (gp.decay > 0 && o.level > 0) o.decay = r(gp.decay, 10000), o.hasDecay = true;
     }
 
     json toSynth(json &fxOut) {
@@ -1102,7 +1629,6 @@ struct Decoder {
                     }
             return 0.0;
         };
-        struct Group { char letter; std::vector<Osc> oscs; int n = 1; double det = 0; bool wide = false, synced = false; double base = 0; };
         std::vector<Group> groups;
         for (auto *s : srcs) {
             const double base = masterTune + s->tune + s->fine / 100, gain = std::pow(10.0, s->ampDb / 20) * s->weight;
@@ -1154,6 +1680,37 @@ struct Decoder {
             }
             if (std::fabs(s->pan) > 0.1) notes.push_back(L + ": pan " + fmt("%+.2f", s->pan) + " not played (no per-oscillator pan)");
             groups.push_back(gp);
+            if (s->additive) {
+                Group ag;
+                ag.letter = s->letter;
+                ag.el = &adds[(size_t)(s->letter - 'A')];
+                ag.pitch = base;
+                ag.gain = gain * s->adVol.v;
+                const double dad = ownDecay(s, "SAdVol");
+                ag.decay = dad > 0 && dall > 0 ? std::min(dad, dall) : std::max(dad, dall);
+                additiveOscs(ag, false);
+                groups.push_back(ag);
+            }
+        }
+        // more than 12 oscillators: the additive elements playing as several sines or waves become one additive oscillator
+        for (;;) {
+            size_t total = 0;
+            bool sync = false;
+            Group *big = nullptr;
+            for (auto &gp : groups) {
+                total += gp.oscs.size();
+                sync |= gp.synced;
+                if (gp.el && gp.oscs.size() > 1 && (!big || gp.oscs.size() > big->oscs.size())) big = &gp;
+            }
+            if (total + sync <= 12 || !big) break;
+            additiveOscs(*big, true);
+        }
+        for (auto &gp : groups) {
+            if (!gp.el) continue;
+            const std::string L(1, gp.letter);
+            notes.push_back(L + ": additive, " + gp.how);
+            for (auto &x : gp.el->notes) notes.push_back(L + ": " + x);
+            for (auto &x : gp.el->unexpressed) notes.push_back(L + ": " + x + " not played");
         }
         // hard sync: a silent master first, at the first synced source's pitch
         std::vector<Osc> oscs;
@@ -1196,8 +1753,9 @@ struct Decoder {
             const int vmax = *std::max_element(counts.begin(), counts.end());
             double det = -1e300;
             bool wide = false;
-            for (auto &gp : groups) { if (gp.n == vmax) det = std::max(det, gp.det); wide |= gp.wide; }
-            synth["unison"] = {{"voices", std::min(16, vmax)}, {"detune", r(std::min(100.0, det), 10)}, {"spread", wide ? 0.8 : 0.5}};
+            double stackSpread = -1;   // an additive stack's own spread (its pan profile)
+            for (auto &gp : groups) { if (gp.n == vmax) det = std::max(det, gp.det), stackSpread = std::max(stackSpread, gp.spread); wide |= gp.wide; }
+            synth["unison"] = {{"voices", std::min(16, vmax)}, {"detune", r(std::min(100.0, det), 10)}, {"spread", stackSpread >= 0 ? stackSpread : wide ? 0.8 : 0.5}};
             if (det > 100) notes.push_back("unison detune " + fmt("%.0f", det) + " cents capped at 100");
             if (distinct.size() > 1) notes.push_back("sources have different unison counts: all oscillators use " + std::to_string(vmax));
         }
@@ -1296,7 +1854,15 @@ struct Decoder {
         const double level = volumeDb - linDb(0.63) + pervolDb - linDb(0.794) + linDb(std::max(amp, 1e-3));
         synth["level"] = r(std::max(-40.0, std::min(12.0, level)), 100);
         fxOut = effects(rk, rest, special);
-        const auto un = unmapped(false);
+        bool additive = false;
+        for (auto &gp : groups) {   // an additive element's Comb, Filter or EQ unit, after the voices
+            if (!gp.el) continue;
+            additive = true;
+            if (gp.el->post.empty()) continue;
+            fxOut.insert(fxOut.begin(), gp.el->post.begin(), gp.el->post.end());
+            if (srcs.size() > 1) notes.push_back(std::string(1, gp.letter) + ": its additive Comb, Filter or EQ unit plays after the voices, on every source");
+        }
+        const auto un = unmapped(false, additive);
         if (!un.empty()) {
             std::string l;
             for (size_t k = 0; k < un.size() && k < 6; ++k) l += (k ? "; " : "") + un[k];
@@ -1358,7 +1924,16 @@ struct Decoder {
                 for (auto &[k, v] : reg) rg.op[k] = v;
                 out.sfz.regions.push_back(rg);
             };
-            if (s->sampler)
+            // granular: Speed 0.5 = 100% plays the zone, 0 freezes at Position (a short crossfaded loop there, about a
+            // grain: the guide's 2-230 ms, linear a guess), a slow scan plays the zone at its own rate
+            const bool frozen = s->granular && s->grSpeed.v < 0.005, scan = s->granular && !frozen && std::fabs(s->grSpeed.v - 0.5) >= 0.02;
+            const double grain = 0.002 + 0.228 * s->grSize.v;
+            if (s->granular) {
+                if (frozen) notes.push_back(L + ": granular, frozen at Position " + fmt("%.2f", s->position) + ": a " + fmt("%.0f", 1000 * grain) + " ms crossfaded loop there (the grain texture is lost)");
+                else if (scan) notes.push_back(L + ": granular, scanning at Speed " + fmt("%.2f", s->grSpeed.v) + " (a time-stretch in Alchemy): plays at the sample's own rate");
+                else notes.push_back(L + ": granular at Speed 100%: plays as the sample itself (the grain texture and Alchemy's time-kept transposition are lost)");
+            }
+            if (s->sampler || s->granular)
                 for (auto &z : s->zones) {
                     std::map<std::string, std::string> reg = {{"sample", z.found}, {"pitch_keycenter", std::to_string(z.key)}, {"lokey", std::to_string(z.lokey)},
                         {"hikey", std::to_string(z.hikey)}, {"lovel", std::to_string(z.lovel)}, {"hivel", std::to_string(z.hivel)},
@@ -1373,6 +1948,13 @@ struct Decoder {
                         if (z.loopMode == 3) notes.push_back(L + ": its forward-backward loop plays forward");
                     } else reg["loop_mode"] = "no_loop";
                     if (s->position > 0.001 && z.hasEnd && z.end != 0 && sr > 0) reg["offset"] = std::to_string((long long)(s->position * z.end * sr));
+                    if (frozen && sr > 0) {
+                        const double from = z.hasEnd && z.end > 0 ? s->position * z.end : 0;
+                        reg["loop_mode"] = "loop_continuous";
+                        reg["offset"] = reg["loop_start"] = std::to_string((long long)(from * sr));
+                        reg["loop_end"] = std::to_string((long long)((from + grain) * sr));
+                        reg["loop_crossfade"] = fmt("%.4f", grain / 4);
+                    }
                     if (s->reverse) reg["direction"] = "reverse";
                     region(reg);
                     ++out.total;
@@ -1423,12 +2005,13 @@ AlchemyPatch alchemyPatch(const std::string &text, const std::string &name) {
         out.why = D.refusal(samples, out.what);
         out.arp = D.arp(out.arpNotes);
         if (!out.why.empty()) return out;
+        D.held = out.what == "additive" || out.what == "granular";
         if (samples) {
             out.kind = AlchemyPatch::Sampler;
             D.toSampler(out);
         } else {
             out.kind = AlchemyPatch::Synth;
-            out.synth.engine = "virtual analog";
+            out.synth.engine = out.what == "additive" ? "additive" : "virtual analog";
             out.synth.synth = D.toSynth(out.synth.fx);
             out.synth.arp = out.arp;
         }

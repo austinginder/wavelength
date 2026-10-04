@@ -392,9 +392,23 @@ sys.exit(0 if not r["ok"] and "External" in r["error"] and not p["plays"] and "E
       exs_why="a Sculpture patch played by side-chain audio was not refused with the reason"
     fi
   fi
+  # an Alchemy patch on additive synthesis (Test Alchemy Additive: source A 25 partials at a saw's levels, untuned)
+  # plays on builtin:synth through one additive oscillator, C4 sounding C4
+  sed -e 's/"Retro"/"Additive"/' -e 's/Test Retro/Test Alchemy Additive/' out/check/exs/retro.json > out/check/exs/additive.json
+  if [ -z "$exs_why" ] && { ! "./$build/wavelength" render out/check/exs/additive.json --out out/check/exs/additive --json > /dev/null 2>&1 ||
+     ! "./$build/wavelength" analyze out/check/exs/additive/stems/01-additive.wav --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d["pitch"]["note"] == "C4" and not d["silent"] and d["lufs"] > -40 else 1)' ||
+     ! "./$build/wavelength" samples --patch "Test Alchemy Additive" --json 2>/dev/null | python3 -c '
+import json, sys
+o = json.load(sys.stdin)["patch"]["synth"]["patch"]["osc"]
+sys.exit(0 if len(o) == 1 and o[0]["wave"] == "additive" and len(o[0]["partials"]) == 25 else 1)'; }; then
+    exs_why="the Test Alchemy Additive patch did not play C4 through an additive oscillator"
+  fi
 fi
 unset WAVELENGTH_LOGIC_PATCHES
-if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created (Alchemy too, with its arpeggiator; Vintage Electric Piano, Vintage Clav and Sculpture), --patch"; fi
+if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created (Alchemy too, with its arpeggiator and on additive synthesis; Vintage Electric Piano, Vintage Clav and Sculpture), --patch"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir
