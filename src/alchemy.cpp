@@ -266,6 +266,9 @@ double cents(double v) { return (v - 0.5) * 200; }   // fine tune +-100 cents
 double linDb(double v) { return 20 * std::log10(std::max(v, 1e-5)); }   // volumes are linear gains (0.7943 = -2 dB)
 const double kCutOct = 128.0 / 12;   // key follow 100% + bend 3.2% (the factory convention) tracks 1:1 over 128 keys
 double cutoffHz(double v) { return 20000.0 * std::pow(2.0, -(1 - v) * kCutOct); }   // a guess: 1.0 = 20 kHz
+// a distortion amount (0..1) as saturate drive in dB: a guess kept mild until reference renders (3 + 24 x v made chords
+// harsh: a half-way knob drove every note of a chord into one another at 15 dB)
+double distortionDb(double v) { return 3 + 12 * std::min(1.0, std::max(0.0, v)); }
 double envTime(double v) { return 20.0 * std::pow(std::max(0.0, v), 4.0); }       // AHDSR stages 0..20 s (a guess: v^4)
 double lfoHz(double v) { return 220.0 * std::pow(std::max(0.0, v), 6.0); }        // free LFOs 0..220 Hz (a guess: v^6)
 double glideSec(double v) { return std::max(0.0, v); }                            // a guess: 0..1 s
@@ -1341,7 +1344,7 @@ struct Decoder {
         if (t == 4) {   // Distortion: tube / mech / exciter as saturation, crush as a bitcrusher
             json out = json::array();
             const double drv = std::max({g("DisTube"), g("DisMech"), g("DisXcita")});
-            if (drv > 0.005) out.push_back({{"type", "saturate"}, {"drive", r(3 + 24 * drv, 10)}, {"mix", 1.0}});
+            if (drv > 0.005) out.push_back({{"type", "saturate"}, {"drive", r(distortionDb(drv), 10)}, {"mix", 1.0}});
             if (g("DisCrush") > 0.005) out.push_back({{"type", "bitcrush"}, {"bits", r(std::max(2.0, 16 - 14 * g("DisCrush")), 10)}, {"mix", 1.0}});
             return out.empty() ? json(nullptr) : out;
         }
@@ -1352,7 +1355,7 @@ struct Decoder {
             if (kind == "lowpass" || kind == "highpass" || kind == "bandpass")
                 return {{"type", "filter"}, {"mode", kind}, {"cutoff", r(std::min(20000.0, std::max(20.0, cutoffHz(g("FilCut")))), 10)},
                         {"resonance", r(0.7071 + 8 * std::pow(g("FilRes"), 2.0))}, {"mix", r(mix)}};
-            if (kind == "drive" && g("FilRes") > 0.01) return {{"type", "saturate"}, {"drive", r(6 + 18 * g("FilCut"), 10)}, {"mix", r(std::min(1.0, mix * g("FilRes")))}};
+            if (kind == "drive" && g("FilRes") > 0.01) return {{"type", "saturate"}, {"drive", r(distortionDb(g("FilCut")), 10)}, {"mix", r(std::min(1.0, mix * g("FilRes")))}};
             notes.push_back("MM Filter type #" + std::to_string((int)g("FilType")) + " (tuned family) not played");
             return nullptr;
         }
@@ -1406,6 +1409,25 @@ struct Decoder {
         return nullptr;
     }
 
+    // the drive in dB of the distortion-type filters (their cutoff knob as the amount, their Res as the mix),
+    // each weighted by the share of the level its source carries (a main filter's by all of it)
+    double voiceDriveDb(const std::vector<const Filt *> &special) const {
+        double tot = 0, acc = 0;
+        for (auto *s : audible()) tot += std::pow(10.0, s->ampDb / 20) * s->weight;
+        if (tot <= 0) return 0;
+        for (auto *f : special) {
+            if (f->kind != "drive" || f->res <= 0.01) continue;
+            double w = tot;
+            if (f->where.size() > 2 && f->where[1] == ' ') {   // "A filter 2": source A's
+                w = 0;
+                for (auto *s : audible()) if (s->letter == f->where[0]) w = std::pow(10.0, s->ampDb / 20) * s->weight;
+            }
+            acc += w * distortionDb(f->cutoff) * std::min(1.0, f->res);
+        }
+        return acc / tot;
+    }
+    bool voiceDrive = false;   // building for builtin:synth: distortion-type filters go to its filter's drive
+
     // the effects racks the signal reaches (A-D, then Main), after the filters builtin:synth can't hold per voice
     json effects(const std::set<std::string> &rk, const std::vector<const Filt *> &rest, const std::vector<const Filt *> &special) {
         json fx = json::array();
@@ -1414,12 +1436,15 @@ struct Decoder {
                           {"resonance", r(0.7071 + 8 * std::pow(f->res, 2.0))}});
             notes.push_back(f->where + ": played after the voices as a static filter");
         }
-        for (auto *f : special) {
-            if (f->kind == "drive" && f->res > 0.01) {
-                fx.push_back({{"type", "saturate"}, {"drive", r(6 + 18 * f->cutoff, 10)}, {"mix", r(std::min(1.0, f->res))}});
-                notes.push_back(f->where + ": distortion-type filter #" + std::to_string(f->code) + " as saturate (a guess)");
-            } else if (f->kind == "tuned") notes.push_back(f->where + ": tuned filter #" + std::to_string(f->code) + " (comb, ring, FM or formant family) not played");
+        // distortion-type filters work inside each voice in Alchemy: builtin:synth plays them as its filter's drive (set
+        // with the filter); the sampler has no drive per voice, so one saturate after it, as hard as their level-weighted mix
+        const double dDb = voiceDriveDb(special);
+        if (!voiceDrive && dDb > 0.05) {
+            fx.push_back({{"type", "saturate"}, {"drive", r(dDb, 10)}, {"mix", 1.0}});
+            notes.push_back("distortion-type filters as one saturate after the instrument (a guess; Alchemy distorts each voice)");
         }
+        for (auto *f : special)
+            if (f->kind == "tuned") notes.push_back(f->where + ": tuned filter #" + std::to_string(f->code) + " (comb, ring, FM or formant family) not played");
         std::vector<std::string> order;
         for (const char *k : {"A", "B", "C", "D", "Main"}) if (rk.count(k)) order.push_back(k);
         if (held && order.size() > 2) {   // racks A-D each serve their own sources: in series one's pan or filter would cut the others
@@ -1662,12 +1687,12 @@ struct Decoder {
                 Osc o;
                 o.wave = "noise";
                 o.level = gain * std::pow(10.0, s->noiseVolDb / 20);
+                if (s->lowcut > 0.01) o.extra["lowcut"] = r(cutoffHz(s->lowcut), 1);     // its band, at middle C
+                if (s->highcut < 0.99) o.extra["highcut"] = r(cutoffHz(s->highcut), 1);
                 gp.oscs.push_back(o);
                 std::string lowered = s->noiseShape;
                 for (auto &c : lowered) c = (char)std::tolower((unsigned char)c);
                 if (lowered != "white") notes.push_back(L + ": " + s->noiseShape + " noise plays as white noise");
-                if (s->lowcut > 0.01 || s->highcut < 0.99)
-                    notes.push_back(L + ": the noise band " + fmt("%.0f", cutoffHz(s->lowcut)) + "-" + fmt("%.0f", cutoffHz(s->highcut)) + " Hz is not applied");
             }
             const double dva = ownDecay(s, "SVAVol"), dnz = ownDecay(s, "SNsVol"), dall = ownDecay(s, "SAmp");
             for (auto &o : gp.oscs) {
@@ -1794,6 +1819,11 @@ struct Decoder {
             synth["filter"] = fl;
             notes.push_back("filter: " + prim->where + " type #" + std::to_string(prim->code) + " as " + prim->kind + " " + std::to_string(prim->slope) + " dB (type order inferred)");
         } else synth["filter"] = {{"type", "off"}};
+        if (const double dDb = voiceDriveDb(special); dDb > 0.05) {   // distortion-type filters: the voice's drive (gain 1 + 7 x drive)
+            const double d = std::min(1.0, (std::pow(10.0, dDb / 20) - 1) / 7);
+            synth["filter"]["drive"] = r(std::max(synth["filter"].value("drive", 0.0), d));
+            notes.push_back("distortion-type filters as the voice's drive (a guess)");
+        }
         // the amplitude envelope and its velocity
         std::string which;
         const Adsr env = ampEnvelope(which);
@@ -1852,7 +1882,9 @@ struct Decoder {
         }
         const double level = volumeDb - linDb(0.63) + pervolDb - linDb(0.794) + linDb(std::max(amp, 1e-3));
         synth["level"] = r(std::max(-40.0, std::min(12.0, level)), 100);
+        voiceDrive = true;
         fxOut = effects(rk, rest, special);
+        voiceDrive = false;
         bool additive = false;
         for (auto &gp : groups) {   // an additive element's Comb, Filter or EQ unit, after the voices
             if (!gp.el) continue;

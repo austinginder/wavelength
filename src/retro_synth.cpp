@@ -154,6 +154,28 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params) {
     return out;
 }
 
+namespace {
+// A low- or band-pass that reads as closed at middle C even with its envelope fully open, in front of nearly all the
+// level: what opens it in GarageBand (an unmapped control or modulation, a filter type only inferred) isn't re-created,
+// and the patch would play choked (A Simpler Time read as a 20 Hz band-pass that its effects then drove into fuzz).
+// Its cutoff in Hz, else 0.
+double closedFilterHz(const nlohmann::json &s) {
+    if (!s.contains("filter") || !s["filter"].is_object()) return 0;
+    const auto &f = s["filter"];
+    const std::string type = f.value("type", "lowpass");
+    if (type != "lowpass" && type != "bandpass") return 0;
+    const double cut = f.value("cutoff", 20000.0), env = std::max(0.0, f.value("env", 0.0));
+    if (cut * std::pow(2.0, env) >= 80) return 0;
+    double in = 0, all = 0;   // the oscillators' level through the filter, and in all
+    for (auto &o : s.value("osc", nlohmann::json::array())) {
+        const double l = o.value("level", 1.0);
+        all += l;
+        if (o.value("filter", true)) in += l;
+    }
+    return all > 0 && all - in < 0.2 * all ? cut : 0;   // unless a fifth of the level skips it (80s Sine Synth: its sine)
+}
+} // namespace
+
 bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::string *why) {
     const LogicPatch *p = logicPatchNamed(name);
     if (!p || p->sampler) return false;
@@ -181,6 +203,11 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::st
             out = sculpturePatch(c.settings.params, refused);
             if (!refused.empty()) { if (why) *why = refused; return false; }
         } else continue;
+        if (const double hz = closedFilterHz(out.synth); hz > 0) {
+            if (why) *why = "its filter reads as closed (a " + std::to_string((int)std::lround(hz)) + " Hz " + out.synth["filter"].value("type", std::string("lowpass")) +
+                            " at middle C, its envelope open) with the controls at rest: what opens it in GarageBand isn't re-created";
+            return false;
+        }
         out.name = p->name;
         std::vector<std::string> fxNotes;
         for (auto &f : patchChainEffects(chans, fxNotes)) out.fx.push_back(f);

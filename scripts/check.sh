@@ -632,6 +632,20 @@ sys.exit(0 if ok else 1)'; }; then arp_why="the Test Arp patch or preset played 
 if [ -n "$arp_why" ]; then echo "FAIL arp: $arp_why"; fail=1
 else echo "ok   arp: up-and-down over two octaves on the grid; a patch's Arpeggiator grid, swing and chord step, its preset"; fi
 
+# synth noise band: a noise oscillator with lowcut 2000 and highcut 4000 Hz centres between them; open noise sits far higher
+mkdir -p out/check/noiseband
+cat > out/check/noiseband/job.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "tail": 0, "stems": "24",
+ "tracks": [{"name": "Band", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "noise", "lowcut": 2000, "highcut": 4000}], "filter": {"type": "off"}}, "notes": [{"beat": 0, "dur": 2, "key": 60}]},
+            {"name": "Open", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "noise"}], "filter": {"type": "off"}}, "notes": [{"beat": 0, "dur": 2, "key": 60}]}]}
+JOB
+if "./$build/wavelength" render out/check/noiseband/job.json --out out/check/noiseband/out > /dev/null 2>&1 &&
+   b=$("./$build/wavelength" analyze out/check/noiseband/out/stems/01-band.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["spectrum"]["centroidHz"])') &&
+   o=$("./$build/wavelength" analyze out/check/noiseband/out/stems/02-open.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["spectrum"]["centroidHz"])') &&
+   python3 -c "import sys; sys.exit(0 if 2000 < $b < 4500 and $o > 6000 else 1)"; then
+  echo "ok   noise band: a band-limited noise oscillator centres in its band"
+else echo "FAIL noise band: the noise oscillator's band didn't shape it (centroid ${b:-?} Hz, open ${o:-?} Hz)"; fail=1; fi
+
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)
 if ! "./$build/wavelength" render examples/synth-tour.json --out "out/check/picture/$build" --stems none --png --json 2>/dev/null | python3 -c '

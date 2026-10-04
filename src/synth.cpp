@@ -227,6 +227,7 @@ struct Osc {
     bool filtered = true;   // false: joins after the filter (Retro Synth's sine level)
     bool sync = false;      // hard sync: restarts whenever the first oscillator starts a cycle
     std::shared_ptr<const AdditiveSet> add;   // Additive: its partials
+    double lowcut = 0, highcut = 0;           // Noise: its band in Hz (0 = open), 12 dB/oct each
 };
 
 struct SynthLfo {
@@ -412,7 +413,8 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         else if (wave == "noise") x.wave = Osc::Noise;
         else if (wave == "additive") x.wave = Osc::Additive;
         else throw std::runtime_error("synth: " + w + "wave '" + wave + "' must be saw, square (or pulse), triangle, sine, noise or additive");
-        checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync", "partials", "harmonics", "partialWave", "shiftHz"}, w, warnings);
+        checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync", "partials", "harmonics", "partialWave", "shiftHz",
+                      "lowcut", "highcut"}, w, warnings);
         for (const char *k : {"partials", "harmonics", "partialWave", "shiftHz"})
             if (x.wave != Osc::Additive && o.contains(k)) warnings.push_back("synth: " + w + k + " only applies to \"wave\": \"additive\"; ignored");
         x.level = std::max(0.0, num(o, "level", 1, w));
@@ -421,6 +423,13 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         x.decay = std::max(0.0, num(o, "decay", 0, w));
         x.filtered = o.value("filter", true);
         x.sync = o.value("sync", false);
+        if (o.contains("lowcut") || o.contains("highcut")) {
+            if (x.wave != Osc::Noise) warnings.push_back("synth: " + w + "lowcut and highcut only apply to \"wave\": \"noise\"; ignored");
+            else {
+                x.lowcut = std::clamp(num(o, "lowcut", 0, w), 0.0, 20000.0);
+                x.highcut = std::clamp(num(o, "highcut", 0, w), 0.0, 20000.0);
+            }
+        }
         if (x.sync && i == 0) { warnings.push_back("synth: osc[0].sync: the first oscillator is the one others sync to; ignored"); x.sync = false; }
         if (x.wave == Osc::Additive) {
             x.add = parseAdditive(o, w, job.sampleRate, x.pw, warnings);
@@ -585,6 +594,7 @@ struct Unit {                       // one oscillator copy (an osc x a unison vo
     size_t sines = 0;    // an additive sine bank: where its partials' phasors start in the voice's list,
     size_t sinesOn = 0;  // how many of them sound (the rest are above 0.45 x the sample rate)
     double sinesInc = -1;   // and the pitch they were set for
+    dsp::Biquad noiseHp, noiseLp;   // a noise oscillator's band
 };
 
 struct Phasor { double c, s, rc, rs, g; };   // a sine partial: cos and sin of its phase, its step, its level now
@@ -631,6 +641,8 @@ struct Voice {
                 x.pan = pan;
                 x.phase = U > 1 ? (hash32(seed * 131 + (uint32_t)(o * 17 + (size_t)u)) & 0xffffff) / 16777216.0 : 0.0;
                 x.fmPhase = 0;
+                if (P->osc[o].lowcut > 0) x.noiseHp.set(dsp::Biquad::HighPass, P->osc[o].lowcut, 0.7071, 0, sr);
+                if (P->osc[o].highcut > 0) x.noiseLp.set(dsp::Biquad::LowPass, P->osc[o].highcut, 0.7071, 0, sr);
                 const AdditiveSet *a = P->osc[o].add.get();
                 if (a && !a->tables) {   // a sine bank: each partial starts where the unit's phase puts it
                     x.sines = sines.size();
@@ -1036,7 +1048,12 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                         sumR += sr2 * g * uR[idx];
                         continue;
                     }
-                    const double s = osc.wave == Osc::Noise ? v.noise.next() : oscSample(osc, x, pw, fmAmt);
+                    double s;
+                    if (osc.wave == Osc::Noise) {
+                        s = v.noise.next();
+                        if (osc.lowcut > 0) s = x.noiseHp.process(s);
+                        if (osc.highcut > 0) s = x.noiseLp.process(s);
+                    } else s = oscSample(osc, x, pw, fmAmt);
                     x.phase += x.inc;
                     if (osc.sync) {   // restart with the first oscillator's cycle (its unit of the same unison voice)
                         const Unit &m = v.units[(size_t)u];
