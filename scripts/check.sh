@@ -288,7 +288,7 @@ unset WAVELENGTH_APPLE_LOOPS
 if [ -n "$loops_why" ]; then echo "FAIL apple loops: $loops_why"; fail=1; else echo "ok   apple loops: tempo, key, repeat, notes (Drummer slices from 0), import, AAC"; fi
 # Logic and GarageBand instruments: a generated EXS instrument (scripts/make-test-exs.py) plays A4 from its one zone
 # with its own envelope (release 64 = 0.65 s past a 1 s note) unless the track sets "release"; a GarageBand patch whose
-# Sampler slot stores that instrument plays it the same; a patch on Alchemy is refused, naming it
+# Sampler slot stores that instrument plays it the same; a patch on Alchemy that stores no preset text is refused, naming it
 rm -rf out/check/exs && mkdir -p out/check/exs
 python3 scripts/make-test-exs.py out/check/exs
 cat > out/check/exs/job.json <<'JOB'
@@ -350,9 +350,23 @@ JOB
      [ "$("./$build/wavelength" analyze out/check/exs/organ/stems/01-organ.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C4" ]; }; then
     exs_why="the Vintage B3 patch did not play C4 on builtin:synth"
   fi
+  # an Alchemy patch with its preset text (Test Alchemy: source A a saw tuned +12, an AHDSR on the amp, a low-pass) plays
+  # on builtin:synth, C4 sounding C5; with Alchemy's arpeggiator on (Test Alchemy Arp) the notes play through it
+  sed -e 's/"Retro"/"Alchemy"/' -e 's/Test Retro/Test Alchemy/' out/check/exs/retro.json > out/check/exs/alchemy.json
+  if [ -z "$exs_why" ] && { ! "./$build/wavelength" render out/check/exs/alchemy.json --out out/check/exs/alchemy --json > /dev/null 2>&1 ||
+     [ "$("./$build/wavelength" analyze out/check/exs/alchemy/stems/01-alchemy.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C5" ]; }; then
+    exs_why="the Alchemy patch did not play C5 on builtin:synth"
+  fi
+  sed -e 's/Test Alchemy/Test Alchemy Arp/' out/check/exs/alchemy.json > out/check/exs/alchemy-arp.json
+  if [ -z "$exs_why" ] && ! "./$build/wavelength" render out/check/exs/alchemy-arp.json --out out/check/exs/alchemy-arp --json 2>/dev/null | python3 -c '
+import json, sys
+t = json.load(sys.stdin)["tracks"][0]
+sys.exit(0 if any("through its Arpeggiator (1/16 up over 2 octaves)" in w for w in t["warnings"]) else 1)'; then
+    exs_why="Alchemy's arpeggiator did not play the Test Alchemy Arp patch's notes"
+  fi
 fi
 unset WAVELENGTH_LOGIC_PATCHES
-if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created, --patch"; fi
+if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created (Alchemy too, with its arpeggiator), --patch"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir

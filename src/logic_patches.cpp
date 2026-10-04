@@ -1,5 +1,6 @@
 #include "logic_patches.hpp"
 
+#include "alchemy.hpp"
 #include "bplist.hpp"
 #include "platform.hpp"
 
@@ -96,6 +97,19 @@ const Record *instrumentOf(const std::vector<Record> &recs) {
     for (auto &r : recs)
         if (isSamplerInstrument(r.name) || synthNames().count(r.name)) return &r;
     return nullptr;
+}
+
+// Alchemy keeps its settings as text: from "<alchemypreset>" (after a header and sometimes a binary block, past the
+// plug-in data's start at payload +140) to the last line end before the first byte that isn't text
+std::string alchemyText(const std::vector<uint8_t> &d, size_t a, size_t b) {
+    static const char tag[] = "<alchemypreset>";
+    if (b <= a + 140) return "";
+    const auto it = std::search(d.begin() + (long)(a + 140), d.begin() + (long)b, tag, tag + 15);
+    const size_t s = (size_t)(it - d.begin());
+    size_t e = s;
+    while (e < b && (d[e] == '\t' || d[e] == '\r' || d[e] == '\n' || (d[e] >= 32 && d[e] < 127))) ++e;
+    if (e < b) while (e > s && d[e - 1] != '\n') --e;
+    return std::string(d.begin() + (long)s, d.begin() + (long)e);
 }
 
 std::vector<std::string> channelFiles(const std::string &patchDir) {
@@ -484,6 +498,7 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         c.file = f;
         const Record *r = instrumentOf(recs);
         if (r) { c.instrument = r->name; c.preset = r->preset; c.settings = settingsOf(d, r->at, std::min(d.size(), r->at + r->size), r->name); }
+        if (r && r->name == "Alchemy") c.alchemy = alchemyText(d, r->at, std::min(d.size(), r->at + r->size));
         // the audio effects in their insert order (records aren't stored in it); MIDI effects are named, not played
         std::vector<const Record *> fx;
         for (auto &x : recs) {
@@ -650,6 +665,14 @@ bool appleArpeggiator(const std::string &name, bool preset, json &arp, std::vect
                 arp = arpeggiatorSettings(m, notes);
                 if (!arp.is_null()) return true;
             }
+    for (auto &c : chans)   // else Alchemy's own arpeggiator, when it's on
+        if (c.instrument == "Alchemy" && !c.alchemy.empty()) {
+            AlchemyPatch a = alchemyPatch(c.alchemy, shown);
+            if (a.arp.is_null()) continue;
+            arp = a.arp;
+            notes.insert(notes.end(), a.arpNotes.begin(), a.arpNotes.end());
+            return true;
+        }
     err = "the patch '" + shown + "' has no Arpeggiator switched on";
     return false;
 }

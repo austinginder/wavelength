@@ -5,7 +5,10 @@
                                     instrument parameters: volume -6 dB, release 64 (0.65 s), sustain 127
   <dir>/patches/Test Patch.patch/   a channel strip (#Root.cst) whose Sampler slot stores that instrument, then a
                                     Channel EQ (low cut 200 Hz 12 dB/oct, master -3 dB)
-  <dir>/patches/Test Synth.patch/   a channel strip on Alchemy (an instrument only GarageBand plays)
+  <dir>/patches/Test Synth.patch/   a channel strip on Alchemy that stores no preset text (only GarageBand can play it)
+  <dir>/patches/Test Alchemy.patch/ a channel strip on Alchemy with a small preset written here: source A a saw tuned
+                                    +12 semitones, an AHDSR on the amp, main filter 1 a low-pass
+  <dir>/patches/Test Alchemy Arp.patch/  the same with Alchemy's arpeggiator on: 1/16 up over 2 octaves, note length 0.5
   <dir>/patches/Test Beat GB.patch/ a channel strip on Ultrabeat with the settings "Machine Kit.pst" (its kit folder
                                     comes from make-test-sample-folders.py)
   <dir>/patches/Test Retro.patch/   a channel strip on Retro Synth: Analog mode, one saw, filter off, transposed +12
@@ -20,6 +23,8 @@ import math, os, plistlib, struct, sys
 out = sys.argv[1]
 os.makedirs(os.path.join(out, 'patches', 'Test Patch.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Synth.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Alchemy.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Alchemy Arp.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Retro.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Organ.patch'), exist_ok=True)
@@ -91,6 +96,36 @@ strip(os.path.join(out, 'patches', 'Test Patch.patch', '#Root.cst'),
       [record(0, '', b'\0\0\0\0', bytes(8)), record(3, 'Sampler', b'MELC', bytes(120) + exs), record(4, 'Channel EQ', b'GAME', settings(236, ceq))])
 strip(os.path.join(out, 'patches', 'Test Synth.patch', '#Root.cst'), [record(3, 'Alchemy', b'GAME', bytes(200))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
+
+def alchemy_text(arp):
+    # Alchemy's preset text: "<section>" lines and "Key = value" lines, CRLF. A modulatable value is "v smooth n" and n
+    # slots follow (Type, Id, ModMap, Depth; Type 2 = an AHDSR, Depth 1.0 = +100%). Values are 0..1: coarse tune
+    # 0.5 + st / 96, cutoff 1.0 = 20 kHz over 128/12 octaves, AHDSR times 20 s x v^4, volumes linear.
+    v = lambda x: '%.4f 0.0000 0' % x
+    lines = ['<alchemypreset>', 'Version = 166', 'Name = Test Alchemy', '', '<perform>', 'PerVol = 0.7940', '',
+             '<filters>', 'F1On = 1', 'F1Type = 0', 'F1Cut = ' + v(0.8), 'F1Res = ' + v(0.1), 'F1Drive = ' + v(0), 'F1FxMix = ' + v(0),
+             'F1EfxRot = 0', 'F2On = 0', 'F2FxMix = ' + v(0), 'FSerMix = ' + v(0), '',
+             '<master>', 'Volume = ' + v(0.63), 'Amp = 1.0000 0.0000 1', '  Type = 2', '  Id = 0', '  ModMap = 0', '  Depth = 1.0000 0.0000 0',
+             'TuneCrs = ' + v(0.5), 'TuneFine = ' + v(0.5), 'NmVoices = 8', 'PlayMode = 0', 'Porto = ' + v(0), '']
+    if arp:   # five blocks (all sources, then A-D): Mode 1/7 = up, Rate 0.6837 synced = 1/16, Octaves 1/3 = two, Sustain 0.5
+        lines += ['<arp>']
+        for b in range(5):
+            lines += ['ArpRate = 0.6837', 'ArpSustn = ' + v(0.5), 'ArpMode = ' + (v(1 / 7) if b == 0 else v(0)), 'ArpOct = ' + v(1 / 3), 'ArpSync = 1']
+        lines += ['']
+    lines += ['<morph>', 'MorAll = 2', 'MorAllX = ' + v(0), 'MorAllY = ' + v(1), '']
+    for k, letter in enumerate('ABCD'):   # source A plays a saw a octave up; B-D are off
+        lines += ['<source>', 'SOn = %d' % (k == 0), 'SAmp = ' + v(1), 'STunCrs = ' + v(0.5 + 12 / 96), 'STunFin = ' + v(0.5),
+                  'SPan = ' + v(0.5), 'SKeyTrk = 2', 'SStereo = 0', 'SVAOn = 1', 'SVAShpe = Alchemy/Libraries/WaveOsc/Basic/Saw.raw',
+                  'SVAVol = ' + v(1), 'SVASym = ' + v(0.5), 'SVASync = ' + v(0), 'SVANOsc = ' + v(0), 'SVAUnis = ' + v(0), 'SVAPhas = ' + v(0),
+                  'SNsOn = 0', 'SAdOn = 0', 'SSpOn = 0', 'SGrOn = 0', 'SFile = ', 'SF1On = 0', 'SF2On = 0', 'SF3On = 0', 'SFiPar = 0',
+                  'SFilMix = ' + v(0), '']
+    lines += ['<ahdsr>', 'AhdAttck = ' + v(0.2), 'AhdHold = ' + v(0), 'AhdDecay = ' + v(0.3), 'AhdSustn = ' + v(0.8), 'AhdRelse = ' + v(0.3), '',
+              '<extensions>', 'A-VAWideUnison = 0', '']
+    # the plug-in data: a header (u32 313 here), then the text and a byte that isn't text
+    return struct.pack('<I', 313) + bytes(30) + '\r\n'.join(lines).encode() + b'\r\n\0\0\0\0'
+
+for name, arp in (('Test Alchemy', False), ('Test Alchemy Arp', True)):
+    strip(os.path.join(out, 'patches', name + '.patch', '#Root.cst'), [record(3, 'Alchemy', b'GAME', alchemy_text(arp), name + '.acp')])
 # Retro Synth (plug-in id 279): parameter #n; unused ones hold 1e30
 retro = [1e30] * 902
 for n, v in {1: 8, 2: 0, 3: 12, 4: 0, 5: -6, 201: 0, 209: 0, 301: 1, 303: 1, 401: 0, 802: 1, 803: 100, 804: 1, 805: 100, 806: 0}.items():

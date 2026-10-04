@@ -40,6 +40,7 @@ struct PatchChannel {
     std::vector<std::string> midiEffects;   // its MIDI effects (Arpeggiator, Chord Trigger, ...) by name
     std::vector<PatchPlugin> midiChain;     // and with their settings, in slot order (the Arpeggiator plays as the track's "arp")
     PatchPlugin settings;               // the instrument's own settings (Retro Synth's parameters)
+    std::string alchemy;                // Alchemy's settings: its preset text from "<alchemypreset>" ("" = none stored)
 };
 
 // A send from a patch's channel to a GarageBand aux (data.plist): "Large Hall/6.6s Botta Church", its level
@@ -89,8 +90,9 @@ const std::vector<std::pair<std::string, std::string>> &arpeggiatorPresets();
 // as a track "arp" object (arp.hpp); null when it's switched off. `notes` names what is left out (latch, keyboard
 // split, scale snapping, (de-)crescendo).
 nlohmann::json arpeggiatorSettings(const PatchPlugin &p, std::vector<std::string> &notes);
-// The "arp" of a patch's Arpeggiator (`preset` false: the first one switched on in its channels) or of an
-// Arpeggiator preset (`preset` true), by name (any case). False with err when there is none.
+// The "arp" of a patch's Arpeggiator (`preset` false: the first one switched on in its channels, else its Alchemy
+// arpeggiator when that's on) or of an Arpeggiator preset (`preset` true), by name (any case). False with err when
+// there is none.
 bool appleArpeggiator(const std::string &name, bool preset, nlohmann::json &arp, std::vector<std::string> &notes, std::string &err);
 
 } // namespace wl

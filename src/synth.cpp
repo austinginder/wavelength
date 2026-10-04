@@ -604,15 +604,19 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
         std::string found;
         for (auto &[n, p] : bank.items()) if (n == preset) found = n;
         GarageBandSynth gb;
-        if (found.empty() && garageBandSynthPatch(preset, gb)) {   // a GarageBand Retro Synth patch, re-created here
+        std::string refused;   // a GarageBand patch on an instrument re-created here that can't play on it, and why
+        if (found.empty() && garageBandSynthPatch(preset, gb, &refused)) {   // a GarageBand synth patch, re-created here
             found = "Init";
             patchTranspose = gb.transpose;
             patchFx = gb.fx;
             if (!tLevelProbe) levelFix = garageBandLevelFix(gb.name);
             char fixText[96] = "";
             if (levelFix != 0) std::snprintf(fixText, sizeof fixText, "; its level moved %+.1f dB toward its peers' (scales not yet calibrated)", levelFix);
-            warnings.push_back("preset '" + gb.name + "' is GarageBand's " + gb.instrument + " patch" + (gb.engine.empty() ? "" : " (" + gb.engine + " mode)") +
-                               ", re-created on builtin:synth: an approximation" + fixText);
+            warnings.push_back("preset '" + gb.name + "' is GarageBand's " + garageBandSynthKind(gb) + " patch, re-created on builtin:synth: an approximation" + fixText);
+        }
+        if (found.empty() && !refused.empty()) {
+            err = "track '" + track.name + "': GarageBand's patch '" + preset + "' doesn't play on builtin:synth: " + refused;
+            return false;
         }
         if (found.empty()) {
             std::string lower = preset;

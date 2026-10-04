@@ -1,5 +1,6 @@
 #include "sampler.hpp"
 
+#include "alchemy.hpp"
 #include "analyze.hpp"
 #include "apple_loops.hpp"
 #include "logic_patches.hpp"
@@ -1210,10 +1211,20 @@ const std::vector<SampleLibraryEntry> &patchLibrary() {
         std::set<std::string> seen;
         // GarageBand's and Logic's patches that play on Logic's samplers, when some of their samples are installed
         for (auto &pt : logicPatches()) {
-            if ((!pt.sampler && pt.instrument != "Ultrabeat") || !seen.insert(lower(pt.name)).second) continue;
+            if ((!pt.sampler && pt.instrument != "Ultrabeat" && pt.instrument != "Alchemy") || !seen.insert(lower(pt.name)).second) continue;
             std::vector<PatchChannel> chans;
             std::string e;
             if (!readPatchChannels(pt.path, chans, e)) continue;
+            if (pt.instrument == "Alchemy") {   // Alchemy patches that play their installed samples
+                for (auto &c : chans)
+                    if (c.instrument == "Alchemy") {
+                        if (!alchemyMayPlaySamples(c.alchemy)) break;
+                        const AlchemyPatch a = alchemyPatch(c.alchemy, pt.name);
+                        if (a.kind == AlchemyPatch::Sampler && a.samples) lib.push_back({"patch", pt.name, pt.path, pt.category, a.samples});
+                        break;
+                    }
+                continue;
+            }
             if (!pt.sampler) {   // Ultrabeat: its kit's samples
                 const std::string kit = ultrabeatKit(pt.path, chans);
                 for (auto &k : sampleLibrary())
@@ -1316,9 +1327,19 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     json out = {{"name", fs::path(dir).stem().string()}, {"path", dir}, {"channels", json::array()}, {"sends", json::array()}};
     size_t installed = 0;
     bool synth = false;
+    std::unique_ptr<AlchemyPatch> alchemy;   // its Alchemy channel's translation
     for (auto &c : chans) {
         json j = {{"file", fs::path(c.file).filename().string()}, {"instrument", c.instrument}, {"preset", c.preset}, {"effects", c.effects}, {"plays", c.sampler}};
-        if (c.sampler) {
+        if (c.instrument == "Alchemy" && !alchemy) {
+            alchemy = std::make_unique<AlchemyPatch>(alchemyPatch(c.alchemy, fs::path(dir).stem().string()));
+            j["alchemy"] = alchemy->what;
+            if (alchemy->kind == AlchemyPatch::Sampler) {
+                j["plays"] = true;
+                j["source"] = "Alchemy's samples, as SFZ regions";
+                j["samples"] = {{"installed", alchemy->samples}, {"total", alchemy->total}};
+                installed += alchemy->samples;
+            } else synth = true;
+        } else if (c.sampler) {
             size_t i = 0, t = 0;
             if (c.exsAt) { exs::sampleCount(c.data, c.exsAt, fs::path(dir), i, t); j["source"] = "stored in the patch"; }
             else if (!c.exs.empty()) {
@@ -1336,7 +1357,8 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     const std::string kit = installed ? "" : ultrabeatKit(dir, chans);
     if (!kit.empty()) out["kit"] = kit;
     GarageBandSynth gs;
-    const bool resynth = !installed && kit.empty() && garageBandSynthPatch(fs::path(dir).stem().string(), gs);
+    std::string why;
+    const bool resynth = !installed && kit.empty() && garageBandSynthPatch(fs::path(dir).stem().string(), gs, &why);
     if (resynth) {
         out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes},
                         {"patch", gs.synth}, {"transpose", gs.transpose}};
@@ -1344,8 +1366,17 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     }
     out["plays"] = installed > 0 || !kit.empty() || resynth;
     if (!out["plays"].get<bool>())
-        out["why"] = synth && !installed ? "its instrument runs only inside GarageBand and Logic" : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
+        out["why"] = synth && !installed ? (!why.empty() ? why : "its instrument runs only inside GarageBand and Logic")
+                                         : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
     std::vector<std::string> notes;
+    if (alchemy && alchemy->kind == AlchemyPatch::Sampler) {   // the sampler settings and effects its translation gives
+        json cfg = alchemy->sampler;
+        if (alchemy->gain != 0) cfg["gain"] = alchemy->gain;
+        out["sampler"] = cfg;
+        out["notes"] = alchemy->synth.notes;
+        out["effects"] = alchemy->synth.fx;
+        for (auto &f : patchChainEffects(chans, notes)) out["effects"].push_back(f);
+    }
     if (!out.contains("effects")) out["effects"] = patchChainEffects(chans, notes);
     out["effectNotes"] = notes;
     for (auto &c : chans)   // its Arpeggiator, played as the track's "arp"
@@ -1355,6 +1386,7 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
                 json a = arpeggiatorSettings(m, an);
                 if (!a.is_null()) out["arp"] = a;
             }
+    if (!out.contains("arp") && alchemy && !alchemy->arp.is_null()) out["arp"] = alchemy->arp;   // else Alchemy's own
     for (auto &s : readPatchSends(dir)) {
         json j = {{"channel", s.channel}, {"aux", s.aux}, {"room", s.room}, {"db", std::round(s.db * 10) / 10}};
         const std::string ir = impulseForRoom(s.room);
@@ -1434,13 +1466,16 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
 }
 
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
-    json kitCfg;   // an Ultrabeat patch plays as its kit
+    json kitCfg;   // an Ultrabeat patch plays as its kit; an Alchemy patch with its own sampler settings
     json patchFx = json::array();   // the patch's own effects, played after the instrument ("effects": false leaves them out)
     std::vector<std::string> patchFxNotes;
+    std::unique_ptr<AlchemyPatch> alchemy;   // an Alchemy patch that plays samples: its instrument as SFZ regions
     if (track.sampler.is_object() && track.sampler.contains("patch") && track.sampler["patch"].is_string()) {
         const std::string q = track.sampler["patch"].get<std::string>();
         std::string dir = resolveIn(q, job.baseDir), e2;
-        if (dir.empty() || !fs::is_directory(dir)) { if (!findEntry("patch", q, dir, e2)) dir.clear(); }
+        if (dir.empty() || !fs::is_directory(dir)) {
+            if (!findEntry("patch", q, dir, e2)) { const LogicPatch *lp = logicPatchNamed(q); dir = lp ? lp->path : ""; }
+        }
         std::vector<PatchChannel> chans;
         if (!dir.empty() && readPatchChannels(dir, chans, e2)) {
             const bool sampled = std::any_of(chans.begin(), chans.end(), [](const PatchChannel &c) { return c.sampler; });
@@ -1452,6 +1487,21 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                 warnings.push_back("patch '" + fs::path(dir).stem().string() + "' plays Ultrabeat: its kit's samples play ('" + kit + "'), without Ultrabeat's synthesis");
             }
             if (!kit.empty() || sampled) patchFx = patchChainEffects(chans, patchFxNotes);
+            for (auto &c : chans) {
+                if (sampled || !kit.empty() || c.instrument != "Alchemy") continue;
+                AlchemyPatch a = alchemyPatch(c.alchemy, fs::path(dir).stem().string());
+                if (a.kind == AlchemyPatch::Sampler) {
+                    alchemy = std::make_unique<AlchemyPatch>(std::move(a));
+                    kitCfg = track.sampler;
+                    for (auto &[k, v] : alchemy->sampler.items()) if (!kitCfg.contains(k)) kitCfg[k] = v;   // mono and glide, unless the track sets them
+                    if (alchemy->gain != 0) kitCfg["gain"] = kitCfg.value("gain", 0.0) + alchemy->gain;
+                    patchFx = alchemy->synth.fx;
+                    for (auto &f : patchChainEffects(chans, patchFxNotes)) patchFx.push_back(f);
+                    warnings.push_back("patch '" + fs::path(dir).stem().string() + "' is GarageBand's Alchemy patch: its samples play as SFZ regions with its "
+                                       "envelope, filter and effects re-created (an approximation; `wavelength samples --patch` lists what's left out)");
+                }
+                break;
+            }
         }
     }
     const json &cfg = kitCfg.is_null() ? track.sampler : kitCfg;
@@ -1491,6 +1541,10 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         if (!soundfont->zones(*pr, sz, err)) return false;
         sf2Zones(sz, zones);
         source = path;
+    } else if (alchemy) {   // an Alchemy patch on its samples
+        isSfz = true;
+        if (!sfzZones(alchemy->sfz, zones, swLow, swHigh, swDefault, notePolyOne, warnings, err)) { err = "patch '" + alchemy->synth.name + "': " + err; return false; }
+        source = alchemy->synth.name;
     } else if (cfg.contains("patch")) {   // a GarageBand or Logic patch: the sampler instruments of its channels
         isExs = true;
         const std::string q = cfg["patch"].get<std::string>();
@@ -1501,10 +1555,12 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                 const LogicPatch *named = logicPatchNamed(q);
                 if (!named) { err = e2; return false; }
                 GarageBandSynth gs;
-                if (!named->sampler && garageBandSynthPatch(named->name, gs)) {
+                std::string why;
+                if (!named->sampler && garageBandSynthPatch(named->name, gs, &why)) {
                     err = "patch '" + named->name + "' plays " + named->instrument + ", a synth: play it as \"plugin\": \"builtin:synth\", \"preset\": \"" + named->name + "\" (re-created there)";
                     return false;
                 }
+                if (!named->sampler && !why.empty()) { err = "patch '" + named->name + "' plays " + named->instrument + ": " + why; return false; }
                 if (!named->sampler) { err = "patch '" + named->name + "' plays " + named->instrument + ", an instrument only GarageBand and Logic can play (patches on Sampler, EXS24 and Drum Kit Designer play here, and synth patches on builtin:synth)"; return false; }
                 dir = named->path;   // its samples may be missing: the error below names them
             }

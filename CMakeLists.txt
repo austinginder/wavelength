@@ -189,6 +189,7 @@ add_executable(wavelength
   src/logic_patches.cpp
   src/retro_synth.cpp
   src/apple_synths.cpp
+  src/alchemy.cpp
   src/arp.cpp
   src/bplist.cpp
   src/sfz.cpp

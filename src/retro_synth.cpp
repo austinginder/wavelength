@@ -1,5 +1,6 @@
 #include "retro_synth.hpp"
 
+#include "alchemy.hpp"
 #include "apple_synths.hpp"
 #include "logic_patches.hpp"
 
@@ -152,15 +153,22 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params) {
     return out;
 }
 
-bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out) {
+bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::string *why) {
     const LogicPatch *p = logicPatchNamed(name);
     if (!p || p->sampler) return false;
     std::vector<PatchChannel> chans;
     std::string err;
     if (!readPatchChannels(p->path, chans, err)) return false;
     for (auto &c : chans) {
-        if (c.settings.params.empty()) continue;
-        if (c.instrument == "Retro Synth") out = retroSynthPatch(c.settings.params);
+        if (c.instrument == "Alchemy") {   // its preset text: virtual-analog patches play here, the rest say why not
+            AlchemyPatch a = alchemyPatch(c.alchemy, p->name);
+            if (a.kind != AlchemyPatch::Synth) {
+                if (why) *why = a.kind == AlchemyPatch::Sampler ? "it plays Alchemy's samples: \"plugin\": \"builtin:sampler\", \"sampler\": {\"patch\": \"" + p->name + "\"}" : a.why;
+                return false;
+            }
+            out = a.synth;
+        } else if (c.settings.params.empty()) continue;
+        else if (c.instrument == "Retro Synth") out = retroSynthPatch(c.settings.params);
         else if (c.instrument == "Vintage B3") out = vintageB3Patch(c.settings.params);
         else if (c.instrument == "ES2") out = es2Patch(c.settings.params);
         else if (c.instrument == "ES1") out = es1Patch(c.settings.params);
@@ -175,6 +183,10 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out) {
     return false;
 }
 
+std::string garageBandSynthKind(const GarageBandSynth &g) {
+    return g.instrument + (g.engine.empty() ? "" : " (" + g.engine + (g.instrument == "Alchemy" ? ")" : " mode)"));
+}
+
 const std::vector<std::pair<std::string, std::string>> &garageBandSynthPatches() {
     static std::vector<std::pair<std::string, std::string>> list;
     static std::once_flag once;
@@ -183,7 +195,7 @@ const std::vector<std::pair<std::string, std::string>> &garageBandSynthPatches()
             if (p.sampler) continue;
             GarageBandSynth g;
             if (garageBandSynthPatch(p.name, g))
-                list.push_back({p.name, g.instrument + (g.engine.empty() ? "" : " (" + g.engine + " mode)") + (p.arpeggiator ? ", arpeggiated" : "")});
+                list.push_back({p.name, garageBandSynthKind(g) + (p.arpeggiator || !g.arp.is_null() ? ", arpeggiated" : "")});
         }
     });
     return list;

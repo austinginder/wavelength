@@ -331,7 +331,7 @@ int cmdPresets(const Args &a) {
         }
         for (auto &p : logicPatches()) {
             json arp;
-            if (p.arpeggiator && appleArpeggiator(p.path, false, arp, ignored, e2)) add(p.name, "patch", arp);
+            if ((p.arpeggiator || p.instrument == "Alchemy") && appleArpeggiator(p.path, false, arp, ignored, e2)) add(p.name, "patch", arp);
         }
         if (a.has("--json")) emit(json{{"ok", true}, {"plugin", "arp"}, {"presets", list}}.dump(2));
         else std::fprintf(OUT, "\nOn any track: \"arp\": \"<name>\" (or {\"preset\": \"<name>\"} / {\"patch\": \"<name>\"} with settings on top).\n"
@@ -550,6 +550,7 @@ int cmdSamples(const Args &a) {
                          d["name"].get<std::string>().c_str(), d["synth"]["instrument"].get<std::string>().c_str());
             return 0;
         }
+        if (d.contains("notes")) for (auto &n : d["notes"]) std::fprintf(OUT, "  ~ %s\n", n.get<std::string>().c_str());   // an Alchemy patch's re-creation
         std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:sampler\", \"sampler\": {\"patch\": \"%s\"} (\"effects\": false for the dry instrument).\n",
                      d["name"].get<std::string>().c_str());
         if (!d["sends"].empty())
