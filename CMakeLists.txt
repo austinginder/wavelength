@@ -185,6 +185,7 @@ add_executable(wavelength
   src/musicxml.cpp
   src/wav.cpp
   src/audio_file.cpp
+  src/apple_loops.cpp
   src/sfz.cpp
   src/sf2.cpp
   src/encode.cpp

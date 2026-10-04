@@ -241,6 +241,47 @@ sys.exit(0 if d.get("ok") and d["tracks"][0].get("lufs", -120) > -60 else 1)'; t
     echo "FAIL au: Apple's Audio Units did not render"; fail=1
   fi
 fi
+# Apple Loops: a tagged CAF (scripts/make-test-apple-loop.py: 4 beats at 120 BPM in C major, notes inside) found
+# by name follows the song's tempo (3 repeats at 90 BPM = 8 s) and moves into the song's key (C -> D: the sine
+# reads D4); its notes come out moved into a key and import as a job; on macOS an AAC copy decodes to the same
+# length and loudness
+rm -rf out/check/loops && mkdir -p out/check/loops/lib
+python3 scripts/make-test-apple-loop.py "out/check/loops/lib/Test Loop.caf"
+cat > out/check/loops/job.json <<'JOB'
+{"tempo": 90, "tail": 0, "leadIn": 0, "stems": "16", "keys": [{"bar": 1, "key": "D major"}],
+ "tracks": [{"name": "Loop", "plugin": "builtin:audio", "clips": [{"file": "lib:Apple Loops/Test Loop.caf", "beat": 0, "repeat": 3, "key": "song"}]}]}
+JOB
+export WAVELENGTH_APPLE_LOOPS="$PWD/out/check/loops/lib"
+loops_why=""
+if ! "./$build/wavelength" render out/check/loops/job.json --out out/check/loops/out --json > out/check/loops/report.json 2>/dev/null; then
+  loops_why="the loop job did not render"
+elif ! "./$build/wavelength" analyze out/check/loops/out/stems/01-loop.wav --json 2>/dev/null | python3 -c '
+import json, sys
+a = json.load(sys.stdin); r = json.load(open("out/check/loops/report.json"))
+sys.exit(0 if a["pitch"]["note"] == "D4" and abs(r["duration"] - 8.0) < 0.02 else 1)'; then
+  loops_why="the loop did not follow the tempo (8 s) and key (D4)"
+elif ! "./$build/wavelength" loops --notes "Test Loop" --key "E major" --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if [n["key"] for n in d["notes"]] == [64, 68] and d["loop"]["bpm"] == 120 else 1)'; then
+  loops_why="loops --notes did not give the notes moved into E"
+elif ! "./$build/wavelength" import "out/check/loops/lib/Test Loop.caf" --out out/check/loops/imp > /dev/null 2>&1 ||
+     ! python3 -c 'import json; j = json.load(open("out/check/loops/imp/job.json")); assert len(j["tracks"][0]["notes"]) == 2'; then
+  loops_why="import of the loop's notes failed"
+elif [ "$(uname)" = Darwin ]; then
+  afconvert -f caff -d aac out/check/loops/out/mix.wav out/check/loops/aac.caf
+  cat > out/check/loops/aac.json <<'JOB'
+{"tempo": 90, "tail": 0, "leadIn": 0, "stems": "none", "tracks": [{"name": "AAC", "plugin": "builtin:audio", "clips": [{"file": "aac.caf", "beat": 0}]}]}
+JOB
+  "./$build/wavelength" render out/check/loops/aac.json --out out/check/loops/aac --json > out/check/loops/aac-report.json 2>/dev/null &&
+    python3 -c '
+import json, sys
+a = json.load(open("out/check/loops/aac-report.json")); r = json.load(open("out/check/loops/report.json"))
+sys.exit(0 if abs(a["mix"]["lufs"] - r["mix"]["lufs"]) < 0.3 and abs(a["duration"] - r["duration"]) < 0.05 else 1)' ||
+    loops_why="an AAC CAF did not decode to the same length and loudness"
+fi
+unset WAVELENGTH_APPLE_LOOPS
+if [ -n "$loops_why" ]; then echo "FAIL apple loops: $loops_why"; fail=1; else echo "ok   apple loops: tempo, key, repeat, notes, import, AAC"; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)

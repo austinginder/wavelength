@@ -28,6 +28,12 @@ Usage:
       List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ and
       SoundFonts); --kit shows the General MIDI key each of a kit's files is mapped to, --soundfont
       a SoundFont's presets. --install-soundfont downloads MuseScore General (MIT), the General MIDI set.
+  wavelength loops [--search TEXT] [--key KEY] [--midi] [--json] | loops --notes <name> [--key KEY] [--json]
+      List the Apple Loops GarageBand and Logic install (macOS): category, key, tempo, length in
+      beats, and "notes" for software-instrument loops. A clip plays one as {"file": "lib:Apple
+      Loops/<name>.caf"}: it follows the song's tempo, and "key": "song" moves it into the job's key.
+      --key shows the shift into a key; --midi lists only loops with notes; --notes prints a loop's
+      notes in beats (moved into --key), ready for a track.
   wavelength audition <plugin> [--jobs 4] [--limit N] [--rebuild] [--json] | audition --retag
       Render every preset once (C4, 1 s) in worker processes and index how it sounds: octave
       offset, loudness, brightness, band balance, envelope, width. `presets` then shows tags
@@ -118,11 +124,12 @@ Usage:
       instruments, dynamics and hairpins as velocities, staccato and accents, tempo marks, key
       signatures (with a mode) as "keys", rehearsal marks as markers. Notes keep their score marks
       in "marks". Parts get General MIDI sounds like a MIDI import. `render score.mxl` does both steps.
-  wavelength import <song.mid> [--out DIR] [--instrument PLUGIN] [--json]
+  wavelength import <song.mid | loop.caf> [--out DIR] [--instrument PLUGIN] [--json]
       Turn a Standard MIDI File into a job: tempo map, time signature, markers, one track per
       MIDI track and channel (notes, sustain pedal, volume/pan/expression, other CCs, pitch
       bend). Channel 10 plays builtin:drums; other channels a General MIDI-family sound from
       the sample library, or PLUGIN for all of them. `render song.mid` imports and renders.
+      A software-instrument Apple Loop (a .caf with notes inside) imports the same way.
   wavelength export <job.json> [--out song.mid | song.dawproject] [--no-print] [--json]
       Write the job's parts as a MIDI file (type 1): tempo map, time signature, markers, and a
       track per job track with its notes, CC, pitch bend and pressure automation. To a .dawproject
@@ -271,6 +278,7 @@ const Summary kSummaries[] = {
     {"Find sounds", "plugins", "Installed plugins and built-in instruments"},
     {"Find sounds", "presets", "A plugin's presets, to use by name"},
     {"Find sounds", "samples", "Sample libraries: multisamples, kits, SFZ, SoundFonts"},
+    {"Find sounds", "loops", "Apple Loops by category, key and tempo; their notes"},
     {"Find sounds", "audition", "Render every preset once and tag how it sounds"},
     {"Find sounds", "card", "Picture of how presets sound: one full card, or a sheet to compare"},
     {"Find sounds", "compat", "Test every plugin: loads, renders, presets, state"},

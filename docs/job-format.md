@@ -142,15 +142,24 @@ Audio files on the timeline, in beats. The track has `"clips"` instead of notes:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `file` | required | An audio file (WAV, AIFF, FLAC, MP3 or Ogg Vorbis, told apart by content): relative to the job (in a song: under `media/`), a library file by name (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, see [Library files](#library-files-lib)), an absolute path, or relative to a sample root; or `{"render": ...}`, the song's own audio (below). |
+| `file` | required | An audio file (WAV, AIFF, CAF, FLAC, MP3, Ogg Vorbis or M4A, told apart by content; AAC and Apple Lossless decode on macOS only): relative to the job (in a song: under `media/`), a library file by name (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, `"lib:Apple Loops/Early Days Piano.caf"`, see [Library files](#library-files-lib)), an absolute path, or relative to a sample root; or `{"render": ...}`, the song's own audio (below). |
 | `beat` / `endAt` | one of them | Where the clip starts, or the beat where it ends (reverse swells, pickups). |
-| `bpm` | none | The file's own tempo: the clip is sped up or slowed to the song's tempo at its anchor. |
+| `bpm` | none (an Apple Loop: its own) | The file's own tempo: the clip is sped up or slowed to the song's tempo at its anchor. |
 | `speed` | 1 | An explicit speed factor instead of `bpm`. |
 | `stretch` | true | Keep the pitch while changing speed (Signalsmith Stretch); `false` = tape-style, pitch follows speed. |
 | `pitch` | 0 | Semitones, without changing length. |
 | `start`, `length` | 0, whole file | Trim, in seconds of the file; or `beats` (with `bpm`) instead of `length`. |
 | `reverse` | false | Play the trimmed audio backwards. |
+| `repeat` | 1 | Play the trimmed audio this many times back to back (a loop for 4 bars: `"beats": 16, "repeat": 4`). |
+| `key` | none | Apple Loops: move the loop into a key, `"D minor"`, or into the job's own key at the clip, `"song"` (from `keys`). Adds to `pitch`. |
 | `gain`, `fadeIn`, `fadeOut` | 0 dB, 2 ms, 5 ms | Level and edge fades (ms). |
+
+**Apple Loops** (macOS: the loops GarageBand and Logic install in `/Library/Audio/Apple Loops`, and your own in `~/Library/Audio/Apple Loops`). `wavelength loops --search "hip hop piano"` lists them with category, key, tempo and length in beats; `"file": "lib:Apple Loops/<name>.caf"` plays one. A loop knows its tempo, so it follows the song's tempo with its pitch kept (`"bpm"` or `"speed"` override that), and its key, so `"key": "song"` moves a tonal loop into the song's key the way GarageBand does: tonic to tonic, or to the relative key when one is minor and the other major, never more than 6 semitones. Drum and effect loops have no key and play as recorded. Software-instrument loops ("notes" in the list) also carry their notes: `wavelength loops --notes <name> --key "D minor"` prints them in beats for a track's `notes`, and `wavelength import <loop.caf>` makes a job of them.
+
+```json
+{"name": "Keys", "plugin": "builtin:audio", "clips": [
+  {"file": "lib:Apple Loops/Early Days Piano.caf", "beat": 0, "repeat": 4, "key": "song"}]}
+```
 
 **The song's own audio as a clip.** `file` can be `{"render": [fromBeat, toBeat], "tracks": [...], "tail": 3, "fx": [...]}`: those beats of the song, rendered inside the same render, become the clip's audio. A reverse swell of the drop with no pre-render:
 
@@ -171,7 +180,7 @@ Plays sample libraries without a plugin: Bitwig `.multisample` instruments (the 
 
 #### Library files: `lib:`
 
-One file of an installed sample library, by name, so a job never depends on where a computer keeps it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum Machines/Legend 909/..."`), or `"lib:<path under a sample root>"` (`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit `map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in the manifest's `requires`, and `wavelength migrate` turns absolute library paths into `lib:` names.
+One file of an installed sample library, by name, so a job never depends on where a computer keeps it: `"lib:<library>/<file>"`, where `<library>` is a kit or loop folder as `wavelength samples` lists it (`"lib:Legend 909/Kick Legend 909 01 accent.wav"`, or with its category, `"lib:Classic Drum Machines/Legend 909/..."`), `Apple Loops` for any Apple Loop by its file name (`"lib:Apple Loops/Early Days Piano.caf"`, whatever folder it is in), or `"lib:<path under a sample root>"` (`"lib:Bitwig/Anti-Loops/Genys/Kick from Tony's Beatbox.wav"`). Works for a sampler `sample`, a kit `map` entry and an audio clip `file`. A `lib:` name is never a file of the song: `pack` lists it in the manifest's `requires`, and `wavelength migrate` turns absolute library paths into `lib:` names.
 
 ```json
 {"name": "Keys", "plugin": "builtin:sampler", "sampler": {"multisample": "Grand Piano", "release": 0.4}, "notes": [...]}
@@ -231,7 +240,7 @@ Not played: filter and pitch envelopes, LFOs, `<curve>` and `<effect>`. The rend
 | `buses` | `[{"name": "Hall", "gain": 0, "fx": [...], "output": "Glue", "stem": true, "automation": {"gain": curve, "rides": curve}}]`. Tracks reach them through `sends` or `output`; a bus returns to the master or to another bus (`output`), and runs after every bus that feeds it. `"stem": true` writes `stems/bus-<name>.wav`: the bus after its effects and before its fader and rides, the same signal as its `lufs` in the report (so `gain` = target - `lufs`, as for a track), in the job's `stems` format. |
 | `master` | `{"gain": 0, "fx": [...], "automation": {"gain": curve, "rides": curve}, "loudness": -14}`, applied to the full mix before `normalize`. Gain automation fades the whole mix. `loudness` is a target in integrated LUFS after the chain: Wavelength finds the gain that lands on it, like a limiter's input gain. `"loudnessGain"` says where it goes: `"peak"` (default) in front of the trailing run of `clip`/`limiter` effects, so EQ and glue compressors before it see the mix as mixed and keep the section contrast while the clip still shaves the loud signal; `"limiter"` in front of the last built-in limiter only (after any clip before it); `"start"` before the whole chain (the behaviour before 0.2). A chain without a built-in limiter always gets it at the start; the report gives `mix.loudnessGainDb`, and a warning when the chain caps it. |
 | `markers` | `[{"beat": 0, "name": "Intro"}, ...]`, the report gives loudness per section (before and after the master). `"checks": false` on a marker says the section is meant as it is (a false-ending silence, a soft peak): no dropout or weak-drop warnings for it. |
-| `keys` | `[{"bar": 1, "key": "D minor"}, {"bar": 69, "key": "E minor"}]`: the key from each bar on (or `"beat"`), for `wavelength lint --harmony`; the render ignores it. Keys: a note and a mode, `"D minor"`, `"F# major"`, `"Bbm"`, `"C phrygian"` (major, minor, dorian, phrygian, lydian, mixolydian). Declare every planned key change here so the lint reads it as a new key, not as wrong notes; `"checks": false` on an entry makes a stretch chromatic on purpose (no harmony problems reported in it). |
+| `keys` | `[{"bar": 1, "key": "D minor"}, {"bar": 69, "key": "E minor"}]`: the key from each bar on (or `"beat"`), for `wavelength lint --harmony` and for Apple Loop clips with `"key": "song"`; the render ignores it otherwise. Keys: a note and a mode, `"D minor"`, `"F# major"`, `"Bbm"`, `"C phrygian"` (major, minor, dorian, phrygian, lydian, mixolydian). Declare every planned key change here so the lint reads it as a new key, not as wrong notes; `"checks": false` on an entry makes a stretch chromatic on purpose (no harmony problems reported in it). |
 | `chords` | `[[0, "C#m"], [80, "A"], [88, "B"]]` (beat, chord symbol) or `[{"bar": 21, "chord": "A"}, ...]`: the chord timeline that `"follow"` curves retune to (see `effects.md`). Symbols: a root (`C#`, `Bb`) and a quality: `m`, `dim`, `aug`, `sus2`, `sus4`, `5`, with `7`, `maj7`, `m7`, `m7b5`, `dim7`; a slash bass is ignored; `"-"` holds the previous chord. Without it, a `follow` curve uses the chords `wavelength lint --harmony --chords` reads from the notes (per bar, or per half bar when the halves differ). |
 
 ## Notes

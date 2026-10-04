@@ -1,5 +1,7 @@
 #include "sampler.hpp"
 
+#include "apple_loops.hpp"
+
 #include "audio_file.hpp"
 #include "dsp.hpp"
 #include "platform.hpp"
@@ -866,6 +868,8 @@ std::string resolveLibraryFile(const std::string &ref) {
         a = b + 1;
     }
     std::error_code ec;
+    if (rel.rfind("Apple Loops/", 0) == 0 && rel.find('/', 12) == std::string::npos)   // an Apple Loop by file name
+        if (const AppleLoop *l = findAppleLoop(rel.substr(12))) return l->path;
     for (auto &root : sampleRoots())
         if (fs::is_regular_file(fs::path(root) / fs::u8path(rel), ec)) return (fs::path(root) / fs::u8path(rel)).string();
     const size_t slash = rel.rfind('/');
@@ -881,6 +885,9 @@ std::string resolveLibraryFile(const std::string &ref) {
 std::string libraryRef(const std::string &file) {
     std::error_code ec;
     const fs::path f = fs::absolute(fs::u8path(file), ec).lexically_normal();
+    if (lower(f.extension().string()) == ".caf")
+        if (const AppleLoop *l = appleLoopAt(f.string()); l && resolveLibraryFile("lib:Apple Loops/" + f.filename().u8string()) != "")
+            return "lib:Apple Loops/" + f.filename().u8string();
     for (auto &e : sampleLibrary())   // "lib:Legend 909/Kick.wav" when that names this file
         if ((e.kind == "kit" || e.kind == "loops") && fs::path(e.path).lexically_normal() == f.parent_path()) {
             for (const std::string &ref : {"lib:" + e.name + "/" + f.filename().u8string(), "lib:" + e.category + "/" + e.name + "/" + f.filename().u8string()})
@@ -1020,6 +1027,8 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
                 lib.push_back({kit ? "kit" : "loops", name, dir, d.parent_path().filename().string(), wavs.size()});
             }
         }
+        // GarageBand's and Logic's Apple Loops: one library, every loop by its file name ("lib:Apple Loops/<name>.caf")
+        if (appleLoopCount()) lib.push_back({"loops", "Apple Loops", appleLoopRoots().front(), "Apple", appleLoopCount()});
         std::sort(lib.begin(), lib.end(), [](auto &a, auto &b) { return a.kind != b.kind ? a.kind < b.kind : lower(a.name) < lower(b.name); });
     });
     return lib;

@@ -17,6 +17,7 @@
 #include "analyze.hpp"
 #include "audio_file.hpp"
 #include "clips.hpp"
+#include "apple_loops.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
 #include "help.hpp"
@@ -95,7 +96,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help", "--apply", "--dry-run"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help", "--apply", "--dry-run", "--midi"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -372,6 +373,87 @@ int cmdPresets(const Args &a) {
     if (a.has("--json")) emit(json{{"ok", true}, {"plugin", info.id}, {"presets", list}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "\n%zu of %zu presets (%s). Use them in a job as \"preset\": \"<name>\".%s\n", shown, presets.size(), info.name.c_str(),
                       audition.empty() ? " Run `wavelength audition` to tag them by sound." : "");
+    return 0;
+}
+
+// ---- loops -----------------------------------------------------------------------------
+json appleLoopJson(const AppleLoop &l) {
+    json j = {{"name", l.name}, {"file", "lib:Apple Loops/" + fs::u8path(l.path).filename().u8string()}, {"folder", l.folder},
+              {"category", l.category}, {"subcategory", l.subcategory}, {"genre", l.genre}, {"descriptors", l.descriptors},
+              {"beats", l.beats}, {"bpm", std::round(l.bpm * 100) / 100}, {"seconds", std::round(l.seconds * 1000) / 1000},
+              {"timeSignature", l.timeSignature}, {"notes", l.midi}};
+    if (!l.key.empty()) { j["key"] = l.key; j["scale"] = l.scale; }
+    return j;
+}
+
+int cmdLoops(const Args &a) {
+    std::string err;
+    int tonic = -1;
+    bool minor = false;
+    if (a.has("--key") && !parseKeyName(a.get("--key"), tonic, minor, err)) return fail(a, "--key: " + err);
+    if (a.has("--notes")) {   // the notes inside a software-instrument loop, in beats, ready for a track
+        const std::string q = a.get("--notes");
+        const AppleLoop *l = findAppleLoop(q);
+        if (!l && fs::exists(fs::u8path(q))) l = appleLoopAt(q);
+        if (!l) return fail(a, "no Apple Loop named '" + q + "' (run `wavelength loops --search <text>`)");
+        MidiImport m;
+        if (!importMidiFile(l->path, "", "", m, err)) return fail(a, err);
+        int shift = 0;
+        if (tonic >= 0) appleLoopShift(*l, tonic, minor, shift);
+        json notes = json::array();
+        for (auto &t : m.job["tracks"])
+            for (auto n : t["notes"]) {
+                if (shift && n.contains("key") && n["key"].is_number()) n["key"] = n["key"].get<int>() + shift;
+                notes.push_back(n);
+            }
+        std::sort(notes.begin(), notes.end(), [](const json &x, const json &y) { return x["beat"].get<double>() < y["beat"].get<double>(); });
+        if (a.has("--json")) { emit(json{{"ok", true}, {"loop", appleLoopJson(*l)}, {"shift", shift}, {"notes", notes}}.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+        std::fprintf(OUT, "%s: %zu notes over %d beats (%s%s%s)%s\n", l->name.c_str(), notes.size(), l->beats, l->key.empty() ? "no key" : l->key.c_str(),
+                     l->scale.empty() ? "" : " ", l->scale.c_str(), shift ? (", moved " + std::string(shift > 0 ? "+" : "") + std::to_string(shift) + " to " + a.get("--key")).c_str() : "");
+        std::string lines;
+        for (size_t i = 0; i < notes.size(); ++i) lines += (i ? ",\n " : "[") + notes[i].dump();
+        std::fprintf(OUT, "%s]\n", lines.empty() ? "[" : lines.c_str());
+        return 0;
+    }
+    std::vector<std::string> words;
+    {
+        std::string q = a.get("--search"), w;
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+        for (char c : q + " ") { if (c == ' ') { if (!w.empty()) words.push_back(w); w.clear(); } else w += c; }
+    }
+    const auto &loops = appleLoops();
+    json list = json::array();
+    size_t shown = 0;
+    for (auto &l : loops) {
+        if (a.has("--midi") && !l.midi) continue;
+        std::string hay = l.name + " " + l.folder + " " + l.category + " " + l.subcategory + " " + l.genre + " " + l.key + " " + l.scale;
+        for (auto &d : l.descriptors) hay += " " + d;
+        std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
+        if (!std::all_of(words.begin(), words.end(), [&](const std::string &w) { return hay.find(w) != std::string::npos; })) continue;
+        ++shown;
+        int shift = 0;
+        const bool shifted = tonic >= 0 && appleLoopShift(l, tonic, minor, shift);
+        if (a.has("--json")) {
+            json j = appleLoopJson(l);
+            if (shifted) j["shift"] = shift;
+            list.push_back(j);
+            continue;
+        }
+        const std::string key = l.key.empty() ? "-" : l.key + (l.scale == "minor" ? "m" : l.scale == "major" ? "" : " " + l.scale);
+        const std::string bpm = l.beats > 0 && l.bpm > 0 ? (std::to_string((int)std::lround(l.bpm)) + " bpm") : "one-shot";
+        const std::string extra = (l.midi ? "notes" : "") + std::string(shifted ? (std::string(l.midi ? ", " : "") + (shift > 0 ? "+" : "") + std::to_string(shift)) : "");
+        const std::string cat = l.category + (l.subcategory.empty() ? "" : "/" + l.subcategory);
+        if (term::out().on) {
+            const term::Style &st = term::out();
+            std::fprintf(OUT, "%s %s %s %s %s %s\n", st.bold(col(l.name, 34)).c_str(), st.dim(col(cat, 24)).c_str(), st.cyan(col(key, 9)).c_str(),
+                         col(bpm, 9).c_str(), st.dim(col(std::to_string(l.beats) + " beats", 9)).c_str(), extra.c_str());
+        } else std::fprintf(OUT, "%-34.34s %-24.24s %-9s %-9s %3d beats %s\n", l.name.c_str(), cat.c_str(), key.c_str(), bpm.c_str(), l.beats, extra.c_str());
+    }
+    if (a.has("--json")) { emit(json{{"ok", true}, {"roots", appleLoopRoots()}, {"loops", list}}.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+    if (loops.empty()) { std::fprintf(OUT, "No Apple Loops installed (GarageBand or Logic Pro installs them in /Library/Audio/Apple Loops).\n"); return 0; }
+    std::fprintf(OUT, "\n%zu of %zu Apple Loops. Play one on a builtin:audio track: {\"file\": \"lib:Apple Loops/<name>.caf\", \"beat\": 0, \"repeat\": 4, \"key\": \"song\"}\n"
+                      "(it follows the song's tempo by itself). Loops marked \"notes\" carry their notes: `wavelength loops --notes <name>`.%s\n",
+                 shown, loops.size(), tonic >= 0 ? " The last column is the shift into --key." : "");
     return 0;
 }
 
@@ -877,7 +959,7 @@ int cmdMaster(const Args &a) {
 // ---- render ----------------------------------------------------------------------------
 // ---- import -------------------------------------------------------------------------
 int cmdImport(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | score.musicxml | score.mxl | project.bwproject> [--out DIR]");
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | loop.caf | score.musicxml | score.mxl | project.bwproject> [--out DIR]");
     const std::string src = a.positional[1];
     if (fs::path(src).extension() == ".bwproject" && a.has("--list")) {   // Bitwig's own format: list its tracks and devices
         bitwig::Project p;
@@ -921,7 +1003,7 @@ int cmdImport(const Args &a) {
     const std::string outDir = a.get("--out", fs::path(src).stem().string());
     std::string ext = fs::path(src).extension().string();
     for (auto &ch : ext) ch = (char)std::tolower((unsigned char)ch);
-    if (ext == ".mid" || ext == ".midi" || ext == ".smf" || ext == ".kar" || ext == ".rmi") {
+    if (ext == ".mid" || ext == ".midi" || ext == ".smf" || ext == ".kar" || ext == ".rmi" || ext == ".caf") {   // .caf: a software-instrument Apple Loop
         MidiImport m;
         std::string err;
         if (!importMidiFile(src, outDir, a.get("--instrument", ""), m, err)) return fail(a, err);
@@ -1910,6 +1992,7 @@ int run(int argc, char **argv) {
             {"params", {"--preset", "--state", "--format", "--all", "--map", "--steps", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
             {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--json"}},
+            {"loops", {"--search", "--key", "--midi", "--notes", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},
             {"compat", {"--format", "--jobs", "--presets", "--timeout", "--report", "--rebuild", "--json", "--verbose"}},
@@ -1945,6 +2028,7 @@ int run(int argc, char **argv) {
         if (cmd == "params") return cmdParams(a);
         if (cmd == "presets") return cmdPresets(a);
         if (cmd == "samples") return cmdSamples(a);
+        if (cmd == "loops") return cmdLoops(a);
         if (cmd == "analyze") return cmdAnalyze(a);
         if (cmd == "audition") return cmdAudition(a);
         if (cmd == "compat") return cmdCompat(a);

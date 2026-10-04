@@ -104,6 +104,13 @@ json tools() {
     list.push_back(tool("list_samples", "List sample libraries",
         "Sample libraries builtin:sampler plays: Bitwig multisamples, drum kits, SFZ instruments, SoundFonts and loops.",
         {{"search", prop("string", "only libraries matching this")}}, {}, readOnly));
+    list.push_back(tool("list_loops", "List Apple Loops",
+        "The Apple Loops GarageBand and Logic install (macOS): category, key, tempo and length in beats. A builtin:audio clip "
+        "{\"file\": \"lib:Apple Loops/<name>.caf\", \"beat\": 0, \"repeat\": 4, \"key\": \"song\"} follows the song's tempo and moves "
+        "into the job's key. Give \"notes\" a loop's name to get the notes inside a software-instrument loop, in beats.",
+        {{"search", prop("string", "only loops whose name, category, genre, key or descriptors contain all these words")},
+         {"key", prop("string", "a key (\"D minor\"): each loop's shift into it, and the notes moved into it")},
+         {"notes", prop("string", "a loop's name: its notes instead of the list")}}, {}, readOnly));
     list.push_back(tool("plugin_params", "List a plugin's parameters",
         "A plugin's parameters with their ranges and display text (for \"params\" and automation.params), optionally after loading "
         "a preset. builtin:synth lists its own parameter names.",
@@ -452,6 +459,26 @@ private:
             if (list.size() > 300) lines += "... " + std::to_string(list.size() - 300) + " more: narrow with search\n";
             return text(lines.empty() ? "no sample libraries match (samples --install-soundfont adds General MIDI sounds)"
                                       : lines + "\nUse with \"plugin\": \"builtin:sampler\" and \"sampler\": {\"multisample\"|\"kit\"|\"sfz\"|\"soundfont\": \"<name>\"}.");
+        }
+        if (name == "list_loops") {
+            std::vector<std::string> args = {"loops", "--json"};
+            for (const char *k : {"search", "key", "notes"})
+                if (!str(a, k).empty()) { args.push_back(std::string("--") + k); args.push_back(str(a, k)); }
+            if (!run(args, id, progress, 600, out, fail)) return fail;
+            if (!str(a, "notes").empty()) return text(out.dump(1));
+            std::string lines;
+            size_t shown = 0;
+            const auto list = out.value("loops", json::array());
+            for (auto &l : list) {
+                if (shown++ >= 200) break;
+                const std::string key = !l.contains("key") ? "no key" : l["key"].get<std::string>() + (l.value("scale", "").empty() ? "" : " " + l.value("scale", ""));
+                lines += l.value("name", "") + "  (" + l.value("category", "") + "/" + l.value("subcategory", "") + ", " + key + ", " +
+                         std::to_string((int)std::lround(l.value("bpm", 0.0))) + " bpm, " + std::to_string(l.value("beats", 0)) + " beats" +
+                         (l.value("notes", false) ? ", notes" : "") + (l.contains("shift") ? ", shift " + std::to_string(l["shift"].get<int>()) : "") + ")\n";
+            }
+            if (list.size() > 200) lines += "... " + std::to_string(list.size() - 200) + " more: narrow with search\n";
+            return text(lines.empty() ? "no Apple Loops match (GarageBand or Logic Pro installs them on macOS)"
+                                      : lines + "\nPlay one on a builtin:audio track: {\"file\": \"lib:Apple Loops/<name>.caf\", \"beat\": 0, \"repeat\": 4, \"key\": \"song\"}.");
         }
         if (name == "plugin_params") {
             std::vector<std::string> args = {"params", need(a, "plugin"), "--json"};

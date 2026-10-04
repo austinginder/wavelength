@@ -1,5 +1,7 @@
 #include "midi_file.hpp"
 
+#include "apple_loops.hpp"
+
 #include "catalog.hpp"
 #include "sampler.hpp"
 
@@ -114,6 +116,11 @@ bool readFile(const std::string &path, std::vector<uint8_t> &d, std::string &err
     std::ifstream f(path, std::ios::binary);
     if (!f) { err = "cannot open " + path; return false; }
     d.assign(std::istreambuf_iterator<char>(f), {});
+    if (d.size() >= 4 && std::equal(d.begin(), d.begin() + 4, "caff")) {   // a software-instrument Apple Loop: the notes inside
+        std::vector<uint8_t> smf;
+        if (!cafMidi(d, smf, err)) { err = path + " " + err; return false; }
+        d.swap(smf);
+    }
     return true;
 }
 
@@ -455,6 +462,7 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
     job["tracks"] = out;
     if (!markers.empty()) job["markers"] = markers;
     res.job = job;
+    if (outDir.empty()) return true;   // the job only (loops --notes)
     std::error_code ec;
     fs::create_directories(outDir, ec);
     std::ofstream o(fs::path(outDir) / "job.json");

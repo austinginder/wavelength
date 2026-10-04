@@ -40,6 +40,7 @@ Never guess plugin or preset names. List them:
 "$WAVELENGTH" audition <plugin>                     # once per plugin: tags like "octave -1", dark, pluck
 "$WAVELENGTH" card <plugin> "<A>" "<B>" + <plugin2> "<C>"   # cards.png: a contact sheet of candidates; read it
 "$WAVELENGTH" samples --search <text>               # sample libraries, SFZ, SoundFonts, drum kits (builtin:sampler)
+"$WAVELENGTH" loops --search <text>                 # macOS: GarageBand's Apple Loops by key and tempo (builtin:audio clips)
 "$WAVELENGTH" presets builtin:synth                 # the built-in synth's patches: always there, no plugin needed
 ```
 

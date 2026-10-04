@@ -25,7 +25,8 @@ struct MidiImport {
     int format = 0;                     // SMF type 0, 1 or 2
 };
 
-// `instrument`: a plugin spec for every melodic track ("" = General MIDI sounds from the sample library)
+// `instrument`: a plugin spec for every melodic track ("" = General MIDI sounds from the sample library).
+// `path` can also be a software-instrument Apple Loop (.caf with notes inside); `outDir` "" writes nothing.
 bool importMidiFile(const std::string &path, const std::string &outDir, const std::string &instrument, MidiImport &out, std::string &err);
 
 // General MIDI program 0-127: its name, and the sound a part with it gets: {"plugin", "sampler"}. A close

@@ -120,7 +120,7 @@ struct Job {
     int stemBits = 32;              // 32 float, 24, 16, or 0 = no stem files
     std::vector<DeliverySpec> deliver;   // files written next to mix.wav (MP3, FLAC, 16/24-bit WAV)
     std::vector<Marker> markers;  // sections for per-section loudness in the report
-    std::vector<KeyMark> keys;    // declared keys by bar, for `lint --harmony` (the render ignores them)
+    std::vector<KeyMark> keys;    // declared keys by bar, for `lint --harmony` and Apple Loop clips' "key": "song"
     RenderWindow window;
     std::string baseDir;       // relative paths resolve from here
     std::string sourcePath;     // the job file (worker processes re-read it); empty = render in process

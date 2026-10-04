@@ -1,18 +1,23 @@
 #include "clips.hpp"
 
+#include "apple_loops.hpp"
 #include "audio_file.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
+#include "harmony.hpp"
 #include "sampler.hpp"
 
 #include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <map>
 #include <set>
 
 using nlohmann::json;
+namespace fs = std::filesystem;
 
 namespace wl {
 
@@ -80,12 +85,13 @@ bool renderSpec(const json &f, ClipRender &r, double &tail, std::string &err) {
 
 bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err, const Audio *rendered = nullptr) {
     static const std::set<std::string> known = {"file", "beat", "endAt", "bpm", "speed", "pitch", "stretch", "start", "length",
-                                                "beats", "reverse", "gain", "fadeIn", "fadeOut"};
+                                                "beats", "reverse", "gain", "fadeIn", "fadeOut", "repeat", "key"};
     for (auto &[k, v] : c.items())
         if (!known.count(k)) { err = "clip: unknown setting '" + k + "'"; return false; }
     Audio src;
     int sr = 0;
     std::string file;
+    const AppleLoop *loop = nullptr;   // an Apple Loop knows its tempo and key
     if (c.contains("file") && c["file"].is_object()) {
         // the song's own audio, captured from the render graph, plus the tail, through the clip's own fx
         const json &f = c["file"];
@@ -111,9 +117,13 @@ bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err, cons
         const std::string path = resolveSampleFile(file, job.baseDir);
         if (path.empty()) { err = "clip: cannot find audio file '" + file + "'"; return false; }
         if (!loadFile(path, src, sr, err)) return false;
+        std::string ext = fs::u8path(path).extension().string();
+        for (auto &ch : ext) ch = (char)std::tolower((unsigned char)ch);
+        if (ext == ".caf") loop = appleLoopAt(path);
     }
-    // trim in the file's own time: start / length in seconds, or beats at the clip's own bpm
-    const double srcBpm = c.value("bpm", 0.0);
+    // trim in the file's own time: start / length in seconds, or beats at the clip's own bpm (an Apple
+    // Loop's own tempo unless "bpm" or "speed" is given: it follows the song's tempo, as in GarageBand)
+    const double srcBpm = c.value("bpm", loop && loop->bpm > 0 && !c.contains("speed") ? loop->bpm : 0.0);
     const double start = std::max(0.0, c.value("start", 0.0));
     double length = c.value("length", 0.0);
     if (c.contains("beats")) {
@@ -126,6 +136,17 @@ bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err, cons
     cut.left.assign(src.left.begin() + (long)a, src.left.begin() + (long)b);
     cut.right.assign(src.right.begin() + (long)a, src.right.begin() + (long)b);
     if (c.value("reverse", false)) { std::reverse(cut.left.begin(), cut.left.end()); std::reverse(cut.right.begin(), cut.right.end()); }
+    const int repeat = c.value("repeat", 1);
+    if (repeat < 1 || repeat > 1000) { err = "clip: \"repeat\" is how many times it plays back to back (1-1000)"; return false; }
+    if (repeat > 1) {
+        const size_t n = cut.frames();
+        cut.left.reserve(n * (size_t)repeat);
+        cut.right.reserve(n * (size_t)repeat);
+        for (int k = 1; k < repeat; ++k) {
+            cut.left.insert(cut.left.end(), cut.left.begin(), cut.left.begin() + (long)n);
+            cut.right.insert(cut.right.end(), cut.right.begin(), cut.right.begin() + (long)n);
+        }
+    }
     clip.audio = sr == job.sampleRate ? std::move(cut) : resample(cut, (double)sr / job.sampleRate);
     if (clip.audio.frames() == 0) { err = "clip: '" + file + "' is empty after trimming"; return false; }
 
@@ -137,6 +158,23 @@ bool parseClip(const Job &job, const json &c, Clip &clip, std::string &err, cons
     const bool hasBeat = c.contains("beat"), hasEnd = c.contains("endAt");
     if (hasBeat == hasEnd) { err = "clip: give either \"beat\" (where it starts) or \"endAt\" (the beat where it ends)"; return false; }
     const double anchorBeat = hasBeat ? c["beat"].get<double>() : c["endAt"].get<double>();
+    // "key": an Apple Loop moved into a key ("D minor") or into the job's own key at the clip ("song")
+    if (c.contains("key")) {
+        if (!c["key"].is_string()) { err = "clip: \"key\" is a key name (\"D minor\") or \"song\""; return false; }
+        if (!loop) { err = "clip: \"key\" moves an Apple Loop into a key; '" + file + "' doesn't say its own key (use \"pitch\")"; return false; }
+        const std::string k = c["key"].get<std::string>();
+        int shift = 0;
+        if (k == "song") {
+            const KeyMark *in = nullptr;
+            for (auto &m : job.keys) if (m.beat <= anchorBeat + 1e-9) in = &m;
+            if (!in && !job.keys.empty()) in = &job.keys.front();
+            if (!in) { err = "clip: \"key\": \"song\" needs the job's \"keys\" ([{\"bar\": 1, \"key\": \"D minor\"}])"; return false; }
+            if (appleLoopShift(*loop, in->tonic, in->minor, shift)) clip.pitch += shift;
+        } else if (!loop->key.empty()) {
+            if (!appleLoopShift(*loop, k, shift, err)) { err = "clip: \"key\": " + err; return false; }
+            clip.pitch += shift;
+        }
+    }
     // speed: the file's tempo fitted to the song's (at the anchor), or an explicit factor
     clip.speed = c.value("speed", 1.0);
     if (srcBpm > 0 && !c.contains("speed")) clip.speed = job.tempo.bpmAtBeat(anchorBeat) / srcBpm;
