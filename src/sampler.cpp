@@ -1338,7 +1338,8 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     GarageBandSynth gs;
     const bool resynth = !installed && kit.empty() && garageBandSynthPatch(fs::path(dir).stem().string(), gs);
     if (resynth) {
-        out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes}};
+        out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes},
+                        {"patch", gs.synth}, {"transpose", gs.transpose}};
         out["effects"] = gs.fx;
     }
     out["plays"] = installed > 0 || !kit.empty() || resynth;

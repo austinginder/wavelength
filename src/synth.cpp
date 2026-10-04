@@ -3,12 +3,16 @@
 #include "automation.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
+#include "loudness.hpp"
 #include "retro_synth.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 
 namespace wl {
@@ -543,6 +547,46 @@ bool isSynthExpParam(const std::string &name) {
 
 bool isBuiltinSynthPatch(const std::string &name) { return patchBank().contains(name); }
 
+namespace {
+thread_local bool tLevelProbe = false;   // rendering a level probe: no level fix inside it
+
+// GarageBand's factory patches are roughly level-matched, but a re-creation can land far from them while its filter
+// and resonance scales are guesses (a self-oscillating resonance, a filter closed until modulation that isn't
+// mapped). A patch whose probe (C3 held, then a C minor chord, effects included) measures outside -33..-17 LUFS,
+// 8 dB either side of the re-creations' typical -25, is moved to the nearer edge (by at most +24 dB). The dB to
+// add after its effects; cached per patch.
+double garageBandLevelFix(const std::string &name) {
+    static std::mutex m;
+    static std::map<std::string, double> cache;
+    {
+        std::lock_guard<std::mutex> lock(m);
+        auto it = cache.find(name);
+        if (it != cache.end()) return it->second;
+    }
+    Job job;
+    Track t;
+    t.name = "level probe";
+    t.plugin = "builtin:synth";
+    t.preset = name;
+    for (auto [start, key] : std::initializer_list<std::pair<double, int>>{{0, 48}, {2, 60}, {2, 63}, {2, 67}})
+        t.notes.push_back({start, 1.5, key, 0, 0.8, {}, {}});
+    Audio a;
+    a.resize((size_t)(4.5 * job.sampleRate));
+    std::vector<std::string> w;
+    std::string e;
+    double fix = 0;
+    tLevelProbe = true;
+    const bool ok = renderSynth(job, t, a, w, e);
+    tLevelProbe = false;
+    const double lufs = ok ? integratedLufs(a, job.sampleRate) : 0;
+    if (ok && std::isfinite(lufs) && lufs > -120) fix = lufs > -17 ? -17 - lufs : lufs < -33 ? std::min(24.0, -33 - lufs) : 0;
+    fix = std::round(fix * 10) / 10;
+    std::lock_guard<std::mutex> lock(m);
+    cache[name] = fix;
+    return fix;
+}
+} // namespace
+
 bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
     const double sr = job.sampleRate;
     Patch P;
@@ -550,6 +594,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
     std::vector<bool> automated((size_t)P_COUNT, false);
     bool pwParam = false;   // "pw" set by params or automation: it replaces every pulse oscillator's own width
     double patchTranspose = 0;          // a GarageBand patch's own transposition (semitones)
+    double levelFix = 0;                // dB after its effects that brings a re-created patch near the others' level
     json patchFx = json::array();       // and its effects, after the voices ("synth": {"effects": false} leaves them out)
     try {
         // the named patch, then the track's "synth" object merged over it
@@ -563,8 +608,11 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             found = "Init";
             patchTranspose = gb.transpose;
             patchFx = gb.fx;
+            if (!tLevelProbe) levelFix = garageBandLevelFix(gb.name);
+            char fixText[96] = "";
+            if (levelFix != 0) std::snprintf(fixText, sizeof fixText, "; its level moved %+.1f dB toward its peers' (scales not yet calibrated)", levelFix);
             warnings.push_back("preset '" + gb.name + "' is GarageBand's " + gb.instrument + " patch" + (gb.engine.empty() ? "" : " (" + gb.engine + " mode)") +
-                               ", re-created on builtin:synth: an approximation");
+                               ", re-created on builtin:synth: an approximation" + fixText);
         }
         if (found.empty()) {
             std::string lower = preset;
@@ -857,6 +905,10 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             if (!fx->process(out, ctx, err)) return false;
             for (auto &w : fx->warnings) warnings.push_back("patch effect: " + w);
         }
+    }
+    if (levelFix != 0) {
+        const float g = (float)dsp::dbToLin(levelFix);
+        for (size_t i = 0; i < out.frames(); ++i) out.left[i] *= g, out.right[i] *= g;
     }
     return true;
 }
