@@ -1,5 +1,7 @@
 #include "audio_file.hpp"
 
+#include "platform.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -43,6 +45,11 @@ bool interleaved(const uint8_t *data, size_t len, int channels, int bits, bool f
         if (channels > 1) s.r[i] = get(q + bps);
     }
     return true;
+}
+
+// AAC and Apple Lossless (Apple Loops, GarageBand and Logic content, M4A): the system's decoder
+bool decodeSystem(const uint8_t *d, size_t size, DecodedAudio &s, std::string &err) {
+    return platform::decodeWithSystem(d, size, s.rate, s.l, s.r, err);
 }
 
 bool decodeWav(const uint8_t *d, size_t size, DecodedAudio &s, std::string &err) {
@@ -104,14 +111,16 @@ bool decodeAiff(const uint8_t *d, size_t size, DecodedAudio &s, std::string &err
     if (c == "sowt") return interleaved(data, dataLen, channels, (bits + 7) / 8 * 8, false, false, false, s, err);
     if (c == "fl32") return interleaved(data, dataLen, channels, 32, true, true, false, s, err);
     if (c == "fl64") return interleaved(data, dataLen, channels, 64, true, true, false, s, err);
-    err = "unsupported AIFF-C compression '" + comp + "'";
+    if (decodeSystem(d, size, s, err)) return true;   // ima4, ulaw, alaw, ...
+    err = "AIFF-C compression '" + comp + "': " + err;
     return false;
 }
 
 uint64_t be64(const uint8_t *p) { return (uint64_t)be32(p) << 32 | be32(p + 4); }
 
 // Core Audio Format: "caff" + version, then chunks (4-byte type, i64 BE size; -1 = to the end of the
-// file for 'data'). Linear PCM only ('lpcm'; flags: 1 float, 2 little-endian).
+// file for 'data'). Linear PCM ('lpcm'; flags: 1 float, 2 little-endian) is read here, anything else
+// (AAC in Apple Loops) by the system's decoder.
 struct CafInfo { double rate = 0; int channels = 0, bits = 0; bool flt = false, little = false; size_t dataAt = 0, dataLen = 0; std::string format; };
 bool cafInfo(const uint8_t *d, size_t size, size_t fileSize, CafInfo &c, std::string &err) {
     if (size < 8 || std::memcmp(d, "caff", 4)) { err = "not a CAF file"; return false; }
@@ -136,13 +145,17 @@ bool cafInfo(const uint8_t *d, size_t size, size_t fileSize, CafInfo &c, std::st
         p += 12 + (size_t)len;
     }
     if (!c.dataAt || c.channels < 1) { err = "CAF has no desc/data chunk"; return false; }
-    if (c.format != "lpcm") { err = "unsupported CAF encoding '" + c.format + "' (linear PCM only)"; return false; }
     return true;
 }
 
 bool decodeCaf(const uint8_t *d, size_t size, DecodedAudio &s, std::string &err) {
     CafInfo c;
     if (!cafInfo(d, size, size, c, err)) return false;
+    if (c.format != "lpcm") {
+        if (decodeSystem(d, size, s, err)) return true;
+        err = "CAF encoding '" + c.format + "': " + err;
+        return false;
+    }
     s.rate = c.rate;
     return interleaved(d + c.dataAt, std::min(c.dataLen, size - c.dataAt), c.channels, c.bits, c.flt, !c.little, false, s, err);
 }
@@ -165,7 +178,8 @@ bool decodeAudio(const uint8_t *d, size_t size, DecodedAudio &out, std::string &
         ok = codecs::vorbis(d, size, out, err);
     }
     else if (isMp3(d, size)) ok = codecs::mp3(d, size, out, err);
-    else { err = "not a WAV, AIFF, CAF, FLAC, MP3 or Ogg Vorbis file"; return false; }
+    else if (size >= 12 && !std::memcmp(d + 4, "ftyp", 4)) ok = decodeSystem(d, size, out, err);   // M4A
+    else { err = "not a WAV, AIFF, CAF, FLAC, MP3, Ogg Vorbis or M4A file"; return false; }
     if (ok && !(out.rate > 0)) { err = "the file gives no sample rate"; return false; }
     return ok;
 }
@@ -197,7 +211,7 @@ bool readAudioFrames(const std::string &path, double from, double to, DecodedAud
     size_t dataAt = 0, dataLen = 0, frame = 0;
     int channels = 0, bits = 0;
     bool flt = false, big = false, known = false;
-    if (head.size() >= 8 && !std::memcmp(head.data(), "caff", 4) && cafInfo(head.data(), head.size(), fileSize, c, e2)) {
+    if (head.size() >= 8 && !std::memcmp(head.data(), "caff", 4) && cafInfo(head.data(), head.size(), fileSize, c, e2) && c.format == "lpcm") {
         out = DecodedAudio{};
         out.rate = c.rate; dataAt = c.dataAt; dataLen = c.dataLen; channels = c.channels; bits = c.bits; flt = c.flt; big = !c.little; known = true;
     } else if (head.size() >= 12 && !std::memcmp(head.data(), "RIFF", 4) && !std::memcmp(head.data() + 8, "WAVE", 4)) {
@@ -239,7 +253,7 @@ bool readAudioFrames(const std::string &path, double from, double to, DecodedAud
 bool isAudioFileName(const std::string &path) {
     std::string e = std::filesystem::path(path).extension().string();
     for (auto &c : e) c = (char)std::tolower((unsigned char)c);
-    return e == ".wav" || e == ".aif" || e == ".aiff" || e == ".aifc" || e == ".caf" || e == ".flac" || e == ".mp3" || e == ".ogg";
+    return e == ".wav" || e == ".aif" || e == ".aiff" || e == ".aifc" || e == ".caf" || e == ".flac" || e == ".mp3" || e == ".ogg" || e == ".m4a";
 }
 
 } // namespace wl

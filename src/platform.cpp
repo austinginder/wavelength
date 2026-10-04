@@ -33,6 +33,7 @@
 extern char **environ;
 #endif
 #ifdef __APPLE__
+#include <AudioToolbox/AudioToolbox.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <mach-o/dyld.h>
@@ -361,6 +362,85 @@ std::vector<std::filesystem::path> niContentDirs() {
     }
 #endif
     return out;
+}
+
+#if defined(__APPLE__)
+namespace {
+struct MemoryFile { const uint8_t *data; size_t size; };
+OSStatus memoryRead(void *ref, SInt64 pos, UInt32 count, void *buf, UInt32 *got) {
+    auto *m = static_cast<MemoryFile *>(ref);
+    if (pos < 0 || (size_t)pos > m->size) { *got = 0; return kAudioFileInvalidPacketOffsetError; }
+    *got = (UInt32)std::min<size_t>(count, m->size - (size_t)pos);
+    std::memcpy(buf, m->data + pos, *got);
+    return noErr;
+}
+SInt64 memorySize(void *ref) { return (SInt64) static_cast<MemoryFile *>(ref)->size; }
+std::string osStatus(OSStatus s) {
+    const uint32_t b = (uint32_t)s;
+    const char c[4] = {(char)(b >> 24), (char)(b >> 16), (char)(b >> 8), (char)b};
+    for (char x : c) if (x < 32 || x > 126) return std::to_string((int)s);
+    return "'" + std::string(c, 4) + "'";
+}
+} // namespace
+#endif
+
+bool decodeWithSystem(const uint8_t *data, size_t size, double &rate, std::vector<float> &l, std::vector<float> &r, std::string &err) {
+#if defined(__APPLE__)
+    MemoryFile mem{data, size};
+    AudioFileID file = nullptr;
+    OSStatus st = AudioFileOpenWithCallbacks(&mem, memoryRead, nullptr, memorySize, nullptr, 0, &file);
+    if (st != noErr) { err = "the system can't open it (" + osStatus(st) + ")"; return false; }
+    ExtAudioFileRef ext = nullptr;
+    st = ExtAudioFileWrapAudioFileID(file, false, &ext);
+    if (st != noErr) { AudioFileClose(file); err = "the system can't decode it (" + osStatus(st) + ")"; return false; }
+    AudioStreamBasicDescription in{};
+    UInt32 sz = sizeof in;
+    st = ExtAudioFileGetProperty(ext, kExtAudioFileProperty_FileDataFormat, &sz, &in);
+    const UInt32 channels = std::min<UInt32>(in.mChannelsPerFrame, 2);
+    if (st != noErr || channels < 1 || !(in.mSampleRate > 0)) {
+        ExtAudioFileDispose(ext); AudioFileClose(file);
+        err = "the system can't read its format (" + osStatus(st) + ")";
+        return false;
+    }
+    // float32, interleaved, at the file's own rate; a file with more channels keeps the first two
+    AudioStreamBasicDescription out{};
+    out.mSampleRate = in.mSampleRate;
+    out.mFormatID = kAudioFormatLinearPCM;
+    out.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    out.mChannelsPerFrame = in.mChannelsPerFrame;
+    out.mBitsPerChannel = 32;
+    out.mBytesPerFrame = out.mBytesPerPacket = 4 * in.mChannelsPerFrame;
+    out.mFramesPerPacket = 1;
+    st = ExtAudioFileSetProperty(ext, kExtAudioFileProperty_ClientDataFormat, sizeof out, &out);
+    if (st != noErr) { ExtAudioFileDispose(ext); AudioFileClose(file); err = "the system can't decode it to PCM (" + osStatus(st) + ")"; return false; }
+    rate = in.mSampleRate;
+    l.clear(); r.clear();
+    const UInt32 block = 8192, n = in.mChannelsPerFrame;
+    std::vector<float> buf((size_t)block * n);
+    for (;;) {
+        AudioBufferList list;
+        list.mNumberBuffers = 1;
+        list.mBuffers[0].mNumberChannels = n;
+        list.mBuffers[0].mDataByteSize = (UInt32)(buf.size() * sizeof(float));
+        list.mBuffers[0].mData = buf.data();
+        UInt32 frames = block;
+        st = ExtAudioFileRead(ext, &frames, &list);
+        if (st != noErr) { ExtAudioFileDispose(ext); AudioFileClose(file); err = "decoding failed (" + osStatus(st) + ")"; return false; }
+        if (frames == 0) break;
+        for (UInt32 i = 0; i < frames; ++i) {
+            l.push_back(buf[(size_t)i * n]);
+            if (channels > 1) r.push_back(buf[(size_t)i * n + 1]);
+        }
+    }
+    ExtAudioFileDispose(ext);
+    AudioFileClose(file);
+    if (l.empty()) { err = "decoded to no audio"; return false; }
+    return true;
+#else
+    (void)data; (void)size; (void)rate; (void)l; (void)r;
+    err = "this encoding (AAC, Apple Lossless) is decoded by macOS only here: convert the file to FLAC or WAV";
+    return false;
+#endif
 }
 
 double loadAverage() {

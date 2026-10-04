@@ -1,6 +1,7 @@
 #pragma once
-// Audio files in: WAV, AIFF/AIFC, CAF (linear PCM), FLAC, MP3 and Ogg Vorbis, told apart by their contents
-// (not the extension). Anything beyond two channels keeps the first two.
+// Audio files in: WAV, AIFF/AIFC, CAF, FLAC, MP3, Ogg Vorbis and M4A, told apart by their contents (not the
+// extension). AAC and Apple Lossless (Apple Loops, M4A, compressed CAF/AIFC) go through the system's decoder,
+// so they play on macOS only. Anything beyond two channels keeps the first two.
 #include "wav.hpp"
 
 #include <cstddef>
@@ -23,7 +24,7 @@ bool readAudio(const std::string &path, Audio &out, int &sampleRate, std::string
 // Frames [from, to) of a file: PCM in a CAF or WAV is read straight from that range (a consolidated
 // sample holding a whole instrument need not be read), other formats are decoded and cut.
 bool readAudioFrames(const std::string &path, double from, double to, DecodedAudio &out, std::string &err);
-// ".wav", ".aif", ".aiff", ".aifc", ".caf", ".flac", ".mp3", ".ogg" (case-insensitive)
+// ".wav", ".aif", ".aiff", ".aifc", ".caf", ".flac", ".mp3", ".ogg", ".m4a" (case-insensitive)
 bool isAudioFileName(const std::string &path);
 
 namespace codecs {   // audio_codecs.cpp: the single-file decoders
