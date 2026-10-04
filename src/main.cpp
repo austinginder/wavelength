@@ -487,6 +487,30 @@ int cmdSamples(const Args &a) {
                           path.c_str(), fs::path(path).stem().string().c_str());
         return 0;
     }
+    if (a.has("--patch")) {   // a GarageBand or Logic patch: its channels, what plays, its sends
+        const json d = describePatch(a.get("--patch"), fs::current_path().string(), err);
+        if (d.is_null()) return fail(a, err);
+        if (a.has("--json")) { emit(json{{"ok", true}, {"patch", d}}.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
+        std::fprintf(OUT, "%s\n%s\n", d["name"].get<std::string>().c_str(), d["path"].get<std::string>().c_str());
+        for (auto &c : d["channels"]) {
+            std::string what = c["instrument"].get<std::string>().empty() ? "(no instrument)" : c["instrument"].get<std::string>();
+            if (c.contains("source")) what += ", " + c["source"].get<std::string>();
+            if (c.contains("samples")) what += ", " + std::to_string(c["samples"]["installed"].get<size_t>()) + " of " + std::to_string(c["samples"]["total"].get<size_t>()) + " samples installed";
+            std::string fx;
+            for (auto &e : c["effects"]) fx += (fx.empty() ? "" : ", ") + e.get<std::string>();
+            std::fprintf(OUT, "  %-14s %s%s\n", c["file"].get<std::string>().c_str(), what.c_str(), fx.empty() ? "" : ("\n                 effects: " + fx).c_str());
+        }
+        if (d.contains("kit")) std::fprintf(OUT, "  plays its kit \"%s\" (Ultrabeat's synthesis left out)\n", d["kit"].get<std::string>().c_str());
+        for (auto &s : d["sends"])
+            std::fprintf(OUT, "  send %-34s %6.1f dB%s\n", s["aux"].get<std::string>().c_str(), s["db"].get<double>(),
+                         s.contains("ir") ? ("   room: \"" + s["ir"].get<std::string>() + "\"").c_str() : "");
+        if (!d["plays"].get<bool>()) { std::fprintf(OUT, "\nDoesn't play here: %s.\n", d["why"].get<std::string>().c_str()); return 0; }
+        std::fprintf(OUT, "\nPlay it: \"plugin\": \"builtin:sampler\", \"sampler\": {\"patch\": \"%s\"}. Its effects are GarageBand's own and don't play.\n",
+                     d["name"].get<std::string>().c_str());
+        if (!d["sends"].empty())
+            std::fprintf(OUT, "For its sends, a bus per room: {\"name\": \"Hall\", \"fx\": [{\"type\": \"convolve\", \"ir\": \"<room>\", \"mix\": 1}]} and \"sends\": {\"Hall\": <dB>}.\n");
+        return 0;
+    }
     if (a.has("--kit")) {
         std::vector<std::pair<int, std::string>> map;
         std::vector<std::string> unmapped;
@@ -1994,7 +2018,7 @@ int run(int argc, char **argv) {
             {"plugins", {"--rescan", "--json", "--block", "--unblock", "--reason"}},
             {"params", {"--preset", "--state", "--format", "--all", "--map", "--steps", "--json", "--verbose"}},
             {"presets", {"--search", "--rescan", "--json"}},
-            {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--json"}},
+            {"samples", {"--search", "--kit", "--roundrobin", "--soundfont", "--install-soundfont", "--force", "--patch", "--json"}},
             {"loops", {"--search", "--key", "--midi", "--notes", "--json"}},
             {"analyze", {"--start", "--end", "--song-time", "--grid", "--div", "--every", "--peaks", "--top", "--json"}},
             {"audition", {"--jobs", "--limit", "--rebuild", "--retag", "--json", "--verbose"}},

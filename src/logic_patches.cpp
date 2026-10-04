@@ -2,8 +2,11 @@
 
 #include "platform.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -27,7 +30,7 @@ const std::set<std::string> &synthNames() {
     return s;
 }
 
-struct Record { size_t at, size; std::string name; };
+struct Record { size_t at, size; std::string name, preset; };
 
 // The plugin records of a channel strip: where each payload is, its size and its plugin's name
 bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
@@ -35,10 +38,12 @@ bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
     const auto first = std::search(d.begin(), d.begin() + (long)std::min<size_t>(d.size(), 4096), magic, magic + 4);
     for (size_t pos = (size_t)(first - d.begin()); pos + 36 <= d.size() && !std::memcmp(&d[pos], "UCuA", 4);) {
         const uint32_t n = le32(&d[pos + 0x1c]);
-        Record r{pos + 36, n, ""};
+        Record r{pos + 36, n, "", ""};
         const uint8_t *pl = &d[pos + 36];
-        if (n >= 140 && pos + 36 + 140 <= d.size() && (!std::memcmp(pl + 132, "MELC", 4) || !std::memcmp(pl + 132, "GAME", 4)))
+        if (n >= 140 && pos + 36 + 140 <= d.size() && (!std::memcmp(pl + 132, "MELC", 4) || !std::memcmp(pl + 132, "GAME", 4))) {
             for (size_t k = 0; k < 12 && pl[120 + k]; ++k) r.name += (char)pl[120 + k];
+            for (size_t k = 14; k < 120 && pl[k] >= 32 && pl[k] < 127; ++k) r.preset += (char)pl[k];
+        }
         out.push_back(r);
         pos += 36 + (size_t)n;
     }
@@ -73,6 +78,29 @@ std::vector<std::string> channelFiles(const std::string &patchDir) {
     return files;
 }
 } // namespace
+
+std::vector<PatchSend> readPatchSends(const std::string &patchDir) {
+    std::vector<PatchSend> out;
+    std::string text;
+    if (!platform::plistToJson((fs::path(patchDir) / "data.plist").string(), text)) return out;
+    const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+    if (!j.is_object() || !j.contains("channels") || !j["channels"].is_array()) return out;
+    for (auto &ch : j["channels"]) {
+        if (!ch.is_object() || !ch.contains("Channel_sends") || !ch["Channel_sends"].is_array()) continue;
+        for (auto &snd : ch["Channel_sends"]) {
+            if (!snd.is_object() || !snd.value("auxTag", std::string()).size() || snd.value("sendIsMuted", false)) continue;
+            const double v = snd.value("sendVolume", 0.0);
+            if (v <= 0) continue;
+            PatchSend p;
+            p.channel = ch.value("Channel_name", std::string());
+            p.aux = snd["auxTag"].get<std::string>();
+            p.room = p.aux.substr(p.aux.find('/') == std::string::npos ? 0 : p.aux.find('/') + 1);
+            p.db = 20 * std::log10(v);
+            out.push_back(p);
+        }
+    }
+    return out;
+}
 
 bool isSamplerInstrument(const std::string &name) { return name == "Sampler" || name == "EXS24" || name == "Drum Kit"; }
 
@@ -139,7 +167,8 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         PatchChannel c;
         c.file = f;
         const Record *r = instrumentOf(recs);
-        if (r) c.instrument = r->name;
+        if (r) { c.instrument = r->name; c.preset = r->preset; }
+        for (auto &x : recs) if (!x.name.empty() && &x != r) c.effects.push_back(x.name);
         c.sampler = r && isSamplerInstrument(r->name);
         if (c.sampler) {
             c.data.swap(d);

@@ -24,12 +24,13 @@ Usage:
   wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
-  wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--install-soundfont [--force]] [--json]
+  wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--patch NAME] [--install-soundfont [--force]] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ,
       SoundFonts, Logic and GarageBand instruments and patches, Apple Loops) and impulse responses
       for the convolve effect; --kit shows the General MIDI key each of a kit's files is mapped to,
-      --soundfont a SoundFont's presets. --install-soundfont downloads MuseScore General (MIT), the
-      General MIDI set.
+      --soundfont a SoundFont's presets, --patch a GarageBand or Logic patch (its channels, whether
+      and what it plays here, its effects and sends with their rooms for convolve). --install-soundfont
+      downloads MuseScore General (MIT), the General MIDI set.
   wavelength loops [--search TEXT] [--key KEY] [--midi] [--json] | loops --notes <name> [--key KEY] [--json]
       List the Apple Loops GarageBand and Logic install (macOS): category, key, tempo, length in
       beats, and "notes" for software-instrument loops. A clip plays one as {"file": "lib:Apple

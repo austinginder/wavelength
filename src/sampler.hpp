@@ -25,6 +25,8 @@
 #include "job.hpp"
 #include "wav.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <string>
 #include <vector>
 
@@ -47,6 +49,10 @@ const std::vector<SampleLibraryEntry> &patchLibrary();
 // inside) and any audio file under /Library/Audio/Impulse Responses, ~/Library/Audio/Impulse Responses and
 // $WAVELENGTH_IR_PATH; count = length in ms (cached per process, built on first use).
 const std::vector<SampleLibraryEntry> &impulseLibrary();
+// A GarageBand or Logic patch as `samples --patch` shows it: its channels (instrument, where its samples come from
+// and how many are installed, its effects), whether it plays here (or why not), and its sends with the impulse
+// response of each aux's room when one is installed. null with err when there is no such patch.
+nlohmann::json describePatch(const std::string &query, const std::string &baseDir, std::string &err);
 // An impulse response by path (relative to baseDir), lib: name or library name; "" with err when none.
 std::string findImpulseResponse(const std::string &query, const std::string &baseDir, std::string &err);
 // A sample file by path (absolute, relative to baseDir, or relative to a sample root); "" if missing.

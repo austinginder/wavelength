@@ -314,8 +314,19 @@ synth_out=$("./$build/wavelength" render out/check/exs/synth.json --out out/chec
 if [ -z "$exs_why" ] && ! echo "$synth_out" | grep "Retro Synth" > /dev/null; then
   exs_why="a Retro Synth patch was not refused by name"
 fi
+# samples --patch: the stored instrument's sample is installed and the patch plays; the synth patch says why it doesn't
+if [ -z "$exs_why" ]; then
+  p1=$("./$build/wavelength" samples --patch "Test Patch" --json 2>/dev/null || true)
+  p2=$("./$build/wavelength" samples --patch "Test Synth" --json 2>/dev/null || true)
+  python3 -c '
+import json, sys
+a, b = json.loads(sys.argv[1])["patch"], json.loads(sys.argv[2])["patch"]
+c = a["channels"][0]
+sys.exit(0 if a["plays"] and c["instrument"] == "Sampler" and c["samples"] == {"installed": 1, "total": 1} and "Channel EQ" in c["effects"]
+         and not b["plays"] and "GarageBand" in b["why"] else 1)' "$p1" "$p2" || exs_why="samples --patch described the test patches wrong"
+fi
 unset WAVELENGTH_LOGIC_PATCHES
-if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument, synth patches refused"; fi
+if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument, synth patches refused, --patch"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir
@@ -375,7 +386,20 @@ print(" ".join("%d=%s" % (m["key"], m["file"]) for m in json.load(sys.stdin)["ma
 for want in 36=MK_BD1.wav 38=MK_SD1.wav 42=MK_HH1.wav 46=MK_HHo.wav 39=MK_Clap.wav; do
   case " $map " in *" $want "*) ;; *) folders_why="kit map lacks $want ($map)";; esac
 done
-if [ -n "$folders_why" ]; then echo "FAIL sample folders: $folders_why"; fail=1; else echo "ok   sample folders: note-named multisamples (both octave namings), drum machine abbreviations"; fi
+# an Ultrabeat patch plays its kit folder (named by its settings, "Machine Kit.pst")
+python3 scripts/make-test-exs.py out/check/folders/exs
+cat > out/check/folders/beat.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0, "stems": "none",
+ "tracks": [{"name": "Beat", "plugin": "builtin:sampler", "sampler": {"patch": "Test Beat GB"}, "notes": [{"beat": 0, "dur": 0.5, "key": 36}]}]}
+JOB
+beat=$(WAVELENGTH_SAMPLES_PATH="$PWD/out/check/folders/lib" WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/folders/exs/patches" \
+  "./$build/wavelength" render out/check/folders/beat.json --out out/check/folders/beat --json 2>/dev/null || true)
+echo "$beat" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+sys.exit(0 if r.get("ok") and r["tracks"][0]["lufs"] > -60 and "Machine Kit" in " ".join(r["tracks"][0].get("warnings", [])) else 1)' ||
+  folders_why="the Ultrabeat patch did not play its kit"
+if [ -n "$folders_why" ]; then echo "FAIL sample folders: $folders_why"; fail=1; else echo "ok   sample folders: note-named multisamples (both octave namings), drum machine abbreviations, Ultrabeat patch kits"; fi
 
 # serve: the web UI answers, carries its token, refuses changes without it
 # render --png and picture: real PNGs of the size the report names, a lane per track (taller with more tracks)

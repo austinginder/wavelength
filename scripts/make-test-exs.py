@@ -5,12 +5,15 @@
                                     instrument parameters: volume -6 dB, release 64 (0.65 s), sustain 127
   <dir>/patches/Test Patch.patch/   a channel strip (#Root.cst) whose Sampler slot stores that instrument
   <dir>/patches/Test Synth.patch/   a channel strip on Retro Synth (an instrument only GarageBand plays)
+  <dir>/patches/Test Beat GB.patch/ a channel strip on Ultrabeat with the settings "Machine Kit.pst" (its kit folder
+                                    comes from make-test-sample-folders.py)
 Usage: make-test-exs.py <dir>"""
 import math, os, struct, sys
 
 out = sys.argv[1]
 os.makedirs(os.path.join(out, 'patches', 'Test Patch.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Synth.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
 wav = os.path.abspath(os.path.join(out, 'Test Sine.wav'))
 rate, n = 48000, 96000
 pcm = struct.pack('<%dh' % n, *[int(16000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n)])
@@ -43,10 +46,11 @@ exs = (chunk(0, 0, 'Test Instrument', bytes(40)) + chunk(1, 0, 'Zone', bytes(zon
 with open(os.path.join(out, 'Test Instrument.exs'), 'wb') as f:
     f.write(exs)
 
-def record(slot, plugin, maker, data):
+def record(slot, plugin, maker, data, preset=''):
     # a channel strip slot: 36-byte "UCuA" header (payload size at +0x1c), payload with the plugin's name at
     # +120 and its maker at +132, then the plugin's data
     payload = bytearray(140)
+    payload[14:14 + len(preset)] = preset.encode()
     payload[120:120 + len(plugin)] = plugin.encode()
     payload[132:136] = maker
     payload += data
@@ -64,3 +68,4 @@ def strip(path, records):
 strip(os.path.join(out, 'patches', 'Test Patch.patch', '#Root.cst'),
       [record(0, '', b'\0\0\0\0', bytes(8)), record(3, 'Sampler', b'MELC', bytes(120) + exs), record(4, 'Channel EQ', b'GAME', bytes(64))])
 strip(os.path.join(out, 'patches', 'Test Synth.patch', '#Root.cst'), [record(3, 'Retro Synth', b'GAME', bytes(200))])
+strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])

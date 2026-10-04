@@ -36,6 +36,9 @@ std::vector<std::filesystem::path> niContentDirs();
 // M4A or AIFC, through AudioToolbox; encoder priming and padding are trimmed). Stereo files fill l and
 // r, mono fills l only. False elsewhere, with err saying what to convert the file to.
 bool decodeWithSystem(const uint8_t *data, size_t size, double &rate, std::vector<float> &l, std::vector<float> &r, std::string &err);
+// A property list file (XML or binary) as JSON text (macOS; dates as seconds, data as its length): false elsewhere
+// or when it can't be read.
+bool plistToJson(const std::string &path, std::string &json);
 // macOS: the CPU architectures a plugin bundle (or a plain library/executable) contains, e.g.
 // {"x86_64"} for an Intel-only plugin; empty when it can't be read or elsewhere.
 std::vector<std::string> binaryArchs(const std::string &path);

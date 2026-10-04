@@ -1184,6 +1184,23 @@ const std::vector<SampleLibraryEntry> &sampleLibrary() {
     return lib;
 }
 
+// The drum machine kit an Ultrabeat patch plays: GarageBand installs each one's samples as a kit folder named
+// like the patch or its settings ("Beat Machine GB", "Boutique 808"); "" when it isn't one or the kit is missing
+std::string ultrabeatKit(const std::string &patchDir, const std::vector<PatchChannel> &chans) {
+    for (auto &c : chans) {
+        if (c.instrument != "Ultrabeat") continue;
+        const std::string name = fs::path(patchDir).stem().string(), preset = fs::path(c.preset).stem().string();
+        std::vector<std::string> names = {preset, name};
+        for (const std::string &n : {preset, name})
+            if (n.size() > 3 && n.compare(n.size() - 3, 3, " GB") == 0) names.push_back(n.substr(0, n.size() - 3));
+            else names.push_back(n + " GB");
+        for (auto &n : names)
+            for (auto &e : sampleLibrary())
+                if (e.kind == "kit" && !n.empty() && lower(e.name) == lower(n)) return e.name;
+    }
+    return "";
+}
+
 const std::vector<SampleLibraryEntry> &patchLibrary() {
     static std::vector<SampleLibraryEntry> lib;
     static std::once_flag once;
@@ -1191,10 +1208,16 @@ const std::vector<SampleLibraryEntry> &patchLibrary() {
         std::set<std::string> seen;
         // GarageBand's and Logic's patches that play on Logic's samplers, when some of their samples are installed
         for (auto &pt : logicPatches()) {
-            if (!pt.sampler || !seen.insert(lower(pt.name)).second) continue;
+            if ((!pt.sampler && pt.instrument != "Ultrabeat") || !seen.insert(lower(pt.name)).second) continue;
             std::vector<PatchChannel> chans;
             std::string e;
             if (!readPatchChannels(pt.path, chans, e)) continue;
+            if (!pt.sampler) {   // Ultrabeat: its kit's samples
+                const std::string kit = ultrabeatKit(pt.path, chans);
+                for (auto &k : sampleLibrary())
+                    if (!kit.empty() && k.kind == "kit" && k.name == kit) { lib.push_back({"patch", pt.name, pt.path, pt.category, k.count}); break; }
+                continue;
+            }
             size_t installed = 0;
             for (auto &c : chans) {
                 if (!c.sampler) continue;
@@ -1258,6 +1281,68 @@ std::string findImpulseResponse(const std::string &query, const std::string &bas
     std::string path = resolveIn(query, baseDir);
     if (path.empty() && !findEntry("ir", query, path, err)) return "";
     return path;
+}
+
+// The impulse response a GarageBand aux plays ("6.6s Botta Church" is the file "06.6s Botta Church-OST.SDIR",
+// "1.3s Diffuse Hall" is "1.3s_Diffuse Hall"); "" when none is installed
+std::string impulseForRoom(const std::string &room) {
+    auto norm = [](std::string s) {
+        s = lower(s);
+        if (s.size() > 4 && s.compare(s.size() - 4, 4, "-ost") == 0) s.resize(s.size() - 4);
+        std::string o;
+        for (char c : s) o += c == '_' ? ' ' : c;
+        while (o.size() > 1 && o[0] == '0' && isdigit((unsigned char)o[1])) o.erase(0, 1);
+        return o;
+    };
+    const std::string want = norm(room);
+    for (auto &e : impulseLibrary()) if (norm(e.name) == want) return e.name;
+    return "";
+}
+
+json describePatch(const std::string &query, const std::string &baseDir, std::string &err) {
+    std::string dir = resolveIn(query, baseDir);
+    if (dir.empty() || !fs::is_directory(dir)) {
+        std::string e2;
+        if (!findEntry("patch", query, dir, e2)) {
+            const LogicPatch *named = logicPatchNamed(query);
+            if (!named) { err = e2; return nullptr; }
+            dir = named->path;
+        }
+    }
+    std::vector<PatchChannel> chans;
+    if (!readPatchChannels(dir, chans, err)) return nullptr;
+    json out = {{"name", fs::path(dir).stem().string()}, {"path", dir}, {"channels", json::array()}, {"sends", json::array()}};
+    size_t installed = 0;
+    bool synth = false;
+    for (auto &c : chans) {
+        json j = {{"file", fs::path(c.file).filename().string()}, {"instrument", c.instrument}, {"preset", c.preset}, {"effects", c.effects}, {"plays", c.sampler}};
+        if (c.sampler) {
+            size_t i = 0, t = 0;
+            if (c.exsAt) { exs::sampleCount(c.data, c.exsAt, fs::path(dir), i, t); j["source"] = "stored in the patch"; }
+            else if (!c.exs.empty()) {
+                j["source"] = c.exs;
+                std::string path, e2;
+                std::vector<uint8_t> d;
+                if (findEntry("exs", fs::path(c.exs).stem().string(), path, e2) && readFile(path, d)) exs::sampleCount(d, 0, fs::path(path).parent_path(), i, t);
+                else j["source"] = c.exs + " (not installed)";
+            }
+            if (t) j["samples"] = {{"installed", i}, {"total", t}};
+            installed += i;
+        } else if (!c.instrument.empty()) synth = true;
+        out["channels"].push_back(j);
+    }
+    const std::string kit = installed ? "" : ultrabeatKit(dir, chans);
+    if (!kit.empty()) out["kit"] = kit;
+    out["plays"] = installed > 0 || !kit.empty();
+    if (!out["plays"].get<bool>())
+        out["why"] = synth && !installed ? "its instrument runs only inside GarageBand and Logic" : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
+    for (auto &s : readPatchSends(dir)) {
+        json j = {{"channel", s.channel}, {"aux", s.aux}, {"room", s.room}, {"db", std::round(s.db * 10) / 10}};
+        const std::string ir = impulseForRoom(s.room);
+        if (!ir.empty()) j["ir"] = ir;
+        out["sends"].push_back(j);
+    }
+    return out;
 }
 
 // "Snare 01.wav" and "Snare 02.wav" are takes of one sound: the name without its trailing number
@@ -1330,7 +1415,24 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
 }
 
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
-    const json &cfg = track.sampler;
+    json kitCfg;   // an Ultrabeat patch plays as its kit
+    if (track.sampler.is_object() && track.sampler.contains("patch") && track.sampler["patch"].is_string()) {
+        const std::string q = track.sampler["patch"].get<std::string>();
+        std::string dir = resolveIn(q, job.baseDir), e2;
+        if (dir.empty() || !fs::is_directory(dir)) { if (!findEntry("patch", q, dir, e2)) dir.clear(); }
+        std::vector<PatchChannel> chans;
+        if (!dir.empty() && readPatchChannels(dir, chans, e2)) {
+            const bool sampled = std::any_of(chans.begin(), chans.end(), [](const PatchChannel &c) { return c.sampler; });
+            const std::string kit = sampled ? "" : ultrabeatKit(dir, chans);
+            if (!kit.empty()) {
+                kitCfg = track.sampler;
+                kitCfg.erase("patch");
+                kitCfg["kit"] = kit;
+                warnings.push_back("patch '" + fs::path(dir).stem().string() + "' plays Ultrabeat: its kit's samples play ('" + kit + "'), without Ultrabeat's synthesis and effects");
+            }
+        }
+    }
+    const json &cfg = kitCfg.is_null() ? track.sampler : kitCfg;
     if (!cfg.is_object()) { err = "track '" + track.name + "': builtin:sampler needs a \"sampler\" object (multisample, sfz, soundfont, exs, kit or sample)"; return false; }
     static const std::set<std::string> known = {"multisample", "kit", "map", "sample", "root", "attack", "release", "oneShot",
                                                 "select", "transpose", "velocity", "choke", "gain", "mono", "glide",

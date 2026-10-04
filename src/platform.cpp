@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <chrono>
 #include <fstream>
+#include <iterator>
 #include <cstdlib>
 #include <mutex>
 #include <sstream>
@@ -439,6 +441,78 @@ bool decodeWithSystem(const uint8_t *data, size_t size, double &rate, std::vecto
 #else
     (void)data; (void)size; (void)rate; (void)l; (void)r;
     err = "this encoding (AAC, Apple Lossless) is decoded by macOS only here: convert the file to FLAC or WAV";
+    return false;
+#endif
+}
+
+#if defined(__APPLE__)
+namespace {
+void cfToJson(CFTypeRef v, std::string &o) {
+    auto quote = [&](const std::string &s) {
+        o += '"';
+        for (unsigned char c : s) {
+            if (c == '"' || c == '\\') { o += '\\'; o += (char)c; }
+            else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", c); o += b; }
+            else o += (char)c;
+        }
+        o += '"';
+    };
+    auto str = [](CFStringRef s) {
+        const CFIndex n = CFStringGetMaximumSizeForEncoding(CFStringGetLength(s), kCFStringEncodingUTF8) + 1;
+        std::string b((size_t)n, '\0');
+        if (!CFStringGetCString(s, b.data(), n, kCFStringEncodingUTF8)) return std::string();
+        b.resize(std::strlen(b.c_str()));
+        return b;
+    };
+    const CFTypeID t = v ? CFGetTypeID(v) : 0;
+    if (!v) o += "null";
+    else if (t == CFDictionaryGetTypeID()) {
+        const CFIndex n = CFDictionaryGetCount((CFDictionaryRef)v);
+        std::vector<const void *> keys((size_t)n), vals((size_t)n);
+        CFDictionaryGetKeysAndValues((CFDictionaryRef)v, keys.data(), vals.data());
+        o += '{';
+        for (CFIndex i = 0; i < n; ++i) {
+            if (i) o += ',';
+            quote(CFGetTypeID(keys[(size_t)i]) == CFStringGetTypeID() ? str((CFStringRef)keys[(size_t)i]) : std::to_string(i));
+            o += ':';
+            cfToJson(vals[(size_t)i], o);
+        }
+        o += '}';
+    } else if (t == CFArrayGetTypeID()) {
+        o += '[';
+        for (CFIndex i = 0, n = CFArrayGetCount((CFArrayRef)v); i < n; ++i) { if (i) o += ','; cfToJson(CFArrayGetValueAtIndex((CFArrayRef)v, i), o); }
+        o += ']';
+    } else if (t == CFStringGetTypeID()) quote(str((CFStringRef)v));
+    else if (t == CFBooleanGetTypeID()) o += CFBooleanGetValue((CFBooleanRef)v) ? "true" : "false";
+    else if (t == CFNumberGetTypeID()) {
+        double d = 0;
+        CFNumberGetValue((CFNumberRef)v, kCFNumberDoubleType, &d);
+        char b[40];
+        std::snprintf(b, sizeof b, "%.17g", std::isfinite(d) ? d : 0.0);
+        o += b;
+    } else if (t == CFDateGetTypeID()) o += std::to_string(CFDateGetAbsoluteTime((CFDateRef)v));
+    else if (t == CFDataGetTypeID()) o += std::to_string(CFDataGetLength((CFDataRef)v));
+    else o += "null";
+}
+} // namespace
+#endif
+
+bool plistToJson(const std::string &path, std::string &json) {
+#if defined(__APPLE__)
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CFDataRef data = CFDataCreate(nullptr, reinterpret_cast<const UInt8 *>(bytes.data()), (CFIndex)bytes.size());
+    if (!data) return false;
+    CFPropertyListRef plist = CFPropertyListCreateWithData(nullptr, data, kCFPropertyListImmutable, nullptr, nullptr);
+    CFRelease(data);
+    if (!plist) return false;
+    json.clear();
+    cfToJson(plist, json);
+    CFRelease(plist);
+    return true;
+#else
+    (void)path; (void)json;
     return false;
 #endif
 }

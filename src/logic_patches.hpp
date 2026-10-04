@@ -16,10 +16,18 @@ namespace wl {
 struct PatchChannel {
     std::string file;            // the channel strip (.cst)
     std::string instrument;      // its instrument as the channel strip names it ("Sampler", "EXS24", "Drum Kit", "Alchemy", ...); "" = none
+    std::string preset;          // the instrument's settings file as the channel strip names it ("Boutique 808.pst", "#default.pst")
     bool sampler = false;        // an instrument the sampler plays
     std::vector<uint8_t> data;   // the channel strip, read whole for sampler channels
     size_t exsAt = 0;            // where an instrument stored inside it starts (0 = none)
     std::string exs;             // else the .exs file it names ("Steinway Piano 2.exs")
+    std::vector<std::string> effects;   // the other plugins on the channel, in order (GarageBand's own: not played)
+};
+
+// A send from a patch's channel to a GarageBand aux (data.plist): "Large Hall/6.6s Botta Church", its level
+struct PatchSend {
+    std::string channel, aux, room;   // the channel's name, the aux tag, its room ("6.6s Botta Church")
+    double db = 0;                    // the send level, read as a linear gain
 };
 
 struct LogicPatch {
@@ -36,6 +44,8 @@ const std::vector<LogicPatch> &logicPatches();
 const LogicPatch *logicPatchNamed(const std::string &name);
 // A patch folder's channels (root channel first) with their instruments; sampler channels read whole.
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err);
+// A patch's sends (macOS: data.plist is a binary property list); empty when it has none or can't be read.
+std::vector<PatchSend> readPatchSends(const std::string &patchDir);
 // "Sampler", "EXS24", "Drum Kit" (Drum Kit Designer): instruments built on Logic's samplers.
 bool isSamplerInstrument(const std::string &name);
 
