@@ -311,8 +311,11 @@ std::vector<FileRef> fileRefs(json &job) {
     auto sound = [&](json &o, const std::string &where) {
         state(o, where);
         chain(o, where);
+        // a GarageBand or Logic patch folder (an imported project's track keeps its own channel strip as one)
+        if (o.contains("preset") && o["preset"].is_string() && hasExt(o["preset"].get<std::string>(), {".patch"})) add(where + " preset", o["preset"], o);
         if (!o.contains("sampler") || !o["sampler"].is_object()) return;
         json &sm = o["sampler"];
+        if (sm.contains("patch") && sm["patch"].is_string() && hasExt(sm["patch"].get<std::string>(), {".patch"})) add(where + " sampler.patch", sm["patch"], o);
         // file or library name, by key (docs/song-format.md section 4.2): a sample is always a file
         if (sm.contains("sample") && sm["sample"].is_string()) add(where + " sampler.sample", sm["sample"], o);
         for (const char *k : {"multisample", "sfz", "soundfont", "exs"})

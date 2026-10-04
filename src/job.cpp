@@ -552,8 +552,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 if (tr.plugin == "builtin:synth" && !tr.preset.empty() && !isBuiltinSynthPatch(tr.preset)) patch = tr.preset;
                 else if (tr.plugin == "builtin:sampler" && tr.sampler.is_object() && tr.sampler.contains("patch") && tr.sampler["patch"].is_string())
                     patch = tr.sampler["patch"].get<std::string>();
+                if (!patch.empty() && (patch.find('/') != std::string::npos) && fs::u8path(patch).is_relative() && !baseDir.empty())
+                    patch = (fs::u8path(baseDir) / fs::u8path(patch)).lexically_normal().u8string();   // a patch folder beside the job
                 if (!patch.empty() && appleArpeggiator(patch, false, arp, arpNotes, aerr))
-                    tr.warnings.push_back("patch '" + patch + "' plays its notes through its Arpeggiator (" + arpSummary(arp) +
+                    tr.warnings.push_back("patch '" + fs::u8path(patch).stem().u8string() + "' plays its notes through its Arpeggiator (" + arpSummary(arp) +
                                           "); \"arp\": false plays them as written");
                 else arp = nullptr;
             }

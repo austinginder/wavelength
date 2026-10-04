@@ -9,9 +9,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 
 using nlohmann::json;
+
+namespace fs = std::filesystem;
 
 namespace wl {
 
@@ -177,11 +180,22 @@ double closedFilterHz(const nlohmann::json &s) {
 } // namespace
 
 bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::string *why) {
+    // a patch by name, or a patch folder by path (an imported GarageBand project's track: its own channel strip)
+    LogicPatch byPath;
     const LogicPatch *p = logicPatchNamed(name);
-    if (!p || p->sampler) return false;
+    std::error_code ec;
+    if (!p && fs::is_directory(fs::u8path(name), ec)) {
+        byPath.name = fs::u8path(name).stem().u8string();
+        byPath.path = name;
+        p = &byPath;
+    }
+    if (!p) return false;
     std::vector<PatchChannel> chans;
     std::string err;
     if (!readPatchChannels(p->path, chans, err)) return false;
+    if (p == &byPath)
+        for (auto &c : chans) byPath.sampler |= c.sampler;
+    if (p->sampler) return false;
     for (auto &c : chans) {
         if (c.instrument == "Alchemy") {   // its preset text: virtual-analog patches play here, the rest say why not
             AlchemyPatch a = alchemyPatch(c.alchemy, p->name);

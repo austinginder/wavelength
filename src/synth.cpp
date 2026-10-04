@@ -7,10 +7,12 @@
 #include "retro_synth.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -715,7 +717,10 @@ bool isSynthExpParam(const std::string &name) {
 
 bool isBuiltinSynthPatch(const std::string &name) { return patchBank().contains(name); }
 
+namespace fs = std::filesystem;
+
 namespace {
+std::string lowerAscii(std::string s) { for (auto &c : s) c = (char)std::tolower((unsigned char)c); return s; }
 thread_local bool tLevelProbe = false;   // rendering a level probe: no level fix inside it
 
 // GarageBand's factory patches are roughly level-matched, but a re-creation can land far from them while its filter
@@ -773,11 +778,16 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
         for (auto &[n, p] : bank.items()) if (n == preset) found = n;
         GarageBandSynth gb;
         std::string refused;   // a GarageBand patch on an instrument re-created here that can't play on it, and why
-        if (found.empty() && garageBandSynthPatch(preset, gb, &refused)) {   // a GarageBand synth patch, re-created here
+        std::string gbKey = preset;   // its name, or a patch folder's path (from the job's folder: an imported project's track)
+        if (found.empty() && (gbKey.find('/') != std::string::npos || (gbKey.size() > 6 && lowerAscii(gbKey.substr(gbKey.size() - 6)) == ".patch"))) {
+            const fs::path pp = fs::u8path(gbKey);
+            if (pp.is_relative() && !job.baseDir.empty()) gbKey = (fs::u8path(job.baseDir) / pp).lexically_normal().u8string();
+        }
+        if (found.empty() && garageBandSynthPatch(gbKey, gb, &refused)) {   // a GarageBand synth patch, re-created here
             found = "Init";
             patchTranspose = gb.transpose;
             patchFx = gb.fx;
-            if (!tLevelProbe) levelFix = garageBandLevelFix(gb.name);
+            if (!tLevelProbe) levelFix = garageBandLevelFix(gbKey);
             char fixText[96] = "";
             if (levelFix != 0) std::snprintf(fixText, sizeof fixText, "; its level moved %+.1f dB toward its peers' (scales not yet calibrated)", levelFix);
             warnings.push_back("preset '" + gb.name + "' is GarageBand's " + garageBandSynthKind(gb) + " patch, re-created on builtin:synth: an approximation" + fixText);

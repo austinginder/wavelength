@@ -344,6 +344,12 @@ JOB
      [ "$("./$build/wavelength" analyze out/check/exs/retro/stems/01-retro.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C5" ]; then
     exs_why="the Retro Synth patch did not play C5 on builtin:synth"
   fi
+  # a patch folder by path plays the same as by name
+  sed -e "s|\"Test Retro\"|\"$PWD/out/check/exs/patches/Test Retro.patch\"|" out/check/exs/retro.json > out/check/exs/retro-path.json
+  if [ -z "$exs_why" ] && { ! "./$build/wavelength" render out/check/exs/retro-path.json --out out/check/exs/retro-path --json > /dev/null 2>&1 ||
+     [ "$("./$build/wavelength" analyze out/check/exs/retro-path/stems/01-retro.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C5" ]; }; then
+    exs_why="a Retro Synth patch folder by path did not play C5 on builtin:synth"
+  fi
   # and a Vintage B3 patch whose only drawbar is the upper 8' plays the note itself
   sed -e 's/"Retro"/"Organ"/' -e 's/Test Retro/Test Organ/' out/check/exs/retro.json > out/check/exs/organ.json
   if [ -z "$exs_why" ] && { ! "./$build/wavelength" render out/check/exs/organ.json --out out/check/exs/organ --json > /dev/null 2>&1 ||
