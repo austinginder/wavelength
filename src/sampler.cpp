@@ -9,7 +9,9 @@
 #include "audio_file.hpp"
 #include "dsp.hpp"
 #include "effects.hpp"
+#include "loudness.hpp"
 #include "platform.hpp"
+#include "preset_files.hpp"
 #include "sf2.hpp"
 #include "sfz.hpp"
 #include "zip.hpp"
@@ -19,6 +21,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1094,6 +1097,17 @@ std::vector<std::string> sampleRoots() {
                                 fs::path("/Library/Application Support/Logic/Ultrabeat Samples")})
         if (fs::is_directory(dir, ec)) roots.push_back(dir.string());
 #endif
+#if defined(__APPLE__)
+    // Native Instruments' content installs as "<name> Library" folders in /Users/Shared; Maschine expansions keep
+    // plain WAVs there (Kontakt libraries keep theirs in NI's own containers, which aren't read)
+    for (auto &e : fs::directory_iterator("/Users/Shared", ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.size() > 8 && n.compare(n.size() - 8, 8, " Library") == 0 && e.is_directory(ec)) roots.push_back(e.path().string());
+    }
+#endif
+    // DecentSampler's library folder: its instruments' samples and the loose sample packs people keep beside them
+    for (auto &d : decentSamplerLibraries())
+        if (fs::is_directory(d, ec)) roots.push_back(d.string());
     // Serum 2's multisamples are plain SFZ instruments (FLAC samples beside them)
 #if defined(__APPLE__)
     for (const fs::path &dir : {fs::path("/Library/Audio/Presets/Xfer Records/Serum 2 Presets/Multisamples"),
@@ -1260,7 +1274,8 @@ std::vector<std::string> impulseRoots() {
     for (const fs::path &p : {fs::path("/Library/Audio/Impulse Responses"), fs::path(home()) / "Library/Audio/Impulse Responses",
                               fs::path("/Applications/GarageBand.app/Contents/Resources/Impulse Responses"),
                               fs::path("/Applications/Logic Pro.app/Contents/Resources/Impulse Responses"),
-                              fs::path("/Applications/Logic Pro X.app/Contents/Resources/Impulse Responses")})
+                              fs::path("/Applications/Logic Pro X.app/Contents/Resources/Impulse Responses"),
+                              fs::path("/Library/Application Support/MeldaProduction/MeldaProduction IR")})   // MeldaProduction's free IRs
         if (fs::is_directory(p, ec)) roots.push_back(p.string());
 #endif
     return roots;
@@ -1276,7 +1291,8 @@ const std::vector<SampleLibraryEntry> &impulseLibrary() {
             for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 if (ec) break;
                 const std::string ext = lower(it->path().extension().string());
-                if (!it->is_regular_file(ec) || (ext != ".sdir" && !isAudioFileName(it->path().string()))) continue;
+                // MeldaProduction names some of its WAVs ".flac44" / ".flac48" (files are read by their content)
+                if (!it->is_regular_file(ec) || (ext != ".sdir" && ext != ".flac44" && ext != ".flac48" && !isAudioFileName(it->path().string()))) continue;
                 Audio a;
                 int sr = 0;
                 std::string e;
@@ -1465,7 +1481,46 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
     return true;
 }
 
+namespace {
+thread_local bool tSamplerProbe = false;   // rendering a level probe: no level fix inside it
+
+// An Alchemy patch on its samples is re-created with guessed scales (envelopes, filter, its effects racks), like the
+// synth ones, so it gets the same level window: its probe (C3 held, then a C minor chord, effects included) moved
+// into -33..-17 LUFS (by at most +24 dB). The dB to add after its effects; cached per patch.
+double alchemySamplerLevelFix(const std::string &patch) {
+    static std::mutex m;
+    static std::map<std::string, double> cache;
+    {
+        std::lock_guard<std::mutex> lock(m);
+        auto it = cache.find(patch);
+        if (it != cache.end()) return it->second;
+    }
+    Job job;
+    Track t;
+    t.name = "level probe";
+    t.plugin = "builtin:sampler";
+    t.sampler = {{"patch", patch}};
+    for (auto [start, key] : std::initializer_list<std::pair<double, int>>{{0, 48}, {2, 60}, {2, 63}, {2, 67}})
+        t.notes.push_back({start, 1.5, key, 0, 0.8, {}, {}});
+    Audio a;
+    a.resize((size_t)(4.5 * job.sampleRate));
+    std::vector<std::string> w;
+    std::string e;
+    tSamplerProbe = true;
+    const bool ok = renderSampler(job, t, a, w, e);
+    tSamplerProbe = false;
+    const double lufs = ok ? integratedLufs(a, job.sampleRate) : 0;
+    double fix = 0;
+    if (ok && std::isfinite(lufs) && lufs > -120) fix = lufs > -17 ? -17 - lufs : lufs < -33 ? std::min(24.0, -33 - lufs) : 0;
+    fix = std::round(fix * 10) / 10;
+    std::lock_guard<std::mutex> lock(m);
+    cache[patch] = fix;
+    return fix;
+}
+} // namespace
+
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
+    double levelFix = 0;   // an Alchemy patch's move into its peers' level window
     json kitCfg;   // an Ultrabeat patch plays as its kit; an Alchemy patch with its own sampler settings
     json patchFx = json::array();   // the patch's own effects, played after the instrument ("effects": false leaves them out)
     std::vector<std::string> patchFxNotes;
@@ -1497,8 +1552,11 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                     if (alchemy->gain != 0) kitCfg["gain"] = kitCfg.value("gain", 0.0) + alchemy->gain;
                     patchFx = alchemy->synth.fx;
                     for (auto &f : patchChainEffects(chans, patchFxNotes)) patchFx.push_back(f);
+                    if (!tSamplerProbe) levelFix = alchemySamplerLevelFix(dir);
+                    char fixText[96] = "";
+                    if (levelFix != 0) std::snprintf(fixText, sizeof fixText, "; its level moved %+.1f dB toward its peers' (scales not yet calibrated)", levelFix);
                     warnings.push_back("patch '" + fs::path(dir).stem().string() + "' is GarageBand's Alchemy patch: its samples play as SFZ regions with its "
-                                       "envelope, filter and effects re-created (an approximation; `wavelength samples --patch` lists what's left out)");
+                                       "envelope, filter and effects re-created (an approximation; `wavelength samples --patch` lists what's left out)" + fixText);
                 }
                 break;
             }
@@ -1934,6 +1992,10 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             if (!fx->process(out, ctx, err)) return false;
             for (auto &w : fx->warnings) warnings.push_back("patch effect: " + w);
         }
+    }
+    if (levelFix != 0) {
+        const float g = (float)std::pow(10.0, levelFix / 20);
+        for (size_t i = 0; i < out.frames(); ++i) out.left[i] *= g, out.right[i] *= g;
     }
     return true;
 }

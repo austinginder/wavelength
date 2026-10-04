@@ -7,6 +7,7 @@
 #include "catalog.hpp"
 #include "presets.hpp"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -19,5 +20,7 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin);
 // NKS presets for the plugin from the NKS index (nks-v2.json in platform::cacheDir(), built by
 // walking the usual NKS folders); `rescan` rebuilds it.
 std::vector<PresetInfo> nksPresets(const PluginInfo &plugin, bool rescan);
+// The folders DecentSampler installs its libraries to (its own settings' "sampleLibraryDirectory").
+std::vector<std::filesystem::path> decentSamplerLibraries();
 
 } // namespace wl

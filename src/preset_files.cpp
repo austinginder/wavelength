@@ -98,25 +98,6 @@ bool belongsTo(const fs::path &file, const std::string &ext, const PluginInfo &p
     return squash(head.substr(am + 4, end - am - 4)) == p;
 }
 
-// DecentSampler's own settings name the folder its libraries are installed to ("sampleLibraryDirectory")
-std::vector<fs::path> decentSamplerLibraries() {
-    const std::string home = platform::homeDir().string();
-    std::vector<fs::path> out;
-    for (const fs::path &settings : {fs::path(home) / "Music/Audio Music Apps/Decidedly/DecentSampler/DecentSampler.xml",
-                                    fs::path(getenv("APPDATA") ? getenv("APPDATA") : home) / "Decidedly/DecentSampler/DecentSampler.xml",
-                                    fs::path(home) / ".config/Decidedly/DecentSampler/DecentSampler.xml"}) {
-        std::ifstream in(settings, std::ios::binary);
-        if (!in) continue;
-        const std::string xml((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        const std::string key = "name=\"sampleLibraryDirectory\" val=\"";
-        const size_t at = xml.find(key);
-        if (at == std::string::npos) continue;
-        std::string dir = xml.substr(at + key.size(), xml.find('"', at + key.size()) - at - key.size());
-        for (size_t amp; (amp = dir.find("&amp;")) != std::string::npos;) dir.replace(amp, 5, "&");
-        if (!dir.empty()) out.push_back(dir);
-    }
-    return out;
-}
 
 // ---- NKS presets: Native Instruments' RIFF "NIKS" files name the plugin they belong to --------
 struct NksEntry { std::string path, name, category, vendor, bank, magic, uid; };
@@ -238,6 +219,26 @@ bool nksBelongsTo(const NksEntry &e, const PluginInfo &plugin) {
 }
 
 } // namespace
+
+// DecentSampler's own settings name the folder its libraries are installed to ("sampleLibraryDirectory")
+std::vector<fs::path> decentSamplerLibraries() {
+    const std::string home = platform::homeDir().string();
+    std::vector<fs::path> out;
+    for (const fs::path &settings : {fs::path(home) / "Music/Audio Music Apps/Decidedly/DecentSampler/DecentSampler.xml",
+                                    fs::path(getenv("APPDATA") ? getenv("APPDATA") : home) / "Decidedly/DecentSampler/DecentSampler.xml",
+                                    fs::path(home) / ".config/Decidedly/DecentSampler/DecentSampler.xml"}) {
+        std::ifstream in(settings, std::ios::binary);
+        if (!in) continue;
+        const std::string xml((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::string key = "name=\"sampleLibraryDirectory\" val=\"";
+        const size_t at = xml.find(key);
+        if (at == std::string::npos) continue;
+        std::string dir = xml.substr(at + key.size(), xml.find('"', at + key.size()) - at - key.size());
+        for (size_t amp; (amp = dir.find("&amp;")) != std::string::npos;) dir.replace(amp, 5, "&");
+        if (!dir.empty()) out.push_back(dir);
+    }
+    return out;
+}
 
 std::vector<PresetInfo> nksPresets(const PluginInfo &plugin, bool rescan) {
     std::vector<PresetInfo> out;
