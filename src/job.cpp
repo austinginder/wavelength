@@ -436,7 +436,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         if (!j.contains("tracks") || !j["tracks"].is_array() || j["tracks"].empty()) { err = "job needs a non-empty \"tracks\" array"; return false; }
         out.settings = j;
         for (const char *k : {"tracks", "buses", "master", "markers", "chords", "keys", "title", "stems", "picture", "deliver",
-                              "normalize", "parallel", "retries", "description"})
+                              "normalize", "parallel", "retries", "description", "import"})
             out.settings.erase(k);
         for (auto &t : j["tracks"]) {
             Track tr;

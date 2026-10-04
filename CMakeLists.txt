@@ -181,6 +181,7 @@ add_executable(wavelength
   src/dawproject.cpp
   src/dawproject_export.cpp
   src/bitwig.cpp
+  src/garageband.cpp
   src/midi_file.cpp
   src/musicxml.cpp
   src/wav.cpp

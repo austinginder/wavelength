@@ -204,9 +204,10 @@ json tools() {
         "Makes a .wavelength file (a ZIP of the song folder: job, listed files, comments, history) to share, and lists the "
         "plugins and libraries it needs. Validates the song first.",
         {{"song", song}, {"out", prop("string", "the .wavelength file (default <slug>.wavelength in the current folder)")}}, {"song"}, writes));
-    list.push_back(tool("import", "Import MIDI, MusicXML, DAWproject or a Bitwig project",
-        "Makes a job from a MIDI file, a MusicXML score (MuseScore, Sibelius, Dorico), a DAWproject or a Bitwig Studio project (.bwproject, no export needed), ready to render and edit.",
-        {{"file", prop("string", ".mid, .musicxml/.mxl, .dawproject or .bwproject")}, {"out", prop("string", "folder for job.json")}}, {"file", "out"}, writes));
+    list.push_back(tool("import", "Import MIDI, MusicXML, DAWproject, a Bitwig or a GarageBand project",
+        "Makes a job from a MIDI file, a MusicXML score (MuseScore, Sibelius, Dorico), a DAWproject, a Bitwig Studio project (.bwproject, no export needed) "
+        "or a GarageBand project (.band: its tracks play their own channel strips), ready to render and edit.",
+        {{"file", prop("string", ".mid, .musicxml/.mxl, .dawproject, .bwproject or .band")}, {"out", prop("string", "folder for job.json")}}, {"file", "out"}, writes));
     return list;
 }
 

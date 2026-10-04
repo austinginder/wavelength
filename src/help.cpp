@@ -124,6 +124,15 @@ Usage:
       (play start, loops) and automation of faders, pans and instrument plugin parameters. Audio
       clips and Bitwig 6 automation clips aren't read yet: export a DAWproject for those. --list shows
       the project's tracks and devices instead. `render project.bwproject` imports and renders.
+  wavelength import <song.band> [--out DIR] [--all-tracks] [--copy-media] [--json]
+      Turn a GarageBand project (GarageBand 10 for Mac; read on any system) into a job: its tracks in
+      order, each playing its own channel strip from <out>/patches (Sampler, EXS24 and Drum Kit
+      Designer instruments on builtin:sampler, Apple's synths re-created on builtin:synth, audio
+      tracks' effects as fx), faders, pans, sends to buses carrying the aux effects, the master's
+      effects, MIDI and Drummer regions as notes, audio regions as clips, tempo, time signature and
+      key. Tracks without regions are left out unless --all-tracks; --copy-media copies audio files
+      into <out>/media. Not read yet (listed): mute and solo, region loops and parameters, tempo
+      changes, automation; the fader law is a guess. `render song.band` imports and renders.
   wavelength import <score.musicxml | score.mxl> [--out DIR] [--instrument PLUGIN] [--json]
       Turn a MusicXML score (MuseScore, Sibelius, Finale, Dorico, music21) into a job: a track per
       part, repeats and endings played out, ties, chords and voices, concert pitch for transposing
@@ -156,7 +165,7 @@ Usage:
   wavelength mcp
       Runs a Model Context Protocol server on stdin/stdout for MCP clients (Claude Desktop, Claude Code,
       Cursor): tools to read the guide, list instruments, presets, samples and parameters, lint, render
-      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject/Bitwig projects;
+      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject/Bitwig/GarageBand projects;
       for songs: save, history, undo, diff, comments and replies, fallbacks, pack.
   wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
       Draws the arrangement before rendering: sections, bars and a lane per track with its notes
@@ -302,7 +311,7 @@ const Summary kSummaries[] = {
     {"Songs", "validate", "Check a song or package against the format"},
     {"Songs", "migrate", "Bring an older song folder up to the format"},
     {"Songs", "purge", "Delete render WAVs and stems, keep MP3s playable"},
-    {"Import and export", "import", "A job from MIDI, MusicXML, DAWproject or a Bitwig project"},
+    {"Import and export", "import", "A job from MIDI, MusicXML, DAWproject, Bitwig or GarageBand"},
     {"Import and export", "export", "A job as a MIDI file or a DAWproject"},
     {"People and agents", "serve", "A local review page for listening together"},
     {"People and agents", "mcp", "An MCP server for Claude Desktop, Cursor and more"},

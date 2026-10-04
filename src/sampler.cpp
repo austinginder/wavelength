@@ -1480,7 +1480,8 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
     if (!kit.empty()) out["kit"] = kit;
     GarageBandSynth gs;
     std::string why;
-    const bool resynth = !installed && kit.empty() && garageBandSynthPatch(fs::path(dir).stem().string(), gs, &why);
+    // by its folder: an imported project's track is its own channel strip, whatever installed patch shares its name
+    const bool resynth = !installed && kit.empty() && garageBandSynthPatch(dir, gs, &why);
     if (resynth) {
         out["synth"] = {{"plugin", "builtin:synth"}, {"preset", gs.name}, {"instrument", gs.instrument}, {"engine", gs.engine}, {"notes", gs.notes},
                         {"patch", gs.synth}, {"transpose", gs.transpose}};

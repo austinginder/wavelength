@@ -8,6 +8,7 @@
 //   wavelength state save <plugin> --out FILE.clap-preset [--state FILE] [--set "Name=value"]...
 //   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
 //   wavelength import <project.bwproject> [--out DIR] [--list] [--json]
+//   wavelength import <song.band> [--out DIR] [--all-tracks] [--copy-media] [--json]
 //   wavelength lint <job.json> [--tracks "A,B,C"] [--low "B"] [--crossings] [--json]
 //   wavelength lint <job.json> --harmony [--key K] [--ignore "A,B"] [--chords] [--max-bars N] [--json]
 //   wavelength save | history | undo | redo | restore | diff | comments [song] (song_cli.cpp)
@@ -41,6 +42,7 @@
 #include "synth.hpp"
 #include "bitwig.hpp"
 #include "dawproject.hpp"
+#include "garageband.hpp"
 #include "midi_file.hpp"
 #include "musicxml.hpp"
 #include "vst2_plugin.hpp"
@@ -98,7 +100,7 @@ struct Args {
 };
 
 Args parse(int argc, char **argv) {
-    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help", "--apply", "--dry-run", "--midi"};
+    static const std::vector<std::string> flags = {"--json", "--rescan", "--verbose", "--all", "--roundrobin", "--rebuild", "--retag", "--song-time", "--crossings", "--harmony", "--chords", "--peaks", "--open", "--install-soundfont", "--force", "--no-print", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--check", "--list", "--help", "--apply", "--dry-run", "--midi", "--all-tracks", "--copy-media"};
     Args a;
     for (int i = 1; i < argc; ++i) {
         std::string s = argv[i];
@@ -1046,8 +1048,9 @@ int cmdMaster(const Args &a) {
 // ---- render ----------------------------------------------------------------------------
 // ---- import -------------------------------------------------------------------------
 int cmdImport(const Args &a) {
-    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | loop.caf | score.musicxml | score.mxl | project.bwproject> [--out DIR]");
-    const std::string src = a.positional[1];
+    if (a.positional.size() < 2) return fail(a, "usage: wavelength import <project.dawproject | song.mid | loop.caf | score.musicxml | score.mxl | project.bwproject | song.band> [--out DIR]");
+    std::string src = a.positional[1];
+    while (src.size() > 1 && (src.back() == '/' || src.back() == '\\')) src.pop_back();   // a package folder: "My Song.band/"
     if (fs::path(src).extension() == ".bwproject" && a.has("--list")) {   // Bitwig's own format: list its tracks and devices
         bitwig::Project p;
         std::string err;
@@ -1118,6 +1121,22 @@ int cmdImport(const Args &a) {
         for (auto &n : m.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
         return 0;
     }
+    if (ext == ".band") {   // a GarageBand project
+        DawprojectImport r;
+        std::string err;
+        if (!importGarageBand(src, outDir, r, err, a.has("--all-tracks"), a.has("--copy-media"))) return fail(a, err);
+        const std::string jobPath = (fs::path(outDir) / "job.json").string();
+        if (a.has("--json")) {
+            emit(json{{"ok", true}, {"job", jobPath}, {"application", r.application}, {"tracks", r.tracks}, {"buses", r.buses},
+                      {"notes", r.noteCount}, {"left out", r.notes}}.dump(2, ' ', false, json::error_handler_t::replace));
+            return 0;
+        }
+        std::fprintf(OUT, "imported %s (%s): %zu tracks, %zu buses, %zu notes -> %s\n", src.c_str(), r.application.c_str(), r.tracks, r.buses,
+                     r.noteCount, jobPath.c_str());
+        for (auto &n : r.notes) std::fprintf(OUT, "  ! %s\n", n.c_str());
+        if (!r.tracks) std::fprintf(OUT, "No track has regions to play: --all-tracks keeps the empty ones.\n");
+        return 0;
+    }
     DawprojectImport r;
     std::string err;
     const bool bwproject = ext == ".bwproject";   // Bitwig's own project, no export needed
@@ -1175,6 +1194,7 @@ int cmdExport(const Args &a) {
 int cmdRender(const Args &a) {
     if (a.positional.size() < 2) return fail(a, "usage: wavelength render <job.json | project.dawproject>");
     std::string path = a.positional[1];
+    while (path.size() > 1 && (path.back() == '/' || path.back() == '\\')) path.pop_back();   // a package folder: "My Song.band/"
     if (package::isPackage(path)) {   // a .wavelength song: unpacked once into the cache, rendered from there
         std::string err;
         const std::string dir = package::cached(path, err);
@@ -1206,6 +1226,15 @@ int cmdRender(const Args &a) {
         std::string err;
         if (!importMusicXml(path, importDir, a.get("--instrument", ""), m, err)) return fail(a, err);
         for (auto &n : m.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
+        path = (fs::path(importDir) / "job.json").string();
+    }
+    if (fs::path(path).extension() == ".band") {   // a GarageBand project: import next to the output, then render that job
+        const std::string importDir = (fs::path(a.get("--out", "out")) / "import").string();
+        DawprojectImport r;
+        std::string err;
+        if (!importGarageBand(path, importDir, r, err)) return fail(a, err);
+        for (auto &n : r.notes) std::fprintf(stderr, "import: %s\n", n.c_str());
+        if (!r.tracks) return fail(a, path + ": no track has regions to play");
         path = (fs::path(importDir) / "job.json").string();
     }
     if (fs::path(path).extension() == ".dawproject" || fs::path(path).extension() == ".bwproject") {   // import next to the output, then render that job
@@ -2086,7 +2115,7 @@ int run(int argc, char **argv) {
             {"render", {"--out", "--stems", "--deliver", "--jobs", "--tracks", "--level-from", "--from", "--to", "--preroll", "--json", "--verbose", "--bitwig", "--instrument", "--png", "--no-png", "--loop", "--keep", "--fallbacks", "--cache", "--mix"}},
             {"master", {"--chain", "--loudness", "--lead-in", "--input-lead-in", "--out", "--deliver", "--json", "--verbose"}},
             {"state", {"--out", "--preset", "--state", "--format", "--json", "--verbose"}},
-            {"import", {"--out", "--json", "--bitwig", "--instrument", "--list"}},
+            {"import", {"--out", "--json", "--bitwig", "--instrument", "--list", "--all-tracks", "--copy-media"}},
             {"export", {"--out", "--json", "--no-print"}},
             {"serve", {"--port", "--host", "--open", "--ui"}},
             {"lint", {"--tracks", "--low", "--split", "--from", "--to", "--section", "--crossings", "--json", "--harmony", "--key", "--ignore", "--chords", "--max-bars"}},

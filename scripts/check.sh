@@ -415,6 +415,34 @@ sys.exit(0 if len(o) == 1 and o[0]["wave"] == "additive" and len(o[0]["partials"
 fi
 unset WAVELENGTH_LOGIC_PATCHES
 if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created (Alchemy too, with its arpeggiator and on additive synthesis; Vintage Electric Piano, Vintage Clav and Sculpture), --patch"; fi
+# GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
+# ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
+# imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle;
+# rendered from the .band, the track plays its own channel strip (transposed +12: the first note, C4, sounds C5)
+rm -rf out/check/band && mkdir -p out/check/band
+python3 scripts/make-test-band.py out/check/band
+band_why=""
+if ! "./$build/wavelength" import "out/check/band/Test Song.band/" --out out/check/band/imp --json > out/check/band/import.json 2>/dev/null; then
+  band_why="the import failed: $(head -c 300 out/check/band/import.json)"
+elif ! python3 -c '
+import json, sys
+j = json.load(open("out/check/band/imp/job.json"))
+t = j["tracks"]
+ok = j["tempo"] == 100 and j["timeSignature"] == [4, 4] and j["keys"] == [{"bar": 1, "key": "D minor"}] and j["sampleRate"] == 48000
+ok &= len(t) == 1 and t[0]["name"] == "Synth" and t[0]["plugin"] == "builtin:synth" and t[0]["preset"] == "patches/Synth.patch"
+ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
+ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69)] and t[0]["notes"][2]["vel"] == 0.5
+ok &= j["buses"] == [{"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100}]}]
+ok &= j["import"]["cycle"] == [0, 8] and j["import"]["savedWith"] == "make-test-band.py"
+sys.exit(0 if ok else 1)'; then
+  band_why="the job came out wrong: $(head -c 400 out/check/band/imp/job.json)"
+elif ! "./$build/wavelength" render "out/check/band/Test Song.band" --out out/check/band/render --json > /dev/null 2>&1; then
+  band_why="rendering the .band failed"
+else
+  got=$("./$build/wavelength" analyze out/check/band/render/stems/01-synth.wav --start 0.05 --end 1.1 --song-time --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
+  [ "$got" = "C5" ] || band_why="its first note played $got, not C5"
+fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions) and renders its track's own channel strip"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir
