@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -200,13 +201,32 @@ std::string paramNames() {
 // ---- the patch as data -------------------------------------------------------------------------
 struct Adsr { double a = 0.003, d = 0.3, s = 1.0, r = 0.15; };
 
+// An additive oscillator's sine partials, ready to play. A harmonic set (every partial a whole multiple of the note, no
+// shiftHz) plays from mip-mapped single-cycle tables, one per third of an octave of fundamentals, each holding the
+// partials that stay under 0.45 x the sample rate at the top of its band (faded out from 0.40) and 16 x oversampled
+// for linear interpolation. An inharmonic or shifted set plays as a bank of sines, each faded the same way as it nears
+// 0.45 x the sample rate.
+struct AdditiveSet {
+    struct Part { double amp, ratio, phase, gl, gr; };   // amplitude, frequency ratio, start phase, left and right gains
+    std::vector<Part> parts;                              // ratio order, scaled together (summed power at most a sine's)
+    bool tables = false, stereo = false;
+    double shiftHz = 0;
+    struct Table { double fmax; size_t n; std::vector<float> l, r; };   // for fundamentals up to fmax Hz; n + 1 samples
+    std::vector<Table> mip;
+    int pick(double hz) const {
+        for (size_t k = 0; k < mip.size(); ++k) if (mip[k].fmax >= hz) return (int)k;
+        return (int)mip.size() - 1;
+    }
+};
+
 struct Osc {
-    enum Wave { Saw, Square, Triangle, Sine, Noise } wave = Saw;
+    enum Wave { Saw, Square, Triangle, Sine, Noise, Additive } wave = Saw;
     double level = 1, pitch = 0, pw = 0.5, decay = 0;   // pitch in semitones; decay: own amplitude decay (s), 0 = none
     bool fm = false;
     double fmRatio = 1, fmIndex = 0, fmDecay = 0, fmSustain = 0;
     bool filtered = true;   // false: joins after the filter (Retro Synth's sine level)
     bool sync = false;      // hard sync: restarts whenever the first oscillator starts a cycle
+    std::shared_ptr<const AdditiveSet> add;   // Additive: its partials
 };
 
 struct SynthLfo {
@@ -248,6 +268,119 @@ double num(const json &o, const char *k, double def, const std::string &where) {
     throw std::runtime_error("synth: '" + where + k + "' must be a number (or text like \"800 Hz\"), not " + v.dump());
 }
 
+// The amplitude of each harmonic m of a "partialWave" (sine 1, saw 1/m, a pulse of width pw its own series, triangle
+// odd 1/m^2), the fundamental's 1, as complex numbers: the real part sine phase, the imaginary part cosine phase
+std::complex<double> waveHarmonic(const std::string &wave, double pw, int m) {
+    if (wave == "saw") return {1.0 / m, 0};
+    if (wave == "triangle") return m % 2 ? std::complex<double>(0, -1.0 / ((double)m * m)) : 0.0;
+    if (wave == "square") {   // +1 for pw of the cycle, -1 after: (2 / pi m) (1 - cos 2 pi m pw, sin 2 pi m pw), over 4 / pi
+        const double a = TAU * m * pw;
+        return std::complex<double>(1 - std::cos(a), std::sin(a)) / (2.0 * m);
+    }
+    return m == 1 ? 1.0 : 0.0;
+}
+
+// "partials" ([amplitude, ratio] or [amplitude, ratio, pan] each) and "harmonics" ({"count", "tilt", "odd", "even"}),
+// each partial playing "partialWave" (its harmonics spread into sine partials at their own ratios), plus "shiftHz",
+// as the sine partials an additive oscillator plays at this sample rate
+std::shared_ptr<const AdditiveSet> parseAdditive(const json &o, const std::string &w, double sr, double pw, std::vector<std::string> &warnings) {
+    struct In { double amp, ratio, pan; };
+    std::vector<In> in;
+    if (o.contains("harmonics")) {
+        const json &h = o["harmonics"];
+        if (!h.is_object() && !h.is_number()) throw std::runtime_error("synth: " + w + "harmonics is a count or {\"count\": 64, \"tilt\": -6, \"odd\": 1, \"even\": 1}");
+        if (h.is_object()) checkKeys(h, {"count", "tilt", "odd", "even"}, w + "harmonics.", warnings);
+        const int count = (int)std::clamp(h.is_number() ? h.get<double>() : num(h, "count", 64, w + "harmonics."), 1.0, 1024.0);
+        const double tilt = h.is_number() ? -6 : std::clamp(num(h, "tilt", -6, w + "harmonics."), -48.0, 24.0);
+        const double odd = h.is_number() ? 1 : std::max(0.0, num(h, "odd", 1, w + "harmonics.")), even = h.is_number() ? 1 : std::max(0.0, num(h, "even", 1, w + "harmonics."));
+        for (int k = 1; k <= count; ++k) in.push_back({std::pow((double)k, tilt / 6.0206) * (k % 2 ? odd : even), (double)k, 0});
+    }
+    if (o.contains("partials")) {
+        const json &l = o["partials"];
+        if (!l.is_array()) throw std::runtime_error("synth: " + w + "partials is a list of [amplitude, ratio] or [amplitude, ratio, pan]");
+        for (auto &p : l) {
+            if (!p.is_array() || p.size() < 2 || p.size() > 3 || !p[0].is_number() || !p[1].is_number() || (p.size() == 3 && !p[2].is_number()))
+                throw std::runtime_error("synth: " + w + "partials: each is [amplitude, ratio] or [amplitude, ratio, pan], not " + p.dump());
+            const double ratio = p[1].get<double>();
+            if (!(ratio > 0) || ratio > 1024) throw std::runtime_error("synth: " + w + "partials: a ratio is above 0 and at most 1024, not " + p.dump());
+            in.push_back({std::max(0.0, p[0].get<double>()), ratio, p.size() == 3 ? std::clamp(p[2].get<double>(), -1.0, 1.0) : 0.0});
+        }
+    }
+    if (in.empty()) throw std::runtime_error("synth: " + w + "an additive oscillator needs \"partials\" ([[1, 1], [0.5, 2], ...]) or \"harmonics\"");
+    if (in.size() > 1024) throw std::runtime_error("synth: " + w + "partials: at most 1024");
+    std::string wave = o.value("partialWave", "sine");
+    if (wave == "pulse") wave = "square";
+    if (wave == "tri") wave = "triangle";
+    if (wave != "sine" && wave != "saw" && wave != "square" && wave != "triangle")
+        throw std::runtime_error("synth: " + w + "partialWave '" + wave + "' must be sine, saw, square (or pulse) or triangle");
+    // every partial's harmonics (one for a sine), summed where they meet at a ratio
+    struct Acc { std::complex<double> z; double weight = 0, pan = 0; };
+    std::map<long long, Acc> at;
+    for (auto &p : in) {
+        if (p.amp <= 0) continue;
+        for (int m = 1; p.ratio * m <= 1024 + 1e-9 && (wave != "sine" || m == 1); ++m) {
+            const std::complex<double> c = waveHarmonic(wave, pw, m);
+            if (std::abs(c) < 1e-6) continue;
+            Acc &a = at[std::llround(p.ratio * m * 1e6)];
+            a.z += p.amp * c;
+            a.weight += p.amp * std::abs(c);
+            a.pan += p.amp * std::abs(c) * p.pan;
+        }
+    }
+    auto set = std::make_shared<AdditiveSet>();
+    double top = 0, power = 0;
+    for (auto &[k, a] : at) top = std::max(top, std::abs(a.z));
+    for (auto &[k, a] : at) {
+        const double amp = std::abs(a.z);
+        if (amp < 1e-6 * top) continue;
+        const double pan = a.weight > 0 ? a.pan / a.weight : 0, ang = (pan + 1) * dsp::kPi / 4;
+        const bool panned = std::fabs(pan) > 1e-6;
+        set->parts.push_back({amp, (double)k / 1e6, std::arg(a.z), panned ? std::cos(ang) * M_SQRT2 : 1.0, panned ? std::sin(ang) * M_SQRT2 : 1.0});
+        set->stereo |= panned;
+        power += amp * amp;
+    }
+    if (set->parts.empty()) warnings.push_back("synth: " + w + "partials: every amplitude is 0: it makes no sound");
+    for (auto &p : set->parts) p.amp /= std::sqrt(std::max(1.0, power));
+    set->shiftHz = std::clamp(num(o, "shiftHz", 0, w), -20000.0, 20000.0);
+    set->tables = set->shiftHz == 0;
+    for (auto &p : set->parts) set->tables &= std::fabs(p.ratio - std::round(p.ratio)) < 1e-6;
+    if (!set->tables || set->parts.empty()) return set;
+    // the tables: harmonic h at fundamental fmax keeps (0.45 sr - h fmax) / (0.05 sr) of its level, up to 1
+    const int hmax = (int)std::lround(set->parts.back().ratio);
+    std::vector<double> prev;
+    for (double fmax = 0.40 * sr / hmax;; fmax *= std::pow(2.0, 1.0 / 3)) {
+        std::vector<double> g(set->parts.size());
+        int kmax = 0;
+        for (size_t k = 0; k < g.size(); ++k) {
+            const double h = std::round(set->parts[k].ratio);
+            g[k] = std::clamp((0.45 * sr - h * fmax) / (0.05 * sr), 0.0, 1.0);
+            if (g[k] > 0) kmax = (int)h;
+        }
+        if (!kmax) break;
+        if (g == prev) { set->mip.back().fmax = fmax; continue; }   // the same partials: the band below grows
+        prev = g;
+        size_t n = 256;
+        while (n < 16 * (size_t)kmax) n *= 2;
+        AdditiveSet::Table t{fmax, n, {}, {}};
+        for (int side = 0; side < (set->stereo ? 2 : 1); ++side) {
+            // x(j) = sum of g a sin(2 pi h j / n + phase): the imaginary part of sum g a e^(i phase) e^(i 2 pi h j / n)
+            std::vector<std::complex<double>> s(n);
+            for (size_t k = 0; k < g.size(); ++k) {
+                const auto &p = set->parts[k];
+                if (g[k] > 0) s[(size_t)std::lround(p.ratio)] = std::conj(std::polar(g[k] * p.amp * (side ? p.gr : set->stereo ? p.gl : 1.0), p.phase));
+            }
+            dsp::fft(s);
+            auto &out = side ? t.r : t.l;
+            out.resize(n + 1);
+            for (size_t j = 0; j < n; ++j) out[j] = (float)-s[j].imag();
+            out[n] = out[0];
+        }
+        set->mip.push_back(std::move(t));
+        if (fmax >= 0.45 * sr) break;
+    }
+    return set;
+}
+
 Adsr parseAdsr(const json &o, Adsr d, const std::string &where, std::vector<std::string> &warnings) {
     if (o.is_null()) return d;
     if (!o.is_object()) throw std::runtime_error("synth: '" + where + "' must be an object with attack, decay, sustain, release");
@@ -270,7 +403,6 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         const auto &o = oscs[i];
         const std::string w = "osc[" + std::to_string(i) + "].";
         if (!o.is_object()) throw std::runtime_error("synth: each oscillator is an object like {\"wave\": \"saw\"}");
-        checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync"}, w, warnings);
         Osc x;
         const std::string wave = o.value("wave", "saw");
         if (wave == "saw") x.wave = Osc::Saw;
@@ -278,7 +410,11 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         else if (wave == "triangle" || wave == "tri") x.wave = Osc::Triangle;
         else if (wave == "sine") x.wave = Osc::Sine;
         else if (wave == "noise") x.wave = Osc::Noise;
-        else throw std::runtime_error("synth: " + w + "wave '" + wave + "' must be saw, square (or pulse), triangle, sine or noise");
+        else if (wave == "additive") x.wave = Osc::Additive;
+        else throw std::runtime_error("synth: " + w + "wave '" + wave + "' must be saw, square (or pulse), triangle, sine, noise or additive");
+        checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync", "partials", "harmonics", "partialWave", "shiftHz"}, w, warnings);
+        for (const char *k : {"partials", "harmonics", "partialWave", "shiftHz"})
+            if (x.wave != Osc::Additive && o.contains(k)) warnings.push_back("synth: " + w + k + " only applies to \"wave\": \"additive\"; ignored");
         x.level = std::max(0.0, num(o, "level", 1, w));
         x.pitch = 12 * num(o, "octave", 0, w) + num(o, "semi", 0, w) + num(o, "cents", 0, w) / 100;
         x.pw = std::clamp(num(o, "pw", 0.5, w), 0.02, 0.98);
@@ -286,6 +422,10 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         x.filtered = o.value("filter", true);
         x.sync = o.value("sync", false);
         if (x.sync && i == 0) { warnings.push_back("synth: osc[0].sync: the first oscillator is the one others sync to; ignored"); x.sync = false; }
+        if (x.wave == Osc::Additive) {
+            x.add = parseAdditive(o, w, job.sampleRate, x.pw, warnings);
+            if (x.sync && !x.add->tables) { warnings.push_back("synth: " + w + "sync: an inharmonic or shifted additive oscillator can't restart; ignored"); x.sync = false; }
+        }
         if (o.contains("fm")) {
             const auto &f = o["fm"];
             if (!f.is_object()) throw std::runtime_error("synth: " + w + "fm is {\"ratio\": 2, \"index\": 1.5, \"decay\": 0.4}");
@@ -441,7 +581,13 @@ struct Unit {                       // one oscillator copy (an osc x a unison vo
     double phase = 0, fmPhase = 0, inc = 0;
     double detune = 0;   // -0.5..0.5 of the unison detune
     double pan = 0;      // -1..1 at full spread
+    int table = 0;       // an additive oscillator's table for its pitch now
+    size_t sines = 0;    // an additive sine bank: where its partials' phasors start in the voice's list,
+    size_t sinesOn = 0;  // how many of them sound (the rest are above 0.45 x the sample rate)
+    double sinesInc = -1;   // and the pitch they were set for
 };
+
+struct Phasor { double c, s, rc, rs, g; };   // a sine partial: cos and sin of its phase, its step, its level now
 
 struct Voice {
     const Patch *P = nullptr;
@@ -460,12 +606,14 @@ struct Voice {
     std::vector<double> oscDecayLevel;
     std::vector<double> fmLevel;              // per osc FM index envelope (1 at the attack)
     std::vector<double> fmCoef;
+    std::vector<Phasor> sines;                // additive sine banks' partials, per unit
 
     void start(const Patch &patch, double sampleRate, uint32_t seed) {
         P = &patch; sr = sampleRate;
         noise = dsp::Noise(seed | 1);
         const int U = P->unison;
         units.assign(P->osc.size() * (size_t)U, Unit{});
+        sines.clear();
         // unison voices: detune spread evenly from lowest to highest; the centre voice sits in the middle,
         // the others alternate sides as they move out, so neither side is all flat or all sharp
         const double c = (U - 1) / 2.0;
@@ -483,6 +631,14 @@ struct Voice {
                 x.pan = pan;
                 x.phase = U > 1 ? (hash32(seed * 131 + (uint32_t)(o * 17 + (size_t)u)) & 0xffffff) / 16777216.0 : 0.0;
                 x.fmPhase = 0;
+                const AdditiveSet *a = P->osc[o].add.get();
+                if (a && !a->tables) {   // a sine bank: each partial starts where the unit's phase puts it
+                    x.sines = sines.size();
+                    for (auto &p : a->parts) {
+                        const double ph = p.phase + TAU * p.ratio * x.phase;
+                        sines.push_back({std::cos(ph), std::sin(ph), 1, 0, 0});
+                    }
+                }
             }
         oscDecay.assign(P->osc.size(), 1.0);
         oscDecayLevel.assign(P->osc.size(), 1.0);
@@ -522,7 +678,7 @@ inline double oscSample(const Osc &o, const Unit &x, double pw, double fmAmt) {
     case Osc::Sine:
         if (o.fm) return std::sin(TAU * t + fmAmt * std::sin(TAU * x.fmPhase));
         return std::sin(TAU * t);
-    case Osc::Noise: return 0;   // handled by the voice
+    case Osc::Noise: case Osc::Additive: return 0;   // handled by the voice
     }
     return 0;
 }
@@ -646,6 +802,22 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             patch.merge_patch(own);
         }
         P = parsePatch(patch, job, warnings);
+        for (size_t o = 0; o < P.osc.size(); ++o) {   // a sine bank plays at most 512 partials across its unison voices
+            const auto &a = P.osc[o].add;
+            const size_t keep = std::max<size_t>(1, 512 / (size_t)P.unison);
+            if (!a || a->tables || a->parts.size() <= keep) continue;
+            auto t = std::make_shared<AdditiveSet>(*a);
+            std::vector<size_t> idx(t->parts.size());
+            for (size_t k = 0; k < idx.size(); ++k) idx[k] = k;
+            std::stable_sort(idx.begin(), idx.end(), [&](size_t x, size_t y) { return a->parts[x].amp > a->parts[y].amp; });
+            idx.resize(keep);
+            std::sort(idx.begin(), idx.end());
+            t->parts.clear();
+            for (size_t k : idx) t->parts.push_back(a->parts[k]);
+            P.osc[o].add = t;
+            warnings.push_back("synth: osc[" + std::to_string(o) + "]: " + std::to_string(a->parts.size()) + " inharmonic partials x " + std::to_string(P.unison) +
+                               " unison voices: the loudest " + std::to_string(keep) + " play");
+        }
         // "params": overrides by name
         for (const auto &ps : track.params) {
             const int i = paramIndex(ps.key);
@@ -766,6 +938,28 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                         Unit &x = v.units[o * (size_t)U + (size_t)u];
                         const double semis = pitch + P.osc[o].pitch + x.detune * detune / 100.0;
                         x.inc = std::min(nyq, 440.0 * std::pow(2.0, (semis - 69) / 12.0)) / sr;
+                        if (const AdditiveSet *a = P.osc[o].add.get()) {
+                            if (a->tables) x.table = a->pick(x.inc * sr);
+                            else {
+                                Phasor *ph = v.sines.data() + x.sines;
+                                if (x.inc != x.sinesInc) {   // each partial's step and its level under 0.45 x the sample rate
+                                    x.sinesInc = x.inc;
+                                    x.sinesOn = 0;
+                                    for (size_t k = 0; k < a->parts.size(); ++k) {
+                                        const double hz = a->parts[k].ratio * x.inc * sr + a->shiftHz, step = TAU * hz / sr;
+                                        ph[k].rc = std::cos(step);
+                                        ph[k].rs = std::sin(step);
+                                        ph[k].g = a->parts[k].amp * std::clamp((0.45 * sr - std::fabs(hz)) / (0.05 * sr), 0.0, 1.0);
+                                        if (ph[k].g > 0) x.sinesOn = k + 1;
+                                    }
+                                }
+                                for (size_t k = 0; k < x.sinesOn; ++k) {   // back onto the unit circle (the silent ones wait)
+                                    const double m = (3 - ph[k].c * ph[k].c - ph[k].s * ph[k].s) / 2;
+                                    ph[k].c *= m;
+                                    ph[k].s *= m;
+                                }
+                            }
+                        }
                         const double pan = std::clamp(x.pan * spread, -1.0, 1.0);
                         const double ang = (pan + 1) * dsp::kPi / 4;
                         uL[o * (size_t)U + (size_t)u] = std::cos(ang) * M_SQRT2;
@@ -808,6 +1002,40 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 for (int u = 0; u < U; ++u) {
                     const size_t idx = o * (size_t)U + (size_t)u;
                     Unit &x = v.units[idx];
+                    if (osc.add) {   // additive: its table (left and right when panned) or its sine bank
+                        const AdditiveSet &a = *osc.add;
+                        double sl = 0, sr2 = 0;
+                        if (a.tables) {
+                            if (!a.mip.empty()) {
+                                const auto &tb = a.mip[(size_t)x.table];
+                                const double pos = x.phase * (double)tb.n;
+                                const size_t j = std::min((size_t)pos, tb.n - 1);
+                                const double fr = pos - (double)j;
+                                sl = tb.l[j] + fr * (tb.l[j + 1] - tb.l[j]);
+                                sr2 = a.stereo ? tb.r[j] + fr * (tb.r[j + 1] - tb.r[j]) : sl;
+                            }
+                        } else {
+                            Phasor *ph = v.sines.data() + x.sines;
+                            for (size_t k = 0; k < x.sinesOn; ++k) {
+                                Phasor &q = ph[k];
+                                const double s = q.s * q.g;
+                                sl += s * a.parts[k].gl;
+                                sr2 += s * a.parts[k].gr;
+                                const double c = q.c * q.rc - q.s * q.rs;
+                                q.s = q.c * q.rs + q.s * q.rc;
+                                q.c = c;
+                            }
+                        }
+                        x.phase += x.inc;
+                        if (osc.sync) {
+                            const Unit &m = v.units[(size_t)u];
+                            if (m.phase < m.inc && m.inc > 0) x.phase = m.phase * (x.inc / m.inc);
+                        }
+                        if (x.phase >= 1) x.phase -= std::floor(x.phase);
+                        sumL += sl * g * uL[idx];
+                        sumR += sr2 * g * uR[idx];
+                        continue;
+                    }
                     const double s = osc.wave == Osc::Noise ? v.noise.next() : oscSample(osc, x, pw, fmAmt);
                     x.phase += x.inc;
                     if (osc.sync) {   // restart with the first oscillator's cycle (its unit of the same unison voice)

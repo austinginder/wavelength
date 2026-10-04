@@ -7,9 +7,9 @@
 //   "params": {"cutoff": "800 Hz"}                      overrides by name (`wavelength params builtin:synth`)
 //   "automation": {"params": {"cutoff": [[0, 200], [16, 4000]]}}   the same names over time
 //
-// Oscillators are band-limited (polyBLEP saw and pulse), with unison, FM on sine oscillators, a sub
-// and noise, a resonant 12/24 dB state-variable filter with its own envelope, LFOs, glide and mono
-// legato. Deterministic: the same job renders the same samples every time.
+// Oscillators are band-limited (polyBLEP saw and pulse; additive oscillators drop the partials that would
+// alias), with unison, FM on sine oscillators, a sub and noise, a resonant 12/24 dB state-variable filter
+// with its own envelope, LFOs, glide and mono legato. Deterministic: the same job renders the same samples every time.
 #include "job.hpp"
 #include "wav.hpp"
 

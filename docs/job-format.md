@@ -109,7 +109,7 @@ The `synth` object:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `osc` | `[{"wave": "saw"}]` | Up to 12 oscillators: `wave` (`saw`, `square`/`pulse`, `triangle`, `sine`, `noise`), `level` 1, `octave`, `semi`, `cents`, `pw` 0.5 (pulse width), `decay` (seconds of its own fade: a tine or click on top of a sustained sound), and on a sine `fm`: `{"ratio": 2, "index": 1.5, "decay": 0.4, "sustain": 0}` (a sine modulator at `ratio` times the pitch; `index` sets brightness and falls to `sustain` of itself over `decay` seconds), `"filter": false` (it joins after the filter: a clean sine body under a filtered patch), `"sync": true` (hard sync: it restarts with every cycle of the first oscillator, so tuning it up with `semi` sweeps the classic sync timbre). Saw and pulse are band-limited (a synced oscillator's restart isn't). |
+| `osc` | `[{"wave": "saw"}]` | Up to 12 oscillators: `wave` (`saw`, `square`/`pulse`, `triangle`, `sine`, `noise`, `additive`: see below), `level` 1, `octave`, `semi`, `cents`, `pw` 0.5 (pulse width), `decay` (seconds of its own fade: a tine or click on top of a sustained sound), and on a sine `fm`: `{"ratio": 2, "index": 1.5, "decay": 0.4, "sustain": 0}` (a sine modulator at `ratio` times the pitch; `index` sets brightness and falls to `sustain` of itself over `decay` seconds), `"filter": false` (it joins after the filter: a clean sine body under a filtered patch), `"sync": true` (hard sync: it restarts with every cycle of the first oscillator, so tuning it up with `semi` sweeps the classic sync timbre). Saw and pulse are band-limited (a synced oscillator's restart isn't). |
 | `unison` | 1 | Copies of every oscillator: a count, or `{"voices": 7, "detune": 30, "spread": 0.8}` (cents from lowest to highest copy, stereo width). Copies start at random (seeded) phases, so supersaws sound full. |
 | `sub`, `noise` | 0, 0 | A square an octave below the note, and white noise. Above about 0.2 the sub takes over the pitch: the part sounds (and `analyze` reads it) an octave lower. |
 | `filter` | lowpass 8000 | `type` (`lowpass`, `highpass`, `bandpass`, `off`), `slope` 12 or 24, `cutoff` (Hz or text), `resonance` 0-1, `keytrack` 0-1 (from C4), `env` (octaves the filter envelope adds), `velocity` (octaves darker at velocity 0), `drive` 0-1 (saturation into the filter). |
@@ -120,6 +120,23 @@ The `synth` object:
 | `level` | 0 | dB. |
 
 Per-note `bend` and `vibrato` play on builtin:synth tracks as on the sampler, and `automation.pitchbend` (semitones) bends every voice. MIDI CC and pressure automation do nothing here: automate parameters by name.
+
+**Additive oscillators.** `{"wave": "additive", ...}` plays a list of sine partials, alias-free at any pitch:
+
+| Key | Meaning |
+|---|---|
+| `partials` | `[[amplitude, ratio], ...]`, or `[amplitude, ratio, pan]` with pan -1..1: each partial at `ratio` times the note's frequency (above 0, at most 1024; whole numbers are harmonics). Up to 1024 partials. |
+| `harmonics` | A harmonic series instead of (or under) the list: `{"count": 64, "tilt": -6, "odd": 1, "even": 1}`, or just a count. `tilt` is dB per octave (-6 falls like a saw, 0 is flat), `odd` and `even` scale those harmonics (the fundamental is odd: `"even": 0` gives a square's series). |
+| `partialWave` | `sine` (default), or `saw`, `square` (with `pw`) or `triangle`: every partial plays that wave instead, its harmonics joining the list (an organ of saws). |
+| `shiftHz` | Moves every partial up (or down) by that many Hz: an inharmonic, metallic spectrum that doesn't follow the key. |
+
+Amplitudes are relative: when the partials together hold more power than one full sine they are scaled down together, so a long list plays about as loud as a single oscillator at the same `level`. Partials above 0.45 times the sample rate are left out (faded from 0.40) at every pitch, glide and vibrato included. Harmonic sets play from precomputed tables and cost about what a saw does; inharmonic or shifted ones play as a bank of sines (at most 512 partials across the unison voices: the loudest ones play), so keep those lists short. `octave`, `semi`, `cents`, `level`, `decay`, `filter`, `sync` (harmonic sets only) and unison work as on any oscillator.
+
+```json
+{"name": "Glass", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "additive", "partials": [[1, 1], [0.5, 2.76], [0.3, 5.4, -0.4], [0.2, 8.93, 0.4]]}],
+ "filter": {"type": "off"}, "amp": {"attack": 0.002, "decay": 2.5, "sustain": 0, "release": 1}},
+ "notes": [{"beat": 0, "dur": 2, "key": "E5", "vel": 0.8}]}
+```
 
 ### builtin:shepard
 

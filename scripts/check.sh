@@ -543,6 +543,43 @@ a = json.load(sys.stdin)
 sys.exit(0 if a["pitch"]["note"] == "C3" and a["lufs"] > -30 and a["stereo"]["width"] > 0.1 else 1)' || gate_why="${gate_why:+$gate_why; }the phaser lost the pitch, the level or its width"
 fi
 if [ -n "$gate_why" ]; then echo "FAIL gate/phaser: $gate_why"; fail=1; else echo "ok   gate/phaser: a noise gate closes on a quiet tone, a phaser keeps pitch and widens"; fi
+# additive oscillator: a 200-partial saw at C7 sounds C7 and nothing aliases below its fundamental (every component
+# under 1.9 kHz at least 60 dB under it: the partials above 0.45 x the sample rate are left out); an inharmonic,
+# shifted and panned set plays through a unison as a bank of sines
+mkdir -p out/check/additive
+cat > out/check/additive/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0.2, "stems": "16",
+ "tracks": [{"name": "Saw", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "additive", "harmonics": {"count": 200, "tilt": -6}}], "filter": {"type": "off"}},
+             "notes": [{"beat": 0, "dur": 1, "key": "C7", "vel": 0.8}]},
+            {"name": "Bell", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "additive", "partials": [[1, 1], [0.5, 2.76, -0.5], [0.3, 5.4, 0.5]], "shiftHz": 3}],
+             "filter": {"type": "off"}, "unison": 3}, "notes": [{"beat": 0, "dur": 1, "key": "A4", "vel": 0.8}]}]}
+JOB
+additive_why=""
+if ! "./$build/wavelength" render out/check/additive/job.json --out "out/check/additive/$build" --json > /dev/null 2>&1; then
+  additive_why="the job did not render"
+elif [ "$("./$build/wavelength" analyze "out/check/additive/$build/stems/01-saw.wav" --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "C7" ]; then
+  additive_why="the 200-partial saw did not sound C7"
+elif ! python3 - "out/check/additive/$build/stems/01-saw.wav" <<'PY'
+import math, sys, wave
+w = wave.open(sys.argv[1])
+sr, ch, raw = w.getframerate(), w.getnchannels(), w.readframes(w.getnframes())
+x = [int.from_bytes(raw[i:i + 2], "little", signed=True) for i in range(0, len(raw), 2 * ch)][int(0.3 * sr):int(0.3 * sr) + 8192]
+x = [s * (0.5 - 0.5 * math.cos(2 * math.pi * i / (len(x) - 1))) for i, s in enumerate(x)]
+def level(hz):   # Goertzel: the windowed segment's magnitude at hz
+    c, a, b = 2 * math.cos(2 * math.pi * hz / sr), 0.0, 0.0
+    for v in x: a, b = v + c * a - b, a
+    return math.sqrt(max(1e-30, a * a + b * b - c * a * b))
+sys.exit(0 if max(level(hz) for hz in range(40, 1900, 15)) < level(2093.0) * 1e-3 else 1)
+PY
+then
+  additive_why="the 200-partial saw at C7 aliases below its fundamental"
+elif ! "./$build/wavelength" analyze "out/check/additive/$build/stems/02-bell.wav" --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if not d["silent"] and d["stereo"]["width"] > 0 else 1)'; then
+  additive_why="the inharmonic bell was silent or mono"
+fi
+if [ -n "$additive_why" ]; then echo "FAIL additive: $additive_why"; fail=1; else echo "ok   additive: a 200-partial saw at C7 in tune with nothing aliased below it, an inharmonic panned bank of sines"; fi
 # arp: a C major chord held two beats at 1/16 up-and-down (top and bottom once) over two octaves plays C4 E4 G4 C5
 # E5 G5 E5 C5 (read back from a MIDI export); a patch's Arpeggiator (make-test-exs.py's Test Arp: 1/16 up over two
 # octaves, note length 50 %, swing 60, the grid note 127, rest, chord 64, note 100 tied over 2, note 64) plays by

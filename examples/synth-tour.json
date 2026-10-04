@@ -3015,6 +3015,76 @@
    ]
   },
   {
+   "name": "Glass",
+   "plugin": "builtin:synth",
+   "gain": -9,
+   "sends": {
+    "Verb": -6
+   },
+   "synth": {
+    "osc": [
+     {
+      "wave": "additive",
+      "partials": [
+       [
+        1,
+        1
+       ],
+       [
+        0.6,
+        2.76
+       ],
+       [
+        0.35,
+        5.4,
+        -0.4
+       ],
+       [
+        0.2,
+        8.93,
+        0.4
+       ]
+      ]
+     }
+    ],
+    "filter": {
+     "type": "off"
+    },
+    "amp": {
+     "attack": 0.002,
+     "decay": 2.5,
+     "sustain": 0,
+     "release": 1
+    }
+   },
+   "notes": [
+    {
+     "beat": 0,
+     "dur": 3.5,
+     "key": "E5",
+     "vel": 0.7
+    },
+    {
+     "beat": 4,
+     "dur": 3.5,
+     "key": "C5",
+     "vel": 0.7
+    },
+    {
+     "beat": 8,
+     "dur": 3.5,
+     "key": "G5",
+     "vel": 0.7
+    },
+    {
+     "beat": 12,
+     "dur": 3.5,
+     "key": "D5",
+     "vel": 0.7
+    }
+   ]
+  },
+  {
    "name": "Riser",
    "plugin": "builtin:synth",
    "preset": "FX Noise Sweep",
