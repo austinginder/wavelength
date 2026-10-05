@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -112,7 +113,7 @@ struct Ev {
     std::string data;    // meta payload
 };
 
-bool readFile(const std::string &path, std::vector<uint8_t> &d, std::string &err) {
+bool readFile(const std::string &path, std::vector<uint8_t> &d, std::string &err, bool *loop = nullptr) {
     std::ifstream f(path, std::ios::binary);
     if (!f) { err = "cannot open " + path; return false; }
     d.assign(std::istreambuf_iterator<char>(f), {});
@@ -120,6 +121,7 @@ bool readFile(const std::string &path, std::vector<uint8_t> &d, std::string &err
         std::vector<uint8_t> smf;
         if (!cafMidi(d, smf, err)) { err = path + " " + err; return false; }
         d.swap(smf);
+        if (loop) *loop = true;
     }
     return true;
 }
@@ -216,7 +218,8 @@ json gmSound(int program, bool drums, std::string &note) {
 
 bool importMidiFile(const std::string &path, const std::string &outDir, const std::string &instrument, MidiImport &res, std::string &err) {
     std::vector<uint8_t> d;
-    if (!readFile(path, d, err)) return false;
+    bool loop = false;
+    if (!readFile(path, d, err, &loop)) return false;
     size_t pos = 0;
     if (d.size() >= 8 && std::equal(d.begin(), d.begin() + 4, "RIFF")) pos = 20;   // RMID wrapper
     if (d.size() < pos + 14 || !std::equal(d.begin() + (long)pos, d.begin() + (long)pos + 4, "MThd")) { err = path + " is not a Standard MIDI File"; return false; }
@@ -247,6 +250,26 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
         pos += 8 + len;
     }
     if (tracks.empty()) { err = path + " has no tracks"; return false; }
+    if (loop) {   // a Drummer loop's notes are a slice of a longer performance: it starts at the first note's bar
+        uint64_t first = UINT64_MAX;
+        double barBeats = 4;
+        bool haveSig = false;
+        for (auto &t : tracks)
+            for (auto &e : t) {
+                if ((e.status & 0xf0) == 0x90 && e.b > 0) first = std::min(first, e.tick);
+                if (!haveSig && e.status == 0xff && e.metaType == 0x58 && e.data.size() >= 2 && e.data[0] > 0)
+                    barBeats = (uint8_t)e.data[0] * 4.0 / (1 << (uint8_t)e.data[1]), haveSig = true;
+            }
+        const double bar = barBeats * ticksPerBeat;
+        if (first != UINT64_MAX && bar > 0) {
+            const uint64_t start = (uint64_t)(std::floor((first + 0.25 * ticksPerBeat) / bar) * bar);   // a flam a 16th early still counts
+            if (start > 0) {
+                for (auto &t : tracks)
+                    for (auto &e : t) e.tick = e.tick > start ? e.tick - start : 0;
+                res.notes.push_back("the loop's notes start " + std::to_string((int)std::lround(start / bar)) + " bars into its MIDI (a slice of a longer performance): moved to beat 0");
+            }
+        }
+    }
     auto beat = [&](uint64_t tick) { return r6((double)tick / ticksPerBeat); };
 
     // conductor: tempo, time signature, markers (from any track)

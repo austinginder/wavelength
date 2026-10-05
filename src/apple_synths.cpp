@@ -111,7 +111,10 @@ GarageBandSynth vintageB3Patch(const std::vector<float> &params) {
     // like KY Organ at -12, moved by the organ's own Volume (from the factory patches' typical -6 dB) and Expression:
     // a patch that turns the organ down for its distortion or EQ boosts keeps that gain structure
     const double expression = V(104) > 0 && V(104) <= 1 ? 20 * std::log10(std::max(0.01, V(104))) : 0.0;
-    synth["level"] = r(std::clamp(-12 + (V(105) + 6) + expression, -40.0, 12.0), 100);
+    // the rotor cabinet's speaker rolls the top off (fitted on GarageBand's organ loops: 5th order at 3.87 kHz, and
+    // 1.2 dB up for what it takes); older strips (the loops') don't store its switch and sound through it
+    const bool cabinet = params.size() <= 128 || V(128) >= 0.5;
+    synth["level"] = r(std::clamp(-12 + (V(105) + 6) + expression + (cabinet ? 1.2 : 0.0), -40.0, 12.0), 100);
     out.synth = synth;
     // effects: EQ, distortion (and the wah) under Master FX, the rotor cabinet, the reverb
     if (V(152) >= 0.5) {
@@ -136,6 +139,9 @@ GarageBandSynth vintageB3Patch(const std::vector<float> &params) {
         if (sp == 1) { rot["bypass"] = true; notes.push_back("rotor brake (rotors stopped): rotary bypassed; a stopped Leslie's colour isn't modelled"); }
         out.fx.push_back(rot);
     }
+    if (cabinet)   // the stages the fit used: Q 0.5 for the odd order, then a 4th-order Butterworth (Q 0.618, 1.618)
+        out.fx.push_back({{"type", "eq"}, {"bands", {{{"type", "lowpass"}, {"freq", 3870}, {"q", 0.5}}, {{"type", "lowpass"}, {"freq", 3870}, {"q", 0.618}},
+                                                    {{"type", "lowpass"}, {"freq", 3870}, {"q", 1.618}}}}});
     if (V(152) >= 0.5 && V(155) >= 0.5 && V(71) > 0) {
         out.fx.push_back({{"type", "reverb"}, {"decay", 1.6}, {"size", 0.6}, {"mix", r(std::min(0.5, V(71) / 200 * 0.6))}});
         notes.push_back("reverb type not decoded: a mid-size room, its mix scaled from Reverb Level");

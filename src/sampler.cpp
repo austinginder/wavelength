@@ -1649,6 +1649,14 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
                 kitCfg = track.sampler;
                 kitCfg.erase("patch");
                 kitCfg["kit"] = kit;
+                // GarageBand's Ultrabeat kits play their second kick on key 53 too (where General MIDI has a ride bell): its loops do
+                std::vector<std::pair<int, std::string>> km;
+                std::vector<std::string> unmapped;
+                std::string kdir, kerr;
+                if (kitMap(kit, job.baseDir, km, unmapped, kdir, kerr, false) && std::none_of(km.begin(), km.end(), [](auto &m) { return m.first == 53; }) &&
+                    !(kitCfg.contains("map") && kitCfg["map"].is_object() && kitCfg["map"].contains("53")))
+                    for (auto &[key, file] : km)
+                        if (key == 35) { kitCfg["map"]["53"] = file; break; }
                 warnings.push_back("patch '" + fs::path(dir).stem().string() + "' plays Ultrabeat: its kit's samples play ('" + kit + "'), without Ultrabeat's synthesis");
             }
             if (!kit.empty() || sampled) patchFx = patchChainEffects(chans, patchFxNotes);

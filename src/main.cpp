@@ -469,11 +469,6 @@ int cmdLoops(const Args &a) {
                 notes.push_back(n);
             }
         std::sort(notes.begin(), notes.end(), [](const json &x, const json &y) { return x["beat"].get<double>() < y["beat"].get<double>(); });
-        // a Drummer loop's notes are a slice of a longer performance, starting a whole number of loops in: from beat 0
-        if (!notes.empty() && l->beats > 0) {
-            const double first = notes.front()["beat"].get<double>(), shift = std::floor((first + 0.25) / l->beats) * l->beats;   // a flam a 16th early still counts
-            if (shift > 0) for (auto &n : notes) n["beat"] = std::max(0.0, std::round((n["beat"].get<double>() - shift) * 1e6) / 1e6);
-        }
         if (a.has("--json")) { emit(json{{"ok", true}, {"loop", appleLoopJson(*l)}, {"shift", shift}, {"notes", notes}}.dump(2, ' ', false, json::error_handler_t::replace)); return 0; }
         double span = 0;
         for (auto &n : notes) span = std::max(span, n["beat"].get<double>() + n.value("dur", 0.0));
