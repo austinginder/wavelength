@@ -177,7 +177,8 @@ struct Channel {
     uint8_t type = 0;
     uint16_t idx = 0;             // within its type
     std::string name;             // "Inst 1", "Bus 2", "Output 1-2"
-    double volume = 90, pan = 64; // fader (8.24 fixed point at +0x52, 90 = 0 dB), pan (8.8 at +0x58, 64 = centre)
+    double volume = 90, pan = 64; // fader (8.24 fixed point, 90 = 0 dB), pan (0..127, 64 = centre)
+    bool mute = false, solo = false;
     uint16_t input = 0;           // an aux: the bus it listens to
     std::string uuid;             // 16 bytes after its ff d5 marker; "" when not stored
     std::vector<const Chunk *> records;
@@ -237,8 +238,12 @@ Channel channelOf(const Chunk &c) {
     ch.type = pl.u8(4);
     ch.idx = pl.u16(6);
     ch.name = trimmed(pl.cstr(0x3c, 0x4c));
-    ch.volume = pl.u32(0x52) / 16777216.0;
-    ch.pan = pl.u16(0x58) / 256.0;
+    // the fader: +0x74 holds it exactly (faders set to -6, -12, -30 and +3 dB read back within 0.02 dB); +0x52 is a
+    // coarse copy in half steps that can sit off it (90.5 where the fader is at 0 dB)
+    ch.volume = (pl.n >= 0x78 ? pl.u32(0x74) : pl.u32(0x52)) / 16777216.0;
+    ch.pan = pl.u8(0x59);
+    ch.solo = pl.u8(0x58) & 1;    // +0x58: flags, bit 0 solo
+    ch.mute = pl.u8(0x5a) & 1;    // +0x5a: state, bit 0 muted (bit 1: silenced by another track's solo)
     ch.input = pl.u16(0x5e);
     for (size_t k = 0xc0; k + 1 < pl.n; ++k)
         if (pl.p[k] == 0xff && pl.p[k + 1] == 0xd5) {
@@ -977,8 +982,10 @@ struct Converter {
             warn.push_back(name + ": track kind " + t.kind + " not converted");
             return nullptr;
         }
-        // fader, pan, sends
+        // fader, pan, mute and solo, sends
         if (std::fabs(ch.gainDb()) > 0.005) job["gain"] = r3(ch.gainDb());
+        if (ch.mute) job["mute"] = true;
+        if (ch.solo) job["solo"] = true;   // resolved over all the tracks below
         if (std::fabs(ch.panUnit()) > 0.001) job["pan"] = r3(ch.panUnit());
         json sends = json::object();
         for (auto &s : ch.sends()) {
@@ -1070,6 +1077,14 @@ struct Converter {
             json j = track(t);
             if (!j.is_null()) tracks.push_back(j);
         }
+        // solo: the soloed tracks play and the rest are muted, as GarageBand plays it
+        std::string soloed;
+        for (auto &t : tracks) if (t.value("solo", false)) soloed += (soloed.empty() ? "" : ", ") + t.value("name", std::string());
+        for (auto &t : tracks) {
+            if (!soloed.empty() && !t.value("solo", false)) t["mute"] = true;
+            t.erase("solo");
+        }
+        if (!soloed.empty()) warn.push_back("solo: " + soloed + " soloed in GarageBand, so the other tracks are muted");
         job["tracks"] = tracks;
         if (!buses.empty()) job["buses"] = buses;
         const json m = master();

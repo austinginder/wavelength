@@ -424,7 +424,7 @@ std::vector<PatchSend> readPatchSends(const std::string &patchDir) {
             p.channel = ch.value("Channel_name", std::string());
             p.aux = snd["auxTag"].get<std::string>();
             p.room = p.aux.substr(p.aux.find('/') == std::string::npos ? 0 : p.aux.find('/') + 1);
-            p.db = 20 * std::log10(v);
+            p.db = 40 * std::log10(v * 127 / 90);   // sendVolume is the send knob's position / 127, on the fader's law (90 = 0 dB)
             out.push_back(p);
         }
     }

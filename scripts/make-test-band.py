@@ -74,14 +74,16 @@ def envi(oid, name, channel):
 
 
 def channel(number, kind, index, name, volume, pan, uuid):
-    # a channel strip object: +4 type, +6 index, +0x3c name, +0x52 fader (8.24 on 0-127, 90 = 0 dB), +0x58 pan (8.8,
-    # 64 = centre), then its UUID after ff at +0xd4
+    # a channel strip object: +4 type, +6 index, +0x3c name, the fader (8.24 on 0-127, 90 = 0 dB) exactly at +0x74 and
+    # as a coarse copy at +0x52, +0x58 flags (bit 0 solo), +0x59 pan (0-127, 64 = centre), +0x5a state (bit 0 muted),
+    # then its UUID after ff at +0xd4
     pl = bytearray(261)
     pl[4] = kind
     struct.pack_into('<H', pl, 6, index)
     pl[0x3c:0x3c + len(name)] = name.encode()
     struct.pack_into('<I', pl, 0x52, volume << 24)
-    struct.pack_into('<H', pl, 0x58, pan << 8)
+    struct.pack_into('<I', pl, 0x74, volume << 24)
+    pl[0x59] = pan
     pl[0xd4] = 0xff
     pl[0xd5:0xd5 + 16] = uuid
     return chunk('AuCO', 0x0e, 4 * number, bytes(pl), ref=number)
