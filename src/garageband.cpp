@@ -1161,20 +1161,36 @@ struct Converter {
             if (c.type == kMaster && !mst) mst = &c;
         }
         json m = json::object();
-        const double g = (out ? out->gainDb() : 0) + (mst ? mst->gainDb() : 0);
-        if (std::fabs(g) > 0.005) m["gain"] = r3(g);
+        double g = (out ? out->gainDb() : 0) + (mst ? mst->gainDb() : 0);
         if (out) {
             const json fx = channelFx(*out, "master", writePatch(*out, "_master"));
             if (!fx.empty()) m["fx"] = fx;
         }
+        // the master track's volume automation (Mix > Fade Out writes four points): its fader follows the curve
+        for (auto it = curves.begin(); it != curves.end(); ++it) {
+            const Envi *e = P.envi(it->first);
+            const Channel *ch = !e ? nullptr : out && e->ch == out->r ? out : mst && e->ch == mst->r ? mst : nullptr;
+            if (!ch || it->second.volume.empty()) continue;
+            const auto &v = it->second.volume;
+            json pts = json::array();
+            pts.push_back({r4(std::max(0.0, beat(v[0].first))), r3(faderDb(v[0].second))});
+            for (size_t k = 1; k < v.size(); ++k) faderPoints(pts, beat(v[k - 1].first), v[k - 1].second, beat(v[k].first), v[k].second, 0);
+            m["automation"]["gain"] = pts;
+            g -= ch->gainDb();
+            if (m.contains("fx")) warn.push_back("master: its volume automation plays before the master's effects (GarageBand fades after them)");
+            if (!it->second.pan.empty() || it->second.other) warn.push_back("master: pan and plug-in automation not converted");
+            curves.erase(it);
+            break;
+        }
+        if (std::fabs(g) > 0.005) m["gain"] = r3(g);
         return m;
     }
 
     // A volume curve's points in dB from (b0, v0) to (b1, v1) on the fader's scale: the fader moves straight on its own
-    // scale, so points go in between until a straight line in dB stays within 0.1 dB of it
+    // scale, so points go in between until a straight line in dB stays within 0.1 dB of it (above -60 dB)
     static void faderPoints(json &pts, double b0, double v0, double b1, double v1, int depth) {
         const double vm = (v0 + v1) / 2, bm = (b0 + b1) / 2;
-        if (depth < 8 && std::fabs(faderDb(vm) - (faderDb(v0) + faderDb(v1)) / 2) > 0.1) {
+        if (depth < 8 && std::max(faderDb(v0), faderDb(v1)) > -60 && std::fabs(faderDb(vm) - (faderDb(v0) + faderDb(v1)) / 2) > 0.1) {
             faderPoints(pts, b0, v0, bm, vm, depth + 1);
             faderPoints(pts, bm, vm, b1, v1, depth + 1);
             return;
