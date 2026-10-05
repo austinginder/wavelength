@@ -333,6 +333,14 @@ sys.exit(0 if a["plays"] and c["instrument"] == "Sampler" and c["samples"] == {"
          and a["effects"] == [{"type": "eq", "bands": [{"type": "highpass", "freq": 200, "q": 0.71}]}, {"type": "gain", "db": -3}]
          and not b["plays"] and "GarageBand" in b["why"] else 1)' "$p1" "$p2" || exs_why="samples --patch described the test patches wrong"
 fi
+# an Amp Designer after the instrument plays as built-in effects: its gain stage, tone stack and tremolo
+if [ -z "$exs_why" ]; then
+  p3=$("./$build/wavelength" samples --patch "Test Amp" --json 2>/dev/null || true)
+  python3 -c '
+import json, sys
+t = [e["type"] for e in json.loads(sys.argv[1])["patch"]["effects"]]
+sys.exit(0 if "saturate" in t and "tremolo" in t and t.count("eq") >= 2 else 1)' "$p3" || exs_why="an Amp Designer did not play as saturate, eq and tremolo"
+fi
 # a Retro Synth patch plays on builtin:synth by name (its saw a C4 note sounds C5: the patch is transposed +12), and so
 # does a Vintage B3 patch
 if [ -z "$exs_why" ]; then

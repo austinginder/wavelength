@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -155,6 +156,652 @@ std::pair<double, double> mixGain(double dry, double wet) {
 }
 // a reverb's damping from its high cut: 1 kHz and below fully damped, 10 kHz and up open
 double damping(double highCutHz) { return r2(std::clamp(1 - std::log10(std::max(highCutHz, 1000.0) / 1000), 0.0, 1.0)); }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Amp Designer ("Amp"), Bass Amp Designer ("Bass Amp") and Pedalboard as Wavelength's built-in effects.
+// Paste into src/logic_patches.cpp inside the second anonymous namespace (after damping(), before patchEffects), then
+// add the four branches shown at the end of this file to patchEffects. Uses json, r2, r4, dbLin, le32, PatchPlugin.
+//
+// Decoded from GarageBand's patches, the presets in Plug-In Settings, CSParameterOrder.plist and Apple's Logic Pro
+// Effects guide (FORMAT.md in the research folder). The sound is an approximation: tanh stages ("saturate", level-
+// matched), the tone stacks, cabinets and microphones as EQ curves, the spring reverb as Apple's spring impulse
+// response (or the built-in reverb), the stompboxes as their nearest built-in effect. No Apple DSP is modelled.
+// ---------------------------------------------------------------------------------------------------------------------
+json bandOf(const char *type, double freq, double gain, double q) {
+    json b = {{"type", type}, {"freq", r2(freq)}, {"q", r4(q)}};
+    if (std::strcmp(type, "highpass") && std::strcmp(type, "lowpass") && std::strcmp(type, "bandpass")) b["gain"] = r2(gain);
+    return b;
+}
+// an eq of the bands that do something (cuts always; shelves and peaks of 0.05 dB or more); null when none
+json eqOf(const std::vector<json> &bands) {
+    json bs = json::array();
+    for (auto &b : bands)
+        if (!b.is_null() && (b["type"] == "highpass" || b["type"] == "lowpass" || b["type"] == "bandpass" || std::fabs(b.value("gain", 0.0)) >= 0.05))
+            bs.push_back(b);
+    return bs.empty() ? json() : json{{"type", "eq"}, {"bands", bs}};
+}
+json gainOf(double db) { return std::fabs(db) >= 0.05 ? json{{"type", "gain"}, {"db", r2(db)}} : json(); }
+// a tanh stage and (comp) the gain that takes back the loudness it adds for a DI guitar (bass) at about -21 LUFS with
+// peaks near -6 dBFS, measured with Wavelength's saturate: an amp or pedal is level-neutral at that input and, driven,
+// compresses what comes in hotter or quieter, as the real ones do
+double satGain(double drive, bool bass) {
+    static const double D[] = {0, 3, 6, 9, 12, 15, 18, 24, 30, 36, 42, 48};
+    static const double gtr[] = {2.3, 3.9, 6.1, 8.7, 11.3, 13.7, 15.9, 19.4, 21.7, 23.1, 24.0, 24.5};
+    static const double bas[] = {2.3, 3.8, 5.9, 8.1, 10.3, 12.1, 13.5, 15.4, 17.0, 18.2, 19.1, 19.8};
+    const double *t = bass ? bas : gtr, d = std::max(0.0, drive);
+    if (d >= 48) return t[11] + 0.08 * (d - 48);
+    size_t i = 0;
+    while (i + 1 < 12 && D[i + 1] <= d) ++i;
+    return t[i] + (t[i + 1] - t[i]) * (d - D[i]) / (D[i + 1] - D[i]);
+}
+void addSat(json &fx, double drive, double mix = 1, bool comp = true, bool bass = false) {
+    json s = {{"type", "saturate"}, {"drive", r2(std::max(0.0, drive))}};
+    if (mix < 0.999) s["mix"] = r4(mix);
+    fx.push_back(s);
+    if (comp) {
+        const double g = -20 * std::log10((1 - mix) + mix * std::pow(10.0, satGain(drive, bass) / 20));
+        if (std::fabs(g) >= 0.05) fx.push_back({{"type", "gain"}, {"db", r2(g)}});
+    }
+}
+// a 12/24/36 dB/oct low or high cut as Butterworth biquads
+void cutInto(std::vector<json> &bands, const char *type, double freq, int slopeDb) {
+    static const std::vector<double> q2 = {0.7071}, q4 = {0.5412, 1.3066}, q6 = {0.5176, 0.7071, 1.9319};
+    const int order = std::clamp(2 * (int)std::lround(slopeDb / 12.0), 2, 6);
+    for (double q : order == 2 ? q2 : order == 4 ? q4 : q6) bands.push_back(bandOf(type, freq, 0, q));
+}
+void addFx(json &fx, const json &e) { if (!e.is_null()) fx.push_back(e); }
+// an amp's or a pedal's filters and tone controls, each held at its input's loudness: Apple's amps and drive pedals keep
+// their level as Gain, Drive and the tone controls turn (their Output and Level don't follow them), and a fuzz after a wah
+// isn't quieter for it; with the tanh stages' compensation (addSat) Output / Level is the only level change at a DI level
+json matched(json fx) {
+    for (auto &f : fx) {
+        const std::string t = f.value("type", std::string());
+        if ((t == "eq" || t == "filter" || t == "autowah") && !f.contains("match")) f["match"] = "static";
+    }
+    return fx;
+}
+double toDb(double lin) { return 20 * std::log10(std::max(lin, 1e-9)); }
+
+// a synced rate or time stored as a fraction of a whole note, as Wavelength's note text ("1/8", "1/8T", "1/16D", "2/1",
+// else "<fraction>/1", which Wavelength reads too)
+std::string noteText(double x) {
+    char buf[32];
+    if (x >= 1 && std::fabs(x - std::round(x)) < 1e-3) { std::snprintf(buf, sizeof buf, "%d/1", (int)std::lround(x)); return buf; }
+    for (int den : {1, 2, 4, 8, 16, 32, 64}) {
+        if (std::fabs(x - 1.0 / den) < 1e-4) { std::snprintf(buf, sizeof buf, "1/%d", den); return buf; }
+        if (std::fabs(x - 2.0 / 3.0 / den) < 1e-4) { std::snprintf(buf, sizeof buf, "1/%dT", den); return buf; }
+        if (std::fabs(x - 1.5 / den) < 1e-4) { std::snprintf(buf, sizeof buf, "1/%dD", den); return buf; }
+    }
+    std::snprintf(buf, sizeof buf, "%g/1", std::round(x * 1e6) / 1e6);
+    return buf;
+}
+json rateOf(bool sync, double v) { return sync ? json(noteText(v > 0 ? v : 0.125)) : json(r4(std::max(0.01, v))); }
+// chorus takes Hz only: a synced rate as Hz at 120 BPM (a whole note = 2 s)
+double hzAt120(bool sync, double v) { return sync && v > 0 ? r4(1 / (2 * v)) : r4(std::max(0.01, v)); }
+
+// Apple's spring impulse response (GarageBand's and Logic's sound library, /Library/Audio/Impulse Responses)
+bool springIrInstalled() {
+    static const bool have = [] {
+        std::error_code ec;
+        const fs::path rel = "Apple/01 Large Spaces/06 Spring Reverbs/3.7s_Long Spring.SDIR";
+        return fs::exists(fs::path("/Library/Audio/Impulse Responses") / rel, ec) ||
+               fs::exists(platform::homeDir() / "Library/Audio/Impulse Responses" / rel, ec);
+    }();
+    return have;
+}
+json springOrReverb(bool spring, double lp, double decay, double mix, double hp = 200) {
+    if (spring && springIrInstalled()) {
+        json c = {{"type", "convolve"}, {"ir", "3.7s_Long Spring"}, {"length", r2(decay)}, {"highpass", hp}, {"mix", r4(mix)}};
+        if (lp > 0) c["lowpass"] = r2(lp);
+        return c;
+    }
+    return {{"type", "reverb"}, {"decay", r2(decay)}, {"size", spring ? 0.35 : 0.6}, {"predelay", spring ? 0 : 12}, {"damping", damping(lp)},
+            {"highpass", hp}, {"mix", r4(mix)}};
+}
+
+// A chain blended with its own input, out = (1 - w) x + w chain(x): exact for one effect with a "mix", the magnitude of
+// the blend for eq and gain, and effect by effect for a longer chain (an approximation). Stands in for parallel paths.
+json blendChain(const json &fx, double w) {
+    if (w >= 0.995) return fx;
+    json out = json::array();
+    if (w <= 0.005) return out;
+    static const std::set<std::string> mixable = {"saturate", "chorus", "delay", "reverb", "convolve", "compressor", "filter", "phaser",
+                                                  "rotary", "autowah", "bitcrush", "gate", "multiband"};
+    auto keep = [&](double g) { return toDb((1 - w) + w * std::pow(10.0, g / 20)); };
+    for (auto &f : fx) {
+        const std::string t = f.value("type", std::string());
+        if (mixable.count(t)) { json g = f; g["mix"] = r4(f.value("mix", 1.0) * w); out.push_back(g); }
+        else if (t == "gain") addFx(out, gainOf(keep(f.value("db", 0.0))));
+        else if (t == "tremolo") { json g = f; g["depth"] = r4(f.value("depth", 0.5) * w); out.push_back(g); }
+        else if (t == "vibrato") { json g = f; g["depth"] = r2(f.value("depth", 20.0) * w); out.push_back(g); }
+        else if (t == "eq") {
+            std::vector<json> bs;
+            std::set<std::pair<std::string, double>> shelves;   // a cut's Butterworth stages become one shelf
+            for (auto &b : f["bands"]) {
+                const std::string k = b.value("type", std::string());
+                const double fr = b.value("freq", 1000.0), q = b.value("q", 0.7071);
+                json nb;
+                if (k == "highpass") nb = bandOf("lowshelf", fr, toDb(1 - w), 0.7071);
+                else if (k == "lowpass") nb = bandOf("highshelf", fr, toDb(1 - w), 0.7071);
+                else if (k == "bandpass") { addFx(out, gainOf(toDb(1 - w))); nb = bandOf("peak", fr, -toDb(1 - w), q); }
+                else nb = bandOf(k.c_str(), fr, keep(b.value("gain", 0.0)), q);
+                const std::string nt = nb["type"];
+                if ((k == "highpass" || k == "lowpass") && !shelves.insert({nt, (double)nb["freq"]}).second) continue;
+                bs.push_back(nb);
+            }
+            addFx(out, eqOf(bs));
+        } else if (t == "clip" || t == "limiter") { if (w >= 0.5) out.push_back(f); }
+        else out.push_back(f);
+    }
+    return out;
+}
+
+// ------------------------------------------------------------------------------------------------- Amp Designer
+// #1 Gain, #2 Bass, #3 Mids, #4 Treble, #5 Presence, #6 Master (0-10), #7 Output dB, #9 Model (0 = a custom combo),
+// #10 Amp, #11 EQ type, #12 Cabinet, #13 Mic, #14 mic position across (0 centre - 1 rim), #16 mic distance (1 = default),
+// #23 Trem/Vib on, #24 0 Tremolo / 1 Vibrato, #25 Depth 0-10, #26 Sync, #27 Speed (Hz, or a whole-note fraction synced),
+// #30 Reverb on, #31 Reverb type, #32 Reverb Level 0-10
+struct AmpModel { const char *name; double hp, preHz, preDb, g0, span, pw; };
+const AmpModel &ampModel(int id) {
+    // preamp drive = g0 + span * (Gain / 10)^1.6 dB: the Clean / Crunch / Distorted presets of each amp land at about
+    // 3-8 / 14-20 / 25+ dB of tanh drive for a DI guitar peaking near -6 dBFS; pw: power-amp drive at Master 10
+    static const AmpModel amps[] = {
+        {"British Combo", 90, 2500, 3, -4, 32, 8},   // fallback (id 5)
+        {"Large Black Panel Combo", 70, 0, 0, -6, 32, 6}, {"Small Tweed Combo", 60, 0, 0, -2, 32, 8},
+        {"Vintage British Stack", 90, 1200, 2, 0, 40, 8}, {"Modern American Stack", 120, 800, 3, 6, 36, 4},
+        {"British Combo", 90, 2500, 3, -4, 32, 8}, {"Silver Panel Combo", 70, 0, 0, -6, 32, 6},
+        {"Small Brown Panel Combo", 70, 0, 0, -4, 32, 8}, {"Mini Black Panel Combo", 80, 0, 0, -6, 32, 6},
+        {"Large Tweed Combo", 60, 0, 0, -2, 32, 8}, {"Blues Blaster Combo", 70, 0, 0, -4, 32, 8},
+        {"Mini Tweed Combo", 70, 0, 0, -2, 32, 8}, {"Modern British Stack", 110, 900, 2, 6, 36, 4},
+        {"Brown Stack", 90, 1000, 2, 3, 40, 8}, {"British Blues Combo", 90, 1200, 2, 0, 40, 8},
+        {"Studio Combo", 90, 900, 2, -2, 34, 6}, {"Small British Combo", 90, 2500, 2, -4, 32, 8},
+        {"Boutique British Combo", 80, 2000, 1, -4, 32, 6}, {"Sunshine Stack", 90, 700, 2, 0, 40, 8},
+        {"Small Sunshine Combo", 90, 2000, 2, -4, 34, 8}, {"Stadium Stack", 80, 0, 0, -6, 32, 4},
+        {"Stadium Combo", 80, 0, 0, -6, 32, 4}, {"Boutique Retro Combo", 80, 2500, 1, -4, 32, 6},
+        {"Pawnshop Combo", 120, 1500, 2, -1, 32, 10}, {"High Octane Stack", 120, 800, 3, 6, 36, 4},
+        {"Turbo Stack", 120, 1000, 4, 9, 36, 4}, {"Transparent Preamp", 20, 0, 0, -12, 20, 0}};
+    return id >= 1 && id <= 26 ? amps[id] : amps[0];
+}
+struct Peak { double hz, db, q; };
+struct Cabinet { const char *name; double hp, hpQ, lp; int slope; std::vector<Peak> peaks; };
+const Cabinet &ampCabinet(int id) {   // #12: the speaker's low resonance (high-pass), its top (low-pass), its peaks
+    static const std::vector<Cabinet> cabs = {
+        {"Direct", 0, 0, 0, 0, {}},
+        {"Black Panel 4 x 10", 80, 0.9, 5000, 24, {{200, 1, 1}, {1800, 2, 1.2}}},
+        {"Tweed 1 x 12", 90, 0.8, 4800, 24, {{400, -1.5, 1}, {2500, 2, 1.2}}},
+        {"Vintage British 4 x 12", 85, 1.3, 5200, 36, {{550, -2, 1}, {2000, 3, 1.2}}},
+        {"Modern American 4 x 12", 80, 1.3, 5000, 36, {{150, 2, 1}, {400, -1, 1}, {2500, 2.5, 1.4}}},
+        {"British 2 x 12", 90, 0.9, 5500, 24, {{500, -1, 1}, {2500, 3, 1.2}}},
+        {"Silver Panel 2 x 12", 80, 1.0, 5500, 24, {{120, 1.5, 1}, {2200, 2, 1.2}}},
+        {"Brown Panel 1 x 12", 85, 0.8, 5000, 24, {{2200, 1.5, 1}}},
+        {"Black Panel 1 x 10", 110, 0.8, 5000, 24, {{2500, 2.5, 1.2}}},
+        {"Tweed 4 x 10", 80, 0.9, 5200, 24, {{2800, 2.5, 1.2}}},
+        {"Brown Panel 1 x 15", 70, 0.9, 5000, 24, {{2500, 2, 1.4}}},
+        {"Tweed 1 x 10", 110, 0.8, 4500, 24, {{2000, 2, 1.2}}},
+        {"Modern British 4 x 12", 80, 1.3, 5500, 36, {{500, -3, 1}, {2800, 3, 1.4}}},
+        {"Brown 4 x 12", 85, 1.3, 5000, 36, {{800, 1.5, 1}, {2400, 2.5, 1.4}}},
+        {"British Blues 2 x 12", 85, 1.0, 5500, 24, {{2500, 2.5, 1.2}}},
+        {"Studio 1 x 12", 90, 0.9, 5000, 24, {{900, 1.5, 1}, {3000, 2, 1.4}}},
+        {"British 1 x 12", 100, 0.8, 5200, 24, {{3000, 2.5, 1.2}}},
+        {"Boutique British 2 x 12", 85, 0.9, 6000, 24, {{700, 1.5, 1}, {3200, 3, 1.2}}},
+        {"Sunshine 4 x 12", 85, 1.3, 4800, 36, {{700, 2, 1}, {2200, 2, 1.4}}},
+        {"Sunshine 1 x 12", 95, 0.8, 5500, 24, {{3000, 3, 1.2}}},
+        {"Stadium 4 x 12", 95, 1.3, 5500, 36, {{3000, 3.5, 1.4}}},
+        {"Stadium 2 x 12", 85, 0.9, 5500, 24, {{2500, 2, 1.2}}},
+        {"Boutique Retro 2 x 12", 85, 0.9, 6000, 24, {{700, 1.5, 1}, {3200, 3, 1.2}}},
+        {"Pawnshop 1 x 8", 140, 0.9, 4000, 24, {{160, 2, 1.5}, {1500, 3, 1.2}}},
+        {"High Octane 4 x 12", 80, 1.4, 6000, 36, {{500, -4, 0.9}, {3000, 3, 1.4}}},
+        {"Turbo 4 x 12", 80, 1.4, 6500, 36, {{500, -6, 0.8}, {3500, 4, 1.4}}}};
+    return id >= 0 && id < (int)cabs.size() ? cabs[(size_t)id] : cabs[0];
+}
+struct MicBand { const char *type; double hz, db, q; };
+// #13 / Bass Amp #49: 1 Condenser 87, 3 Dynamic 20, 4 Dynamic 421 (Bass Amp Designer's three mics are stored as 1, 3, 4);
+// 0, 2, 5, 6 read as Dynamic 57, Ribbon 121, Condenser 414, Dynamic 609 (a guess)
+const std::vector<MicBand> &micBands(int id) {
+    static const std::vector<std::vector<MicBand>> mics = {
+        {{"lowshelf", 200, -2, 0.7}, {"peak", 4500, 3, 1.2}}, {{"highshelf", 8000, 1.5, 0.7}},
+        {{"lowshelf", 150, 1.5, 0.7}, {"highshelf", 5000, -4, 0.7}}, {{"lowshelf", 250, -3, 0.7}, {"peak", 1500, 2, 1.0}},
+        {{"highshelf", 5000, 2, 0.7}}, {{"highshelf", 8000, 2, 0.7}}, {{"lowshelf", 250, -2, 0.7}, {"peak", 3500, 3, 1.0}}};
+    return id >= 0 && id < (int)mics.size() ? mics[(size_t)id] : mics[1];
+}
+// the cabinet's and microphone's curve: Apple's mic pad, the cone's centre fuller, the rim brighter and thinner, nearer more bass
+void cabMicInto(std::vector<json> &bs, double hp, double hpQ, double lp, int slope, const std::vector<Peak> &peaks, int mic, double x, double z,
+                double proximityHz) {
+    if (hp <= 0) return;   // a Direct "cabinet": no speaker, no mic
+    bs.push_back(bandOf("highpass", hp, 0, hpQ));
+    for (auto &pk : peaks) bs.push_back(bandOf("peak", pk.hz, pk.db, pk.q));
+    for (auto &m : micBands(mic)) bs.push_back(bandOf(m.type, m.hz, m.db, m.q));
+    if (x > 0.01) { bs.push_back(bandOf("lowshelf", 200, -3 * x, 0.7071)); bs.push_back(bandOf("highshelf", 3000, 3 * x, 0.7071)); }
+    if (z < 0.99) bs.push_back(bandOf("lowshelf", proximityHz, 2.5 * (1 - z), 0.7071));
+    cutInto(bs, "lowpass", lp * (1 + 0.15 * x), slope);
+}
+
+json ampDesignerFx(const PatchPlugin &p, std::vector<std::string> &notes) {
+    auto v = [&](size_t n, double def = 0) { return n < p.params.size() && p.params[n] < 1e29f ? (double)p.params[n] : def; };
+    json fx = json::array();
+    const int ampId = (int)std::lround(v(10, 5));
+    const AmpModel &a = ampModel(ampId);
+    const double gain = v(1, 5), bass = v(2, 5), mids = v(3, 5), treble = v(4, 5), presence = v(5, 5), master = v(6, 5);
+    // preamp: the voicing's low cut and pre-emphasis, then the gain stage
+    addFx(fx, eqOf({a.hp > 20 ? bandOf("highpass", a.hp, 0, 0.7071) : json(), a.preDb != 0 ? bandOf("peak", a.preHz, a.preDb, 0.8) : json()}));
+    addSat(fx, a.g0 + a.span * std::pow(std::max(0.0, gain) / 10, 1.6));
+    // tone stack, #11: 0 Modern, 1 British Bright, 2 Vintage, 3 U.S. Classic, 4 Boutique (the factory models' own EQs)
+    struct Stack { double bHz, bR, mHz, mQ, m0, mR, tHz, t0, tR; };
+    static const Stack stacks[] = {{90, 8, 700, 1.0, -4, 8, 3000, 0, 8}, {150, 5, 1000, 0.8, -1, 5, 3000, 2, 7}, {120, 6, 650, 0.8, -3, 5, 2200, 0, 7},
+                                   {100, 6, 500, 0.7, -6, 5, 2500, 0, 7}, {110, 6, 800, 0.9, -1, 6, 3500, 1, 7}};
+    const Stack &s = stacks[std::clamp((int)std::lround(v(11, 2)), 0, 4)];
+    addFx(fx, eqOf({bandOf("lowshelf", s.bHz, s.bR * (bass - 5) / 5, 0.7071), bandOf("peak", s.mHz, s.m0 + s.mR * (mids - 5) / 5, s.mQ),
+                    bandOf("highshelf", s.tHz, s.t0 + s.tR * (treble - 5) / 5, 0.7071)}));
+    // effects section (before Presence and Master): tremolo or vibrato, then the reverb
+    if (v(23) >= 0.5 && v(25) > 0) {
+        const json rate = rateOf(v(26) >= 0.5, v(27, 5.4));
+        if (v(24) >= 0.5) fx.push_back({{"type", "vibrato"}, {"rate", rate}, {"depth", r2(std::min(100.0, 5 * v(25)))}});
+        else fx.push_back({{"type", "tremolo"}, {"rate", rate}, {"depth", r4(std::min(1.0, v(25) / 10))}, {"shape", "sine"}});
+    } else if (v(23) >= 0.5) notes.push_back("Amp Designer: its tremolo/vibrato is on at Depth 0 (a Smart Control raises it), left out");
+    if (v(30) >= 0.5 && v(32) > 0) {
+        // #31: Vintage, Simple, Mellow, Bright, Dark, Resonant, Boutique Spring, Sweet, Rich, Warm Reverb
+        struct Verb { bool spring; double lp, decay; };
+        static const Verb verbs[] = {{true, 6000, 2.2}, {true, 4000, 2.0}, {true, 2500, 2.0}, {true, 5000, 2.0}, {true, 3000, 2.2},
+                                     {true, 4000, 2.4}, {true, 5000, 2.4}, {false, 5000, 2.0}, {false, 8000, 2.6}, {false, 4000, 2.4}};
+        const int t = ((int)std::lround(v(31)) % 10 + 10) % 10;
+        fx.push_back(springOrReverb(verbs[t].spring, verbs[t].lp, verbs[t].decay, std::min(0.6, 0.06 * v(32))));
+        if (t == 5) notes.push_back("Amp Designer: Resonant Spring's distorted midrange is not modelled");
+    }
+    // power amp: Master turned up saturates; Presence acts after it
+    if (a.pw > 0 && master > 5) addSat(fx, a.pw * (master - 5) / 5);
+    addFx(fx, eqOf({bandOf("highshelf", 4500, 1.5 * (presence - 5), 0.7071)}));
+    // cabinet and microphone
+    const Cabinet &c = ampCabinet((int)std::lround(v(12, ampId)));
+    std::vector<json> cb;
+    cabMicInto(cb, c.hp, c.hpQ, c.lp, c.slope, c.peaks, (int)std::lround(v(13, 1)), std::clamp(v(14), 0.0, 1.0), std::clamp(v(16, 1), 0.0, 1.0), 150);
+    addFx(fx, eqOf(cb));
+    fx = matched(fx);
+    // Output, less the trim the presets set against Master's loudness (Output = 5.3 - 1.37 Master on average over 216
+    // settings; Gain doesn't enter): the stages above are level-matched, so only the rest changes the level
+    addFx(fx, gainOf(v(7) - (5.3 - 1.37 * master)));
+    return fx;
+}
+
+// ------------------------------------------------------------------------------------------------ Bass Amp Designer
+// #1 D.I. Boost dB, #2 HF Cut, #3 Tone on, #4 Tone 1-6, #8 Bright, #10 Gain, #11 EQ on, #12 Bass, #13 Low switch (-1/0/1),
+// #14 Mids, #15 1-2-3 switch, #16 Treble, #17 High switch, #20 Master, #24 Compressor on, #25 Comp, #26 Hard/Soft,
+// #27 comp Gain, #29 Graphic (1) / Parametric (0), #30 additional EQ on, #31 Pre/Post, #32-#38 graphic bands dB,
+// #39-#41 LoMid gain/Hz/Q, #42-#44 HiMid gain/Hz/Q, #46 Model, #47 Amp (1 Modern, 3 Classic, 5 Flip Top), #48 Cabinet,
+// #49 Mic, #50 / #52 mic position, #63 Blend (0 amp - 100 D.I.), #64 Output dB
+json bassAmpFx(const PatchPlugin &p, std::vector<std::string> &notes) {
+    auto v = [&](size_t n, double def = 0) { return n < p.params.size() && p.params[n] < 1e29f ? (double)p.params[n] : def; };
+    const int ampId = (int)std::lround(v(47, 3)), cab = (int)std::lround(v(48, 4));
+    struct BassAmp { double hp, g0, span, pw; };
+    const BassAmp a = ampId == 1 ? BassAmp{40, -3, 27, 10} : ampId == 5 ? BassAmp{40, -9, 24, 10} : BassAmp{35, -6, 26, 12};
+    json amp = json::array();
+    if (v(8) >= 0.5) addFx(amp, eqOf({bandOf("highshelf", 2000, 4, 0.7071)}));                       // Bright
+    addFx(amp, eqOf({bandOf("highpass", a.hp, 0, 0.7071)}));
+    addSat(amp, a.g0 + a.span * v(10, 5) / 10, 1, true, true);
+    json pre = json::array(), extra = json::array(), comp = json::array();
+    if (v(11, 1) >= 0.5) {
+        const int low = (int)std::lround(v(13)), mid = std::clamp((int)std::lround(v(15, 1)), 0, 2);
+        addFx(pre, eqOf({bandOf("lowshelf", low < 0 ? 60 : low > 0 ? 150 : 100, 10 * (v(12, 5) - 5) / 5, 0.7071),
+                         bandOf("peak", mid == 0 ? 250 : mid == 1 ? 500 : 1000, 10 * (v(14, 5) - 5) / 5, 0.8),
+                         bandOf("highshelf", v(17) >= 0.5 ? 5000 : 3000, 10 * (v(16, 5) - 5) / 5, 0.7071)}));
+    }
+    if (v(30) >= 0.5) {
+        if (v(29, 1) >= 0.5) {   // the graphic EQ's bands aren't documented: octaves from 50 Hz (a guess)
+            std::vector<json> bs;
+            for (int i = 0; i < 7; ++i) bs.push_back(bandOf("peak", 50.0 * (1 << i), v(32 + (size_t)i), 1.4));
+            addFx(extra, eqOf(bs));
+        } else addFx(extra, eqOf({bandOf("peak", v(40, 800), v(39), std::max(0.1, v(41, 1))), bandOf("peak", v(43, 2500), v(42), std::max(0.1, v(44, 1)))}));
+    }
+    if (v(24) >= 0.5) {   // its compressor always runs auto gain
+        const double T = -3 * v(25, 5), R = 2 + 0.4 * v(25, 5);
+        const bool hard = v(26) < 0.5;
+        comp.push_back({{"type", "compressor"}, {"threshold", r2(T)}, {"ratio", r2(R * (hard ? 1.5 : 1))}, {"attack", hard ? 3 : 25},
+                        {"release", 150}, {"knee", 6}, {"makeup", r2(-T * (1 - 1 / R) * 0.35 + (v(27, 5) - 5))}});
+    }
+    for (auto *part : {&pre, v(31) >= 0.5 ? &comp : &extra, v(31) >= 0.5 ? &extra : &comp})
+        for (auto &e : *part) amp.push_back(e);
+    if (cab != 7 && v(20, 5) > 5) addSat(amp, a.pw * (v(20, 5) - 5) / 5, 1, true, true);   // power amp (not at PreAmp Out)
+    // #48: 0 Modern 3 Way, 1 Modern 15", 2 Modern 10", 3 Modern 6", 4 Classic 8 x 10", 5 Flip Top 1 x 15", 6 Direct (PowerAmp
+    // Out), 7 Direct (PreAmp Out); its mic #49: 1 Condenser 87, 3 Dynamic 20, 4 Dynamic 421
+    struct BassCab { double hp, hpQ, lp; std::vector<Peak> peaks; };
+    static const BassCab cabs[] = {{40, 0.8, 8000, {{3000, 1, 1}}}, {40, 0.9, 2500, {{80, 2, 1}}}, {60, 0.8, 4000, {{1000, 2, 1}}},
+                                   {120, 0.8, 6000, {{2000, 2, 1}}}, {45, 1.2, 4500, {{100, 2, 1}, {500, -2, 1}}}, {45, 1.1, 2800, {{90, 3, 1}}},
+                                   {0, 0, 0, {}}, {0, 0, 0, {}}};
+    const BassCab &c = cabs[std::clamp(cab, 0, 7)];
+    std::vector<json> cb;
+    cabMicInto(cb, c.hp, c.hpQ, c.lp, 24, c.peaks, (int)std::lround(v(49, 1)), std::clamp(v(50), 0.0, 1.0), std::clamp(v(52, 1), 0.0, 1.0), 120);
+    addFx(amp, eqOf(cb));
+    amp = matched(amp);
+    // the D.I. box: its Tone curves 1-6 as Apple describes them, HF Cut
+    json di = json::array();
+    if (v(3) >= 0.5) {
+        const int t = std::clamp((int)std::lround(v(4, 1)), 1, 6);
+        std::vector<json> bs;
+        if (t == 1) bs = {bandOf("peak", 800, -6, 0.35)};
+        else if (t == 2) bs = {bandOf("peak", 800, -24, 0.5)};
+        else if (t == 3) bs = {bandOf("peak", 1000, -3, 0.4)};
+        else if (t == 4) bs = {bandOf("peak", 250, 1.5, 0.5), bandOf("peak", 8000, -3, 0.8), bandOf("highshelf", 10000, 3, 0.7)};
+        else bs = {bandOf("highpass", 60, 0, 0.5), bandOf("lowshelf", 300, -3, 0.5), bandOf("peak", 900, 3, 0.7)};
+        if (t == 6) bs.push_back(bandOf("lowpass", 12000, 0, 0.7071));
+        addFx(di, eqOf(bs));
+    }
+    if (v(2) >= 0.5) addFx(di, eqOf({bandOf("lowpass", 8000, 0, 0.7071)}));
+    // Blend #63: 0 = the amp alone, 100 = the D.I. alone, between them both in parallel (the D.I. at its Boost)
+    const double wdi = std::clamp(v(63) / 100, 0.0, 1.0), ga = 1 - wdi, gd = wdi * std::pow(10.0, v(1) / 20);
+    json fx = json::array();
+    if (gd <= 1e-6) fx = amp;
+    else if (ga <= 1e-6) { fx = di; addFx(fx, gainOf(v(1))); }
+    else {
+        const double w = ga / (ga + gd);
+        for (auto &e : blendChain(di, 1 - w)) fx.push_back(e);
+        for (auto &e : blendChain(amp, w)) fx.push_back(e);
+        addFx(fx, gainOf(toDb(ga + gd)));
+        notes.push_back("Bass Amp Designer: its amp and D.I. channels play in parallel; blended as one chain (an approximation)");
+    }
+    // Output, less the trim the presets set against Gain and Master (5.8 - 2.05 Gain - 0.58 Master over 60 settings)
+    addFx(fx, gainOf(v(64) - (5.8 - 2.05 * v(10, 5) - 0.58 * v(20, 5))));
+    return fx;
+}
+
+// ------------------------------------------------------------------------------------------------------ Pedalboard
+// A stompbox's #0 On, then its parameters as its CSParameterOrder.plist numbers them; synced Rate / Time are
+// fractions of a whole note. Distortion pedals: a level-matched tanh stage and their Level relative to where their
+// factory presets sit (the median over the stompbox presets; the pedals keep their level as the drive turns).
+json stompFxRaw(const std::string &name, const std::map<int, double> &s, std::vector<std::string> &notes);
+json stompFx(const std::string &name, const std::map<int, double> &s, std::vector<std::string> &notes) {
+    static const std::set<std::string> levelMatched = {"Vintage Drive", "Grinder", "Grit", "Fuzz Machine", "Happy Face Fuzz", "Candy Fuzz",
+        "OctaFuzz", "Monster Fuzz", "Rawk! Distortion", "Double Dragon", "Tube Burner", "Classic Wah", "Modern Wah", "Auto-Funk", "Spin Box"};
+    json fx = stompFxRaw(name, s, notes);
+    return levelMatched.count(name) ? matched(fx) : fx;
+}
+json stompFxRaw(const std::string &name, const std::map<int, double> &s, std::vector<std::string> &notes) {
+    auto v = [&](int n, double def = 0) { auto it = s.find(n); return it == s.end() ? def : it->second; };
+    static const std::map<std::string, double> level0 = {{"Vintage Drive", -1}, {"Grinder", -5}, {"Fuzz Machine", 2}, {"OctaFuzz", 0},
+        {"Happy Face Fuzz", -9.6}, {"Monster Fuzz", -4}, {"Candy Fuzz", -11.8}, {"Double Dragon", 0}, {"Rawk! Distortion", 5},
+        {"Tube Burner", -6}, {"Grit", -14.3}};
+    auto lvl = [&](int n) { return gainOf(v(n) - (level0.count(name) ? level0.at(name) : 0.0)); };
+    auto squash = [&](double T, double R, double attack) {   // a pedal's internal compressor, its reduction half made up
+        return json{{"type", "compressor"}, {"threshold", r2(T)}, {"ratio", R}, {"attack", attack}, {"release", 150}, {"knee", 6},
+                    {"makeup", r2(-T * (1 - 1 / R) * 0.5)}};
+    };
+    auto hz = [&](int nSync, int nRate) {
+        if (v(nSync) >= 0.5) notes.push_back(name + ": its tempo-synced rate plays at 120 BPM");
+        return hzAt120(v(nSync) >= 0.5, v(nRate, 1));
+    };
+    auto delayOf = [&](bool sync, double t) {
+        json d = {{"type", "delay"}};
+        if (sync) d["time"] = r4(4 * t); else d["ms"] = r2(std::max(1.0, t));
+        return d;
+    };
+    json fx = json::array();
+    if (name == "Vintage Drive") {   // Drive, Tone (Hz: a high cut), Level, Fat
+        addFx(fx, eqOf({bandOf("highpass", v(4) >= 0.5 ? 80 : 200, 0, 0.5)}));
+        addSat(fx, v(1, 30));
+        addFx(fx, eqOf({bandOf("lowpass", v(2, 2000), 0, 0.5)}));
+        addFx(fx, lvl(3));
+    } else if (name == "Grinder") {   // Grind, Filter (Hz; harsher higher: a high-pass before), Level, Full/Scoop
+        addFx(fx, eqOf({bandOf("highpass", v(2, 460), 0, 0.5)}));
+        addSat(fx, v(1, 39));
+        addFx(fx, eqOf({bandOf("peak", 700, v(4) >= 0.5 ? -8 : -3, 0.8), bandOf("lowpass", 5000, 0, 0.7071)}));
+        addFx(fx, lvl(3));
+    } else if (name == "Grit") {   // Distortion, Filter (Hz: a high cut), Volume
+        addSat(fx, v(1, 15));
+        addFx(fx, eqOf({bandOf("lowpass", std::min(19000.0, v(2, 5900)), 0, 0.7071)}));
+        addFx(fx, lvl(3));
+    } else if (name == "Fuzz Machine") {   // Fuzz, Tone 0-1 (more treble, fewer lows), Level
+        const double t = std::clamp(v(2, 0.7), 0.0, 1.0);
+        addFx(fx, eqOf({bandOf("highpass", 60 + 200 * t, 0, 0.7071)}));
+        addSat(fx, 20 + 0.5 * v(1, 45));
+        addFx(fx, eqOf({bandOf("lowpass", 1500 * std::pow(2.0, 2.5 * t), 0, 0.7071)}));
+        addFx(fx, lvl(3));
+    } else if (name == "Happy Face Fuzz") {   // Fuzz, Volume
+        addFx(fx, eqOf({bandOf("highpass", 60, 0, 0.7071)}));
+        addSat(fx, 18 + v(1, 30));
+        addFx(fx, eqOf({bandOf("lowpass", 5000, 0, 0.7071)}));
+        addFx(fx, lvl(2));
+    } else if (name == "Candy Fuzz") {   // Drive, Level
+        addFx(fx, eqOf({bandOf("highpass", 150, 0, 0.7071)}));
+        addSat(fx, 18 + v(1, 6));
+        addFx(fx, eqOf({bandOf("highshelf", 3000, 3, 0.7071)}));
+        addFx(fx, lvl(2));
+    } else if (name == "OctaFuzz") {   // Fuzz, Level, Tone 0-100 (a high-pass)
+        notes.push_back("OctaFuzz: its octave-up is not played (a plain fuzz)");
+        addSat(fx, 18 + v(1, 28));
+        addFx(fx, eqOf({bandOf("highpass", 80 * std::pow(2.0, v(3, 46) / 25), 0, 0.7071)}));
+        addFx(fx, lvl(2));
+    } else if (name == "Monster Fuzz") {   // Roar, Growl, Tone 0-100, Texture, Grain, Level
+        addSat(fx, v(1, 37) + v(2, 15));
+        addFx(fx, eqOf({bandOf("peak", 1000, -6, 0.7), bandOf("lowpass", 1500 * std::pow(2.0, v(3, 35) / 30), 0, 0.7071)}));
+        addFx(fx, lvl(6));
+    } else if (name == "Rawk! Distortion") {   // Crunch, Tone 0-100 (brighter), Level
+        double t = v(2, 38);
+        if (t > 100) t = std::clamp(100 * (1 - std::log(t / 100) / std::log(20.0)), 0.0, 100.0);   // newer presets: 100-2000, read inverted
+        addFx(fx, eqOf({bandOf("highpass", 100, 0, 0.7071)}));
+        addSat(fx, v(1, 32));
+        addFx(fx, eqOf({bandOf("lowpass", 1500 * std::pow(2.0, t / 30), 0, 0.7071)}));
+        addFx(fx, lvl(3));
+    } else if (name == "Double Dragon") {   // Drive, Tone 0-100, Level, Input dB, Squash 0-100, Contour, Mix %, Bright (1) / Fat
+        if (v(5) > 0) fx.push_back(squash(-0.3 * v(5), 4, 5));
+        addSat(fx, v(1, 19) + v(4), std::min(1.0, v(7, 100) / 100));   // Input drives harder (the stage is level-compensated)
+        addFx(fx, eqOf({bandOf("lowpass", 1000 * std::pow(2.0, v(2, 74) / 25), 0, 0.7071),
+                        v(8) >= 0.5 ? bandOf("highshelf", 3000, 3, 0.7071) : bandOf("lowshelf", 150, 3, 0.7071)}));
+        addFx(fx, lvl(3));
+    } else if (name == "Tube Burner") {   // Drive, Low, Mid Freq, Mid Gain, High, Tone (Hz), Bias, Squash, Fat, Output
+        if (v(8) > 0) fx.push_back(squash(-0.3 * v(8), 3, 10));
+        addSat(fx, v(1, 22));
+        addFx(fx, eqOf({bandOf("lowshelf", 100, v(2), 0.7071), bandOf("peak", v(3, 800), v(4), 0.8), bandOf("highshelf", 3000, v(5), 0.7071),
+                        bandOf("lowpass", std::min(19000.0, v(6, 4700)), 0, 0.7071), v(9) >= 0.5 ? bandOf("lowshelf", 120, 3, 0.7071) : json()}));
+        addFx(fx, lvl(10));
+    } else if (name == "Hi-Drive") {   // Level dB, Treble (0: only the highs boosted) / Full: a boost into what follows
+        const double boost = v(1, 10);
+        addFx(fx, v(2) < 0.5 ? eqOf({bandOf("highshelf", 1200, boost, 0.7071)}) : gainOf(boost));
+        addSat(fx, 3, 1, false);
+    } else if (name == "Squash Compressor") {   // Sustain (threshold dB), Level (dB), Attack
+        fx.push_back({{"type", "compressor"}, {"threshold", r2(v(1, -20))}, {"ratio", 4}, {"attack", v(3) >= 0.5 ? 2 : 20}, {"release", 200},
+                      {"knee", 6}, {"makeup", r2(v(2))}});
+    } else if (name == "Graphic EQ") {   // 0.1-6.4 kHz bands (dB), Level
+        std::vector<json> bs;
+        for (int i = 0; i < 7; ++i) bs.push_back(bandOf("peak", 100.0 * (1 << i), v(1 + i), 1.4));
+        addFx(fx, eqOf(bs));
+        addFx(fx, gainOf(v(8)));
+    } else if (name == "Classic Wah" || name == "Modern Wah") {   // Pedal Position 0-1; Modern: Mode (4 = Volume), Q -100..100
+        const double pos = std::clamp(v(1, 0.5), 0.0, 1.0);
+        if (name == "Modern Wah" && std::lround(v(2)) == 4) addFx(fx, gainOf(toDb(std::max(0.001, pos))));
+        else fx.push_back({{"type", "filter"}, {"mode", "bandpass"}, {"cutoff", r2(350 * std::pow(2.0, 2.6 * pos))},
+                           {"resonance", name == "Classic Wah" ? 4.0 : r2(4 * std::pow(2.0, 1.5 * v(3) / 100))}});
+    } else if (name == "Auto-Funk") {   // Cutoff, Sensitivity, BP/LP (0 = BP), Up/Down (1 / -1), Hi/Lo resonance
+        const double lo = 150 * std::pow(2.0, v(1, 30) / 40);
+        json a = {{"type", "autowah"}, {"min", r2(lo)}, {"max", r2(lo * 5)}, {"resonance", v(5) >= 0.5 ? 6 : 2.5},
+                  {"sensitivity", r2(std::clamp(20 + v(2, -20), -12.0, 12.0))}, {"mode", v(3) >= 0.5 ? "lowpass" : "bandpass"}};
+        if (v(4, 1) < 0) std::swap(a["min"], a["max"]);   // sweeping down
+        fx.push_back(a);
+    } else if (name == "Blue Echo") {   // Sync, Time, Repeats, Mix, Tone Cut (0 Lo, 1 Hi, 2 Off), Mute
+        if (v(4) <= 0) return fx;
+        const int tc = (int)std::lround(v(5, 2));
+        json d = delayOf(v(1) >= 0.5, v(2, 0.25));
+        d["feedback"] = r4(std::min(0.95, v(3, 50) / 100 * 0.85));
+        d["highpass"] = tc == 1 ? 500 : 20;
+        d["lowpass"] = tc == 0 ? 2500 : 20000;
+        d["pingpong"] = false;
+        d["mix"] = r4(std::min(1.0, v(4) / 100));
+        fx.push_back(d);
+    } else if (name == "Tru-Tape Delay") {   // Sync, Time, Feedback, Mix, Hi Cut, Lo Cut, Dirt, Flutter, Norm/Reverse
+        if (v(4) <= 0) return fx;
+        json d = delayOf(v(1) >= 0.5, v(2, 0.25));
+        d["feedback"] = r4(std::min(0.97, v(3, 50) / 100));
+        d["highpass"] = r2(std::max(20.0, v(6, 20)));
+        d["lowpass"] = r2(std::min(20000.0, v(5, 20000)));
+        d["pingpong"] = false;
+        d["mix"] = r4(std::min(1.0, v(4) / 100));
+        json loop = json::array();
+        if (v(7) > 0) addSat(loop, 0.12 * v(7));
+        if (v(8) > 0) loop.push_back({{"type", "vibrato"}, {"rate", 6}, {"depth", r2(0.1 * v(8))}});
+        if (!loop.empty()) d["loopFx"] = loop;
+        fx.push_back(d);
+        if (v(9) >= 0.5) notes.push_back("Tru-Tape Delay: its reverse playback plays forwards");
+    } else if (name == "Tie Dye Delay") {   // Sync, Time, Feedback, Mix, Tone, Bright/Dark, Listen: a reverse delay
+        if (v(4) <= 0) return fx;
+        json d = delayOf(v(1) >= 0.5, v(2, 0.25));
+        d["feedback"] = r4(std::min(0.95, v(3, 50) / 100));
+        d["highpass"] = 100;
+        d["lowpass"] = r2(1000 * std::pow(2.0, v(5, 50) / 25) * (v(6) >= 0.5 ? 1.5 : 1));
+        d["pingpong"] = false;
+        d["mix"] = r4(std::min(1.0, v(4) / 100));
+        fx.push_back(d);
+        notes.push_back("Tie Dye Delay: its reversed repeats play forwards");
+    } else if (name == "Spring Box") {   // Style (Boutique, Simple, Vintage, Bright, Resonant), Time (short/medium/long), Tone, Mix
+        if (v(4) <= 0) return fx;
+        static const double lps[] = {5000, 4000, 6000, 5500, 4000}, decays[] = {1.2, 2.0, 3.0};
+        fx.push_back(springOrReverb(true, lps[((int)std::lround(v(1)) % 5 + 5) % 5] * std::pow(2.0, v(3) / 100), decays[((int)std::lround(v(2, 1)) % 3 + 3) % 3],
+                                    std::min(1.0, v(4) / 100)));
+    } else if (name == "Phase Tripper") {   // Sync, Rate, Feedback, Depth
+        fx.push_back({{"type", "phaser"}, {"rate", rateOf(v(1) >= 0.5, v(2, 1))}, {"floor", 250}, {"ceiling", r2(250 * std::pow(2.0, 1 + 3 * v(4, 67) / 100))},
+                      {"stages", 4}, {"feedback", r4(std::min(0.9, v(3, 30) / 100 * 0.8))}, {"spread", 0}, {"mix", 0.5}});
+    } else if (name == "Phaze 2") {   // two phasers: the one the Mix favours plays
+        const int b = v(14, 50) < 50 ? 2 : 8;
+        notes.push_back("Phaze 2: its two phasers play as one");
+        fx.push_back({{"type", "phaser"}, {"rate", rateOf(v(1) >= 0.5, v(b, 0.5))}, {"floor", r2(std::max(20.0, v(b + 3, 200)))},
+                      {"ceiling", r2(std::max(v(b + 3, 200) * 1.5, v(b + 4, 4000)))}, {"stages", std::clamp(2 * (int)std::lround(v(b + 1, 6) / 2), 2, 24)},
+                      {"feedback", r4(std::clamp(v(b + 2) / 100, -0.9, 0.9))}, {"spread", 0.25}, {"mix", 0.5}});
+    } else if (name == "Roto Phase") {   // Sync, Rate, Intensity, Vintage/Modern
+        fx.push_back({{"type", "phaser"}, {"rate", rateOf(v(1) >= 0.5, v(2, 1))}, {"floor", 200}, {"ceiling", r2(200 * std::pow(2.0, 1 + 4 * v(3, 50) / 100))},
+                      {"stages", 6}, {"feedback", 0.3}, {"spread", 0.25}, {"mix", 0.5}});
+    } else if (name == "Retro Chorus") {   // Sync, Rate, Depth
+        fx.push_back({{"type", "chorus"}, {"rate", hz(1, 2)}, {"depth", r2(0.5 + 0.05 * v(3, 50))}, {"delay", 8}, {"mix", 0.5}});
+    } else if (name == "Heavenly Chorus") {   // Sync, Rate, Depth, Feedback, Density (dry/effect), Bright
+        fx.push_back({{"type", "chorus"}, {"rate", hz(1, 2)}, {"depth", r2(0.06 * v(3, 50) + 0.5)}, {"delay", 12},
+                      {"mix", r4(std::clamp(v(5, 50) / 100, 0.1, 0.9))}});
+        if (v(6) >= 0.5) addFx(fx, eqOf({bandOf("highshelf", 4000, 2, 0.7071)}));
+    } else if (name == "Robo Flanger") {   // Sync, Rate, Depth, Feedback, Manual
+        if (v(4) > 0) notes.push_back("Robo Flanger: played as a short chorus, without its feedback");
+        fx.push_back({{"type", "chorus"}, {"rate", hz(1, 2)}, {"depth", r2(0.2 + 0.04 * v(3, 30))}, {"delay", r2(0.5 + 0.08 * v(5))}, {"mix", 0.5}});
+    } else if (name == "Flange Factory") {   // Sync, Rate, Depth, Reso, Mix, Wave, Shape, Curve, Manual, Low, High
+        if (v(5) <= 0) return fx;
+        if (v(4) > 0) notes.push_back("Flange Factory: played as a short chorus, without its resonance");
+        fx.push_back({{"type", "chorus"}, {"rate", hz(1, 2)}, {"depth", r2(0.2 + 0.04 * v(3, 10))}, {"delay", r2(0.5 + 0.1 * v(9))},
+                      {"mix", r4(std::min(1.0, v(5) / 100))}});
+    } else if (name == "The Vibe") {   // Sync, Rate, Depth, Type V1 V2 V3 C1 C2 C3
+        const int t = ((int)std::lround(v(4)) % 6 + 6) % 6;
+        static const double vib[] = {10, 20, 35}, cho[] = {1, 2, 3.5};
+        if (t < 3) fx.push_back({{"type", "vibrato"}, {"rate", rateOf(v(1) >= 0.5, v(2, 1))}, {"depth", r2(vib[t] * v(3, 100) / 100)}});
+        else fx.push_back({{"type", "chorus"}, {"rate", hz(1, 2)}, {"depth", r2(cho[t - 3] * v(3, 100) / 100)}, {"delay", 2}, {"mix", 0.5}});
+    } else if (name == "Spin Box") {   // Speed (0 Slow, 1 Brake, 2 Fast), Response, Drive, Cabinet, Fast Rate, Bright
+        const int sp = (int)std::lround(v(1));
+        if (sp == 1) notes.push_back("Spin Box: its brake (rotors stopped) plays as slow");
+        if (v(3) > 1) addSat(fx, v(3));
+        const double fast = std::max(1.0, v(5, 6.7));
+        fx.push_back({{"type", "rotary"}, {"speed", sp == 2 ? 1 : 0}, {"hornFast", r2(fast)}, {"drumFast", r2(fast * 0.87)}});
+        if (v(6) >= 0.5) addFx(fx, eqOf({bandOf("highshelf", 3000, 3, 0.7071)}));
+    } else if (name == "Trem-O-Tone") {   // Sync, Rate, Depth %, Level
+        fx.push_back({{"type", "tremolo"}, {"rate", rateOf(v(1) >= 0.5, v(2, 1))}, {"depth", r4(std::min(1.0, v(3, 50) / 100))}, {"shape", "sine"}});
+        addFx(fx, gainOf(v(4)));
+    } else if (name == "Total Tremolo") {   // Sync, Rate, Depth, Wave, Smoothing, Volume, Speed Up, Slow Down, Speed (1/2x, 1x, 2x)
+        const long sp = std::lround(v(9, 1));
+        const double mult = sp == 0 ? 0.5 : sp == 2 ? 2.0 : 1.0;
+        const json rate = v(1) >= 0.5 ? rateOf(true, v(2, 0.25) / mult) : json(r4(v(2, 4) * mult));
+        fx.push_back({{"type", "tremolo"}, {"rate", rate}, {"depth", r4(std::min(1.0, v(3, 50) / 100))},
+                      {"shape", v(5) >= 40 ? "sine" : v(4) < 16 ? "square" : "triangle"}});
+        addFx(fx, gainOf(v(6)));
+    } else if (name == "Roswell Ringer") notes.push_back("Roswell Ringer: its ring modulation is not played");
+    else if (name == "Dr. Octave") notes.push_back("Dr. Octave: its octaves below are not played (the direct signal plays)");
+    else if (name == "Wham") notes.push_back("Wham: its pitch shift is not played (the direct signal plays)");
+    else notes.push_back(name + ": not played");
+    return fx;
+}
+
+// Pedalboard: a TSPP block of 2001 (or, in newer presets, 3401) values and a chunk per stompbox. #1001 + 20k = the
+// stompbox in chain slot k (k = 0-13, -1 empty), #1002 + 20k = its bus inside a split (0 = A, 1 = B). Each "SBox" chunk
+// (tag stored reversed) holds the stompbox's index, category, type and its own TSPP block (value 1 = #0 On).
+json pedalboardFx(const PatchPlugin &p, std::vector<std::string> &notes) {
+    static const char *types[] = {"Phase Tripper", "Vintage Drive", "Grinder", "Fuzz Machine", "Retro Chorus", "Robo Flanger", "The Vibe",
+                                  "Auto-Funk", "Blue Echo", "Squash Compressor", "Splitter", "Mixer", "OctaFuzz", "Happy Face Fuzz",
+                                  "Monster Fuzz", "Candy Fuzz", "Double Dragon", "Rawk! Distortion", "Hi-Drive", "Spin Box", "Roto Phase",
+                                  "Heavenly Chorus", "Trem-O-Tone", "Phaze 2", "Roswell Ringer", "Total Tremolo", "Classic Wah", "Modern Wah",
+                                  "Tru-Tape Delay", "Spring Box", "Phase Tripper", "Flange Factory", "Tube Burner", "Tie Dye Delay",
+                                  "Dr. Octave", "Graphic EQ", "Wham", "Grit"};
+    struct Box { std::string name; std::map<int, double> v; bool on = false; };
+    std::map<uint32_t, Box> boxes;
+    for (size_t i = 24 + 4 * p.values.size(); i + 8 <= p.block.size();) {
+        const uint32_t n = le32(&p.block[i + 4]);
+        if (n < 8 || i + n > p.block.size()) break;
+        if (!std::memcmp(&p.block[i], "xoBS", 4) && n >= 8 + 16 + 24) {   // "SBox"
+            const uint8_t *c = &p.block[i + 8], *t = c + 16;
+            const uint32_t idx = le32(c), type = le32(c + 8), count = le32(t + 8);
+            if (!std::memcmp(t + 12, "GAMETSPP", 8) && 8 + 16 + 24 + 4 * (size_t)count <= n) {
+                Box b;
+                b.name = type < sizeof types / sizeof *types ? types[type] : "stompbox " + std::to_string(type);
+                for (uint32_t k = 1; k < count; ++k) {   // value 0 is reserved: #n = value n + 1
+                    float f;
+                    std::memcpy(&f, t + 24 + 4 * (size_t)k, 4);
+                    if (std::isfinite(f) && std::fabs(f) < 1e29f) b.v[(int)k - 1] = f;
+                }
+                b.on = b.v.count(0) && b.v[0] >= 0.5;
+                boxes[idx] = b;
+            }
+        }
+        i += n;
+    }
+    auto v = [&](size_t n) { return n < p.params.size() && std::fabs(p.params[n]) < 1e29f ? (double)p.params[n] : -1.0; };
+    struct Slot { const Box *box; int bus; };
+    std::vector<Slot> chain;
+    for (size_t k = 0; k < 14; ++k) {
+        const double j = v(1001 + 20 * k);
+        if (j < 0 || !boxes.count((uint32_t)std::lround(j))) continue;
+        chain.push_back({&boxes[(uint32_t)std::lround(j)], (int)std::lround(std::max(0.0, v(1002 + 20 * k)))});
+    }
+    std::set<std::string> off;
+    auto run = [&](const std::vector<const Box *> &bs) {
+        json out = json::array();
+        for (auto *b : bs) {
+            if (!b->on) { off.insert(b->name); continue; }
+            for (auto &e : stompFx(b->name, b->v, notes)) out.push_back(e);
+        }
+        return out;
+    };
+    json fx = json::array();
+    for (size_t i = 0; i < chain.size();) {
+        const Box &b = *chain[i].box;
+        if (b.name == "Mixer") { ++i; continue; }
+        if (b.name != "Splitter") { for (auto &e : run({&b})) fx.push_back(e); ++i; continue; }
+        // a split: bus A (lower line) and bus B to the Mixer; Mixer #1 A / Mix / B, #2 Mix 0-100 (0 = A alone: a guess)
+        size_t j = i + 1;
+        while (j < chain.size() && chain[j].box->name != "Mixer") ++j;
+        std::vector<const Box *> a, bb;
+        for (size_t k = i + 1; k < j; ++k)
+            if (chain[k].box->name != "Splitter") (chain[k].bus ? bb : a).push_back(chain[k].box);
+        const json A = run(a), B = run(bb);
+        double wA = 0.5, wB = 0.5;
+        if (j < chain.size()) {
+            const auto &m = chain[j].box->v;
+            const long sw = m.count(1) ? std::lround(m.at(1)) : 1;
+            const double mixB = std::clamp((m.count(2) ? m.at(2) : 50.0) / 100, 0.0, 1.0);
+            wA = sw == 0 ? 1 : sw == 2 ? 0 : 1 - mixB;
+            wB = sw == 0 ? 0 : sw == 2 ? 1 : mixB;
+            if ((m.count(3) ? std::fabs(m.at(3)) : 0) + (m.count(4) ? std::fabs(m.at(4)) : 0) > 1) notes.push_back("Pedalboard: the Mixer's bus pans are not played");
+        }
+        if (b.v.count(1) && b.v.at(1) >= 0.5)   // Freq: below the crossover on bus A, above it on bus B
+            fx.push_back({{"type", "multiband"}, {"crossovers", {r2(std::max(20.0, b.v.count(2) ? b.v.at(2) : 490.0))}},
+                          {"bands", {{{"fx", A}, {"gain", wA > 0 ? r2(toDb(2 * wA)) : -96.0}}, {{"fx", B}, {"gain", wB > 0 ? r2(toDb(2 * wB)) : -96.0}}}}});
+        else if (A.empty() && B.empty()) addFx(fx, gainOf(toDb(wA + wB)));
+        else if (A.empty() || B.empty()) {
+            const json &one = A.empty() ? B : A;
+            const double w = wA + wB > 0 ? (A.empty() ? wB : wA) / (wA + wB) : 0;
+            for (auto &e : blendChain(one, w)) fx.push_back(e);
+            addFx(fx, gainOf(toDb(wA + wB)));
+        } else {
+            for (auto &e : wA >= wB ? A : B) fx.push_back(e);
+            addFx(fx, gainOf(toDb(2 * std::max(wA, wB))));
+            notes.push_back(std::string("Pedalboard: bus ") + (wA >= wB ? "B" : "A") + " of a split is left out (the louder bus plays)");
+        }
+        i = j + 1;
+    }
+    if (!off.empty()) {
+        std::string names;
+        for (auto &n : off) names += (names.empty() ? "" : ", ") + n;
+        notes.push_back("Pedalboard: " + names + " switched off in the patch (a Smart Control turns it on), left out");
+    }
+    return fx;
+}
+
 
 // a chunk after a settings block's values (its tag stored byte-reversed, a u32 size counting its 8-byte header)
 bool blockChunk(const PatchPlugin &p, const char *tag, const uint8_t *&data, size_t &size) {
@@ -438,6 +1085,17 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
                      {"ceiling", r2(std::max(v(4, 200) * 1.05, v(5, 4000)))}, {"stages", (int)std::lround(std::clamp(v(6, 6), 2.0, 24.0))},
                      {"feedback", r4(std::clamp(v(3) / 100, -0.95, 0.95))}, {"mix", r4(std::min(1.0, std::fabs(v(9)) / 100))}});
             if (v(9) < 0) notes.push_back("Phaser: its phase-inverted mix plays in phase");
+        } else if (p.name == "Amp") {          // Amp Designer
+            for (auto &e : ampDesignerFx(p, notes)) add(e);
+        } else if (p.name == "Bass Amp") {     // Bass Amp Designer
+            for (auto &e : bassAmpFx(p, notes)) add(e);
+        } else if (p.name == "Pedalboard") {
+            for (auto &e : pedalboardFx(p, notes)) add(e);
+        } else if (p.id == 273) {              // one stompbox as its own plug-in ("Spring Box"): #0 On, then its own parameters
+            std::map<int, double> s;
+            for (size_t i = 0; i < p.params.size(); ++i) if (std::fabs(p.params[i]) < 1e29f) s[(int)i] = p.params[i];
+            if (s.count(0) && s[0] < 0.5) notes.push_back(p.name + ": switched off in the patch, left out");
+            else for (auto &e : stompFx(p.name, s, notes)) add(e);
         } else {
             notes.push_back(p.name + ": GarageBand's own effect, not played");
         }

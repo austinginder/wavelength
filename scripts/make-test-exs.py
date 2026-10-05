@@ -41,6 +41,7 @@ os.makedirs(os.path.join(out, 'patches', 'Test Alchemy Additive.patch'), exist_o
 os.makedirs(os.path.join(out, 'patches', 'Test Beat GB.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Retro.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Organ.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Amp.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Arp.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test EP.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Clav.patch'), exist_ok=True)
@@ -156,6 +157,13 @@ retro = [1e30] * 902
 for n, v in {1: 8, 2: 0, 3: 12, 4: 0, 5: -6, 201: 0, 209: 0, 301: 1, 303: 1, 401: 0, 802: 1, 803: 100, 804: 1, 805: 100, 806: 0}.items():
     retro[n] = v
 strip(os.path.join(out, 'patches', 'Test Retro.patch', '#Root.cst'), [record(3, 'Retro Synth', b'GAME', settings(279, retro))])
+# Test Retro's synth into an Amp Designer (made-up settings): #1 Gain 8, #10 amp model 1, #11 tone stack 1, #23 tremolo
+# on with #25 depth 5, #6 Master 5, #7 Output 0
+amp = [5.0] * 36
+for n, val in {1: 8, 6: 5, 7: 0, 10: 1, 11: 1, 12: 1, 23: 1, 24: 0, 25: 5, 26: 0, 27: 5, 30: 0}.items():
+    amp[n] = val
+strip(os.path.join(out, 'patches', 'Test Amp.patch', '#Root.cst'), [record(3, 'Retro Synth', b'GAME', settings(279, retro)),
+                                                                   record(4, 'Amp', b'GAME', settings(0, amp))])
 # Vintage B3 (plug-in id 216): 234 int32 preset-key registrations come first, then its 169 values (parameter #n = value n+1)
 b3 = [0.0] * 169
 b3[1 + 13] = 8        # upper 8' drawbar full; the other drawbars, percussion, vibrato, click, rotor and effects stay off
