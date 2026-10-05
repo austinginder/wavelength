@@ -16,15 +16,17 @@ and Reverse Playback (in D minor it moves G -> D, -5, so it plays -3). Its autom
 at bar 3 (a step GarageBand stores between them is a decoy), pan from the middle at bar 1 to hard left at bar 5. The
 master fades out from bar 1 to silence at bar 3 (its output channel's volume automation).
 Cycle bars 1-2.
-Usage: make-test-band.py <dir>"""
+The audio track also sends to the Echo bus, its send automated from silence at bar 1 to 0 dB at bar 3.
+Usage: make-test-band.py <dir> [3]   (3: the same song in 3/4; GarageBand still puts bar 1 at tick 38400)"""
 import math, os, plistlib, struct, sys
 
+METER = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 out = os.path.join(sys.argv[1], 'Test Song.band')
 alt = os.path.join(out, 'Alternatives', '000')
 os.makedirs(alt, exist_ok=True)
 os.makedirs(os.path.join(out, 'Resources'), exist_ok=True)
 with open(os.path.join(alt, 'MetaData.plist'), 'wb') as f:
-    plistlib.dump({'BeatsPerMinute': 100.0, 'SongSignatureNumerator': 4, 'SongSignatureDenominator': 4, 'SongKey': 'D',
+    plistlib.dump({'BeatsPerMinute': 100.0, 'SongSignatureNumerator': METER, 'SongSignatureDenominator': 4, 'SongKey': 'D',
                    'SongGenderKey': 'minor', 'SampleRate': 48000, 'NumberOfTracks': 1, 'AudioFiles': [], 'SamplerInstrumentsFiles': []},
                   f, fmt=plistlib.FMT_BINARY)
 with open(os.path.join(out, 'Resources', 'ProjectInformation.plist'), 'wb') as f:
@@ -150,7 +152,7 @@ echo[16:21] = [7, 40, 0, 0, 100]                  # Time 1/8, Repeat 40 %, Color
 body = b''
 body += seq(3, 0, 'Tempo', events(event(0x60, BAR1, ext=[ext(struct.pack('<I', 100 * 10000), mark=0x88)]),
                                   event(0x60, BAR1 + 12 * 3840, ext=[ext(struct.pack('<I', 90 * 10000), mark=0x88)])))   # 90 BPM from bar 13
-body += seq(1, 0, 'Signature', events(event(0x30, 0, bytes([0, 0, 0, 2, 4, 0, 0, 0]), [ext(mark=0x88)])))   # +11 log2 4, +12 4
+body += seq(1, 0, 'Signature', events(event(0x30, 0, bytes([0, 0, 0, 2, METER, 0, 0, 0]), [ext(mark=0x88)])))   # +11 log2 4, +12 the beats
 body += seq(0x16, 0, 'Locators', events(event(0x10, BAR1 + 2 * 3840 - 1, ext=[ext(u12=BAR1)])))             # cycle bars 1-2
 body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', OUT)
 trak = lambda row, kind, obj: chunk('Trak', 0x17, 4, struct.pack('<HHHHI', kind, 0, 0, 0, obj) + bytes(46), sub=row)
@@ -238,8 +240,11 @@ body += seq(0x17, AUTOROOT, 'Track Automation Root Folder', events(event(0x20, B
                                                                   event(0x20, BAR1 - 3840, ext=[ext(struct.pack('<I', MASTER), END), ext(struct.pack('<I', AUTOMASTER), mark=0x88)])))
 body += seq(0x17, AUTOMASTER, '*Automation', events(auto_point(BAR1, 7, 90), auto_point(BAR1 + 2 * 3840, 7, 0)))
 body += channel(OUT, 0x4c, 0, 'Output 1-2', 90, 64, bytes([0xd5, 0x51]) + bytes(14))
+send_point = lambda pos, slot, value: event(0x50, pos, struct.pack('<I', int(value * (1 << 24))) + bytes([28 + slot, 0, 0, 1]))   # 0x50: parameter 28 + slot
 body += seq(0x17, AUTOLOOP, '*Automation', events(auto_point(BAR1, 7, 90), auto_point(BAR1 + 3840, 7, 70, step=True), auto_point(BAR1 + 2 * 3840, 7, 45),
-                                                   auto_point(BAR1, 10, 64), auto_point(BAR1 + 4 * 3840, 10, 0)))
+                                                   auto_point(BAR1, 10, 64), auto_point(BAR1 + 4 * 3840, 10, 0),
+                                                   send_point(BAR1, 0, 0), send_point(BAR1 + 2 * 3840, 0, 90)))
 body += channel(AUD, 0x40, 0, ' Audio 1', 90, 64, bytes([0xd5, 9]) + bytes(14))
+body += record(AUD, 0, send(0, 0, 0, bus_uuid))   # slot 0 to the Echo bus, its level automated
 with open(os.path.join(alt, 'ProjectData'), 'wb') as f:
     f.write(b'#G\xc0\xab' + struct.pack('<HHIII', 0x09d0, 3, 4, 0x00080001, len(body)) + struct.pack('<I', 0) + body)

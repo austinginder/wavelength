@@ -46,6 +46,13 @@ double r4(double v) { return std::round(v * 10000) / 10000; }
 // gives +5.98 dB at 127 (the faders' +6 dB top). A guess, not yet checked against GarageBand's own readout.
 double faderDb(double v) { return v <= 0.01 ? -120.0 : 40.0 * std::log10(v / 90.0); }
 
+// A region's Time Quantize code as its grid in ticks (0 = off or not known): -13 to -1 run down Logic's menu, 1/1, 1/2,
+// 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/96 (-6 = 1/16 and -11 = 1/3 seen; the rest follow the menu)
+int64_t quantizeGrid(int code) {
+    static const int64_t grid[13] = {3840, 1920, 1280, 960, 640, 480, 320, 240, 160, 120, 80, 60, 40};
+    return code >= -13 && code <= -1 ? grid[code + 13] : 0;
+}
+
 bool validUtf8(const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n;) {
         const uint8_t c = p[i];
@@ -167,6 +174,7 @@ std::vector<float> pluginParams(const Plugin &p) {
 // A send record (44 or 76 bytes): +0x14 the destination's code, +0x18 the level (8.24 fixed point on the fader's
 // 0-127 scale), +0x3c the destination channel's UUID (76-byte records)
 struct Send {
+    int index = 0;        // its slot (+6): send automation names it (parameter 28 + slot)
     uint8_t code = 0;
     double level = 0;
     std::string target;   // "" when not stored
@@ -192,6 +200,7 @@ struct Channel {
         for (const Chunk *c : records) {
             if (c->pl.n != 44 && c->pl.n != 76) continue;
             Send s;
+            s.index = c->pl.u16(6);
             s.code = c->pl.u8(0x14);
             s.level = c->pl.u32(0x18) / 16777216.0;
             if (c->pl.n >= 0x4c) s.target = c->pl.raw(0x3c, 16);
@@ -668,7 +677,10 @@ struct Project {
             // note's played position on its grid and the rest here); the region's trim hides the content before it
             int64_t t = start + ((int64_t)e.pos() - origin) - s.trim;
             if (st == 0x90 && !e.ext.empty() && e.ext[0].u8(7) == 0x89) t += e.ext[0].u16(4);
-            if (s.quantize == -6) t = origin + (int64_t)std::llround((double)(t - origin) / (kTicksPerBeat / 4)) * (kTicksPerBeat / 4);
+            if (const int64_t g = quantizeGrid(s.quantize)) {   // the grid runs from the region's content start; a tie goes back
+                const int64_t base = start - s.trim;
+                t = base + (int64_t)std::ceil((double)(t - base) / g - 0.5) * g;
+            }
             if (t < start || (length && t >= end)) continue;
             const int ch = type & 0x0f, d1 = e.rec.u8(12), d2 = e.rec.u8(11);
             if (st == 0x90) {   // extension +12: the length in ticks; +10..11: a high-resolution velocity (/ 32767)
@@ -692,8 +704,9 @@ struct Project {
     // places one "*Automation" sequence per track object. Its events are controller records (0xb0): +4 the song tick,
     // +8 the value in 8.24, +12 the controller (7 volume on the fader's scale, 90 = 0 dB; 10 pan, 0-128 with 64 in the
     // middle), +15 0x40 on the steps GarageBand stores between the points (the curve runs straight between points on
-    // those scales: checked against a bounce). Other records (plug-in parameters) are counted.
-    struct Curves { std::vector<std::pair<int64_t, double>> volume, pan; int other = 0; };
+    // those scales: checked against a bounce). Send levels are 0x50 records with parameter 28 + the send's slot at
+    // +12, on the fader's scale too (t6). Other records (plug-in parameters) are counted.
+    struct Curves { std::vector<std::pair<int64_t, double>> volume, pan; std::map<int, std::vector<std::pair<int64_t, double>>> sends; int other = 0; };
     std::map<uint32_t, Curves> automation() const {
         std::map<uint32_t, Curves> out;
         const Sequence *root = nullptr;
@@ -705,16 +718,18 @@ struct Project {
             for (auto &e : p.seq->events()) {
                 if (e.type() == 0xf1) continue;
                 Curves &c = out[p.envi];
-                if (e.type() != 0xb0) { ++c.other; continue; }
+                if (e.type() != 0xb0 && e.type() != 0x50) { ++c.other; continue; }
                 if (e.rec.u8(15) == 0x40) continue;
                 const double v = e.rec.u32(8) / 16777216.0;
-                if (e.rec.u8(12) == 7) c.volume.push_back({(int64_t)e.pos(), v});
-                else if (e.rec.u8(12) == 10) c.pan.push_back({(int64_t)e.pos(), v});
+                const int id = e.rec.u8(12);
+                if (id == 7) c.volume.push_back({(int64_t)e.pos(), v});
+                else if (id == 10) c.pan.push_back({(int64_t)e.pos(), v});
+                else if (id >= 28 && id < 36) c.sends[id - 28].push_back({(int64_t)e.pos(), v});
                 else ++c.other;
             }
         }
         for (auto it = out.begin(); it != out.end();)
-            it = it->second.volume.empty() && it->second.pan.empty() && !it->second.other ? out.erase(it) : std::next(it);
+            it = it->second.volume.empty() && it->second.pan.empty() && it->second.sends.empty() && !it->second.other ? out.erase(it) : std::next(it);
         return out;
     }
 };
@@ -759,15 +774,13 @@ struct Converter {
     Converter(const Project &p, const std::string &out) : P(p), outDir(out), patchDir(fs::u8path(out) / "patches") {
         const auto sigs = P.signatures();
         const int64_t num = sigs[0][1], den = std::max<int64_t>(1, sigs[0][2]);
-        // bar 1 = ten bars of the first signature after tick 0 (38400 in 4/4); regions show one bar after their stored
-        // position. Both seen in 4/4 only.
+        // bar 1 is tick 38400 and a region shows 3840 ticks after its stored position whatever the meter (4/4 and 3/4 seen)
         barTicks = std::llround(num * 4.0 / den * kTicksPerBeat);
-        bar1 = 10 * barTicks;
-        bias = barTicks;
+        bar1 = 38400;
+        bias = kRegionBias;
         char b[200];
-        if (num != 4 || den != 4) {
-            std::snprintf(b, sizeof b, "time signature %lld/%lld: bar 1 and region positions assume one stored bar = one %lld/%lld bar (verified in 4/4 only)",
-                          (long long)num, (long long)den, (long long)num, (long long)den);
+        if (!(den == 4 && (num == 4 || num == 3))) {
+            std::snprintf(b, sizeof b, "time signature %lld/%lld: positions read as in 4/4 and 3/4 (other meters not checked)", (long long)num, (long long)den);
             warn.push_back(b);
         }
         if (sigs.size() > 1) {
@@ -906,7 +919,7 @@ struct Converter {
             std::vector<Project::Note> n;
             std::vector<Project::Ctrl> c;
             P.placeRegion(p, p.start, bar1, bias, n, c);
-            if (p.seq->quantize && p.seq->quantize != -6)
+            if (p.seq->quantize && !quantizeGrid(p.seq->quantize))
                 warn.push_back(t.name + ": region \"" + p.seq->name + "\" has a Time Quantize (code " + std::to_string(p.seq->quantize) + ") not decoded, played as recorded");
             if (n.empty() && c.empty()) {
                 char b[64];
@@ -1090,8 +1103,10 @@ struct Converter {
         if (ch.mute) job["mute"] = true;
         if (ch.solo) job["solo"] = true;   // resolved over all the tracks below
         if (std::fabs(ch.panUnit()) > 0.001) job["pan"] = r3(ch.panUnit());
+        Project::Curves autos;   // this track's automation (its send curves are read with the sends below)
         if (auto it = t.envi ? curves.find(t.envi->oid) : curves.end(); it != curves.end()) {
-            const Project::Curves &c = it->second;
+            autos = it->second;
+            const Project::Curves &c = autos;
             if (!c.volume.empty()) {   // the fader follows the curve: it replaces the fader's own level
                 json pts = json::array();
                 pts.push_back({r4(std::max(0.0, beat(c.volume[0].first))), r3(faderDb(c.volume[0].second))});
@@ -1108,15 +1123,25 @@ struct Converter {
             if (c.other) warn.push_back(name + ": " + std::to_string(c.other) + " automation points of plug-in parameters not converted");
             curves.erase(it);
         }
+        auto curveDb = [&](const std::vector<std::pair<int64_t, double>> &v) {   // a fader-scale curve as dB points
+            json pts = json::array();
+            pts.push_back({r4(std::max(0.0, beat(v[0].first))), r3(faderDb(v[0].second))});
+            for (size_t k = 1; k < v.size(); ++k) faderPoints(pts, beat(v[k - 1].first), v[k - 1].second, beat(v[k].first), v[k].second, 0);
+            return pts;
+        };
         // GarageBand pans a stereo track as a balance: the near side stays, the far side falls as (1 - |pan|)^2
         if (job.contains("pan") || (job.contains("automation") && job["automation"].contains("pan"))) job["panLaw"] = "balance";
         json sends = json::object();
         for (auto &s : ch.sends()) {
-            if (s.level <= 0.001) continue;
+            const auto curve = autos.sends.find(s.index);   // an automated send follows its curve
+            const bool automated = curve != autos.sends.end() && !curve->second.empty();
+            if (s.level <= 0.001 && !automated) continue;
             const Channel *tg = P.busTarget(s);
             if (!tg) { warn.push_back(name + ": a send (code " + std::to_string(s.code) + ") whose bus could not be found"); continue; }
-            sends[bus(*tg)["name"].get<std::string>()] = r3(faderDb(s.level));
+            sends[bus(*tg)["name"].get<std::string>()] = automated ? curveDb(curve->second) : json(r3(faderDb(s.level)));
+            if (automated) autos.sends.erase(curve);
         }
+        if (!autos.sends.empty()) warn.push_back(name + ": automation of " + std::to_string(autos.sends.size()) + " send(s) whose bus could not be found, not converted");
         if (!sends.empty()) job["sends"] = sends;
         // notes in beats from bar 1
         if (!notes.empty()) {
@@ -1260,7 +1285,8 @@ struct Converter {
             const Envi *e = P.envi(oid);
             char b[32];
             std::snprintf(b, sizeof b, "object %x", oid);
-            const size_t n = c.volume.size() + c.pan.size() + (size_t)c.other;
+            size_t n = c.volume.size() + c.pan.size() + (size_t)c.other;
+            for (auto &[slot, v] : c.sends) n += v.size();
             warn.push_back((e ? e->name : std::string(b)) + ": " + std::to_string(n) + " automation points not converted");
         }
         int64_t c0 = 0, c1 = 0;

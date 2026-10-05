@@ -444,6 +444,8 @@ ok &= t[1]["name"] == "Loop" and [{k: v for k, v in c.items() if k != "file"} fo
 g = t[1]["automation"]["gain"]
 ok &= "gain" not in t[1] and g[0] == [0, 0] and [4, -4.998] in g and g[-1] == [8, -12.041] and t[1]["automation"]["pan"] == [[0, 0], [16, -1]]
 ok &= t[0]["panLaw"] == "balance" and t[1]["panLaw"] == "balance"
+s = t[1]["sends"]["Echo"]
+ok &= s[0] == [0, -120] and s[-1] == [8, 0]
 m = j["master"]["automation"]["gain"]
 ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
@@ -459,7 +461,17 @@ else
   got=$("./$build/wavelength" analyze out/check/band/render/stems/01-synth.wav --start 0.05 --end 1.1 --song-time --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
   [ "$got" = "C5" ] || band_why="its first note played $got, not C5"
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume and pan automation, the master's fade) and renders its track's own channel strip"; fi
+if [ -z "$band_why" ]; then   # the same song in 3/4: bar 1 stays at tick 38400, so every note and clip lands on the same beat
+  rm -rf out/check/band34 && mkdir -p out/check/band34 && python3 scripts/make-test-band.py out/check/band34 3
+  if ! "./$build/wavelength" import "out/check/band34/Test Song.band/" --out out/check/band34/imp --json > out/check/band34/import.json 2>/dev/null || ! python3 -c '
+import json, sys
+a = json.load(open("out/check/band/imp/job.json")); b = json.load(open("out/check/band34/imp/job.json"))
+ok = b["timeSignature"] == [3, 4] and [t.get("notes") for t in a["tracks"]] == [t.get("notes") for t in b["tracks"]]
+ok &= [c["beat"] for c in a["tracks"][1]["clips"]] == [c["beat"] for c in b["tracks"][1]["clips"]]
+ok &= not any("time signature" in w for w in b["import"]["warnings"])
+sys.exit(0 if ok else 1)'; then band_why="the song in 3/4 did not land on the same beats as in 4/4"; fi
+fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, the master's fade; the same song in 3/4) and renders its track's own channel strip"; fi
 
 # panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
 # the default constant-power law takes it 7.66 dB down
