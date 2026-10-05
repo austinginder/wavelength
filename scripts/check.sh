@@ -668,6 +668,37 @@ ok &= [(b, k) for b, k, v, d in t["Off"]] == [(0.0, 60), (0.0, 64), (0.0, 67)]
 sys.exit(0 if ok else 1)'; }; then arp_why="the Test Arp patch or preset played the wrong arpeggio"; fi
 if [ -n "$arp_why" ]; then echo "FAIL arp: $arp_why"; fail=1
 else echo "ok   arp: up-and-down over two octaves on the grid; a patch's Arpeggiator grid, swing and chord step, its preset"; fi
+# midiFx: make-test-exs.py's Test Chords patch (a Chord Trigger: Single, 0 5 10, keys C3-B4; then a Note Repeater: 1/8,
+# 2 repeats, +12 each, velocity ramp 60 %; stored out of slot order) turns one C4 into its chord and the chord's
+# repeats by itself (read back from a MIDI export), "midiFx": false turns that off, its Chord Trigger preset plays on
+# another track, and a track's own chain (chord, transpose onto C major, repeat over a key range, a re-struck key
+# cutting the earlier note) plays its notes; "arp" and "midiFx" together are refused
+mkdir -p out/check/midifx
+python3 scripts/make-test-exs.py out/check/midifx/fx
+cat > out/check/midifx/job.json <<'JOB'
+{"tempo": 120, "stems": "none", "tracks": [
+ {"name": "Auto", "plugin": "builtin:synth", "preset": "Test Chords", "notes": [{"beat": 0, "dur": 0.25, "key": "C4", "vel": 1}]},
+ {"name": "Off", "plugin": "builtin:synth", "preset": "Test Chords", "midiFx": false, "notes": [{"beat": 0, "dur": 0.25, "key": "C4", "vel": 1}]},
+ {"name": "Preset", "plugin": "builtin:synth", "preset": "PL Pluck", "midiFx": [{"type": "chord", "preset": "Test Chords"}], "notes": [{"beat": 0, "dur": 0.25, "key": "C4", "vel": 1}]},
+ {"name": "Own", "plugin": "builtin:synth", "preset": "PL Pluck", "midiFx": [{"type": "chord", "intervals": [0, 4, 7]}, {"type": "transpose", "semitones": 1, "scale": "C major"},
+  {"type": "repeat", "time": "1/8", "repeats": 2, "ramp": 0.7, "range": ["C4", "F4"]}], "notes": [{"beat": 0, "dur": 0.75, "key": "C4", "vel": 1}]}]}
+JOB
+sed -e 's/"midiFx": false/"midiFx": false, "arp": {"rate": "1\/8"}/' out/check/midifx/job.json > out/check/midifx/both.json
+if WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/midifx/fx/patches" WAVELENGTH_PLUGIN_SETTINGS="$PWD/out/check/midifx/fx/settings" \
+     "./$build/wavelength" export out/check/midifx/job.json --out out/check/midifx/job.mid --no-print > /dev/null 2>&1 &&
+   "./$build/wavelength" import out/check/midifx/job.mid --out out/check/midifx/in > /dev/null 2>&1 &&
+   python3 -c '
+import json, sys
+t = {x["name"]: sorted((n["beat"], n["key"], round(n.get("vel", 0) * 127), n["dur"]) for n in x["notes"]) for x in json.load(open("out/check/midifx/in/job.json"))["tracks"]}
+chord = [(0.0, k, 127, 0.25) for k in (60, 65, 70)]
+auto = chord + [(0.5, k, 76, 0.25) for k in (72, 77, 82)] + [(1.0, k, 46, 0.25) for k in (84, 89, 94)]
+own = [(0.0, 60, 127, 0.5), (0.0, 65, 127, 0.5), (0.0, 67, 127, 0.75), (0.5, 60, 89, 0.5), (0.5, 65, 89, 0.5), (1.0, 60, 62, 0.75), (1.0, 65, 62, 0.75)]
+sys.exit(0 if t["Auto"] == auto and t["Off"] == [(0.0, 60, 127, 0.25)] and t["Preset"] == chord and t["Own"] == own else 1)'; then
+  both=$(WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/midifx/fx/patches" "./$build/wavelength" export out/check/midifx/both.json --out out/check/midifx/both.mid --no-print 2>&1 || true)
+  case "$both" in *"not both"*) midifx_why="" ;; *) midifx_why="a track with both \"arp\" and \"midiFx\" wasn't refused" ;; esac
+else midifx_why="the Test Chords patch, its preset or a track's own midiFx played the wrong notes"; fi
+if [ -n "$midifx_why" ]; then echo "FAIL midifx: $midifx_why"; fail=1
+else echo "ok   midifx: a patch's Chord Trigger and Note Repeater in slot order, its preset, a track's chord, scale transpose and repeats"; fi
 
 # synth noise band: a noise oscillator with lowcut 2000 and highcut 4000 Hz centres between them; open noise sits far higher
 mkdir -p out/check/noiseband

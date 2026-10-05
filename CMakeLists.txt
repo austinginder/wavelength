@@ -194,6 +194,7 @@ add_executable(wavelength
   src/alchemy.cpp
   src/decent_sampler.cpp
   src/arp.cpp
+  src/midifx.cpp
   src/bplist.cpp
   src/sfz.cpp
   src/sf2.cpp

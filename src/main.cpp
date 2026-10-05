@@ -20,6 +20,7 @@
 #include "clips.hpp"
 #include "apple_loops.hpp"
 #include "arp.hpp"
+#include "midifx.hpp"
 #include "logic_patches.hpp"
 #include "harmony.hpp"
 #include "serve.hpp"
@@ -340,6 +341,37 @@ int cmdPresets(const Args &a) {
                                "A patch's own Arpeggiator plays by itself when the track uses the patch.\n");
         return 0;
     }
+    // Chord Trigger's, Transposer's and Note Repeater's presets, and the patches that use them
+    if (a.positional[1] == "chord" || a.positional[1] == "transpose" || a.positional[1] == "repeat") {
+        const std::string type = a.positional[1];
+        const std::string plugin = type == "chord" ? "Chord Trigger" : type == "transpose" ? "Transposer" : "Note Repeater";
+        const std::string record = type == "chord" ? "ChordTrig" : type == "transpose" ? "Transposer" : "Note Rep";   // as channel strips name it
+        std::string q = a.get("--search");
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+        json list = json::array();
+        auto add = [&](const std::string &name, const std::string &kind, const json &fx) {
+            std::string hay = kind + " " + name + " " + midiFxSummary(fx);
+            std::transform(hay.begin(), hay.end(), hay.begin(), ::tolower);
+            if (!q.empty() && hay.find(q) == std::string::npos) return;
+            if (a.has("--json")) list.push_back({{"name", name}, {"kind", kind}, {"midiFx", fx}});
+            else std::fprintf(OUT, "%-7s %-46s %s\n", kind.c_str(), name.c_str(), midiFxSummary(fx).c_str());
+        };
+        std::vector<std::string> ignored;
+        std::string e2;
+        for (auto &[name, path] : midiEffectPresets(plugin)) {
+            json fx;
+            if (appleMidiFxPreset(type, name, fx, ignored, e2)) add(name, "preset", fx);
+        }
+        for (auto &p : logicPatches()) {
+            json chain;
+            if (std::find(p.midiEffects.begin(), p.midiEffects.end(), record) == p.midiEffects.end() || !appleMidiFx(p.path, chain, ignored, e2)) continue;
+            for (auto &fx : chain) if (fx.value("type", "") == type) { add(p.name, "patch", fx); break; }
+        }
+        if (a.has("--json")) emit(json{{"ok", true}, {"plugin", type}, {"presets", list}}.dump(2));
+        else std::fprintf(OUT, "\nOn any track: \"midiFx\": [{\"type\": \"%s\", \"preset\": \"<name>\"}] (or \"patch\": \"<name>\"), with settings on top.\n"
+                               "A patch's own MIDI effects play by themselves when the track uses the patch.\n", type.c_str());
+        return 0;
+    }
     if (a.positional[1] == "builtin:synth") {   // the synth's own patches
         std::string q = a.get("--search");
         std::transform(q.begin(), q.end(), q.begin(), ::tolower);
@@ -544,7 +576,11 @@ int cmdSamples(const Args &a) {
                          s.contains("ir") ? ("   room: \"" + s["ir"].get<std::string>() + "\"").c_str() : "");
         if (!d["effects"].empty()) std::fprintf(OUT, "  effects played as: %s\n", d["effects"].dump().c_str());
         for (auto &n : d["effectNotes"]) std::fprintf(OUT, "  ! %s\n", n.get<std::string>().c_str());
-        if (d.contains("arp")) std::fprintf(OUT, "  arpeggiator: %s\n    played as \"arp\": %s\n", arpSummary(d["arp"]).c_str(), d["arp"].dump().c_str());
+        if (d.contains("midiFx") && (d["midiFx"].size() > 1 || d["midiFx"][0].value("type", "") != "arp")) {
+            std::string what;
+            for (auto &e : d["midiFx"]) what += (what.empty() ? "" : ", then ") + midiFxSummary(e, true);
+            std::fprintf(OUT, "  midi effects: %s\n    played as \"midiFx\": %s\n", what.c_str(), d["midiFx"].dump().c_str());
+        } else if (d.contains("arp")) std::fprintf(OUT, "  arpeggiator: %s\n    played as \"arp\": %s\n", arpSummary(d["arp"]).c_str(), d["arp"].dump().c_str());
         if (!d["plays"].get<bool>()) { std::fprintf(OUT, "\nDoesn't play here: %s.\n", d["why"].get<std::string>().c_str()); return 0; }
         if (d.contains("synth")) {   // a synth patch, re-created on builtin:synth
             for (auto &n : d["synth"]["notes"]) std::fprintf(OUT, "  ~ %s\n", n.get<std::string>().c_str());

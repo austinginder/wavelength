@@ -1510,6 +1510,8 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
                 if (!a.is_null()) out["arp"] = a;
             }
     if (!out.contains("arp") && alchemy && !alchemy->arp.is_null()) out["arp"] = alchemy->arp;   // else Alchemy's own
+    std::vector<std::string> midiNotes;   // (named in effectNotes already)
+    if (json midi = patchMidiFx(chans, midiNotes, fs::path(dir).stem().string()); !midi.empty()) out["midiFx"] = midi;   // its whole MIDI chain
     for (auto &s : readPatchSends(dir)) {
         json j = {{"channel", s.channel}, {"aux", s.aux}, {"room", s.room}, {"db", std::round(s.db * 10) / 10}};
         const std::string ir = impulseForRoom(s.room);

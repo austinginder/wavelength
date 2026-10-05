@@ -1,0 +1,25 @@
+{
+  "tempo": 112,
+  "tail": 3,
+  "stems": "16",
+  "markers": [{"beat": 0, "name": "A chord on every note, onto A minor"}, {"beat": 8, "name": "Repeats", "checks": false}, {"beat": 16, "name": "A chord per key, arpeggiated", "checks": false}],
+  "buses": [{"name": "Verb", "fx": [{"type": "reverb", "decay": 2.2, "mix": 1}]}],
+  "master": {"fx": [{"type": "limiter", "ceiling": -1}], "loudness": -14},
+  "tracks": [
+    {"name": "Keys", "plugin": "builtin:synth", "preset": "KY Electric Piano", "gain": -4, "sends": {"Verb": -14},
+     "midiFx": [{"type": "chord", "intervals": [0, 4, 7]}, {"type": "transpose", "scale": "A minor"}],
+     "notes": [{"beat": 0, "dur": 1.9, "key": "A3", "vel": 0.7}, {"beat": 2, "dur": 1.9, "key": "F3", "vel": 0.7}, {"beat": 4, "dur": 1.9, "key": "C4", "vel": 0.7}, {"beat": 6, "dur": 1.9, "key": "G3", "vel": 0.7},
+               {"beat": 8, "dur": 1.9, "key": "A3", "vel": 0.6}, {"beat": 10, "dur": 1.9, "key": "F3", "vel": 0.6}, {"beat": 12, "dur": 1.9, "key": "C4", "vel": 0.6}, {"beat": 14, "dur": 1.9, "key": "G3", "vel": 0.6}]},
+    {"name": "Bell", "plugin": "builtin:synth", "preset": "PL Bell", "gain": -8, "sends": {"Verb": -10},
+     "midiFx": [{"type": "repeat", "time": "1/8D", "repeats": 3, "ramp": 0.6}],
+     "notes": [{"beat": 8, "dur": 0.5, "key": "E5", "vel": 0.8}, {"beat": 10, "dur": 0.5, "key": "C5", "vel": 0.8}, {"beat": 12, "dur": 0.5, "key": "G5", "vel": 0.8}, {"beat": 14, "dur": 0.5, "key": "D5", "vel": 0.8}]},
+    {"name": "Arp", "plugin": "builtin:synth", "preset": "PL Pluck", "gain": -6, "sends": {"Verb": -12},
+     "midiFx": [{"type": "chord", "chords": {"A3": [0, 3, 7, 12], "F3": [0, 4, 7, 12], "C4": [0, 4, 7, 12], "G3": [0, 4, 7, 12]}},
+                {"type": "arp", "rate": "1/16", "order": "updown", "variation": 2, "gate": 0.6}],
+     "notes": [{"beat": 16, "dur": 2, "key": "A3", "vel": 0.8}, {"beat": 18, "dur": 2, "key": "F3", "vel": 0.8}, {"beat": 20, "dur": 2, "key": "C4", "vel": 0.8}, {"beat": 22, "dur": 2, "key": "G3", "vel": 0.8}]},
+    {"name": "Bass", "plugin": "builtin:synth", "preset": "BA Analog", "gain": -4,
+     "notes": [{"beat": 0, "dur": 1.9, "key": "A1"}, {"beat": 2, "dur": 1.9, "key": "F1"}, {"beat": 4, "dur": 1.9, "key": "C2"}, {"beat": 6, "dur": 1.9, "key": "G1"},
+               {"beat": 8, "dur": 1.9, "key": "A1"}, {"beat": 10, "dur": 1.9, "key": "F1"}, {"beat": 12, "dur": 1.9, "key": "C2"}, {"beat": 14, "dur": 1.9, "key": "G1"},
+               {"beat": 16, "dur": 1.9, "key": "A1"}, {"beat": 18, "dur": 1.9, "key": "F1"}, {"beat": 20, "dur": 1.9, "key": "C2"}, {"beat": 22, "dur": 1.9, "key": "G1"}]}
+  ]
+}

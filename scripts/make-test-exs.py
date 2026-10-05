@@ -25,6 +25,10 @@
                                     off (its centre point holds the material), transposed +12
   <dir>/patches/Test Sculpture Side.patch/  the same with object 2 External (side-chain audio): refused
   <dir>/settings/Arpeggiator/Test Arp.pst   the same Arpeggiator settings as a preset
+  <dir>/patches/Test Chords.patch/  Test Retro's Retro Synth after two MIDI effects, stored out of their slot order: a
+                                    Note Repeater (slot 1: 1/8, 2 repeats, +12 semitones each, velocity ramp 60 %) and
+                                    a Chord Trigger (slot 0: Single mode, intervals 0 5 10, keys C3-B4)
+  <dir>/settings/Chord Trigger/Test Chords.pst   the same Chord Trigger settings as a preset
 Usage: make-test-exs.py <dir>"""
 import math, os, plistlib, struct, sys
 
@@ -43,6 +47,8 @@ os.makedirs(os.path.join(out, 'patches', 'Test Clav.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Sculpture.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'patches', 'Test Sculpture Side.patch'), exist_ok=True)
 os.makedirs(os.path.join(out, 'settings', 'Arpeggiator'), exist_ok=True)
+os.makedirs(os.path.join(out, 'patches', 'Test Chords.patch'), exist_ok=True)
+os.makedirs(os.path.join(out, 'settings', 'Chord Trigger'), exist_ok=True)
 wav = os.path.abspath(os.path.join(out, 'Test Sine.wav'))
 rate, n = 48000, 96000
 pcm = struct.pack('<%dh' % n, *[int(16000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n)])
@@ -75,10 +81,11 @@ exs = (chunk(0, 0, 'Test Instrument', bytes(40)) + chunk(1, 0, 'Zone', bytes(zon
 with open(os.path.join(out, 'Test Instrument.exs'), 'wb') as f:
     f.write(exs)
 
-def record(slot, plugin, maker, data, preset=''):
-    # a channel strip slot: 36-byte "UCuA" header (payload size at +0x1c), payload with the plugin's name at
-    # +120 and its maker at +132, then the plugin's data
+def record(slot, plugin, maker, data, preset='', order=0):
+    # a channel strip slot: 36-byte "UCuA" header (payload size at +0x1c), payload with its position among the
+    # channel's effects at +6, the plugin's name at +120 and its maker at +132, then the plugin's data
     payload = bytearray(140)
+    struct.pack_into('<H', payload, 6, order)
     payload[14:14 + len(preset)] = preset.encode()
     payload[120:120 + len(plugin)] = plugin.encode()
     payload[132:136] = maker
@@ -176,6 +183,23 @@ with open(os.path.join(out, 'settings', 'Arpeggiator', 'Test Arp.pst'), 'wb') as
 arpeggiator = struct.pack('<III', 300, 0, 0x02000000) + struct.pack('<I', len(block)) + bytes(16) + block
 strip(os.path.join(out, 'patches', 'Test Arp.patch', '#Root.cst'),
       [record(0, 'Arpeggiator', b'GAME', arpeggiator), record(3, 'Retro Synth', b'GAME', settings(279, retro))])
+# MIDI effects in a block with chunks after the values, as the Arpeggiator's above. Chord Trigger (plug-in id 308):
+# #0 Single (0) / Multi (1), #1/#2 the key range, #3 the key the chord was learned on, #7 Learn Remote (20 = off),
+# #8 transposition; the chord map in an untagged chunk: n, n intervals from the learned key, then m Multi chords
+def midi_effect(plugin_id, values, chunks=b''):
+    vals = [0.0] + values
+    block = struct.pack('<IHBBI', 24 + 4 * len(vals) + len(chunks), 1, 0, 0, len(vals)) + b'GAMETSPP' + struct.pack('<I', plugin_id) + struct.pack('<%df' % len(vals), *vals) + chunks
+    return block, struct.pack('<III', plugin_id, 0, 0x02000000) + struct.pack('<I', len(block)) + bytes(16) + block
+
+chord_map = struct.pack('<5i', 3, 0, 5, 10, 0)
+chord_block, chord = midi_effect(308, [0, 48, 71, 60, 0, 0, 0, 20, 0, 0], b'\0\0\0\0' + struct.pack('<I', 8 + len(chord_map)) + chord_map)
+with open(os.path.join(out, 'settings', 'Chord Trigger', 'Test Chords.pst'), 'wb') as f:
+    f.write(chord_block)
+# Note Repeater (plug-in id 303): #0 input through, #1 sync, #2 delay (a fraction of a whole note), #3 repeats,
+# #4 semitones a repeat, #5 velocity ramp %, #6/#7 the key range, #8 a switch
+_, repeater = midi_effect(303, [1, 1, 0.125, 2, 12, 60, 0, 127, 0])
+strip(os.path.join(out, 'patches', 'Test Chords.patch', '#Root.cst'),
+      [record(1, 'Note Rep', b'GAME', repeater, order=1), record(0, 'ChordTrig', b'GAME', chord, order=0), record(3, 'Retro Synth', b'GAME', settings(279, retro))])
 # Vintage Electric Piano (plug-in id 0xd5, 40 parameters): model 0 (a tine), Decay 130, Release 100, Bell 0.5, 16 voices;
 # its EQ, drive, phaser, tremolo and chorus off
 ep = [0.0] * 40

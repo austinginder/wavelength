@@ -78,6 +78,10 @@ PatchPlugin settingsOf(const std::vector<uint8_t> &d, size_t a, size_t b, const 
             if (i) p.params.push_back(p.values.back());
         }
         if (le) p.block.assign(d.begin() + (long)s, d.begin() + (long)blockEnd);
+        // a channel strip's plug-in data (from payload +140) starts with a 32-byte prefix and, for most plug-ins, a
+        // table of (default, highest, default) step indices per parameter up to the block
+        if (s >= a + 172 && (s - a - 172) % 12 == 0)
+            for (size_t t = a + 172; t + 12 <= s; t += 12) p.steps.push_back((int)le32(&d[t + 4]));
         break;
     }
     return p;
@@ -151,6 +155,56 @@ std::pair<double, double> mixGain(double dry, double wet) {
 }
 // a reverb's damping from its high cut: 1 kHz and below fully damped, 10 kHz and up open
 double damping(double highCutHz) { return r2(std::clamp(1 - std::log10(std::max(highCutHz, 1000.0) / 1000), 0.0, 1.0)); }
+
+// a chunk after a settings block's values (its tag stored byte-reversed, a u32 size counting its 8-byte header)
+bool blockChunk(const PatchPlugin &p, const char *tag, const uint8_t *&data, size_t &size) {
+    for (size_t at = 24 + 4 * p.values.size(); at + 8 <= p.block.size();) {
+        const uint32_t n = le32(&p.block[at + 4]);
+        if (n < 8 || at + n > p.block.size()) break;
+        if (!std::memcmp(&p.block[at], tag, 4)) { data = &p.block[at + 8]; size = n - 8; return true; }
+        at += n;
+    }
+    return false;
+}
+
+std::string pcName(int k) {
+    static const char *names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    return names[((k % 12) + 12) % 12];
+}
+std::string keyName(int k) { return pcName(k) + std::to_string(k / 12 - 1); }   // 0-127, C4 = 60
+
+// Apple's name for the MIDI effect a "midiFx" type re-creates
+std::string appleMidiFxName(const std::string &type) {
+    return type == "arp" ? "Arpeggiator" : type == "chord" ? "Chord Trigger" : type == "transpose" ? "Transposer" : type == "repeat" ? "Note Repeater" : type;
+}
+
+// a script that only passes its events on (tracing them or not), as Scripter's starting script does
+bool passThroughScript(const std::string &js) {
+    std::string code;
+    for (size_t i = 0; i < js.size(); ++i) {
+        if (!js.compare(i, 2, "//")) { while (i < js.size() && js[i] != '\n') ++i; continue; }
+        if (!js.compare(i, 2, "/*")) { const size_t e = js.find("*/", i + 2); if (e == std::string::npos) break; i = e + 1; continue; }
+        if (!std::isspace((unsigned char)js[i])) code += js[i];
+    }
+    return code.empty() || code == "functionHandleMIDI(event){event.send();}" || code == "functionHandleMIDI(event){event.trace();event.send();}";
+}
+
+// the MIDI effects of one channel as a "midiFx" chain; a Single mode Chord Trigger on a drum kit is GarageBand's
+// default left in the patch (Blue Ridge): every hit would bring three other drums
+json channelMidiFx(const PatchChannel &c, std::vector<std::string> &notes) {
+    json chain = json::array();
+    const bool kit = c.instrument == "Drum Kit" || c.instrument == "Ultrabeat" || c.instrument == "Drum Machin";
+    for (auto &m : c.midiChain) {
+        json e = midiEffectSettings(m, notes);
+        if (e.is_null()) continue;
+        if (kit && e["type"] == "chord" && e.contains("intervals")) {
+            notes.push_back("Chord Trigger: in Single mode on a drum kit (its default chord, left in the patch), skipped: it would add other drums to every hit");
+            continue;
+        }
+        chain.push_back(e);
+    }
+    return chain;
+}
 } // namespace
 
 json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes) {
@@ -400,9 +454,12 @@ json patchChainEffects(const std::vector<PatchChannel> &chans, std::vector<std::
     std::vector<PatchPlugin> chain;
     if (n == 1) {
         chain = inst->chain;
-        for (auto &m : inst->midiChain)
-            if (m.name == "Arpeggiator") { if (!m.bypassed) notes.push_back("Arpeggiator: plays as the track's \"arp\" (\"arp\": false plays the notes as written)"); }
-            else notes.push_back(m.name + ": a MIDI effect, not played (the notes play as written)");
+        std::vector<std::string> left;
+        const json midi = channelMidiFx(*inst, left);
+        std::string names;
+        for (auto &m : midi) names += (names.empty() ? "" : ", ") + appleMidiFxName(m.value("type", ""));
+        if (!names.empty()) notes.push_back("MIDI effects (" + names + "): they play as the track's \"midiFx\" (\"midiFx\": false plays the notes as written)");
+        notes.insert(notes.end(), left.begin(), left.end());
     } else if (n > 1) notes.push_back("several instrument channels: their own effects are left out");
     if (!chans.empty() && chans.front().instrument.empty() && &chans.front() != inst) chain.insert(chain.end(), chans.front().chain.begin(), chans.front().chain.end());
     return patchEffects(chain, notes);
@@ -467,7 +524,10 @@ const std::vector<LogicPatch> &logicPatches() {
                     std::vector<uint8_t> d;
                     std::vector<Record> recs;
                     if (!readWhole(f, d) || !records(d, recs)) continue;
-                    for (auto &x : recs) p.arpeggiator |= x.midiFx && x.name == "Arpeggiator" && !x.bypassed;
+                    for (auto &x : recs) {
+                        p.arpeggiator |= x.midiFx && x.name == "Arpeggiator" && !x.bypassed;
+                        if (x.midiFx && !x.bypassed) p.midiEffects.push_back(x.name);
+                    }
                     const Record *r = instrumentOf(recs);
                     if (!r) continue;
                     if (p.instrument.empty() || (!p.sampler && isSamplerInstrument(r->name))) p.instrument = r->name;
@@ -499,15 +559,18 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         const Record *r = instrumentOf(recs);
         if (r) { c.instrument = r->name; c.preset = r->preset; c.settings = settingsOf(d, r->at, std::min(d.size(), r->at + r->size), r->name); }
         if (r && r->name == "Alchemy") c.alchemy = alchemyText(d, r->at, std::min(d.size(), r->at + r->size));
-        // the audio effects in their insert order (records aren't stored in it); MIDI effects are named, not played
-        std::vector<const Record *> fx;
+        // the audio effects and the MIDI effects each in their slot order (records aren't stored in it)
+        std::vector<const Record *> fx, mfx;
         for (auto &x : recs) {
             if (x.name.empty() || &x == r) continue;
             c.effects.push_back(x.name);
-            if (!x.midiFx) { fx.push_back(&x); continue; }
-            c.midiEffects.push_back(x.name);
-            c.midiChain.push_back(settingsOf(d, x.at, std::min(d.size(), x.at + x.size), x.name));
-            c.midiChain.back().bypassed = x.bypassed;
+            (x.midiFx ? mfx : fx).push_back(&x);
+        }
+        std::stable_sort(mfx.begin(), mfx.end(), [](const Record *a, const Record *b) { return a->order < b->order; });
+        for (auto *x : mfx) {
+            c.midiEffects.push_back(x->name);
+            c.midiChain.push_back(settingsOf(d, x->at, std::min(d.size(), x->at + x->size), x->name));
+            c.midiChain.back().bypassed = x->bypassed;
         }
         std::stable_sort(fx.begin(), fx.end(), [](const Record *a, const Record *b) { return a->order < b->order; });
         for (auto *x : fx) {
@@ -598,13 +661,9 @@ json arpeggiatorSettings(const PatchPlugin &p, std::vector<std::string> &notes) 
     else if (cyc > 0) a["cycle"] = std::min(cyc, 32);
     if (v(11) >= 0.5) {   // #11 Grid: the rhythm grid in the "UGCD" chunk (a binary property list) after the values
         json grid;
-        const size_t count = p.values.size();
-        for (size_t at = 24 + 4 * count; at + 8 <= p.block.size();) {
-            const uint32_t size = le32(&p.block[at + 4]);
-            if (size < 8 || at + size > p.block.size()) break;
-            if (!std::memcmp(&p.block[at], "DCGU", 4) && parseBinaryPlist(&p.block[at + 8], size - 8, grid)) break;
-            at += size;
-        }
+        const uint8_t *g = nullptr;
+        size_t gsize = 0;
+        if (blockChunk(p, "DCGU", g, gsize)) parseBinaryPlist(g, gsize, grid);
         if (grid.is_object() && grid.contains("Steps") && grid["Steps"].is_array()) {
             // each step fills ceil(Length) slots (a Length over 1 ties), the first #13 Active Grid Length slots play
             const int active = std::clamp((int)std::lround(v(13, grid.value("ActiveSteps", 16.0))), 1, 128);
@@ -675,6 +734,181 @@ bool appleArpeggiator(const std::string &name, bool preset, json &arp, std::vect
         }
     err = "the patch '" + shown + "' has no Arpeggiator switched on";
     return false;
+}
+
+json midiEffectSettings(const PatchPlugin &p, std::vector<std::string> &notes) {
+    auto v = [&](size_t n, double def = 0) { return n < p.params.size() && std::fabs(p.params[n]) < 1e29f ? (double)p.params[n] : def; };
+    if (p.bypassed) return nullptr;
+    if (p.id == 300) {   // the Arpeggiator
+        json a = arpeggiatorSettings(p, notes);
+        if (!a.is_null()) a["type"] = "arp";
+        return a;
+    }
+    if (p.id == 308) {   // Chord Trigger
+        // the chord map: n, n intervals (the Single chord, from the trigger key), m, then m x (key, n, n intervals from it)
+        std::vector<int32_t> raw;
+        const uint8_t *m = nullptr;
+        size_t ms = 0;
+        if (blockChunk(p, "\0\0\0\0", m, ms)) for (size_t i = 0; i + 4 <= ms; i += 4) raw.push_back((int32_t)le32(m + i));
+        size_t at = 0;
+        bool whole = true;
+        auto list = [&](int32_t n) {
+            json out = json::array();
+            if (n < 0 || n > 128 || at + (size_t)n > raw.size()) { whole = false; return out; }
+            for (int32_t i = 0; i < n; ++i) out.push_back(raw[at++]);
+            return out;
+        };
+        json single = at < raw.size() ? list(raw[at++]) : json::array(), chords = json::object();
+        for (int32_t k = 0, count = at < raw.size() ? raw[at++] : 0; k < count && whole; ++k) {
+            if (at + 2 > raw.size()) { whole = false; break; }
+            const int key = raw[at++];
+            json c = list(raw[at++]);
+            if (whole && key >= 0 && key <= 127) chords[keyName(key)] = c;
+        }
+        if (!whole) notes.push_back("Chord Trigger: its chord map couldn't be read whole");
+        // a strip saved by an older Chord Trigger keeps Learn Remote in #8 (its step table: #7 9 steps, #8 89)
+        const bool older = p.steps.size() > 8 && p.steps[7] == 8 && p.steps[8] == 88;
+        json c = {{"type", "chord"}};
+        if (v(0) >= 0.5) c["chords"] = chords;
+        else c["intervals"] = single;
+        c["range"] = {(int)std::lround(std::clamp(v(1, 21), 0.0, 127.0)), (int)std::lround(std::clamp(v(2, 108), 0.0, 127.0))};
+        if (const int t = older ? 0 : (int)std::lround(std::clamp(v(8), -48.0, 48.0)); t != 0) c["transpose"] = t;
+        if (older && v(7, 20) != 20) notes.push_back("Chord Trigger: an older version's setting #7 (" + std::to_string(std::lround(v(7))) + ") is read as no transposition");
+        if (v(older ? 8 : 7, 20) > 20.5) notes.push_back("Chord Trigger: its Learn Remote key (picking chords live) is left out");
+        return c;
+    }
+    if (p.id == 290) {   // Transposer: #0 semitones, #2 root, #4 scale menu, #5-#16 the scale's notes C to B
+        json scale = json::array();
+        for (int i = 0; i < 12; ++i) if (v(5 + (size_t)i, 1) >= 0.5) scale.push_back(i);
+        const int semis = (int)std::lround(std::clamp(v(0), -48.0, 48.0));
+        const bool chromatic = scale.empty() || scale.size() == 12;
+        if (semis == 0 && chromatic) return nullptr;
+        json t = {{"type", "transpose"}, {"semitones", semis}};
+        if (!chromatic) {
+            t["scale"] = scale;
+            if (std::lround(v(2)) % 12 != 0) notes.push_back("Transposer: its scale's notes are read as written (its root, " + pcName((int)std::lround(v(2))) + ", left out: unverified)");
+        }
+        return t;
+    }
+    if (p.id == 303) {   // Note Repeater
+        json r = {{"type", "repeat"}};
+        const double d = v(2, 0.125);
+        if (v(1, 1) >= 0.5) {   // synced: a fraction of a whole note (0.0625 = 1/16)
+            std::string name;
+            for (int den = 1; den <= 128 && name.empty(); den *= 2) {
+                if (std::fabs(d - 1.0 / den) < 1e-7) name = "1/" + std::to_string(den);
+                else if (std::fabs(d - 1.5 / den) < 1e-7) name = "1/" + std::to_string(den) + "D";
+                else if (std::fabs(d - 2.0 / 3 / den) < 1e-7) name = "1/" + std::to_string(den) + "T";
+            }
+            if (!name.empty()) r["time"] = name;
+            else r["time"] = r4(d * 4);
+        } else {
+            r["ms"] = r2(d);
+            notes.push_back("Note Repeater: its unsynced delay is read as milliseconds (unverified)");
+        }
+        r["repeats"] = (int)std::lround(std::clamp(v(3, 3), 0.0, 99.0));
+        if (const int t = (int)std::lround(std::clamp(v(4), -48.0, 48.0)); t != 0) r["transpose"] = t;
+        if (const double ramp = std::clamp(v(5, 100), 1.0, 200.0); ramp != 100) r["ramp"] = r4(ramp / 100);
+        if (v(0, 1) < 0.5) r["thru"] = false;
+        const int lo = (int)std::lround(std::clamp(v(6), 0.0, 127.0)), hi = (int)std::lround(std::clamp(v(7, 127), 0.0, 127.0));
+        if (lo != 0 || hi != 127) r["range"] = {lo, hi};
+        return r;
+    }
+    if (p.id == 312 || p.name == "ScriptInst") return nullptr;   // GarageBand's built-in instrument scripts: the notes play as written
+    if (p.id == 302) {   // Scripter: the script is a binary property list holding its text
+        const uint8_t *d = nullptr;
+        size_t n = 0;
+        json script;
+        if (blockChunk(p, "TSCS", d, n) && parseBinaryPlist(d, n, script) && script.is_string() && passThroughScript(script.get<std::string>())) return nullptr;
+        notes.push_back("Scripter: its script isn't run (the notes play as written)");
+        return nullptr;
+    }
+    static const std::map<uint32_t, std::string> names = {{307, "Velocity Processor"}, {304, "Randomizer"}, {305, "Modifier"}};
+    notes.push_back((names.count(p.id) ? names.at(p.id) : p.name) + ": a MIDI effect, not played (the notes play as written)");
+    return nullptr;
+}
+
+json patchMidiFx(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes, const std::string &name) {
+    json chain = json::array();
+    for (auto &c : chans) {   // GarageBand's patches keep their MIDI effects on one channel
+        chain = channelMidiFx(c, notes);
+        if (!chain.empty()) break;
+    }
+    for (auto &e : chain) if (e["type"] == "arp") return chain;
+    for (auto &c : chans)   // else Alchemy's own arpeggiator, inside the instrument (after the MIDI effects)
+        if (c.instrument == "Alchemy" && !c.alchemy.empty()) {
+            AlchemyPatch a = alchemyPatch(c.alchemy, name);
+            if (a.arp.is_null()) continue;
+            json e = a.arp;
+            e["type"] = "arp";
+            chain.push_back(e);
+            notes.insert(notes.end(), a.arpNotes.begin(), a.arpNotes.end());
+            break;
+        }
+    return chain;
+}
+
+bool appleMidiFx(const std::string &name, json &chain, std::vector<std::string> &notes, std::string &err) {
+    std::error_code ec;
+    std::string dir = name, shown = fs::u8path(name).stem().u8string();   // a patch folder, or a patch by name
+    if (!fs::is_directory(fs::u8path(name), ec)) {
+        const LogicPatch *lp = logicPatchNamed(name);
+        if (!lp) { err = "no GarageBand or Logic patch '" + name + "'"; return false; }
+        dir = lp->path, shown = lp->name;
+    }
+    std::vector<PatchChannel> chans;
+    if (!readPatchChannels(dir, chans, err)) return false;
+    chain = patchMidiFx(chans, notes, shown);
+    return true;
+}
+
+const std::vector<std::pair<std::string, std::string>> &midiEffectPresets(const std::string &plugin) {
+    static std::map<std::string, std::vector<std::pair<std::string, std::string>>> lists;
+    static std::mutex mu;
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = lists.find(plugin);
+    if (it != lists.end()) return it->second;
+    auto &list = lists[plugin];
+    std::set<std::string> seen;
+    for (auto &root : pluginSettingsRoots()) {
+        const fs::path dir = fs::path(root) / plugin;
+        std::error_code ec;
+        for (auto e = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec); !ec && e != fs::recursive_directory_iterator(); e.increment(ec)) {
+            if (!e->is_regular_file(ec) || lower(e->path().extension().string()) != ".pst") continue;
+            const std::string rel = (e->path().parent_path().lexically_relative(dir) / e->path().stem()).generic_u8string();
+            const std::string name = rel.rfind("./", 0) == 0 ? rel.substr(2) : rel;
+            if (seen.insert(lower(name)).second) list.push_back({name, e->path().string()});
+        }
+    }
+    std::sort(list.begin(), list.end(), [](auto &a, auto &b) { return lower(a.first) < lower(b.first); });
+    return list;
+}
+
+bool appleMidiFxPreset(const std::string &type, const std::string &name, json &fx, std::vector<std::string> &notes, std::string &err) {
+    const std::string plugin = appleMidiFxName(type);
+    const auto &list = midiEffectPresets(plugin);
+    const std::string q = lower(name);
+    std::vector<const std::pair<std::string, std::string> *> hits;
+    for (auto &x : list) if (lower(x.first) == q) { hits = {&x}; break; }
+    if (hits.empty())
+        for (auto &x : list) {
+            const size_t slash = x.first.rfind('/');
+            if (lower(slash == std::string::npos ? x.first : x.first.substr(slash + 1)) == q) hits.push_back(&x);
+        }
+    if (hits.empty()) { err = "no " + plugin + " preset '" + name + "' (`wavelength presets " + type + "` lists them)"; return false; }
+    if (hits.size() > 1) {
+        err = "'" + name + "' names several " + plugin + " presets:";
+        for (auto *h : hits) err += " '" + h->first + "'";
+        return false;
+    }
+    std::vector<uint8_t> d;
+    if (!readWhole(hits[0]->second, d)) { err = "can't read " + hits[0]->second; return false; }
+    const PatchPlugin p = settingsOf(d, 0, d.size(), plugin);
+    static const std::map<std::string, uint32_t> ids = {{"chord", 308}, {"transpose", 290}, {"repeat", 303}};
+    if (!ids.count(type) || p.id != ids.at(type)) { err = hits[0]->second + " isn't " + plugin + " settings"; return false; }
+    fx = midiEffectSettings(p, notes);
+    if (fx.is_null()) fx = {{"type", type}};   // a Transposer preset that changes nothing
+    return true;
 }
 
 } // namespace wl

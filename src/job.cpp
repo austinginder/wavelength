@@ -3,6 +3,7 @@
 #include "arp.hpp"
 #include "harmony.hpp"
 #include "logic_patches.hpp"
+#include "midifx.hpp"
 
 #include "platform.hpp"
 #include "synth.hpp"
@@ -542,27 +543,41 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             std::vector<int> noteArt;                    // keyswitch per note (-1 = none)
             std::vector<json> ordered;
             json written = t.value("notes", json::array());
-            json arp;   // the held notes as an arpeggio: the track's "arp", else its GarageBand patch's Arpeggiator
-            std::vector<std::string> arpNotes;
-            std::string aerr;
-            if (t.contains("arp") && !(t["arp"].is_boolean() && !t["arp"].get<bool>())) {
-                if (!resolveArp(t["arp"], arp, arpNotes, aerr)) throw std::runtime_error("track '" + tr.name + "': " + aerr);
-            } else if (!t.contains("arp") && !written.empty()) {
+            // the notes' MIDI effects: the track's "midiFx" (or "arp", one arpeggiator), else its GarageBand patch's
+            json midiFx = json::array();
+            std::vector<std::string> fxNotes;
+            std::string ferr;
+            auto off = [&](const char *k) { return t.contains(k) && t[k].is_boolean() && !t[k].get<bool>(); };
+            if (t.contains("midiFx") && t.contains("arp"))
+                throw std::runtime_error("track '" + tr.name + "': give \"midiFx\" or \"arp\", not both (\"arp\": {...} is \"midiFx\": [{\"type\": \"arp\", ...}])");
+            if (off("midiFx") || off("arp")) {   // the notes as written
+            } else if (t.contains("midiFx")) {
+                if (!resolveMidiFx(t["midiFx"], midiFx, fxNotes, ferr)) throw std::runtime_error("track '" + tr.name + "': " + ferr);
+            } else if (t.contains("arp")) {
+                json a;
+                if (!resolveArp(t["arp"], a, fxNotes, ferr)) throw std::runtime_error("track '" + tr.name + "': " + ferr);
+                a["type"] = "arp";
+                midiFx.push_back(a);
+            } else if (!written.empty()) {
                 std::string patch;
                 if (tr.plugin == "builtin:synth" && !tr.preset.empty() && !isBuiltinSynthPatch(tr.preset)) patch = tr.preset;
                 else if (tr.plugin == "builtin:sampler" && tr.sampler.is_object() && tr.sampler.contains("patch") && tr.sampler["patch"].is_string())
                     patch = tr.sampler["patch"].get<std::string>();
                 if (!patch.empty() && (patch.find('/') != std::string::npos) && fs::u8path(patch).is_relative() && !baseDir.empty())
                     patch = (fs::u8path(baseDir) / fs::u8path(patch)).lexically_normal().u8string();   // a patch folder beside the job
-                if (!patch.empty() && appleArpeggiator(patch, false, arp, arpNotes, aerr))
-                    tr.warnings.push_back("patch '" + fs::u8path(patch).stem().u8string() + "' plays its notes through its Arpeggiator (" + arpSummary(arp) +
-                                          "); \"arp\": false plays them as written");
-                else arp = nullptr;
+                if (!patch.empty() && appleMidiFx(patch, midiFx, fxNotes, ferr) && !midiFx.empty()) {
+                    std::string what;
+                    for (auto &e : midiFx) what += (what.empty() ? "its " : " then its ") + midiFxSummary(e, true);
+                    tr.warnings.push_back("patch '" + fs::u8path(patch).stem().u8string() + "' plays its notes through " + what +
+                                          "; \"midiFx\": false plays them as written");
+                }
             }
-            for (auto &w : arpNotes) tr.warnings.push_back(w);
-            if (!arp.is_null()) {
+            for (auto &w : fxNotes) tr.warnings.push_back(w);
+            if (!midiFx.empty()) {
                 json played;
-                if (!arpeggiate(written, arp, played, aerr)) throw std::runtime_error("track '" + tr.name + "': " + aerr);
+                const TempoMap &tm = out.tempo;
+                auto toBeats = [&tm](double beat, double seconds) { return tm.secToBeat(tm.beatToSec(beat) + seconds) - beat; };
+                if (!runMidiFx(written, midiFx, played, ferr, toBeats)) throw std::runtime_error("track '" + tr.name + "': " + ferr);
                 written = played;
             }
             for (auto &n : written) ordered.push_back(n);

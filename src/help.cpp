@@ -25,7 +25,9 @@ Usage:
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
       `presets arp`: GarageBand's and Logic's Arpeggiator presets and the patches that
-      arpeggiate, for a track's "arp" (macOS).
+      arpeggiate, for a track's "arp" (macOS). `presets chord`, `presets transpose` and
+      `presets repeat`: Chord Trigger's, Transposer's and Note Repeater's presets and the patches
+      that use them, for a track's "midiFx".
   wavelength samples [--search TEXT] [--kit NAME [--roundrobin]] [--soundfont NAME] [--patch NAME] [--dspreset NAME] [--install-soundfont [--force]] [--json]
       List sample libraries for builtin:sampler (Bitwig multisamples, drum kit folders, SFZ,
       DecentSampler presets, SoundFonts, Logic and GarageBand instruments and patches, Apple Loops)

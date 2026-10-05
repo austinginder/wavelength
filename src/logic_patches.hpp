@@ -25,6 +25,7 @@ struct PatchPlugin {
     std::vector<float> values;   // every value as stored, the reserved first one included (Delay Designer counts from it)
     std::vector<uint8_t> block;  // the whole block, little-endian (Space Designer's IR name, Delay Designer's taps)
     bool bypassed = false;       // switched off in the patch (payload byte +112; a Smart Control often switches it on)
+    std::vector<int> steps;      // per parameter, its highest step index (a channel strip's table before the block; none in a .pst)
 };
 
 struct PatchChannel {
@@ -38,7 +39,7 @@ struct PatchChannel {
     std::vector<std::string> effects;   // the other plugins on the channel
     std::vector<PatchPlugin> chain;     // its audio effects with their settings, in insert order (the payload's u16 at +6)
     std::vector<std::string> midiEffects;   // its MIDI effects (Arpeggiator, Chord Trigger, ...) by name
-    std::vector<PatchPlugin> midiChain;     // and with their settings, in slot order (the Arpeggiator plays as the track's "arp")
+    std::vector<PatchPlugin> midiChain;     // and with their settings, in slot order (they play as the track's "midiFx")
     PatchPlugin settings;               // the instrument's own settings (Retro Synth's parameters)
     std::string alchemy;                // Alchemy's settings: its preset text from "<alchemypreset>" ("" = none stored)
 };
@@ -54,6 +55,7 @@ struct LogicPatch {
     std::string instrument;             // the instrument it plays (its first sampler channel's, else the first one's)
     bool sampler = false;               // some channel plays an instrument the sampler can play
     bool arpeggiator = false;           // its notes go through an Arpeggiator (switched on)
+    std::vector<std::string> midiEffects;   // the MIDI effects switched on, as channel strips name them ("ChordTrig", "Note Rep")
 };
 
 // Where patches are installed: GarageBand's and Logic's own, Logic's library, the user's.
@@ -73,8 +75,8 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
 // From the parameter maps decoded from GarageBand's patches and Logic's presets.
 nlohmann::json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string> &notes);
 // The effects a patch puts after its instrument, as Wavelength effects: the instrument channel's own (when one
-// channel plays an instrument) and then the root channel's when that's a summing stack around it; its MIDI
-// effects are named in `notes`, not played.
+// channel plays an instrument) and then the root channel's when that's a summing stack around it. `notes` names
+// its MIDI effects (they play as the track's "midiFx", patchMidiFx) and what is left out.
 nlohmann::json patchChainEffects(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes);
 // A patch's sends (macOS: data.plist is a binary property list); empty when it has none or can't be read.
 std::vector<PatchSend> readPatchSends(const std::string &patchDir);
@@ -94,5 +96,26 @@ nlohmann::json arpeggiatorSettings(const PatchPlugin &p, std::vector<std::string
 // arpeggiator when that's on) or of an Arpeggiator preset (`preset` true), by name (any case). False with err when
 // there is none.
 bool appleArpeggiator(const std::string &name, bool preset, nlohmann::json &arp, std::vector<std::string> &notes, std::string &err);
+
+// One MIDI effect's settings as a track "midiFx" entry (midifx.hpp): the Arpeggiator ({"type": "arp", ...}),
+// Chord Trigger (plug-in 308: #0 Single/Multi, #1/#2 key range, #7 Learn Remote, #8 transposition, the chord map
+// in the block's untagged chunk; an older layout keeps Learn Remote in #8), Transposer (290: #0 semitones, #5-#16
+// the scale's 12 notes C to B) and Note Repeater (303: #0 input through, #1 sync, #2 delay as a fraction of a
+// whole note, #3 repeats, #4 semitones per repeat, #5 velocity ramp %, #6/#7 key range). Null when it's switched
+// off, changes nothing or isn't played here; `notes` says what is left out (a Scripter's script, the Velocity
+// Processor, ...). A pass-through Scripter and GarageBand's built-in instrument scripts play the notes as written.
+nlohmann::json midiEffectSettings(const PatchPlugin &p, std::vector<std::string> &notes);
+// The MIDI effects a patch's notes go through, as a "midiFx" chain: the first channel's that has any, in slot order,
+// then Alchemy's own arpeggiator when no Arpeggiator plays (`name` names the patch for Alchemy's notes). A Single
+// mode Chord Trigger on a drum kit (left at its default chord) is skipped with a note.
+nlohmann::json patchMidiFx(const std::vector<PatchChannel> &chans, std::vector<std::string> &notes, const std::string &name = "");
+// patchMidiFx of a patch by name (any case) or folder; false with err when there is no such patch.
+bool appleMidiFx(const std::string &name, nlohmann::json &chain, std::vector<std::string> &notes, std::string &err);
+// The presets of a MIDI effect ("Chord Trigger", "Transposer", "Note Repeater"): names relative to its folder
+// without ".pst" ("Single/Triads/Major"), sorted, cached per process.
+const std::vector<std::pair<std::string, std::string>> &midiEffectPresets(const std::string &plugin);
+// A preset of the MIDI effect that plays a "midiFx" type (chord, transpose, repeat) as its settings, by its name or
+// its last part when that is unique (any case); false with err when there is none.
+bool appleMidiFxPreset(const std::string &type, const std::string &name, nlohmann::json &fx, std::vector<std::string> &notes, std::string &err);
 
 } // namespace wl
