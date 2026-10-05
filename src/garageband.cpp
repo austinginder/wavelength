@@ -1137,8 +1137,9 @@ struct Converter {
         } else if (tempos.size() == 1) job["tempo"] = r4(tempos[0].second);
         else {
             job["tempo"] = json::array();
+            // GarageBand stores a tempo ramp drawn as a curve as tempo events every half beat and plays them as steps
+            // (a bounce of a 100 to 140 BPM ramp: every beat within 2 ms of these steps)
             for (auto &[t, bpm] : tempos) job["tempo"].push_back({{"beat", r4(std::max(0.0, beat(t)))}, {"bpm", r4(bpm)}});
-            warn.push_back("tempo map: " + std::to_string(tempos.size()) + " tempo events written as steps (GarageBand ramps not decoded)");
         }
         const auto sig = P.signatures()[0];
         job["timeSignature"] = {sig[1], sig[2]};

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Write a tiny GarageBand project for scripts/check.sh, made up here (no Apple data):
-  <dir>/Test Song.band/Alternatives/000/MetaData.plist   a binary property list: 100 BPM, 4/4, D minor, 48 kHz
+  <dir>/Test Song.band/Alternatives/000/MetaData.plist   a binary property list: 100 BPM (90 from bar 13), 4/4, D minor, 48 kHz
   <dir>/Test Song.band/Alternatives/000/ProjectData      the song (chunks, below)
   <dir>/Test Song.band/Resources/ProjectInformation.plist  an XML property list naming what saved it
 The song: one software instrument track "Synth" (fader 80 = -2.05 dB, pan 80 = 0.25 right) whose channel strip plays a
@@ -143,7 +143,8 @@ echo = [0.0] * 21
 echo[16:21] = [7, 40, 0, 0, 100]                  # Time 1/8, Repeat 40 %, Color 0, Dry 0 %, Wet 100 %
 
 body = b''
-body += seq(3, 0, 'Tempo', events(event(0x60, BAR1, ext=[ext(struct.pack('<I', 100 * 10000), mark=0x88)])))
+body += seq(3, 0, 'Tempo', events(event(0x60, BAR1, ext=[ext(struct.pack('<I', 100 * 10000), mark=0x88)]),
+                                  event(0x60, BAR1 + 12 * 3840, ext=[ext(struct.pack('<I', 90 * 10000), mark=0x88)])))   # 90 BPM from bar 13
 body += seq(1, 0, 'Signature', events(event(0x30, 0, bytes([0, 0, 0, 2, 4, 0, 0, 0]), [ext(mark=0x88)])))   # +11 log2 4, +12 4
 body += seq(0x16, 0, 'Locators', events(event(0x10, BAR1 + 2 * 3840 - 1, ext=[ext(u12=BAR1)])))             # cycle bars 1-2
 body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', -1)

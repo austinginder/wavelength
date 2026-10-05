@@ -428,7 +428,7 @@ elif ! python3 -c '
 import json, sys
 j = json.load(open("out/check/band/imp/job.json"))
 t = j["tracks"]
-ok = j["tempo"] == 100 and j["timeSignature"] == [4, 4] and j["keys"] == [{"bar": 1, "key": "D minor"}] and j["sampleRate"] == 48000
+ok = j["tempo"] == [{"beat": 0, "bpm": 100}, {"beat": 48, "bpm": 90}] and j["timeSignature"] == [4, 4] and j["keys"] == [{"bar": 1, "key": "D minor"}] and j["sampleRate"] == 48000
 ok &= len(t) == 2 and t[0]["name"] == "Synth" and t[0]["plugin"] == "builtin:synth" and t[0]["preset"] == "patches/Synth.patch"
 ok &= t[1]["name"] == "Loop" and [{k: v for k, v in c.items() if k != "file"} for c in t[1]["clips"]] == [
     {"beat": 32, "start": 0.1, "length": 0.5, "repeat": 2}, {"beat": 33.6667, "start": 0.1, "length": 0.25}]
