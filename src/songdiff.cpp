@@ -133,7 +133,7 @@ int lastBarOf(const Job &job) {
 
 const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "drum", "transpose", "articulations",
                             "velocityTo", "fallback", "warmup", "bendRange", "roll", "arp", "midiFx"};
-const char *kMixKeys[] = {"gain", "pan", "mute", "output", "sends", "stem", "harmony", "groove"};
+const char *kMixKeys[] = {"gain", "pan", "panLaw", "mute", "output", "sends", "stem", "harmony", "groove"};
 
 // a setting's change, naming the keys of an object that changed
 void compareKey(const json &a, const json &b, const std::string &key, std::vector<std::string> &lines) {

@@ -42,6 +42,7 @@ struct Track {
     std::vector<std::pair<std::string, double>> sends;          // bus name → dB (post-fader)
     GainCurve gainAutomation;                                    // fader dB over time plus rides (empty = none)
     Envelope panAutomation;                                      // pan -1..1 over time (empty = static pan)
+    bool balancePan = false;                                     // "panLaw": "balance": the near side stays, the far side falls as (1 - |pan|)^2
     std::vector<std::pair<int, Envelope>> ccAutomation;          // MIDI CC number → value 0..127 over time
     Envelope bendAutomation;                                     // pitch bend in semitones over time
     Envelope pressureAutomation;                                 // channel pressure 0..127 over time

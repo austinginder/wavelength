@@ -2,6 +2,7 @@
 
 #include "apple_loops.hpp"
 #include "bplist.hpp"
+#include "harmony.hpp"
 #include "sampler.hpp"
 #include "xml.hpp"
 
@@ -586,7 +587,9 @@ struct Project {
         uint32_t envi = 0;                 // the track's object
         const Sequence *seq = nullptr;     // a MIDI region's sequence
         const AudioRegion *region = nullptr;
-        int transpose = 0;                 // a MIDI region's Transpose (semitones)
+        int transpose = 0;                 // the region's Transpose (semitones)
+        int gainDb = 0;                    // an audio region's gain (GarageBand sets one per Apple Loop)
+        bool reverse = false;              // an audio region's Reverse Playback
         bool looped = false;               // its length repeats its sequence's pass (main record +13 bit 0x10)
     };
     // The regions placed in a sequence: 0x20 MIDI (or folder) placements, 0x24 audio. Extension 1: +0 the track's
@@ -616,6 +619,10 @@ struct Project {
                         if (it != regions.end()) p.region = &it->second;
                         break;
                     }
+                // an audio region's parameters (extension 0x8a): +0 bit 0x20 Reverse Playback, +4 its gain in dB, +5
+                // Transpose (signed); a bounce of Apple Loops at -14, -11 and -9 dB and one at +12 checked each
+                for (auto &x : e.ext)
+                    if (x.u8(7) == 0x8a) { p.reverse = (x.u8(0) & 0x20) != 0; p.gainDb = (int8_t)x.u8(4); p.transpose = (int8_t)x.u8(5); break; }
             }
             out.push_back(p);
         }
@@ -681,22 +688,33 @@ struct Project {
         }
     }
 
-    // events in each track's automation sequence (the class 0x17 "Automation" sequence places one per track), by
-    // track object, in the order first seen
-    std::vector<std::pair<uint32_t, int>> automation() const {
-        std::vector<std::pair<uint32_t, int>> out;
-        const Sequence *autoSeq = nullptr;
+    // A channel's automation: the class 0x17 "Track Automation Root Folder" sequence ("Automation" in older saves)
+    // places one "*Automation" sequence per track object. Its events are controller records (0xb0): +4 the song tick,
+    // +8 the value in 8.24, +12 the controller (7 volume on the fader's scale, 90 = 0 dB; 10 pan, 0-128 with 64 in the
+    // middle), +15 0x40 on the steps GarageBand stores between the points (the curve runs straight between points on
+    // those scales: checked against a bounce). Other records (plug-in parameters) are counted.
+    struct Curves { std::vector<std::pair<int64_t, double>> volume, pan; int other = 0; };
+    std::map<uint32_t, Curves> automation() const {
+        std::map<uint32_t, Curves> out;
+        const Sequence *root = nullptr;
         for (auto &s : seqs)
-            if (s.cls == 0x17 && s.name == "Automation") { autoSeq = &s; break; }
-        if (!autoSeq) return out;
-        for (auto &p : placements(*autoSeq, kRegionBias)) {
+            if (s.cls == 0x17 && (s.name == "Track Automation Root Folder" || s.name == "Automation")) { root = &s; break; }
+        if (!root) return out;
+        for (auto &p : placements(*root, kRegionBias)) {
             if (!p.seq) continue;
-            int n = 0;
-            for (auto &e : p.seq->events()) n += e.type() != 0xf1;
-            if (!n) continue;
-            auto it = std::find_if(out.begin(), out.end(), [&](auto &x) { return x.first == p.envi; });
-            if (it == out.end()) out.push_back({p.envi, n}); else it->second += n;
+            for (auto &e : p.seq->events()) {
+                if (e.type() == 0xf1) continue;
+                Curves &c = out[p.envi];
+                if (e.type() != 0xb0) { ++c.other; continue; }
+                if (e.rec.u8(15) == 0x40) continue;
+                const double v = e.rec.u32(8) / 16777216.0;
+                if (e.rec.u8(12) == 7) c.volume.push_back({(int64_t)e.pos(), v});
+                else if (e.rec.u8(12) == 10) c.pan.push_back({(int64_t)e.pos(), v});
+                else ++c.other;
+            }
         }
+        for (auto it = out.begin(); it != out.end();)
+            it = it->second.volume.empty() && it->second.pan.empty() && !it->second.other ? out.erase(it) : std::next(it);
         return out;
     }
 };
@@ -735,6 +753,8 @@ struct Converter {
     std::vector<json> buses;                 // in the order first sent to
     std::map<uint32_t, size_t> busOf;        // channel number -> its bus
     int64_t barTicks = 3840, bar1 = 38400, bias = kRegionBias;
+    std::map<uint32_t, Project::Curves> curves;   // each channel's automation, taken as its track converts
+    int songTonic = -1;                      // the project key's tonic (0-11), for Apple Loops
 
     Converter(const Project &p, const std::string &out) : P(p), outDir(out), patchDir(fs::u8path(out) / "patches") {
         const auto sigs = P.signatures();
@@ -940,6 +960,20 @@ struct Converter {
                 file = "media/" + af.name;
             }
             json clip = {{"file", file}, {"beat", r4(beat(p.start))}};
+            // an Apple Loop plays in the project key: GarageBand moves it tonic to tonic the nearest way (a tritone goes
+            // down) whatever either one's mode (a D minor loop in C major plays in C minor), and the region's Transpose
+            // adds to that (a bounce checked G +5, D minor -2, F# -6 and +12 on top)
+            const AppleLoop *loop = appleLoopAt(src.u8string());
+            int shift = p.transpose;
+            if (loop && songTonic >= 0 && !loop->key.empty()) {
+                int from = -1;
+                bool m = false;
+                std::string kerr;
+                if (parseKeyName(loop->key, from, m, kerr)) { int d = ((songTonic - from) % 12 + 12) % 12; if (d > 5) d -= 12; shift += d; }
+            }
+            if (shift) clip["pitch"] = shift;
+            if (p.gainDb) clip["gain"] = p.gainDb;
+            if (p.reverse) clip["reverse"] = true;
             const double rate = af.rate ? af.rate : 44100;
             const double secs = (p.region->frames ? p.region->frames : af.frames) / rate;
             if (p.region->start) clip["start"] = r4((double)p.region->start / rate);
@@ -947,7 +981,6 @@ struct Converter {
             // a looped region repeats its pass over the placement's length, the last pass cut where the loop ends.
             // A pass lasts its seconds at the file's own tempo (an Apple Loop follows the song's) or at the song's
             if (p.looped && p.length > 0 && secs > 0) {
-                const AppleLoop *loop = appleLoopAt(src.u8string());
                 const double bpm = loop && loop->bpm > 0 ? loop->bpm : tempoAt(p.start);
                 const double pass = secs * bpm / 60, total = (double)p.length / kTicksPerBeat;
                 const int full = (int)std::floor(total / pass + 1e-6);
@@ -966,7 +999,7 @@ struct Converter {
             out.push_back(clip);
         }
         if (!out.empty())
-            warn.push_back(name + ": audio region fades and gain are not decoded yet");
+            warn.push_back(name + ": audio region fades are not decoded yet");
         return out;
     }
 
@@ -1057,6 +1090,26 @@ struct Converter {
         if (ch.mute) job["mute"] = true;
         if (ch.solo) job["solo"] = true;   // resolved over all the tracks below
         if (std::fabs(ch.panUnit()) > 0.001) job["pan"] = r3(ch.panUnit());
+        if (auto it = t.envi ? curves.find(t.envi->oid) : curves.end(); it != curves.end()) {
+            const Project::Curves &c = it->second;
+            if (!c.volume.empty()) {   // the fader follows the curve: it replaces the fader's own level
+                json pts = json::array();
+                pts.push_back({r4(std::max(0.0, beat(c.volume[0].first))), r3(faderDb(c.volume[0].second))});
+                for (size_t k = 1; k < c.volume.size(); ++k)
+                    faderPoints(pts, beat(c.volume[k - 1].first), c.volume[k - 1].second, beat(c.volume[k].first), c.volume[k].second, 0);
+                job["automation"]["gain"] = pts;
+                job.erase("gain");
+            }
+            if (!c.pan.empty()) {
+                json pts = json::array();
+                for (auto &[tick, v] : c.pan) pts.push_back({r4(std::max(0.0, beat(tick))), r3(std::clamp((v - 64.0) / 64.0, -1.0, 1.0))});
+                job["automation"]["pan"] = pts;
+            }
+            if (c.other) warn.push_back(name + ": " + std::to_string(c.other) + " automation points of plug-in parameters not converted");
+            curves.erase(it);
+        }
+        // GarageBand pans a stereo track as a balance: the near side stays, the far side falls as (1 - |pan|)^2
+        if (job.contains("pan") || (job.contains("automation") && job["automation"].contains("pan"))) job["panLaw"] = "balance";
         json sends = json::object();
         for (auto &s : ch.sends()) {
             if (s.level <= 0.001) continue;
@@ -1117,10 +1170,28 @@ struct Converter {
         return m;
     }
 
+    // A volume curve's points in dB from (b0, v0) to (b1, v1) on the fader's scale: the fader moves straight on its own
+    // scale, so points go in between until a straight line in dB stays within 0.1 dB of it
+    static void faderPoints(json &pts, double b0, double v0, double b1, double v1, int depth) {
+        const double vm = (v0 + v1) / 2, bm = (b0 + b1) / 2;
+        if (depth < 8 && std::fabs(faderDb(vm) - (faderDb(v0) + faderDb(v1)) / 2) > 0.1) {
+            faderPoints(pts, b0, v0, bm, vm, depth + 1);
+            faderPoints(pts, bm, vm, b1, v1, depth + 1);
+            return;
+        }
+        pts.push_back({r4(b1), r3(faderDb(v1))});
+    }
+
     json convert() {
         std::error_code ec;
         fs::create_directories(patchDir, ec);
         json job = json::object();
+        curves = P.automation();
+        {
+            bool minor = false;
+            std::string kerr;
+            if (P.key().empty() || !parseKeyName(P.key(), songTonic, minor, kerr)) songTonic = -1;
+        }
         auto tempos = P.tempos();
         std::sort(tempos.begin(), tempos.end());
         {   // a tempo event that repeats the tempo before it changes nothing (new projects store 120 twice at bar 1)
@@ -1169,11 +1240,12 @@ struct Converter {
         if (!buses.empty()) job["buses"] = buses;
         const json m = master();
         if (!m.empty()) job["master"] = m;
-        for (auto &[oid, n] : P.automation()) {
+        for (auto &[oid, c] : curves) {   // automation of channels that didn't become tracks (the master's, a bus's)
             const Envi *e = P.envi(oid);
             char b[32];
             std::snprintf(b, sizeof b, "object %x", oid);
-            warn.push_back((e ? e->name : std::string(b)) + ": " + std::to_string(n) + " automation events not converted");
+            const size_t n = c.volume.size() + c.pan.size() + (size_t)c.other;
+            warn.push_back((e ? e->name : std::string(b)) + ": " + std::to_string(n) + " automation points not converted");
         }
         int64_t c0 = 0, c1 = 0;
         const bool cyc = P.cycle(c0, c1);

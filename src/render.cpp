@@ -718,8 +718,16 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         }
 
         if (!track.mute) {
-            double angle = (track.pan + 1.0) * dsp::kPi / 4.0;
-            double pl = std::cos(angle) * M_SQRT2, pr = std::sin(angle) * M_SQRT2;
+            // constant power (+3 dB at the near side when hard over), or a balance: the near side stays and the far
+            // side falls as (1 - |pan|)^2, GarageBand's and Logic's pan on a stereo track (measured on a bounce)
+            auto panGains = [&](double pan, double &l, double &r) {
+                pan = std::clamp(pan, -1.0, 1.0);
+                if (track.balancePan) { l = pan > 0 ? (1 - pan) * (1 - pan) : 1.0; r = pan < 0 ? (1 + pan) * (1 + pan) : 1.0; return; }
+                const double angle = (pan + 1.0) * dsp::kPi / 4.0;
+                l = std::cos(angle) * M_SQRT2; r = std::sin(angle) * M_SQRT2;
+            };
+            double pl, pr;
+            panGains(track.pan, pl, pr);
             const bool panAuto = !track.panAutomation.empty();
             const bool automated = !track.gainAutomation.empty();
             struct Send { Audio *bus; double amt; const Envelope *env; };
@@ -755,10 +763,7 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
             for (size_t f = 0; f < frames; ++f) {
                 if (automated && f % 32 == 0) g = dsp::dbToLin(track.gainDb + track.gainAutomation.at(f / sr));
                 if (f % 32 == 0) for (auto &s : sends) if (s.env) s.amt = dsp::dbToLin(s.env->at(f / sr));
-                if (panAuto && f % 32 == 0) {
-                    angle = (std::clamp(track.panAutomation.at(f / sr), -1.0, 1.0) + 1.0) * dsp::kPi / 4.0;
-                    pl = std::cos(angle) * M_SQRT2; pr = std::sin(angle) * M_SQRT2;
-                }
+                if (panAuto && f % 32 == 0) panGains(track.panAutomation.at(f / sr), pl, pr);
                 const float l = (float)(audio.left[f] * g * pl), r = (float)(audio.right[f] * g * pr);
                 dest->left[f] += l; dest->right[f] += r;
                 postPeak = std::max({postPeak, std::fabs(l), std::fabs(r)});

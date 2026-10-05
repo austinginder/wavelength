@@ -11,7 +11,10 @@ and a C5 past the trim (cut); at bar 5, a one-beat region holding E4 (half a bea
 region with its first half beat trimmed off (an A3 there is hidden), Transpose +2 and Time Quantize 1/16, holding a B3
 730 ticks in (stored as 600 + a 130-tick offset), which plays C#4 a quarter beat in. An audio track "Loop": at bar 9, a
 region of Media/Audio Files/Test Loop.wav (a 1 s, 48 kHz sine) from 0.1 s for 0.5 s, looped over two and a half
-passes. Cycle bars 1-2.
+passes; at bar 11, an Apple Loop tagged G major (Media/Audio Files/Test Apple Loop.caf) with Transpose +2, gain -6 dB
+and Reverse Playback (in D minor it moves G -> D, -5, so it plays -3). Its automation: volume 0 dB at bar 1 to -12.04 dB
+at bar 3 (a step GarageBand stores between them is a decoy), pan from the middle at bar 1 to hard left at bar 5.
+Cycle bars 1-2.
 Usage: make-test-band.py <dir>"""
 import math, os, plistlib, struct, sys
 
@@ -133,7 +136,8 @@ def send(index, code, level, target):
 
 
 INST, BUS, AUD = 0x29, 0x4d, 0x31                 # channel numbers
-LOOP, FILE = 0x10c, 0x200                         # the audio track's object, its file's id
+LOOP, FILE, FILE2 = 0x10c, 0x200, 0x204           # the audio track's object, its files' ids
+AUTOROOT, AUTOLOOP = 0x300, 0x304                 # the automation root folder and the Loop track's automation
 TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4 = 0x100, 0x104, 0x108, 8, 12, 16, 20
 bus_uuid = bytes([0xd5]) + bytes(range(1, 16))
 retro = [1e30] * 902                               # parameter #n; unused ones hold 1e30
@@ -155,14 +159,19 @@ placement = lambda pos, length, region, looped=False, transpose=0: event(
     0x20, pos, bytes([0, 0, 0, 0, 0, 0x16 if looped else 0x04, 0, 0]),
     ext=[ext(struct.pack('<I', TRACK), length), ext(struct.pack('<I', region), mark=0x88), ext(bytes([0, 6, 0, 0, 0, transpose & 0xff]), mark=0x8a)])
 # an audio region's placement (0x24): looped; extension 1: the track and the whole span (2000 ticks = 2.5 passes of the
-# region's 0.5 s at 100 BPM), 0xbc: +8 the region's index, +12 its file
-audio_placement = lambda pos, length, track, file: event(
-    0x24, pos, bytes([0, 0, 0, 0, 0, 0x16, 0, 0]),
-    ext=[ext(struct.pack('<I', track), length), ext(struct.pack('<III', 0, 0, 0), u12=file, mark=0xbc)])
+# region's 0.5 s at 100 BPM), 0xbc: +8 the region's index, +12 its file, 0x8a: its parameters (+0 bit 0x20 Reverse
+# Playback, +4 gain dB, +5 Transpose)
+audio_placement = lambda pos, length, track, file, looped=True, params=None: event(
+    0x24, pos, bytes([0, 0, 0, 0, 0, 0x16 if looped else 0x04, 0, 0]),
+    ext=[ext(struct.pack('<I', track), length), ext(struct.pack('<III', 0, 0, 0), u12=file, mark=0xbc)] + ([ext(params, mark=0x8a)] if params else []))
+# an automation point: a controller record, +8 the value in 8.24, +12 the controller (7 volume, 10 pan), +15 0x40 on a
+# step GarageBand stores between points
+auto_point = lambda pos, cc, value, step=False: event(0xb0, pos, struct.pack('<I', int(value * (1 << 24))) + bytes([cc, 0, 0, 0x40 if step else 1]))
 body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), placement(BAR1 + 3840, 3840, REGION2),
                                          placement(BAR1 + 3 * 3840, 3 * 960, REGION3, looped=True),
                                          placement(BAR1 + 5 * 3840, END, REGION4, transpose=2),
-                                         audio_placement(BAR1 + 7 * 3840, 2000, LOOP, FILE)),
+                                         audio_placement(BAR1 + 7 * 3840, 2000, LOOP, FILE),
+                                         audio_placement(BAR1 + 9 * 3840, END, LOOP, FILE2, looped=False, params=bytes([0x20, 6, 0, 0, (-6) & 0xff, 2]))),
             trak(0, 1, TRACK) + trak(1, 1, LOOP) + trak(2, 3, MASTER))
 body += seq(0x17, REGION1, 'Synth', events(note(BAR1, 60, 100, 1920), note(BAR1 + 1920, 64, 80, 960), note(BAR1 + 2880, 67, 0, 960, hires=16385)))
 body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0, BAR1 + 480, bytes([0, 0, 0, 64, 1, 0, 0, 0])),
@@ -200,6 +209,33 @@ struct.pack_into('<H', rg, 0x4a, 10)
 rg[0x4c:0x56] = b'Loop Clip1'
 body += envi(LOOP, 'Loop', AUD)
 body += chunk('AuFl', 0x05, FILE, bytes(fl)) + chunk('AuRg', 0x05, FILE, bytes(rg), ref=0)
+# the Apple Loop: a CAF of 4 beats at 120 BPM (a 2 s, 48 kHz sine), tagged G major the way GarageBand tags its loops
+n2 = 2 * rate
+pcm2 = struct.pack('>%dh' % n2, *[int(12000 * math.sin(2 * math.pi * 392 * i / rate)) for i in range(n2)])
+cafchunk = lambda kind, body: kind + struct.pack('>q', len(body)) + body
+tags = [('category', 'Keyboards'), ('key signature', 'G'), ('key type', 'major'), ('time signature', '4/4'), ('beat count', '4')]
+uuid = bytes.fromhex('29819273B5BF4AEFB78D62D1EF90BB2C') + struct.pack('>I', len(tags)) + b''.join(k.encode() + b'\0' + v.encode() + b'\0' for k, v in tags)
+fname2 = 'Test Apple Loop.caf'
+with open(os.path.join(media, fname2), 'wb') as f:
+    f.write(b'caff' + struct.pack('>HH', 1, 0) + cafchunk(b'desc', struct.pack('>d4sIIIII', rate, b'lpcm', 0, 2, 1, 1, 16)) +
+            cafchunk(b'uuid', uuid) + cafchunk(b'data', struct.pack('>I', 0) + pcm2))
+fl2 = bytearray(10 + 2 * len(fname2) + 0x1f0)
+struct.pack_into('<H', fl2, 8, len(fname2))
+fl2[10:10 + 2 * len(fname2)] = fname2.encode('utf-16le')
+b2 = 10 + 2 * len(fname2)
+fl2[b2 + 0x8a:b2 + 0x8a + 11] = b'Audio Files'
+struct.pack_into('<I', fl2, b2 + 0x1d4, n2)
+struct.pack_into('<H', fl2, b2 + 0x1dc, rate)
+fl2[b2 + 0x1e0], fl2[b2 + 0x1e2] = 1, 16
+rg2 = bytearray(0x4c + 10 + 16)
+struct.pack_into('<I', rg2, 0x16, n2)
+struct.pack_into('<H', rg2, 0x4a, 10)
+rg2[0x4c:0x56] = b'Apple Loop'
+body += chunk('AuFl', 0x05, FILE2, bytes(fl2)) + chunk('AuRg', 0x05, FILE2, bytes(rg2), ref=0)
+# automation: the root folder places one "*Automation" sequence per track (extension 1: the track object, 2: the sequence)
+body += seq(0x17, AUTOROOT, 'Track Automation Root Folder', events(event(0x20, BAR1 - 3840, ext=[ext(struct.pack('<I', LOOP), END), ext(struct.pack('<I', AUTOLOOP), mark=0x88)])))
+body += seq(0x17, AUTOLOOP, '*Automation', events(auto_point(BAR1, 7, 90), auto_point(BAR1 + 3840, 7, 70, step=True), auto_point(BAR1 + 2 * 3840, 7, 45),
+                                                   auto_point(BAR1, 10, 64), auto_point(BAR1 + 4 * 3840, 10, 0)))
 body += channel(AUD, 0x40, 0, ' Audio 1', 90, 64, bytes([0xd5, 9]) + bytes(14))
 with open(os.path.join(alt, 'ProjectData'), 'wb') as f:
     f.write(b'#G\xc0\xab' + struct.pack('<HHIII', 0x09d0, 3, 4, 0x00080001, len(body)) + struct.pack('<I', 0) + body)

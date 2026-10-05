@@ -48,7 +48,7 @@ const json &engineStamp() {
 json soundOf(const json &track) {
     json t = track;
     if (!t.is_object()) return t;
-    for (const char *k : {"gain", "pan", "mute", "solo", "sends", "output", "stem", "harmony", "range"}) t.erase(k);
+    for (const char *k : {"gain", "pan", "panLaw", "mute", "solo", "sends", "output", "stem", "harmony", "range"}) t.erase(k);
     if (t.contains("automation") && t["automation"].is_object())
         for (const char *k : {"gain", "rides", "pan", "sends"}) t["automation"].erase(k);
     return t;

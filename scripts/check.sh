@@ -425,8 +425,9 @@ unset WAVELENGTH_LOGIC_PATCHES
 if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created (Alchemy too, with its arpeggiator and on additive synthesis; Vintage Electric Piano, Vintage Clav and Sculpture), --patch"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
-# imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle;
-# rendered from the .band, the track plays its own channel strip (transposed +12: the first note, C4, sounds C5)
+# imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,
+# an Apple Loop moved into the song's key with its region's Transpose, gain and Reverse, and the audio track's volume and
+# pan automation; rendered from the .band, the track plays its own channel strip (transposed +12: C4 sounds C5)
 rm -rf out/check/band && mkdir -p out/check/band
 python3 scripts/make-test-band.py out/check/band
 band_why=""
@@ -439,7 +440,10 @@ t = j["tracks"]
 ok = j["tempo"] == [{"beat": 0, "bpm": 100}, {"beat": 48, "bpm": 90}] and j["timeSignature"] == [4, 4] and j["keys"] == [{"bar": 1, "key": "D minor"}] and j["sampleRate"] == 48000
 ok &= len(t) == 2 and t[0]["name"] == "Synth" and t[0]["plugin"] == "builtin:synth" and t[0]["preset"] == "patches/Synth.patch"
 ok &= t[1]["name"] == "Loop" and [{k: v for k, v in c.items() if k != "file"} for c in t[1]["clips"]] == [
-    {"beat": 32, "start": 0.1, "length": 0.5, "repeat": 2}, {"beat": 33.6667, "start": 0.1, "length": 0.25}]
+    {"beat": 32, "start": 0.1, "length": 0.5, "repeat": 2}, {"beat": 33.6667, "start": 0.1, "length": 0.25}, {"beat": 40, "pitch": -3, "gain": -6, "reverse": True}]
+g = t[1]["automation"]["gain"]
+ok &= "gain" not in t[1] and g[0] == [0, 0] and [4, -4.998] in g and g[-1] == [8, -12.041] and t[1]["automation"]["pan"] == [[0, 0], [16, -1]]
+ok &= t[0]["panLaw"] == "balance" and t[1]["panLaw"] == "balance"
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
 ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69), (16, 0.5, 64), (17, 0.5, 64),
                                                                  (18, 0.5, 64), (24.25, 0.5, 61)] and t[0]["notes"][2]["vel"] == 0.5
@@ -453,7 +457,44 @@ else
   got=$("./$build/wavelength" analyze out/check/band/render/stems/01-synth.wav --start 0.05 --end 1.1 --song-time --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
   [ "$got" = "C5" ] || band_why="its first note played $got, not C5"
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize; an audio region's trim and loop) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume and pan automation) and renders its track's own channel strip"; fi
+
+# panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
+# the default constant-power law takes it 7.66 dB down
+rm -rf out/check/panlaw && mkdir -p out/check/panlaw
+cat > out/check/panlaw/job.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "tail": 0, "stems": "none", "master": {"gain": 0}, "tracks": [
+ {"name": "Balance", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}}, "pan": -0.5, "panLaw": "balance",
+  "notes": [{"beat": 0, "dur": 2, "key": 69}]},
+ {"name": "Power", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}}, "pan": -0.5, "mute": true,
+  "notes": [{"beat": 0, "dur": 2, "key": 69}]}]}
+JOB
+panlaw_why=""
+for law in balance power; do
+  python3 - "$law" <<'PY'
+import json, sys
+j = json.load(open('out/check/panlaw/job.json'))
+for t in j['tracks']: t['mute'] = not t['name'].lower().startswith(sys.argv[1])
+json.dump(j, open('out/check/panlaw/%s.json' % sys.argv[1], 'w'))
+PY
+  "./$build/wavelength" render "out/check/panlaw/$law.json" --out "out/check/panlaw/$law" --json > /dev/null 2>&1 || panlaw_why="the $law render failed"
+done
+if [ -z "$panlaw_why" ] && ! python3 - <<'PY'
+import math, struct, sys
+def lr(p):
+    b = open(p, 'rb').read(); i = 12; fmt = data = None
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack('<I', b[i + 4:i + 8])[0]
+        if cid == b'fmt ': fmt = struct.unpack('<HHIIHH', b[i + 8:i + 24])
+        if cid == b'data': data = b[i + 8:i + 8 + n]
+        i += 8 + n + (n & 1)
+    v = struct.unpack('<%df' % (len(data) // 4), data) if fmt[0] == 3 else [x / 32767 for x in struct.unpack('<%dh' % (len(data) // 2), data)]
+    return [20 * math.log10(math.sqrt(sum(x * x for x in v[c::2]) / len(v[c::2]))) for c in (0, 1)]
+b, p = lr('out/check/panlaw/balance/mix.wav'), lr('out/check/panlaw/power/mix.wav')
+sys.exit(0 if abs((b[0] - b[1]) - 12.04) < 0.05 and abs((p[0] - p[1]) - 7.66) < 0.05 and abs(b[0] - (p[0] - 2.32)) < 0.1 else 1)
+PY
+then panlaw_why="half left didn't take the right 12.04 dB down (balance) and 7.66 dB (constant power)"; fi
+if [ -n "$panlaw_why" ]; then echo "FAIL pan law: $panlaw_why"; fail=1; else echo "ok   pan law: balance (GarageBand's) and constant power"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir
