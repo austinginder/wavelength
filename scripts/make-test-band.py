@@ -9,9 +9,11 @@ Retro Synth-like record (Analog mode, one saw, filter off, transposed +12: a C4 
 E4 and G4 (a high-resolution velocity of 16385 = 0.5) for a beat each; at bar 3, trimmed to one bar, A4 for a beat, a CC1
 and a C5 past the trim (cut); at bar 5, a one-beat region holding E4 (half a beat) looped over three beats; at bar 7, a
 region with its first half beat trimmed off (an A3 there is hidden), Transpose +2 and Time Quantize 1/16, holding a B3
-730 ticks in (stored as 600 + a 130-tick offset), which plays C#4 a quarter beat in. Cycle bars 1-2.
+730 ticks in (stored as 600 + a 130-tick offset), which plays C#4 a quarter beat in. An audio track "Loop": at bar 9, a
+region of Media/Audio Files/Test Loop.wav (a 1 s, 48 kHz sine) from 0.1 s for 0.5 s, looped over two and a half
+passes. Cycle bars 1-2.
 Usage: make-test-band.py <dir>"""
-import os, plistlib, struct, sys
+import math, os, plistlib, struct, sys
 
 out = os.path.join(sys.argv[1], 'Test Song.band')
 alt = os.path.join(out, 'Alternatives', '000')
@@ -130,7 +132,8 @@ def send(index, code, level, target):
     return bytes(pl)
 
 
-INST, BUS = 0x29, 0x4d                            # channel numbers
+INST, BUS, AUD = 0x29, 0x4d, 0x31                 # channel numbers
+LOOP, FILE = 0x10c, 0x200                         # the audio track's object, its file's id
 TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4 = 0x100, 0x104, 0x108, 8, 12, 16, 20
 bus_uuid = bytes([0xd5]) + bytes(range(1, 16))
 retro = [1e30] * 902                               # parameter #n; unused ones hold 1e30
@@ -150,10 +153,16 @@ trak = lambda row, kind, obj: chunk('Trak', 0x17, 4, struct.pack('<HHHHI', kind,
 placement = lambda pos, length, region, looped=False, transpose=0: event(
     0x20, pos, bytes([0, 0, 0, 0, 0, 0x16 if looped else 0x04, 0, 0]),
     ext=[ext(struct.pack('<I', TRACK), length), ext(struct.pack('<I', region), mark=0x88), ext(bytes([0, 6, 0, 0, 0, transpose & 0xff]), mark=0x8a)])
+# an audio region's placement (0x24): looped; extension 1: the track and the whole span (2000 ticks = 2.5 passes of the
+# region's 0.5 s at 100 BPM), 0xbc: +8 the region's index, +12 its file
+audio_placement = lambda pos, length, track, file: event(
+    0x24, pos, bytes([0, 0, 0, 0, 0, 0x16, 0, 0]),
+    ext=[ext(struct.pack('<I', track), length), ext(struct.pack('<III', 0, 0, 0), u12=file, mark=0xbc)])
 body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), placement(BAR1 + 3840, 3840, REGION2),
                                          placement(BAR1 + 3 * 3840, 3 * 960, REGION3, looped=True),
-                                         placement(BAR1 + 5 * 3840, END, REGION4, transpose=2)),
-            trak(0, 1, TRACK) + trak(1, 3, MASTER))
+                                         placement(BAR1 + 5 * 3840, END, REGION4, transpose=2),
+                                         audio_placement(BAR1 + 7 * 3840, 2000, LOOP, FILE)),
+            trak(0, 1, TRACK) + trak(1, 1, LOOP) + trak(2, 3, MASTER))
 body += seq(0x17, REGION1, 'Synth', events(note(BAR1, 60, 100, 1920), note(BAR1 + 1920, 64, 80, 960), note(BAR1 + 2880, 67, 0, 960, hires=16385)))
 body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0, BAR1 + 480, bytes([0, 0, 0, 64, 1, 0, 0, 0])),
                                              note(BAR1 + 3840, 72, 90, 960)))
@@ -165,5 +174,31 @@ body += record(INST, 0, send(0, 0, 45, bus_uuid))
 body += record(INST, 1, plugin(0, 'Retro Synth', 0x08000000, 279, retro))
 body += channel(BUS, 0x45, 0, ' Bus 1', 90, 64, bus_uuid)
 body += record(BUS, 0, plugin(1, 'Echo', 0, 0, echo))
+# the audio track: its file in Media/Audio Files, the file's record (AuFl: UTF-16 name, then at fixed distances from
+# its end the folder, frames, rate, channels, bits) and the region's (AuRg: +6 start and +0x16 length in frames, its name)
+media = os.path.join(out, 'Media', 'Audio Files')
+os.makedirs(media, exist_ok=True)
+rate, frames = 48000, 48000
+pcm = struct.pack('<%dh' % frames, *[int(12000 * math.sin(2 * math.pi * 220 * i / rate)) for i in range(frames)])
+with open(os.path.join(media, 'Test Loop.wav'), 'wb') as f:
+    f.write(b'RIFF' + struct.pack('<I', 36 + len(pcm)) + b'WAVE' + b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, rate, rate * 2, 2, 16) +
+            b'data' + struct.pack('<I', len(pcm)) + pcm)
+fname = 'Test Loop.wav'
+fl = bytearray(10 + 2 * len(fname) + 0x1f0)
+struct.pack_into('<H', fl, 8, len(fname))
+fl[10:10 + 2 * len(fname)] = fname.encode('utf-16le')
+b = 10 + 2 * len(fname)
+fl[b + 0x8a:b + 0x8a + 11] = b'Audio Files'
+struct.pack_into('<I', fl, b + 0x1d4, frames)
+struct.pack_into('<H', fl, b + 0x1dc, rate)
+fl[b + 0x1e0], fl[b + 0x1e2] = 1, 16
+rg = bytearray(0x4c + 10 + 16)
+struct.pack_into('<I', rg, 6, 4800)
+struct.pack_into('<I', rg, 0x16, 24000)
+struct.pack_into('<H', rg, 0x4a, 10)
+rg[0x4c:0x56] = b'Loop Clip1'
+body += envi(LOOP, 'Loop', AUD)
+body += chunk('AuFl', 0x05, FILE, bytes(fl)) + chunk('AuRg', 0x05, FILE, bytes(rg), ref=0)
+body += channel(AUD, 0x40, 0, ' Audio 1', 90, 64, bytes([0xd5, 9]) + bytes(14))
 with open(os.path.join(alt, 'ProjectData'), 'wb') as f:
     f.write(b'#G\xc0\xab' + struct.pack('<HHIII', 0x09d0, 3, 4, 0x00080001, len(body)) + struct.pack('<I', 0) + body)

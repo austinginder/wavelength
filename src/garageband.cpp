@@ -1,5 +1,6 @@
 #include "garageband.hpp"
 
+#include "apple_loops.hpp"
 #include "bplist.hpp"
 #include "sampler.hpp"
 #include "xml.hpp"
@@ -335,7 +336,9 @@ AudioRegion audioRegionOf(const Chunk &c) {
     AudioRegion r;
     const View &pl = c.pl;
     r.file = c.oid;
-    if (pl.n > 0x16) r.start = pl.u64(0x0e);
+    // +6 where it starts in its file and +0x16 its length, in the file's frames (a region trimmed by a beat of an
+    // 80 BPM loop: 33075 frames at 44.1 kHz in, 496125 long)
+    if (pl.n > 0x0a) r.start = pl.u32(6);
     if (pl.n > 0x1a) r.frames = pl.u32(0x16);
     const size_t n = pl.n > 0x4c ? pl.u16(0x4a) : 0;
     if (pl.n > 0x4c) r.name = text(pl.p + 0x4c, std::min(n, pl.n - 0x4c));
@@ -754,6 +757,13 @@ struct Converter {
     }
 
     double beat(int64_t tick) const { return (double)(tick - bar1) / kTicksPerBeat; }
+    double tempoAt(int64_t tick) const {   // the song's tempo at a tick (the last tempo event at or before it)
+        auto t = P.tempos();
+        std::sort(t.begin(), t.end());
+        double bpm = t.empty() ? 120.0 : t.front().second;
+        for (auto &[at, b] : t) if (at <= tick) bpm = b;
+        return bpm;
+    }
 
     // A patch folder holding a channel strip as GarageBand stores it: the channel's object as the header, then every
     // record of it. Returns its path relative to the job.
@@ -931,12 +941,32 @@ struct Converter {
             }
             json clip = {{"file", file}, {"beat", r4(beat(p.start))}};
             const double rate = af.rate ? af.rate : 44100;
+            const double secs = (p.region->frames ? p.region->frames : af.frames) / rate;
             if (p.region->start) clip["start"] = r4((double)p.region->start / rate);
-            if (p.region->frames && af.frames && p.region->frames < af.frames) clip["length"] = r4(p.region->frames / rate);
+            if (p.region->frames && af.frames && (p.region->start || p.region->frames < af.frames)) clip["length"] = r4(p.region->frames / rate);
+            // a looped region repeats its pass over the placement's length, the last pass cut where the loop ends.
+            // A pass lasts its seconds at the file's own tempo (an Apple Loop follows the song's) or at the song's
+            if (p.looped && p.length > 0 && secs > 0) {
+                const AppleLoop *loop = appleLoopAt(src.u8string());
+                const double bpm = loop && loop->bpm > 0 ? loop->bpm : tempoAt(p.start);
+                const double pass = secs * bpm / 60, total = (double)p.length / kTicksPerBeat;
+                const int full = (int)std::floor(total / pass + 1e-6);
+                const double rest = total - full * pass;
+                if (full > 1) clip["repeat"] = full;
+                out.push_back(clip);
+                if (rest > 0.01 && full >= 1) {
+                    json tail = clip;
+                    tail.erase("repeat");
+                    tail["beat"] = r4(beat(p.start) + full * pass);
+                    tail["length"] = r4(secs * rest / pass);
+                    out.push_back(tail);
+                }
+                continue;
+            }
             out.push_back(clip);
         }
         if (!out.empty())
-            warn.push_back(name + ": audio regions placed from their file records; region trims, loops, fades and gain are not decoded yet");
+            warn.push_back(name + ": audio region fades and gain are not decoded yet");
         return out;
     }
 
