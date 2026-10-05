@@ -7,7 +7,9 @@ The song: one software instrument track "Synth" (fader 80 = -2.05 dB, pan 80 = 0
 Retro Synth-like record (Analog mode, one saw, filter off, transposed +12: a C4 sounds C5) and sends to a bus "Echo"
 (level 45 = -12.04 dB) that carries an Echo (1/8 note, 40 % repeat, wet only). Two MIDI regions: at bar 1, C4 for 2 beats,
 E4 and G4 (a high-resolution velocity of 16385 = 0.5) for a beat each; at bar 3, trimmed to one bar, A4 for a beat, a CC1
-and a C5 past the trim (cut). Cycle bars 1-2.
+and a C5 past the trim (cut); at bar 5, a one-beat region holding E4 (half a beat) looped over three beats; at bar 7, a
+region with its first half beat trimmed off (an A3 there is hidden), Transpose +2 and Time Quantize 1/16, holding a B3
+730 ticks in (stored as 600 + a 130-tick offset), which plays C#4 a quarter beat in. Cycle bars 1-2.
 Usage: make-test-band.py <dir>"""
 import os, plistlib, struct, sys
 
@@ -55,14 +57,25 @@ def seq(cls, oid, name, evs, traks=b''):
     return chunk('MSeq', cls, oid, bytes(0x10) + struct.pack('<H', len(name)) + name.encode()) + traks + chunk('EvSq', cls, oid, evs)
 
 
-def note(pos, key, vel, length, hires=0):
+def region(cls, oid, name, evs, trim=0, length=0, quantize=0):
+    # a region's sequence with its settings after the name (padded to an even length): +4 its left trim in ticks,
+    # +0x3c its length (one pass), +0x48 its Time Quantize (-6 = 1/16)
+    head = bytes(0x10) + struct.pack('<H', len(name)) + name.encode() + bytes(len(name) & 1)
+    settings = bytearray(0x60)
+    struct.pack_into('<I', settings, 4, trim)
+    struct.pack_into('<I', settings, 0x3c, length)
+    struct.pack_into('<h', settings, 0x48, quantize)
+    return chunk('MSeq', cls, oid, head + bytes(settings)) + chunk('EvSq', cls, oid, evs)
+
+
+def note(pos, key, vel, length, hires=0, offset=0):
     b8 = bytearray(8)
     if hires:
         struct.pack_into('<H', b8, 2, hires)   # +10..11: velocity / 32767
     else:
         b8[3] = vel                            # +11: velocity
     b8[4] = key                                # +12: the key
-    return event(0x90, pos, bytes(b8), [ext(u12=length)])
+    return event(0x90, pos, bytes(b8), [ext(struct.pack('<IH', 0, offset), u12=length)])   # length; +4 ticks past pos
 
 
 def envi(oid, name, channel):
@@ -118,7 +131,7 @@ def send(index, code, level, target):
 
 
 INST, BUS = 0x29, 0x4d                            # channel numbers
-TRACK, ECHO, MASTER, REGION1, REGION2 = 0x100, 0x104, 0x108, 8, 12
+TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4 = 0x100, 0x104, 0x108, 8, 12, 16, 20
 bus_uuid = bytes([0xd5]) + bytes(range(1, 16))
 retro = [1e30] * 902                               # parameter #n; unused ones hold 1e30
 for n, v in {1: 8, 2: 0, 3: 12, 4: 0, 5: -6, 201: 0, 209: 0, 301: 1, 303: 1, 401: 0, 802: 1, 803: 100, 804: 1, 805: 100, 806: 0}.items():
@@ -132,12 +145,21 @@ body += seq(1, 0, 'Signature', events(event(0x30, 0, bytes([0, 0, 0, 2, 4, 0, 0,
 body += seq(0x16, 0, 'Locators', events(event(0x10, BAR1 + 2 * 3840 - 1, ext=[ext(u12=BAR1)])))             # cycle bars 1-2
 body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', -1)
 trak = lambda row, kind, obj: chunk('Trak', 0x17, 4, struct.pack('<HHHHI', kind, 0, 0, 0, obj) + bytes(46), sub=row)
-placement = lambda pos, length, region: event(0x20, pos, ext=[ext(struct.pack('<I', TRACK), length), ext(struct.pack('<I', region), mark=0x88)])
-body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), placement(BAR1 + 3840, 3840, REGION2)),
+# a region's placement: main +13 bit 0x10 looped; extension 1: the track object and the length (a looped one's whole
+# span), 2: its sequence, 0x8a: its parameters (+5 Transpose)
+placement = lambda pos, length, region, looped=False, transpose=0: event(
+    0x20, pos, bytes([0, 0, 0, 0, 0, 0x16 if looped else 0x04, 0, 0]),
+    ext=[ext(struct.pack('<I', TRACK), length), ext(struct.pack('<I', region), mark=0x88), ext(bytes([0, 6, 0, 0, 0, transpose & 0xff]), mark=0x8a)])
+body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), placement(BAR1 + 3840, 3840, REGION2),
+                                         placement(BAR1 + 3 * 3840, 3 * 960, REGION3, looped=True),
+                                         placement(BAR1 + 5 * 3840, END, REGION4, transpose=2)),
             trak(0, 1, TRACK) + trak(1, 3, MASTER))
 body += seq(0x17, REGION1, 'Synth', events(note(BAR1, 60, 100, 1920), note(BAR1 + 1920, 64, 80, 960), note(BAR1 + 2880, 67, 0, 960, hires=16385)))
 body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0, BAR1 + 480, bytes([0, 0, 0, 64, 1, 0, 0, 0])),
                                              note(BAR1 + 3840, 72, 90, 960)))
+body += region(0x17, REGION3, 'Synth 3', events(note(BAR1, 64, 90, 480)), length=960)
+body += region(0x17, REGION4, 'Synth 4', events(note(BAR1, 57, 90, 480), note(BAR1 + 600, 59, 90, 480, offset=130)), trim=480, length=1920,
+               quantize=-6)
 body += channel(INST, 0x43, 0, ' Inst 1', 80, 80, bytes([0xd5]) + bytes(15))
 body += record(INST, 0, send(0, 0, 45, bus_uuid))
 body += record(INST, 1, plugin(0, 'Retro Synth', 0x08000000, 279, retro))

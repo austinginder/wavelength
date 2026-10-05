@@ -431,7 +431,8 @@ t = j["tracks"]
 ok = j["tempo"] == 100 and j["timeSignature"] == [4, 4] and j["keys"] == [{"bar": 1, "key": "D minor"}] and j["sampleRate"] == 48000
 ok &= len(t) == 1 and t[0]["name"] == "Synth" and t[0]["plugin"] == "builtin:synth" and t[0]["preset"] == "patches/Synth.patch"
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
-ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69)] and t[0]["notes"][2]["vel"] == 0.5
+ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69), (16, 0.5, 64), (17, 0.5, 64),
+                                                                 (18, 0.5, 64), (24.25, 0.5, 61)] and t[0]["notes"][2]["vel"] == 0.5
 ok &= j["buses"] == [{"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100}]}]
 ok &= j["import"]["cycle"] == [0, 8] and j["import"]["savedWith"] == "make-test-band.py"
 sys.exit(0 if ok else 1)'; then
@@ -442,7 +443,7 @@ else
   got=$("./$build/wavelength" analyze out/check/band/render/stems/01-synth.wav --start 0.05 --end 1.1 --song-time --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
   [ "$got" = "C5" ] || band_why="its first note played $got, not C5"
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize) and renders its track's own channel strip"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir

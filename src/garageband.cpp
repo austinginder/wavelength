@@ -277,6 +277,10 @@ struct Sequence {
     uint16_t cls = 0;
     uint32_t oid = 0;
     std::string name;
+    // a region's own settings, after its name (padded to an even length): +4 its left trim (the ticks of content
+    // hidden before its start), +0x3c its length (one pass, trims included), +0x48 its Time Quantize (-6 = 1/16)
+    int64_t trim = 0, passLen = 0;
+    int quantize = 0;
     std::vector<const Chunk *> traks;
     const Chunk *evsq = nullptr;
     std::vector<Event> events() const { return evsq ? eventsOf(evsq->pl) : std::vector<Event>{}; }
@@ -454,6 +458,13 @@ struct Project {
                 s.oid = c.oid;
                 const size_t n = c.pl.u16(0x10);
                 if (c.pl.n > 0x12) s.name = text(c.pl.p + 0x12, std::min(n, c.pl.n - 0x12));
+                const size_t e = 0x12 + n + (n & 1);
+                if (c.pl.n > e + 0x4a) {
+                    s.trim = c.pl.u32(e + 4);
+                    s.passLen = c.pl.u32(e + 0x3c);
+                    s.quantize = (int16_t)c.pl.u16(e + 0x48);
+                    if (s.trim >= kToEnd || s.passLen >= kToEnd) s.trim = s.passLen = 0;
+                }
                 auto it = seqAt.find({s.cls, s.oid});
                 if (it != seqAt.end()) seqs[it->second] = s;
                 else { seqAt[{s.cls, s.oid}] = seqs.size(); seqs.push_back(s); }
@@ -573,6 +584,7 @@ struct Project {
         const Sequence *seq = nullptr;     // a MIDI region's sequence
         const AudioRegion *region = nullptr;
         int transpose = 0;                 // a MIDI region's Transpose (semitones)
+        bool looped = false;               // its length repeats its sequence's pass (main record +13 bit 0x10)
     };
     // The regions placed in a sequence: 0x20 MIDI (or folder) placements, 0x24 audio. Extension 1: +0 the track's
     // object, +12 the length; a MIDI region's extension 2: +0 its sequence (class 0x17); an audio region's 0xbc
@@ -586,6 +598,7 @@ struct Project {
             const uint32_t len = e.ext[0].u32(12);
             p.length = len == kToEnd ? 0 : len;
             p.start = (int64_t)e.pos() + bias;
+            p.looped = (e.rec.u8(13) & 0x10) != 0;
             if (e.type() == 0x20) {
                 p.seq = e.ext.size() > 1 ? seq(0x17, e.ext[1].u32(0)) : nullptr;
                 // the region's parameters (extension 0x8a): +5 Transpose, signed semitones (GarageBand gave a
@@ -610,6 +623,21 @@ struct Project {
     struct Ctrl { int64_t tick = 0; std::string type; int cc = 0, value = 0; };
     // The notes and controllers of a region whose sequence starts at song tick `start`: content tick `origin` (bar 1)
     // sounds at `start`, nothing before it or past `length` plays. Folder regions (Drummer's) recurse.
+    // A placed region's notes: one pass of its sequence from `start`, or for a looped region the pass repeated over
+    // the placement's length (the last repeat cut where the loop ends); a region shows its own length (a trimmed
+    // one less than its content) unless the placement gives one
+    void placeRegion(const Placement &p, int64_t start, int64_t origin, int64_t bias, std::vector<Note> &notes,
+                     std::vector<Ctrl> &ctrl, int depth = 0) const {
+        const int64_t pass = p.seq->passLen, total = p.length ? p.length : pass;
+        std::vector<Note> n2;
+        std::vector<Ctrl> c2;
+        if (p.looped && pass > 0 && total > pass)
+            for (int64_t k = 0; k * pass < total; ++k) regionNotes(*p.seq, start + k * pass, std::min(pass, total - k * pass), origin, bias, n2, c2, depth);
+        else regionNotes(*p.seq, start, total, origin, bias, n2, c2, depth);
+        for (auto &x : n2) { x.key = std::clamp(x.key + p.transpose, 0, 127); notes.push_back(x); }
+        ctrl.insert(ctrl.end(), c2.begin(), c2.end());
+    }
+
     void regionNotes(const Sequence &s, int64_t start, int64_t length, int64_t origin, int64_t bias, std::vector<Note> &notes,
                      std::vector<Ctrl> &ctrl, int depth = 0) const {
         const int64_t end = length ? start + length : 0;
@@ -618,15 +646,19 @@ struct Project {
                 if (!p.midi || !p.seq) continue;
                 std::vector<Note> n2;
                 std::vector<Ctrl> c2;
-                regionNotes(*p.seq, start + (p.start - origin), p.length, origin, bias, n2, c2, depth + 1);
-                for (auto &x : n2) if (!length || x.tick < end) { x.key += p.transpose; notes.push_back(x); }
-                for (auto &x : c2) if (!length || x.tick < end) ctrl.push_back(x);
+                placeRegion(p, start + (p.start - origin) - s.trim, origin, bias, n2, c2, depth + 1);
+                for (auto &x : n2) if (x.tick >= start && (!length || x.tick < end)) notes.push_back(x);
+                for (auto &x : c2) if (x.tick >= start && (!length || x.tick < end)) ctrl.push_back(x);
             }
         for (auto &e : s.events()) {
             // MIDI events reuse MIDI status bytes: +12 = data 1 (the key), +11 = data 2 (velocity, value)
             const uint8_t type = e.type(), st = type & 0xf0;
             if (type < 0x80 || type >= 0xf0 || e.pos() >= kToEnd) continue;
-            const int64_t t = start + ((int64_t)e.pos() - origin);
+            // a note's length extension +4: ticks past its stored position (a region's Time Quantize keeps each
+            // note's played position on its grid and the rest here); the region's trim hides the content before it
+            int64_t t = start + ((int64_t)e.pos() - origin) - s.trim;
+            if (st == 0x90 && !e.ext.empty() && e.ext[0].u8(7) == 0x89) t += e.ext[0].u16(4);
+            if (s.quantize == -6) t = origin + (int64_t)std::llround((double)(t - origin) / (kTicksPerBeat / 4)) * (kTicksPerBeat / 4);
             if (t < start || (length && t >= end)) continue;
             const int ch = type & 0x0f, d1 = e.rec.u8(12), d2 = e.rec.u8(11);
             if (st == 0x90) {   // extension +12: the length in ticks; +10..11: a high-resolution velocity (/ 32767)
@@ -843,8 +875,9 @@ struct Converter {
             if (!p.seq) { warn.push_back(t.name + ": a region whose sequence is missing, left out"); continue; }
             std::vector<Project::Note> n;
             std::vector<Project::Ctrl> c;
-            P.regionNotes(*p.seq, p.start, p.length, bar1, bias, n, c);
-            for (auto &x : n) x.key = std::clamp(x.key + p.transpose, 0, 127);
+            P.placeRegion(p, p.start, bar1, bias, n, c);
+            if (p.seq->quantize && p.seq->quantize != -6)
+                warn.push_back(t.name + ": region \"" + p.seq->name + "\" has a Time Quantize (code " + std::to_string(p.seq->quantize) + ") not decoded, played as recorded");
             if (n.empty() && c.empty()) {
                 char b[64];
                 std::snprintf(b, sizeof b, "%.2f", 1 + (double)(p.start - bar1) / barTicks);
@@ -1059,6 +1092,15 @@ struct Converter {
         json job = json::object();
         auto tempos = P.tempos();
         std::sort(tempos.begin(), tempos.end());
+        {   // a tempo event that repeats the tempo before it changes nothing (new projects store 120 twice at bar 1)
+            std::vector<std::pair<int64_t, double>> kept;
+            for (auto &x : tempos) {
+                if (!kept.empty() && std::fabs(kept.back().second - x.second) < 1e-6) continue;
+                if (!kept.empty() && kept.back().first == x.first) kept.back() = x;
+                else kept.push_back(x);
+            }
+            tempos.assign(kept.begin(), kept.end());
+        }
         if (tempos.empty()) {
             job["tempo"] = 120.0;
             warn.push_back("no tempo found: 120 BPM");
