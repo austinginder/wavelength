@@ -572,6 +572,7 @@ struct Project {
         uint32_t envi = 0;                 // the track's object
         const Sequence *seq = nullptr;     // a MIDI region's sequence
         const AudioRegion *region = nullptr;
+        int transpose = 0;                 // a MIDI region's Transpose (semitones)
     };
     // The regions placed in a sequence: 0x20 MIDI (or folder) placements, 0x24 audio. Extension 1: +0 the track's
     // object, +12 the length; a MIDI region's extension 2: +0 its sequence (class 0x17); an audio region's 0xbc
@@ -587,6 +588,10 @@ struct Project {
             p.start = (int64_t)e.pos() + bias;
             if (e.type() == 0x20) {
                 p.seq = e.ext.size() > 1 ? seq(0x17, e.ext[1].u32(0)) : nullptr;
+                // the region's parameters (extension 0x8a): +5 Transpose, signed semitones (GarageBand gave a
+                // MIDI file's region on a bass +12 and showed "(+12 st)")
+                for (auto &x : e.ext)
+                    if (x.u8(7) == 0x8a) { p.transpose = (int8_t)x.u8(5); break; }
             } else {
                 p.midi = false;
                 for (auto &x : e.ext)
@@ -614,7 +619,7 @@ struct Project {
                 std::vector<Note> n2;
                 std::vector<Ctrl> c2;
                 regionNotes(*p.seq, start + (p.start - origin), p.length, origin, bias, n2, c2, depth + 1);
-                for (auto &x : n2) if (!length || x.tick < end) notes.push_back(x);
+                for (auto &x : n2) if (!length || x.tick < end) { x.key += p.transpose; notes.push_back(x); }
                 for (auto &x : c2) if (!length || x.tick < end) ctrl.push_back(x);
             }
         for (auto &e : s.events()) {
@@ -839,6 +844,7 @@ struct Converter {
             std::vector<Project::Note> n;
             std::vector<Project::Ctrl> c;
             P.regionNotes(*p.seq, p.start, p.length, bar1, bias, n, c);
+            for (auto &x : n) x.key = std::clamp(x.key + p.transpose, 0, 127);
             if (n.empty() && c.empty()) {
                 char b[64];
                 std::snprintf(b, sizeof b, "%.2f", 1 + (double)(p.start - bar1) / barTicks);
