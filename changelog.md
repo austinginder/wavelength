@@ -64,6 +64,8 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
+- A GarageBand patch named exactly (Flute, Studio, Heavy, Smash) no longer opens another patch whose name contains it (Flute Solo, Upright Studio Bass, Heavy Synth Bass, Dub Smash GB): `samples --patch` and a sampler `patch` find the patch itself and say why it doesn't play. A patch whose sampler instrument isn't installed no longer plays one whose name contains it (Psychic Energy Piano played Steinway Grand Piano 2 for its Grand Piano).
+- `import song.band` no longer warns that Chord Trigger, Transposer and Note Repeater aren't played: they play, from the track's patch folder.
 - A Drummer loop's notes start where its own audio does. `loops --notes` moved them back by whole loops, so 92 of the 144 started a bar or more late, and `import <loop.caf>` didn't move them at all (Anton - Ambition opened with 44 bars of silence). The slice begins at the bar of the first note, which lines up with the loop's audio in all 144.
 - GarageBand's Ultrabeat kits play their second kick on key 53 too (General MIDI's ride bell), where the drum loops made for them put it: it was silent in Beat Machine, Deep Tech, Neon, Seismic and Trap Door.
 - GarageBand's Vintage B3 patches sound through the rotor cabinet's speaker: a low-pass at 3.87 kHz fitted on GarageBand's 10 organ loops. They were about 30 dB too bright above 2 kHz and now come within 4 dB there in 9 of the 10.

@@ -1035,8 +1035,9 @@ struct Converter {
                 warn.push_back(name + ": " + (setting.empty() ? inst.name : setting) + " (" + inst.name + ") doesn't play here: " + why +
                                "; a built-in stand-in is the fallback");
             }
-            for (auto &p : ch.plugins())
-                if (p.midiFx && !p.bypassed && p.name != "Arpeggiator") warn.push_back(name + ": MIDI effect " + p.name + " not played");
+            for (auto &p : ch.plugins())   // the patch folder's MIDI effects play as the track's midiFx (job.cpp); these don't
+                if (p.midiFx && !p.bypassed && p.name != "Arpeggiator" && p.name != "Chord Trigger" && p.name != "Transposer" && p.name != "Note Repeater")
+                    warn.push_back(name + ": MIDI effect " + p.name + " not played");
             if (category.rfind("Smart", 0) == 0 && (!notes.empty() || !ctrl.empty()))
                 warn.push_back(name + ": " + category + " instrument: its regions play as stored notes (patterns GarageBand generates live from chord "
                                "strips or autoplay are not re-created)");

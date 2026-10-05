@@ -844,8 +844,8 @@ std::string resolveIn(const std::string &name, const std::string &baseDir) {
     return "";
 }
 
-// find a library entry by exact name, then by path suffix, then by unique substring
-bool findEntry(const std::string &kind, const std::string &query, std::string &path, std::string &err) {
+// find a library entry by exact name, then (unless `exactOnly`) by path suffix, then by unique substring
+bool findEntry(const std::string &kind, const std::string &query, std::string &path, std::string &err, bool exactOnly = false) {
     const auto &lib = kind == "patch" ? patchLibrary() : kind == "ir" ? impulseLibrary() : sampleLibrary();
     const std::string q = lower(query);
     std::vector<const SampleLibraryEntry *> exact;
@@ -856,6 +856,10 @@ bool findEntry(const std::string &kind, const std::string &query, std::string &p
         for (auto *e : exact) err += " \"" + fs::path(e->path).parent_path().filename().string() + "/" + e->name + "\"";
         return false;
     }
+    if (exactOnly) { err = "no " + kind + " named '" + query + "'"; return false; }
+    // a library patch by exactly this name that doesn't play on the sampler beats one whose name merely contains it ("Flute"
+    // is a Mellotron patch, not Flute Solo): callers say why that one doesn't play
+    if (kind == "patch" && logicPatchNamed(query)) { err = "patch '" + query + "' doesn't play on the sampler"; return false; }
     for (auto &e : lib) {
         const std::string lp = lower(e.path);
         if (e.kind == kind && lp.size() >= q.size() && lp.compare(lp.size() - q.size(), q.size(), q) == 0) { path = e.path; return true; }
@@ -1468,7 +1472,7 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
                 j["source"] = c.exs;
                 std::string path, e2;
                 std::vector<uint8_t> d;
-                if (findEntry("exs", fs::path(c.exs).stem().string(), path, e2) && readFile(path, d)) exs::sampleCount(d, 0, fs::path(path).parent_path(), i, t);
+                if (findEntry("exs", fs::path(c.exs).stem().string(), path, e2, true) && readFile(path, d)) exs::sampleCount(d, 0, fs::path(path).parent_path(), i, t);
                 else j["source"] = c.exs + " (not installed)";
             }
             if (t) j["samples"] = {{"installed", i}, {"total", t}};
@@ -1756,7 +1760,7 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
             if (c.exsAt) ok = exs::parseData(c.data, c.exsAt, fs::path(dir), zs, lo, hi, def, articulations, w, e2);
             else if (!c.exs.empty()) {
                 std::string path;
-                ok = findEntry("exs", fs::path(c.exs).stem().string(), path, e2) && exs::parse(path, zs, lo, hi, def, articulations, w, e2);
+                ok = findEntry("exs", fs::path(c.exs).stem().string(), path, e2, true) && exs::parse(path, zs, lo, hi, def, articulations, w, e2);
                 if (!ok) e2 = "its instrument " + c.exs + ": " + (e2.rfind("no exs", 0) == 0 ? "not installed (GarageBand's Sound Library has it)" : e2);
             } else e2 = "its " + c.instrument + " channel names no instrument";
             if (!ok) { if (firstErr.empty()) firstErr = e2; continue; }
