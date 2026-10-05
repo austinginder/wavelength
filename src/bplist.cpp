@@ -14,6 +14,7 @@ struct Reader {
     size_t n, refSize = 1;
     std::vector<uint64_t> offsets;
     int depth = 0;
+    bool keepData = false;   // data objects as their bytes (JSON binary), else their size
 
     uint64_t be(size_t at, size_t bytes) const {
         uint64_t v = 0;
@@ -53,7 +54,12 @@ struct Reader {
             else { const uint64_t b = be(at, 8); double f; std::memcpy(&f, &b, 8); out = f; }
             break;
         }
-        case 0x4: { uint64_t c; ok = count(at, m, c) && at + c <= n; if (ok) out = c; break; }   // data: its size
+        case 0x4: {   // data: its size, or its bytes
+            uint64_t c;
+            ok = count(at, m, c) && at + c <= n;
+            if (ok) out = keepData ? json::binary(std::vector<uint8_t>(d + at, d + at + c)) : json(c);
+            break;
+        }
         case 0x5: {   // ASCII string
             uint64_t c;
             ok = count(at, m, c) && at + c <= n;
@@ -110,9 +116,9 @@ struct Reader {
 };
 } // namespace
 
-bool parseBinaryPlist(const uint8_t *d, size_t n, json &out) {
+bool parseBinaryPlist(const uint8_t *d, size_t n, json &out, bool keepData) {
     if (n < 8 + 32 || std::memcmp(d, "bplist0", 7)) return false;
-    Reader r{d, n, 1, {}, 0};
+    Reader r{d, n, 1, {}, 0, keepData};
     const uint8_t *t = d + n - 32;   // trailer: 6 unused, offset size, ref size, object count, top object, table offset
     const size_t offSize = t[6];
     r.refSize = t[7];

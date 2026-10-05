@@ -3,14 +3,20 @@
 #include "alchemy.hpp"
 #include "apple_keys.hpp"
 #include "apple_synths.hpp"
+#include "bplist.hpp"
 #include "logic_patches.hpp"
+#include "xml.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <mutex>
+#include <sstream>
 
 using nlohmann::json;
 
@@ -44,9 +50,105 @@ const char *waveName(double code) {
 const char *lfoShape(double code) {
     switch ((int)std::lround(code)) { case 1: case 2: return "square"; case -1: return "ramp"; case -2: return "saw"; case 4: return "random"; default: return "triangle"; }
 }
+
+// Table mode. A wavetable is a list of waves, each kept as its harmonics' amplitudes (float32, harmonic 1 first, at
+// most 384, trailing zeros left out; a unit-peak saw's fundamental is 2/pi). A patch on a wavetable carries all of it
+// in its settings block, in a "1PTW" chunk after the values: a binary property list {Spectra: [data per wave], UUID,
+// Version}. Patches without one play Retro Synth's built-in Digiwaves, which no data file holds.
+struct RetroTable {
+    std::string uuid;
+    std::vector<std::vector<float>> waves;
+};
+
+uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+
+bool retroTable(const std::vector<uint8_t> &block, RetroTable &t) {
+    if (block.size() < 24) return false;
+    for (size_t at = 24 + 4 * (size_t)le32(&block[8]); at + 8 <= block.size();) {   // the chunks after the values
+        const uint32_t size = le32(&block[at + 4]);
+        if (size < 8 || at + size > block.size()) break;
+        json pl;
+        if (!std::memcmp(&block[at], "1PTW", 4) && parseBinaryPlist(&block[at + 8], size - 8, pl, true) && pl.is_object() &&
+            pl.contains("Spectra") && pl["Spectra"].is_array()) {
+            for (auto &w : pl["Spectra"]) {
+                if (!w.is_binary()) continue;
+                const auto &b = w.get_binary();
+                std::vector<float> a(std::min<size_t>(b.size() / 4, 1024));
+                for (size_t k = 0; k < a.size(); ++k) {
+                    const uint32_t bits = le32(&b[4 * k]);
+                    std::memcpy(&a[k], &bits, 4);
+                    if (!std::isfinite(a[k]) || a[k] < 0) a[k] = 0;
+                }
+                t.waves.push_back(std::move(a));
+            }
+            if (pl.contains("UUID") && pl["UUID"].is_string()) t.uuid = pl["UUID"].get<std::string>();
+            return !t.waves.empty();
+        }
+        at += size;
+    }
+    return false;
+}
+
+// Apple's wavetables' names by UUID, from RetroSynthWavetable.plist in the installed Retro Synth settings folder
+// (read once, names only; empty when it isn't installed)
+const std::map<std::string, std::string> &retroTableNames() {
+    static std::map<std::string, std::string> names;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        for (auto &root : pluginSettingsRoots()) {
+            std::ifstream in(fs::u8path(root) / "Retro Synth" / "RetroSynthWavetable.plist", std::ios::binary);
+            if (!in) continue;
+            std::stringstream text;
+            text << in.rdbuf();
+            std::string err;
+            const auto doc = xml::parse(text.str(), err);
+            const xml::Node *top = doc ? doc->child("dict") : nullptr;
+            if (!top) continue;
+            for (size_t i = 0; i + 1 < top->children.size(); ++i) {   // <key>name</key> <dict>... <key>UUID</key> <string>
+                const xml::Node &k = *top->children[i], &d = *top->children[i + 1];
+                if (k.tag != "key" || d.tag != "dict") continue;
+                for (size_t j = 0; j + 1 < d.children.size(); ++j)
+                    if (d.children[j]->tag == "key" && d.children[j]->text == "UUID" && d.children[j + 1]->tag == "string")
+                        names[d.children[j + 1]->text] = k.text;
+            }
+            if (!names.empty()) break;
+        }
+    });
+    return names;
+}
+
+// the table's wave at position x (0..1 over its waves), between its two neighbours
+std::vector<double> retroWave(const RetroTable &t, double x) {
+    const size_t n = t.waves.size();
+    const double p = std::clamp(x, 0.0, 1.0) * (double)(n - 1);
+    const size_t i = std::min(n - 1, (size_t)p);
+    const double f = p - (double)i;
+    std::vector<double> a;
+    auto add = [&](const std::vector<float> &w, double g) {
+        if (a.size() < w.size()) a.resize(w.size());
+        for (size_t k = 0; k < w.size(); ++k) a[k] += g * w[k];
+    };
+    add(t.waves[i], 1 - f);
+    if (f > 1e-9 && i + 1 < n) add(t.waves[i + 1], f);
+    return a;
+}
+
+// an additive oscillator playing harmonic amplitudes `a` at `level`: partials 80 dB under the loudest are left out,
+// and a wave holding more power than one full sine is scaled to it with the level carrying the rest (builtin:synth
+// scales such lists down), so the amplitudes play as stored. A silent wave gives a silent oscillator.
+json retroAdditive(const std::vector<double> &a, double level) {
+    double top = 0, power = 0;
+    for (double v : a) { top = std::max(top, v); power += v * v; }
+    if (top <= 0) return {{"wave", "sine"}, {"level", 0.0}};
+    const double s = std::max(1.0, std::sqrt(power));
+    json parts = json::array();
+    for (size_t k = 0; k < a.size(); ++k)
+        if (a[k] > 1e-4 * top) parts.push_back({r(a[k] / s, 1e6), (int)k + 1});
+    return {{"wave", "additive"}, {"partials", parts}, {"level", r(level * s)}};
+}
 } // namespace
 
-GarageBandSynth retroSynthPatch(const std::vector<float> &params) {
+GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vector<uint8_t> &block) {
     auto V = [&](size_t i) -> double { const double v = i < params.size() ? params[i] : 0.0; return std::fabs(v) > 1e25 ? 0.0 : v; };
     GarageBandSynth out;
     out.instrument = "Retro Synth";
@@ -63,10 +165,24 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params) {
         json o2 = {{"wave", eng == "Table" ? "saw" : waveName(V(303))}, {"level", r(mix)}, {"semi", (int)std::lround(V(307))}, {"cents", r(V(308), 100)}};
         if (o1["wave"] == "square") o1["pw"] = r(std::max(0.02, V(302) / 100));
         if (o2["wave"] == "square") o2["pw"] = r(std::max(0.02, V(304) / 100));
+        RetroTable tab;
+        if (eng == "Table" && retroTable(block, tab)) {   // Shape 1 and 2: positions in the patch's own wavetable
+            json a2 = retroAdditive(retroWave(tab, V(306)), mix);
+            a2["semi"] = o2["semi"];
+            a2["cents"] = o2["cents"];
+            o1 = retroAdditive(retroWave(tab, V(305)), 1 - mix);
+            o2 = a2;
+            const auto &names = retroTableNames();
+            const auto it = names.find(tab.uuid);
+            notes.push_back("Table mode: the patch's wavetable" + (it != names.end() ? " \"" + it->second + "\"" : std::string()) + " (" +
+                            std::to_string(tab.waves.size()) + " waves) at positions " + fmt(V(305)) + " and " + fmt(V(306)) + ", as additive oscillators");
+            if (V(319) >= 0.5) { if (std::fabs(V(208)) > 0.01) notes.push_back("Table mode: the formant stretch isn't played"); }
+            else if (V(208) < -0.01 && -V(208) * std::max(0.0, 1 - V(606)) > 0.005)
+                notes.push_back("Table mode: the LFO's sweep through the wavetable isn't played: each oscillator holds its position");
+        } else if (eng == "Table")
+            notes.push_back("Table mode: Retro Synth's built-in Digiwaves (positions " + fmt(V(305)) + " and " + fmt(V(306)) +
+                            ") aren't in GarageBand's data files: saws stand in");
         for (auto &o : {o1, o2}) if (o["level"].get<double>() > 0.001) oscs.push_back(tuned(o));
-        if (eng == "Table")
-            notes.push_back("Table mode: wavetable positions " + fmt(V(305)) + " and " + fmt(V(306)) +
-                            " play as saws (Apple's tables aren't Wavelength's to copy)");
     } else if (eng == "Sync") {   // the first oscillator is the master; the second restarts with it, tuned up by the sync amount
         json o1 = {{"wave", waveName(V(309))}, {"level", r(1 - mix)}};
         json o2 = {{"wave", waveName(V(311))}, {"level", r(mix)}, {"semi", r(V(313) * kSyncSemis, 100)}, {"sync", true}};
@@ -137,7 +253,7 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params) {
         for (auto &o : oscs) pulse |= o.value("wave", "") == "square";
         const double d = -V(208) * 0.45 * lg;
         if (pulse && d > 0.005) lfos.push_back({{"rate", rate(603, 604)}, {"depth", r(d)}, {"shape", lfoShape(V(602))}, {"to", "pw"}});
-    } else if (V(208) > 0.01 && eng != "FM") notes.push_back("the filter envelope's modulation of the oscillator shape isn't played");
+    } else if (V(208) > 0.01 && eng != "FM" && !(eng == "Table" && V(319) >= 0.5)) notes.push_back("the filter envelope's modulation of the oscillator shape isn't played");
     if (V(202) > 0.001 && V(202) * vg > 0.005)
         lfos.push_back({{"rate", rate(653, 654)}, {"depth", r(V(202) * vg, 10000)}, {"shape", lfoShape(V(652))}, {"to", "pitch"}});
     if (V(606) > 0.01 || V(656) > 0.01) notes.push_back("LFO and vibrato depths under the mod wheel play at rest (wheel down)");
@@ -205,7 +321,7 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::st
             }
             out = a.synth;
         } else if (c.settings.params.empty()) continue;
-        else if (c.instrument == "Retro Synth") out = retroSynthPatch(c.settings.params);
+        else if (c.instrument == "Retro Synth") out = retroSynthPatch(c.settings.params, c.settings.block);
         else if (c.instrument == "Vintage B3") out = vintageB3Patch(c.settings.params);
         else if (c.instrument == "ES2") out = es2Patch(c.settings.params);
         else if (c.instrument == "ES1") out = es1Patch(c.settings.params);

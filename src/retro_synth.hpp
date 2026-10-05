@@ -7,12 +7,14 @@
 //
 // Retro Synth: Retro Synth's saved settings (parameter #n = params[n], unused ones 1e30) become a
 // builtin:synth patch: its engine (Analog and Sync oscillators, FM as a sine carrier with a sine modulator,
-// Table as saw stand-ins), filter, envelopes, LFO and vibrato, glide and autobend, unison and its chorus or
+// Table as additive oscillators playing the wavetable the patch carries, saws for the built-in Digiwaves no data
+// file holds), filter, envelopes, LFO and vibrato, glide and autobend, unison and its chorus or
 // flanger, plus the patch's own effects (logic_patches.hpp). Parameter numbers from Logic's CSParameterOrder
 // list for Retro Synth and GarageBand's 114 Retro Synth channel strips; the scales marked "guess" (cutoff in
 // Hz, envelope and LFO depth in octaves, FM ratio and index, sync pitch, voice detune) await reference renders.
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -30,8 +32,9 @@ struct GarageBandSynth {
     nlohmann::json arp;                            // the instrument's own arpeggiator as a track "arp" (Alchemy's; null = none)
 };
 
-// The builtin:synth version of Retro Synth settings (params[n] = parameter #n).
-GarageBandSynth retroSynthPatch(const std::vector<float> &params);
+// The builtin:synth version of Retro Synth settings (params[n] = parameter #n; `block` the whole settings block,
+// whose "1PTW" chunk holds a Table-mode patch's wavetable).
+GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vector<uint8_t> &block = {});
 // A GarageBand or Logic patch on an instrument re-created here, by name (any case); false when there is none. `why`
 // says why a patch on such an instrument doesn't play on builtin:synth (an Alchemy patch built on spectral synthesis or
 // moving grains, content that isn't installed, or samples, which the sampler plays; a Sculpture patch played by
