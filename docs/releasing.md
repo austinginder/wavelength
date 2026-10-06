@@ -2,7 +2,7 @@
 
 Releases are cut by hand on a Mac; binaries are built locally, not in CI.
 
-1. In `changelog.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` (add an empty `## [Unreleased]` above it).
+1. In `changelog.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` (add an empty `## [Unreleased]` above it). In `roadmap.md`, mark what shipped as `released x.y.z` (rows still saying `x.y.z` were on main), add rows for shipped features the roadmap doesn't list, and set the legend's on-main version to the next one; update the readme's "Next after" line. Check that `wavelength help` and AGENTS.md's "Known limits" don't still call a shipped feature missing.
 2. In `CMakeLists.txt`, set `project(... VERSION x.y.z)` and clear `WAVELENGTH_VERSION_SUFFIX`; set the same version in `.claude-plugin/plugin.json` (Claude Code updates plugins by it).
 3. `scripts/check.sh` must pass, and `wavelength compat --report compat.md` (every installed plugin, one worker at a time, about an hour; cached results of unchanged plugins are reused within one engine version) must show no plugin newly failing against the last release's report. Compare the two reports' Failing sections; a plugin that fails for its own reasons (a crash in its code, a licence or ROM window) stays listed there.
 4. Commit `🚀 RELEASE: vx.y.z`, tag `vx.y.z`, push the commit and the tag.

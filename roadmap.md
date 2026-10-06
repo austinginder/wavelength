@@ -4,7 +4,7 @@ The goal: Wavelength is the tool an AI agent reaches for to make music. Editable
 
 This file tracks what's planned, what's missing and why. `changelog.md` records what shipped; "Known limits" in `AGENTS.md` lists what doesn't work today.
 
-Status: **released** in the version named, **0.5.0** (on main, not released yet), **next**, **later**, or **idea** (not decided).
+Status: **released** in the version named, **0.6.0** (on main, not released yet), **next**, **later**, or **idea** (not decided).
 
 ## 1. The agent sees what it can't hear
 
@@ -15,12 +15,14 @@ An agent has no ears. Everything it learns about a render has to come back as nu
 | Loudness per track, bus, section and mix; true peak | released 0.1.0 | BS.1770, matches ffmpeg |
 | Harmony and voice-leading lint | released 0.3.0 | `lint --harmony`, parallel fifths and octaves |
 | The song picture (`render --png`) | released 0.4.0 | sections, loudness, spectrogram, notes per track |
-| Mix checks that name a problem and its fix | released 0.4.0 | kick room, wide low end, phase, repetition |
+| Mix checks that name a problem and its fix | released 0.4.0 | kick room, wide low end, phase, repetition; thin bass in 0.5.0 |
+| Patch cards (`card`): a picture of how a preset sounds | released 0.5.0 | spectrum, attack, tail, sounding octave, flags; a contact sheet to compare |
+| Gain staging in one command (`stage`) | released 0.5.0 | faders from stem loudness and role targets |
 | Compare with a reference track (`analyze --reference`) | next | "make it sound like this" as numbers: balance, loudness over time, width, density |
 | Per-note pitch and level tracking in `analyze` | later | |
 | Gain reduction readouts for compressors and limiters | later | |
 | Parameter sweeps: which ranges of a knob sound musical | later | models choose effects well and set them badly |
-| Auditions inside each instrument's range; envelope depth for rhythmic patches | later | |
+| Auditions inside each instrument's range; envelope depth for rhythmic patches | later | `card` probes C2 to C5 already |
 | A written critique from an audio model | idea | judges arrangement and feel; the report judges fidelity |
 
 ## 2. It works on any computer
@@ -38,7 +40,8 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | Installs through package managers (Homebrew, npm or pip) | next | agents reach for these before a tarball |
 | Odin2 and free sample sets in the kit (piano, orchestra, drums) | later | |
 | A notarized macOS binary | later | needs a Developer ID certificate |
-| Audio Unit hosting | 0.5.0 | macOS: instruments, effects and MIDI-controlled effects, factory presets, `.aupreset` state; Intel-only units open out of process |
+| Audio Unit hosting | released 0.5.0 | macOS: instruments, effects and MIDI-controlled effects, factory presets, `.aupreset` state; Intel-only units open out of process |
+| A compatibility sweep of every installed plugin (`compat`) | released 0.5.0 | crashes, hangs, silence, licence windows and presets that change nothing, per plugin |
 | Preset capture (`wavelength capture <plugin>`): open a plugin's own window and save each preset loaded there as a named state | idea | for presets that only load through the plugin's window. Kontakt library instruments need a state saved by a host: an `.nki` or a saved `.nkm` multi can't become one without decrypting it, and Komplete Kontrol restores the Kontakt state it embeds, not the preset path it records. Stepping through presets in Komplete Kontrol's window would capture a whole library, saved for Komplete Kontrol and for Kontakt. Needs plugin editor hosting, VST3 on macOS first |
 | SoundFont and SFZ LFOs (vibrato, tremolo) and pitch envelopes | later | |
 
@@ -74,14 +77,26 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | MIDI, MusicXML and DAWproject import | released 0.3.0 | |
 | Bitwig projects without an export | released 0.4.0 | |
 | Game loops (`render --loop`) | released 0.4.0 | sample-exact, with smpl loop chunks |
+| GarageBand projects (`import song.band`), and GarageBand's patches, Apple Loops and effect chains by name | released 0.5.0 | limited support: structure, mixer and timing faithful; Apple's synths re-created on builtin:synth as approximations calibrated against bounces |
+| MIDI effects on any track: chords, scale transposition, note repeat, arpeggios (`midiFx`, `arp`) | released 0.5.0 | modelled on Logic's and GarageBand's |
 | Scoring to picture: a tempo map from a list of hit times | next | downbeats land on the cuts |
 | Adaptive music for games: layers and stingers exported for Godot and Unity | later | |
 | Vocals: generated vocal stems brought in as clips | later | the biggest gap against Suno |
 | DAWproject import: plugin effect automation, launcher clips, more Bitwig devices; Bitwig project audio clips and Bitwig 6 automation clips | later | |
-| Live playback through the speakers | later | the review page renders previews today |
+| Live playback through the speakers | released 0.5.0 | in `serve`: the editor loops bars live while the mixer changes, and the Playground plays instruments live from the keyboard |
 
 ## 6. Measuring progress
 
 | | Status | Notes |
 |---|---|---|
 | A benchmark for agents making music, judged on the rendered audio | later | tasks, automatic checks from the report, people's votes |
+
+## 7. Files from anywhere, tested everywhere
+
+Songs, packages and projects come from other people, so every reader has to survive a broken or hostile file, and the tests have to run off the Mac too.
+
+| | Status | Notes |
+|---|---|---|
+| Bounds-checked readers for every binary format (plists, ZIP, Serum, SoundFont, VST presets) and a depth limit on XML | next | a crafted file fails with an error, never reads past its buffer |
+| Fuzzing the readers | next | |
+| The regression checks in the Linux Docker image | next | today `check.sh` runs on the Mac and releases run a smaller test on each platform |
