@@ -1,7 +1,10 @@
 #include "logic_patches.hpp"
 
 #include "alchemy.hpp"
+#include "apple_keys.hpp"
+#include "apple_synths.hpp"
 #include "bplist.hpp"
+#include "retro_synth.hpp"
 #include "platform.hpp"
 
 #include <nlohmann/json.hpp>
@@ -1787,6 +1790,35 @@ bool appleMidiFxPreset(const std::string &type, const std::string &name, json &f
     fx = midiEffectSettings(p, notes);
     if (fx.is_null()) fx = {{"type", type}};   // a Transposer preset that changes nothing
     return true;
+}
+
+// An older Apple Loop keeps its channel strip in a "uuid" chunk (a7bd1b9d...): big-endian plug-in records whose
+// settings blocks ("EMAGPPST") carry the plug-in's id. The instrument, when it is one re-created here, as a voice.
+bool appleLoopStripSynth(const std::vector<uint8_t> &caf, GarageBandSynth &out) {
+    static const uint8_t kStrip[16] = {0xa7, 0xbd, 0x1b, 0x9d, 0xdc, 0x29, 0x4b, 0x64, 0xbe, 0x7e, 0x51, 0x3f, 0x68, 0x4b, 0xdd, 0x79};
+    if (caf.size() < 8 || std::memcmp(caf.data(), "caff", 4)) return false;
+    for (size_t i = 8; i + 12 <= caf.size();) {
+        int64_t n = 0;
+        for (int k = 0; k < 8; ++k) n = n << 8 | caf[i + 4 + k];
+        if (n < 0 || i + 12 + (size_t)n > caf.size()) break;
+        const size_t a = i + 12, b = a + (size_t)n;
+        i = b;
+        if (std::memcmp(&caf[a - 12], "uuid", 4) || n < 16 || std::memcmp(&caf[a], kStrip, 16)) continue;
+        for (size_t g = a + 16 + 12; g + 12 <= b; ++g) {
+            if (std::memcmp(&caf[g], "EMAGPPST", 8)) continue;
+            const uint32_t id = (uint32_t)caf[g + 8] << 24 | (uint32_t)caf[g + 9] << 16 | (uint32_t)caf[g + 10] << 8 | caf[g + 11];
+            const char *name = id == 214 ? "ES2" : id == 216 ? "Vintage B3" : id == 189 ? "ES1" : id == 213 ? "E-Piano" : id == 223 ? "Clav" : nullptr;
+            if (!name) continue;
+            const PatchPlugin p = settingsOf(caf, g - 12, b, name);
+            if (p.params.empty()) return false;
+            out = id == 214 ? es2Patch(p.params) : id == 216 ? vintageB3Patch(p.params) : id == 189 ? es1Patch(p.params)
+                : id == 213 ? vintageEPPatch(p.params) : vintageClavPatch(p.params);
+            out.notes.push_back("the loop's own " + std::string(name) + " settings; its effects aren't played");
+            return true;
+        }
+        return false;
+    }
+    return false;
 }
 
 } // namespace wl

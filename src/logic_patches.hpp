@@ -138,4 +138,9 @@ const std::vector<std::pair<std::string, std::string>> &midiEffectPresets(const 
 // its last part when that is unique (any case); false with err when there is none.
 bool appleMidiFxPreset(const std::string &type, const std::string &name, nlohmann::json &fx, std::vector<std::string> &notes, std::string &err);
 
+struct GarageBandSynth;
+// The instrument an older software-instrument Apple Loop keeps in its channel strip (a CAF's "uuid" chunk), as a
+// builtin:synth voice when it is one re-created here (Vintage B3, ES2, ES1, the Vintage Electric Piano and Clav).
+bool appleLoopStripSynth(const std::vector<uint8_t> &caf, GarageBandSynth &out);
+
 } // namespace wl

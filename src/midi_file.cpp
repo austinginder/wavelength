@@ -3,6 +3,8 @@
 #include "apple_loops.hpp"
 
 #include "catalog.hpp"
+#include "logic_patches.hpp"
+#include "retro_synth.hpp"
 #include "sampler.hpp"
 
 #include <algorithm>
@@ -421,9 +423,21 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
             } else if (d.is_object())
                 res.notes.push_back(unique + ": the loop's patch " + p.instName + " doesn't play here (" + d.value("why", std::string("unknown")) + "); a General MIDI sound stands in");
         }
+        if (loop && instrument.empty() && loopPatch.is_null()) {   // an older loop: the instrument in its own channel strip
+            std::vector<uint8_t> caf;
+            std::ifstream f(path, std::ios::binary);
+            caf.assign(std::istreambuf_iterator<char>(f), {});
+            GarageBandSynth gs;
+            if (appleLoopStripSynth(caf, gs) && gs.transpose == 0) {
+                loopPatch = {{"plugin", "builtin:synth"}, {"synth", gs.synth}};
+                if (!gs.fx.empty()) t["fx"] = gs.fx;
+                res.notes.push_back(unique + ": plays the loop's own " + gs.instrument + " settings, re-created on builtin:synth (an approximation; its effects aren't played)");
+            }
+        }
         if (!loopPatch.is_null()) {
             t["plugin"] = loopPatch["plugin"];
             if (loopPatch.contains("sampler")) { t["sampler"] = loopPatch["sampler"]; sampler = true; }
+            else if (loopPatch.contains("synth")) t["synth"] = loopPatch["synth"];
             else t["preset"] = loopPatch["preset"];
         } else if (!instrument.empty() && !drums) t["plugin"] = instrument;
         else {   // General MIDI: a close multisample, else the GM SoundFont (drums: its kit), else builtin:drums
