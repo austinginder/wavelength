@@ -29,7 +29,11 @@ std::string gnum(double v) { char b[48]; std::snprintf(b, sizeof b, "%g", v); re
 // the guesses (see the header): A1 a normalized cutoff -> 20 Hz .. 20 kHz exponentially, A2 an intensity of 1 =
 // 10 octaves of cutoff, A3 EFM1's FM Intensity 1 = index 8; velocity-split values resolve at a typical velocity
 double cutoffHz(double x) { return 20.0 * std::pow(1000.0, std::clamp(x, 0.0, 1.0)); }
-const double kCutOct = 10, kVel = 0.8, kFmIndex = 8;
+const double kCutOct = 10, kVel = 0.8, kFmIndex = 8, kPi = 3.14159265358979323846;
+// ES2, fitted on a GarageBand bounce of twelve of its patches (C3 and C4 each): its envelopes' decay and release
+// times are the time to fall 20 dB, twice builtin:synth's (which fall 40 dB); velocity as a router source counts
+// from the middle velocity, so a route moves its target by intensity x (velocity - 0.5)
+const double kEs2Time = 2, kEs2VelMid = 0.5;
 double lerp(double a, double b, double t) { return a + (b - a) * t; }
 
 // an ES2 router intensity on a pitch target in cents (Apple's guide: 8 = 10 c, 20 = 50 c, 28 = a semitone, 36 = 2,
@@ -163,9 +167,16 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
     // ES2's own row order: 0 glide, 1 analog, 3 keyboard mode; per oscillator (7, 12, 17) coarse, fine, -, wave
     // position, Digiwave; 22/23 the triangle; 24-36 filters, drive, Sine Level, volume; 37-86 ten router slots
     // (source, target, via, intensity, intensity at via max); 87-111 LFOs and envelopes; 112-118 effects and the
-    // planar pad; 119 unison; 128-144 the vector envelope
+    // planar pad; 119 unison; 120-122 oscillators 1-3 on; 128-144 the vector envelope
     json synth = json::object(), oscs = json::array();
-    const auto wts = es2Weights(V(22), V(23));
+    auto wts = es2Weights(V(22), V(23));
+    // an oscillator switched off is silent and the others keep their share of the triangle (GarageBand's bounce:
+    // Synth E-Bass, its oscillator 1 off, plays oscillator 2 alone). With all three off ES2 plays only its filters'
+    // self-oscillation (and Sine Level), which isn't re-created: the triangle's oscillators stand in
+    if (params.size() > 122 && (V(120) >= 0.5 || V(121) >= 0.5 || V(122) >= 0.5)) {
+        for (int o = 1; o <= 3; ++o)
+            if (V(119 + (size_t)o) < 0.5) wts[(size_t)o] = 0;
+    } else if (params.size() > 122) notes.push_back("all three oscillators are switched off (the patch plays its filters' self-oscillation): the triangle's oscillators stand in");
     double pitch[4] = {};
     for (int o = 1; o <= 3; ++o) pitch[o] = V(2 + 5 * o) + V(3 + 5 * o) / 100;
     auto wave = [&](int o) { return ri(V(5 + 5 * o)); };
@@ -173,7 +184,7 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
     for (int o = 1; o <= 3; ++o) {
         const double lvl = wts[o];
         const std::string on = "osc" + std::to_string(o);
-        if (lvl < 0.02) {   // out of the mix; oscillator 1 stays (silent) when 2 or 3 sync to it
+        if (lvl < 0.02) {   // out of the mix or off; oscillator 1 stays (silent) when 2 or 3 sync to it
             if (o == 1 && synced) { json m = {{"wave", "sine"}, {"level", 0}}; if (std::fabs(pitch[1]) > 1e-6) m["semi"] = r(pitch[1]); oscs.push_back(m); }
             continue;
         }
@@ -191,7 +202,23 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
         } else if (o == 1 && v >= 1 && v <= 4) {
             x["wave"] = v == 1 ? "triangle" : v == 2 ? "saw" : "square";
             if (v == 4) x["pw"] = 0.25;
-        } else if (o == 2 && v == 1) { x["wave"] = "sine"; notes.push_back("osc2 ring modulation (osc1 x osc2 square) isn't played: a plain sine stands in"); }
+        } else if (o == 2 && v == 1) {   // ring: oscillator 1's wave times a square at oscillator 2's pitch, as their sum and difference partials
+            const int w1 = wave(1);
+            const double r1 = std::pow(2.0, pitch[1] / 12), r2 = std::pow(2.0, pitch[2] / 12);
+            json parts = json::array();
+            for (int m = 1; m <= (w1 >= 1 && w1 <= 4 ? 6 : 1); ++m) {
+                // oscillator 1's harmonic m (a sine, a Digiwave or FM played as one: the fundamental only)
+                const double a = w1 == 1 ? (m % 2 ? 8 / (kPi * kPi * m * m) : 0) : w1 == 2 ? 2 / (kPi * m) : w1 == 3 ? (m % 2 ? 4 / (kPi * m) : 0)
+                               : w1 == 4 ? 2 / (kPi * m) * std::fabs(std::sin(kPi * m * 0.25)) * 2 : 1;
+                for (int k = 1; k <= 15 && a > 0; k += 2)
+                    for (int sgn = -1; sgn <= 1; sgn += 2) {
+                        const double ratio = std::fabs(k * r2 + sgn * m * r1);
+                        if (ratio > 0.01 && ratio <= 1024) parts.push_back({r(a * 2 / (kPi * k), 10000), r(ratio, 10000)});
+                    }
+            }
+            x = {{"wave", "additive"}, {"partials", parts}};
+            notes.push_back("osc2 ring modulation (osc1 x a square at osc2's pitch) as its sum and difference partials");
+        }
         else if (o == 3 && v == 1) x["wave"] = "noise";
         else if (v == 2 || v == 3) {   // the sync waves: hard sync to oscillator 1, which leads the list
             x["wave"] = v == 2 ? "saw" : "square";
@@ -199,38 +226,33 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
             notes.push_back(on + " wave " + std::to_string(v) + " read as a " + (v == 2 ? "saw" : "square") + " hard-synced to osc1 (order unconfirmed)");
         } else if (v >= 4 && v <= 6) x["wave"] = v == 4 ? "triangle" : v == 5 ? "saw" : "square";
         else { x["wave"] = "square"; x["pw"] = r(std::max(0.03, 0.5 - (v - 6) / 98.0 * 0.47)); }   // positions 7..104 narrow the pulse
-        if (std::fabs(pitch[o]) > 1e-6 && x["wave"] != "noise") x["semi"] = r(pitch[o]);
+        if (std::fabs(pitch[o]) > 1e-6 && x["wave"] != "noise" && x["wave"] != "additive") x["semi"] = r(pitch[o]);
         x["level"] = r(lvl);
         oscs.push_back(x);
     }
     if (V(35) > 0.02) {   // Sine Level: a sine at oscillator 1's pitch, after the filters as in ES2
         json s = {{"wave", "sine"}, {"level", r(V(35))}, {"filter", false}};
         if (pitch[1] != 0) s["semi"] = r(pitch[1]);
+        // in phase with oscillator 1's fundamental, which it reinforces (GarageBand's bounce: Vintage Synth Bass's
+        // fundamental stands 13 dB over its saw's second harmonic); a saw's fundamental starts half a cycle on, a
+        // triangle's three quarters, a pulse's a quarter less half its width
+        const int w1 = wave(1);
+        const double ph = w1 == 2 ? 0.5 : w1 == 1 ? 0.75 : w1 == 4 ? 0.125 : 0.0;
+        if (ph > 0) s["phase"] = ph;
         oscs.push_back(s);
     }
     synth["osc"] = oscs;
-    // the filter the blend favours (-1 filter 1 .. +1 filter 2); a closed high-pass filter 1 counts as filter 2
-    const double blend = V(25);
-    const int f1 = ri(V(26));
-    const bool f1Closed = f1 == 1 && V(27) < 0.02;
-    json filt;
-    std::vector<int> cutTargets;   // the router targets that move the kept filter's cutoff
-    if (blend >= 0 || f1Closed) {
-        filt = {{"type", "lowpass"}, {"slope", ri(V(30)) == 0 ? 12 : 24}, {"cutoff", r(cutoffHz(V(32)), 10)}, {"resonance", r(V(33))}};
-        cutTargets = {16, 19};
-        if (blend > -0.9 && blend < 0.9 && !f1Closed) notes.push_back("filter blend " + num(blend, 2, true) + ": both filters sound in ES2; only filter 2 kept");
-    } else {
-        static const char *types[5] = {"lowpass", "highpass", "bandpass", "lowpass", "bandpass"};   // Lo, Hi, Peak, BR, BP
-        filt = {{"type", f1 >= 0 && f1 <= 4 ? types[f1] : "lowpass"}, {"slope", 12}, {"cutoff", r(cutoffHz(V(27)), 10)}, {"resonance", r(V(28))}};
-        if (f1 == 2 || f1 == 3) notes.push_back("filter 1 Peak / Notch played as band-pass / low-pass");
-        cutTargets = {14, 19, 20};
-        if (blend > -0.9) notes.push_back("filter blend " + num(blend, 2, true) + ": filter 2 also sounds in ES2; only filter 1 kept");
-    }
-    if (V(29) > 0.01) filt["drive"] = r(std::min(1.0, V(29)));
-    // the router: ENV2, velocity, keyboard, Max and pad routes to the kept cutoff, LFO routes, ENV1 -> pitch
-    auto isCut = [&](int t) { return std::find(cutTargets.begin(), cutTargets.end(), t) != cutTargets.end(); };
+    // the router: what moves the filters (cutoffs, resonances, the blend) and the LFO, envelope and pitch routes. A
+    // static source plays at rest: Max 1, the planar pad where the patch left it, the wheels, bender and touch 0, and
+    // velocity (from the middle velocity, see kEs2VelMid) at a typical velocity, on the cutoff as builtin:synth's
+    // velocity amount
     const double padX = V(117), padY = V(118);
-    double envOct = 0, velOct = 0, staticOct = 0;
+    struct Flt { double oct = 0, env = 0, vel = 0, key = 0, res = 0; bool lfo = false; };
+    Flt fl[2];   // filter 1, filter 2: octaves of cutoff (static, ENV2, velocity), key tracking, added resonance
+    double blend = V(25);
+    // a cutoff target's share of filter 1 and 2: 14 Cutoff1, 16 Cutoff2, 19 Cut1+2, 20 Cut1inv2
+    auto cutW = [](int t, int k) { return t == 19 ? 1.0 : t == 14 ? (k == 0 ? 1.0 : 0.0) : t == 16 ? (k == 1 ? 1.0 : 0.0) : t == 20 ? (k == 0 ? 1.0 : -1.0) : 0.0; };
+    auto isCut = [](int t) { return t == 14 || t == 16 || t == 19 || t == 20; };
     json lfos = json::array();
     for (int s = 0; s < 10; ++s) {
         const size_t b = 37 + 5 * (size_t)s;
@@ -241,64 +263,125 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
         double amt = in;
         if (via == 2) amt = lerp(in, inVia, kVel);   // via velocity: at a typical velocity; 3/4 (wheel, touch): at rest
         else if (via != 0 && via != 3 && via != 4) notes.push_back(slot + "via #" + std::to_string(via) + " unknown; its minimum intensity used");
-        const bool cut = isCut(tgt);
-        if (src == 3 && cut) {   // ENV2 -> cutoff: the filter envelope
-            envOct += amt * kCutOct;
-            if (via == 2 && inVia > in) velOct += (inVia - in) * kCutOct * kVel;
-        } else if (src == 9 && cut) { if (amt > 0) velOct += amt * kCutOct; }
-        else if (src == 8 && cut) filt["keytrack"] = r(std::clamp(2 * amt, 0.0, 1.0));   // 0.5 = proportional
-        else if (src == 7 && cut) staticOct += amt * kCutOct;
-        else if ((src == 5 || src == 6) && cut) staticOct += (src == 5 ? padX : padY) * amt * kCutOct;
-        else if ((src == 0 || src == 1) && (via == 0 || via == 2)) {
+        // a static source's value: Max, the pad, velocity at a typical velocity, the wheels, bender and touch at rest
+        const bool still = src == 7 || src == 5 || src == 6 || src == 9;
+        const double at = src == 7 ? 1 : src == 5 ? padX : src == 6 ? padY : src == 9 ? kVel - kEs2VelMid : 0;
+        if (isCut(tgt) && src != 0 && src != 1) {
+            for (int k = 0; k < 2; ++k) {
+                const double w = cutW(tgt, k), oct = amt * w * kCutOct;
+                if (w == 0) continue;
+                if (src == 3) fl[k].env += oct;   // ENV2: the filter envelope
+                else if (src == 9) { fl[k].oct += oct * at; if (oct > 0) fl[k].vel += oct; }   // velocity: and the cutoff follows it
+                else if (src == 8) fl[k].key += oct / 5;   // Kybd: +-1 five octaves from C3 (MIDI 60): 0.5 is proportional
+                else if (still) fl[k].oct += at * oct;
+            }
+            if (src == 2) notes.push_back(slot + "ENV1 -> cutoff (" + num(amt, 2, true) + ") not played (one filter envelope: ENV2's)");
+            else if (!still && src != 3 && src != 8 && via != 3 && via != 4) notes.push_back(slot + route + " (" + num(amt, 2, true) + ") not mapped");
+            continue;
+        }
+        if ((tgt == 15 || tgt == 17 || tgt == 21) && still) {   // Reso1, Reso2, FltBlend from a static source
+            (tgt == 21 ? blend : fl[tgt == 15 ? 0 : 1].res) += at * amt;
+            continue;
+        }
+        if ((src == 0 || src == 1) && (via == 0 || via == 2)) {
             static const char *shapes[7] = {"triangle", "saw", "ramp", "square", "square", "random", "random"};
             const double rate = V(src == 0 ? 89 : 91);
             const int w = ri(V(src == 0 ? 90 : 92));
             json lfo = {{"rate", rate > 0 ? json(r(rate)) : json("1/8")}};
             if (rate <= 0) notes.push_back("LFO" + std::to_string(src + 1) + " rate " + gnum(rate) + " (0 = dc, < 0 = tempo sync) unmapped; \"1/8\" used");
             if (w >= 0 && w < 7) lfo["shape"] = shapes[w];
+            if (src == 0 && V(87) > 0) { lfo["delay"] = r(V(87) / 1000 / 2); lfo["fade"] = r(V(87) / 1000 / 2); }   // LFO1 EG: half delay, half fade-in
             bool pulse = false;
             for (auto &o : oscs) pulse |= o.contains("pw");
+            if (isCut(tgt)) {   // one LFO per filter it moves (resolved to the chain's filters below)
+                for (int k = 0; k < 2; ++k)
+                    if (cutW(tgt, k) != 0) { json l = lfo; l["depth"] = r(amt * cutW(tgt, k) * kCutOct); l["to"] = "cutoff"; l["es2Filter"] = k; lfos.push_back(l); fl[k].lfo = true; }
+                continue;
+            }
             if (tgt >= 0 && tgt <= 3) {
                 lfo["depth"] = r(es2Cents(amt) / 100);
                 lfo["to"] = "pitch";
                 if (tgt) notes.push_back(slot + route + " (one oscillator) plays on all of them");
-            } else if (cut) { lfo["depth"] = r(amt * kCutOct); lfo["to"] = "cutoff"; }
-            else if (tgt >= 5 && tgt <= 8 && pulse) { lfo["depth"] = r(std::fabs(amt) * 0.4); lfo["to"] = "pw"; }
+            } else if (tgt >= 5 && tgt <= 8 && pulse) { lfo["depth"] = r(std::fabs(amt) * 0.4); lfo["to"] = "pw"; }
             else if (tgt == 22 || tgt == 23) { lfo["depth"] = r(std::min(1.0, std::fabs(amt))); lfo["to"] = tgt == 23 ? "amp" : "pan"; }
             else { notes.push_back(slot + route + " not mapped"); continue; }
-            if (src == 0 && V(87) > 0) { lfo["delay"] = r(V(87) / 1000 / 2); lfo["fade"] = r(V(87) / 1000 / 2); }   // LFO1 EG: half delay, half fade-in
             lfos.push_back(lfo);
         } else if (src == 2 && tgt >= 0 && tgt <= 3 && (via == 0 || via == 2))   // ENV1 -> pitch: the pitch envelope
             synth["pitchEnv"] = {{"amount", r(es2Cents(amt) / 100, 100)}, {"decay", r(std::max(0.001, V(94) / 1000 / 4.6), 10000)}};
-        else if (src == 2 && cut) notes.push_back(slot + "ENV1 -> cutoff (" + num(amt, 2, true) + ") not played (one filter envelope: ENV2's)");
         else if (via == 3 || via == 4) {}   // mod wheel or aftertouch at rest
-        else if ((src == 5 || src == 6) && std::fabs((src == 5 ? padX : padY) * amt) < 0.02) {}   // pad centred
+        else if ((src == 5 || src == 6) && std::fabs(at * amt) < 0.02) {}   // pad centred
         else notes.push_back(slot + route + " (" + num(amt, 2, true) + ") not mapped");
     }
     for (int k = 0; k < 2; ++k) {   // the planar pad's vector targets (their list read as the router's: unconfirmed)
         const double pad = k == 0 ? padX : padY, amt = V(142 + 2 * (size_t)k);
         const int tgt = ri(V(141 + 2 * (size_t)k));
         if (isCut(tgt) && std::fabs(pad * amt) > 0.01) {
-            staticOct += pad * amt * kCutOct;
+            for (int f = 0; f < 2; ++f) fl[f].oct += pad * amt * cutW(tgt, f) * kCutOct;
             notes.push_back(std::string("planar pad ") + (k == 0 ? "X" : "Y") + " = " + num(pad, 2, true) + " -> vector target #" + std::to_string(tgt) +
                             " read as a cutoff offset (target list unconfirmed)");
         }
     }
-    if (staticOct != 0) filt["cutoff"] = r(std::clamp(filt["cutoff"].get<double>() * std::pow(2.0, staticOct), 20.0, 20000.0), 10);
-    if (std::fabs(envOct) > 0.05) {
-        filt["env"] = r(std::clamp(envOct, -8.0, 8.0), 100);
-        synth["filterEnv"] = {{"attack", r(lerp(V(98), V(103), kVel) / 1000, 10000)}, {"decay", r(std::max(0.001, V(99) / 1000))},
-                              {"sustain", r(V(101))}, {"release", r(std::max(0.001, V(102) / 1000))}};
+    // the filters: filter 1 (Lo, Hi, Peak, BR, BP at 12 dB) and filter 2 (a low-pass, 12, 18 or 24 dB) in series (V(24)
+    // 0) or parallel (1). Filter Blend -1 plays filter 1 alone and +1 filter 2 alone; in series 0 plays both in turn, a
+    // positive blend bypassing part of filter 1 and a negative one part of filter 2; in parallel 0 is an even mix
+    blend = std::clamp(blend, -1.0, 1.0);
+    const bool parallel = ri(V(24)) == 1;
+    const double share[2] = {parallel ? (1 - blend) / 2 : blend > 0 ? 1 - blend : 1.0, parallel ? (1 + blend) / 2 : blend < 0 ? 1 + blend : 1.0};
+    const int f1 = ri(V(26));
+    json chain = json::array();
+    int chainOf[2] = {-1, -1};
+    for (int k = 0; k < 2; ++k) {
+        const Flt &f = fl[k];
+        const int mode = k == 0 ? f1 : 0;   // filter 2 is a low-pass
+        const double knob = V(k == 0 ? 27 : 32), velOct = std::min(4.0, f.vel);
+        const double hz = std::clamp(cutoffHz(knob) * std::pow(2.0, f.oct + velOct * (1 - kVel)), 20.0, 20000.0);   // builtin:synth's velocity counts from 1
+        const double res = std::clamp(V(k == 0 ? 28 : 33) + f.res, 0.0, 1.0);
+        // a filter that leaves the sound as it is (a low-pass wide open, a high-pass at the bottom, nothing moving it) is left out
+        const bool moving = f.lfo || std::fabs(f.key) > 0.005 || velOct > 0.05;
+        const bool open = !moving && ((mode == 0 && hz >= 19000 && f.env >= 0) || (mode == 1 && hz <= 21 && f.env <= 0));
+        if (share[k] < 0.01 || open) continue;
+        static const char *types[5] = {"lowpass", "highpass", "peak", "notch", "bandpass"};   // Lo, Hi, Peak, BR, BP
+        json st = {{"type", mode >= 0 && mode <= 4 ? types[mode] : "lowpass"}, {"cutoff", r(hz, 10)}};
+        if (mode == 2 || mode == 3) {   // the resonance sets the band's width (a guess: Q 0.7 .. 10); the peak's gain a guess
+            st["q"] = r(0.7 + 9.3 * res, 100);
+            if (mode == 2) st["gain"] = 12;
+        } else {
+            st["slope"] = k == 0 || ri(V(30)) == 0 ? 12 : 24;
+            st["resonance"] = r(res);
+        }
+        if (f.key > 0.005) st["keytrack"] = r(std::clamp(f.key, 0.0, 1.0));
+        if (std::fabs(f.env) > 0.05) st["env"] = r(std::clamp(f.env, -8.0, 8.0), 100);
+        if (velOct > 0.05) st["velocity"] = r(velOct, 100);
+        if (share[k] < 0.995) st["mix"] = r(share[k]);
+        if (parallel && !chain.empty()) st["parallel"] = true;
+        chainOf[k] = (int)chain.size();
+        chain.push_back(st);
+    }
+    if (f1 == 2 || f1 == 3) notes.push_back("filter 1 Peak / Band Reject: the band's width (from Resonance) and the peak's gain are guesses");
+    if (chain.empty()) chain.push_back({{"type", "lowpass"}, {"slope", ri(V(30)) == 0 ? 12 : 24}, {"cutoff", 20000.0}, {"resonance", 0.0}});   // both wide open
+    if (V(29) > 0.01) chain[0]["drive"] = r(std::min(1.0, V(29)));
+    for (auto it = lfos.begin(); it != lfos.end();) {   // the cutoff LFOs onto the chain's filters
+        if (!it->contains("es2Filter")) { ++it; continue; }
+        const int at = chainOf[(*it)["es2Filter"].get<int>()];
+        it->erase("es2Filter");
+        if (at < 0) { it = lfos.erase(it); continue; }
+        if (at > 0) (*it)["filter"] = at;
+        ++it;
+    }
+    bool envOn = false;
+    for (auto &st : chain) envOn |= st.contains("env");
+    if (envOn) {
+        synth["filterEnv"] = {{"attack", r(lerp(V(98), V(103), kVel) / 1000, 10000)}, {"decay", r(std::max(0.001, V(99) / 1000 * kEs2Time))},
+                              {"sustain", r(V(101))}, {"release", r(std::max(0.001, V(102) / 1000 * kEs2Time))}};
         if (std::fabs(V(100)) > 0.5) notes.push_back("ENV2 sustain time " + gnum(V(100)) + " ms (fall or rise) isn't played");
     }
-    if (velOct > 0.05) filt["velocity"] = r(std::min(4.0, velOct), 100);
-    synth["filter"] = filt;
+    synth["filter"] = chain.size() == 1 ? chain[0] : chain;
     if (!lfos.empty()) {
         if (lfos.size() > 4) { notes.push_back("more than four LFO routes: the first four kept"); lfos.erase(lfos.begin() + 4, lfos.end()); }
         synth["lfo"] = lfos;
     }
-    synth["amp"] = {{"attack", r(std::max(0.001, lerp(V(105), V(110), kVel) / 1000), 10000)}, {"decay", r(std::max(0.005, V(106) / 1000))},
-                    {"sustain", r(V(108))}, {"release", r(std::max(0.005, V(109) / 1000))}, {"velocity", r(V(111))}};
+    synth["amp"] = {{"attack", r(std::max(0.001, lerp(V(105), V(110), kVel) / 1000), 10000)}, {"decay", r(std::max(0.005, V(106) / 1000 * kEs2Time))},
+                    {"sustain", r(V(108))}, {"release", r(std::max(0.005, V(109) / 1000 * kEs2Time))}, {"velocity", r(V(111))}};
     if (std::fabs(V(107)) > 0.5) notes.push_back("ENV3 sustain time " + gnum(V(107)) + " ms (fall or rise) isn't played");
     const int km = ri(V(3));   // 0 poly, 1 mono, 2 legato
     if (km == 1 || km == 2) { synth["mono"] = true; synth["legato"] = km == 2; }
@@ -306,8 +389,14 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
         synth["glide"] = r(V(0) / 1000, 10000);
         if (km == 0) notes.push_back("glide on a poly patch: builtin:synth glides only in mono");
     }
-    if (V(119) >= 0.5 || V(1) > 0.25) synth["unison"] = {{"voices", 2}, {"detune", r(5 + 30 * V(1), 10)}, {"spread", 0.7}};   // Analog as detune
-    synth["level"] = r(std::clamp(-6 + (V(36) + 6.5), -40.0, 12.0), 100);   // a calibrated level, moved by the plugin's Volume from its typical -6.5 dB
+    // unison: poly doubles each note; mono and legato stack Voices (row 2) voices; Analog as their detune
+    const int stack = (km == 1 || km == 2) && V(119) >= 0.5 ? std::clamp(ri(V(2)), 2, 16) : 2;
+    double uniDb = 0;   // ES2's stacked voices add up (builtin:synth keeps a unison as loud as one voice)
+    if (V(119) >= 0.5 || V(1) > 0.25) {
+        synth["unison"] = {{"voices", stack}, {"detune", r(5 + 30 * V(1), 10)}, {"spread", 0.7}};
+        if (V(119) >= 0.5) uniDb = 10 * std::log10((double)stack);
+    }
+    synth["level"] = r(std::clamp(-6 + (V(36) + 6.5) + uniDb, -40.0, 12.0), 100);   // a calibrated level, moved by the plugin's Volume from its typical -6.5 dB
     out.synth = synth;
     // effects: distortion as saturation, the modulation effect as a chorus
     if (V(112) > 0.5) {
@@ -319,7 +408,7 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
         if (ri(V(114)) != 0) notes.push_back("modulation effect type " + std::to_string(ri(V(114))) + " (flanger or phaser?) plays as a chorus");
     }
     if ((V(128) != 0 && V(128) != 1) || std::fabs(V(133)) > 0.01) notes.push_back("the vector envelope isn't played");
-    notes.push_back("cutoff in Hz and router cutoff depths are guesses (A1, A2: intensity 1 = 10 octaves)");
+    notes.push_back("cutoff in Hz and router cutoff depths: A1 and A2 (intensity 1 = 10 octaves), consistent with a GarageBand bounce of 12 ES2 patches but not pinned by it");
     return out;
 }
 
