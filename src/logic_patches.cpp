@@ -1201,6 +1201,30 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
                                                             {"gain", r2(std::min(9.0, 6 * v(2) / 100))}}})}});
                 notes.push_back("Exciter: its harmonics play as a high shelf (a guess)");
             }
+        } else if (p.name == "Tube EQ") {   // Vintage Tube EQ (a program EQ and a mid-range EQ): #1 program on, #2 low boost and #3 low
+                                            // atten 0-10 at #4 Hz, #7 high boost 0-10 at #8 kHz with #9 bandwidth, #5 high atten 0-10
+                                            // at #6 kHz; #11 mid on, #12 low peak at #13 Hz, #14 dip at #15 kHz, #17 high peak at
+                                            // #18 kHz; #21 drive, #22 volume dB. The dB per step are guesses (EQP-1A style: a
+                                            // full boost about 13.5 dB, a full cut about 17.5)
+            json bands = json::array();
+            auto step = [](double x) { return std::clamp(x, 0.0, 10.0); };
+            if (v(1, 1) >= 0.5) {
+                const double lf = std::clamp(v(4, 60), 20.0, 300.0);
+                if (step(v(2)) > 0.05) bands.push_back(bandOf("lowshelf", lf, 1.35 * step(v(2)), 0.6));
+                if (step(v(3)) > 0.05) bands.push_back(bandOf("lowshelf", lf * 1.6, -1.75 * step(v(3)), 0.6));
+                const double hf = std::clamp(v(8, 8) * 1000, 1000.0, 18000.0);
+                if (step(v(7)) > 0.05) bands.push_back(bandOf("peak", hf, 1.6 * step(v(7)), 0.5 + std::clamp(v(9, 5), 0.0, 10.0) / 5));
+                if (step(v(5)) > 0.05) bands.push_back(bandOf("highshelf", std::clamp(v(6, 10) * 1000, 3000.0, 19000.0), -2 * step(v(5)), 0.7));
+            }
+            if (v(11, 1) >= 0.5) {
+                if (step(v(12)) > 0.05) bands.push_back(bandOf("peak", std::clamp(v(13, 200), 100.0, 1200.0), 1.0 * step(v(12)), 1.0));
+                if (step(v(14)) > 0.05) bands.push_back(bandOf("peak", std::clamp(v(15, 1) * 1000, 200.0, 8000.0), -1.0 * step(v(14)), 1.0));
+                if (step(v(17)) > 0.05) bands.push_back(bandOf("peak", std::clamp(v(18, 3) * 1000, 1000.0, 6000.0), 1.0 * step(v(17)), 1.0));
+            }
+            if (!bands.empty()) add({{"type", "eq"}, {"bands", bands}});
+            if (v(21) > 0.5) add({{"type", "saturate"}, {"drive", r2(std::min(12.0, v(21)))}, {"match", true}});
+            if (std::fabs(v(22)) > 0.05) add({{"type", "gain"}, {"db", r2(v(22))}});
+            notes.push_back("Tube EQ: its boosts and cuts as shelves and peaks, the dB per step guessed");
         } else if (p.name == "Microphaser") {   // #0 rate Hz, #3 feedback %, #4/#5 sweep floor/ceiling Hz, #6 stages (Phaser's layout), #15 intensity %
             if (v(15) > 0.5) {
                 add({{"type", "phaser"}, {"rate", r4(std::max(0.02, v(0, 0.5)))}, {"floor", r2(std::max(20.0, v(4, 200)))},
