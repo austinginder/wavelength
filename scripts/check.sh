@@ -2,9 +2,22 @@
 # Build, then render every example and fail on errors, silent tracks, or a clipping mix.
 # Usage: scripts/check.sh            (from the repo root)
 #        BUILD=build-dev scripts/check.sh   (a second build tree, while agents render with build/)
+# One run at a time: the checks share out/check/ (and two suites at once heat a laptop), so a second run waits
+# for the first. A lock left by a run that died on this host is taken over; one from another host (a Docker run of
+# scripts/check-linux.sh) can't be checked: delete out/check.lock if no check is running.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 build="${BUILD:-build}"
+host=$(hostname)
+mkdir -p out
+while ! mkdir out/check.lock 2>/dev/null; do
+  read -r lhost lpid < out/check.lock/pid 2>/dev/null || { lhost=""; lpid=""; }
+  if [ "$lhost" = "$host" ] && [ -n "$lpid" ] && ! kill -0 "$lpid" 2>/dev/null; then rm -f out/check.lock/pid; rmdir out/check.lock; continue; fi
+  [ -z "${waited:-}" ] && { echo "waiting for another check.sh run (${lhost:-starting} pid ${lpid:-?}) to finish" >&2; waited=1; }
+  sleep 2
+done
+echo "$host $$" > out/check.lock/pid
+trap 'rm -f out/check.lock/pid; rmdir out/check.lock 2>/dev/null || true' EXIT
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release > /dev/null
 cmake --build "$build" -j "${JOBS:-8}" 2>&1 | grep -E "error:|warning:" && { echo "build has errors or warnings"; exit 1; } || true
 fail=0
