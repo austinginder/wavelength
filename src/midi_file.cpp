@@ -308,7 +308,7 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
 
     // parts: one per (track, channel)
     struct Part {
-        std::string trackName;
+        std::string trackName, instName;   // instName: the track's instrument name (meta 4); an Apple Loop's is its patch
         int channel = 0, program = -1;
         json notes = json::array();
         std::map<int, std::vector<std::pair<uint64_t, int>>> cc;    // controller -> (tick, value)
@@ -319,8 +319,9 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
     for (size_t ti = 0; ti < tracks.size(); ++ti) {
         auto &evs = tracks[ti];
         std::stable_sort(evs.begin(), evs.end(), [](const Ev &a, const Ev &b) { return a.tick < b.tick; });
-        std::string name;
+        std::string name, inst;
         for (auto &e : evs) if (e.status == 0xff && e.metaType == 0x03 && !e.data.empty()) { name = e.data; break; }
+        for (auto &e : evs) if (e.status == 0xff && e.metaType == 0x04 && !e.data.empty()) { inst = e.data; break; }
         std::map<int, size_t> partOf;   // channel -> index in parts
         struct On { uint64_t tick; int vel; int seq; };
         int onSeq = 0;
@@ -335,6 +336,7 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
             partOf[ch] = parts.size();
             parts.emplace_back();
             parts.back().trackName = name;
+            parts.back().instName = inst;
             parts.back().channel = ch;
             return parts.back();
         };
@@ -401,13 +403,29 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
         const bool drums = p.channel == 9;
         const int program = std::max(p.program, 0);
         std::string name = p.trackName;
+        if (loop && (name.empty() || name == "Presets") && !p.instName.empty()) name = p.instName;   // Drummer loops name the track "Presets"
         if (name.empty()) name = drums ? "Drums" : kGmNames[program];
         std::string unique = name;
         for (int k = 2; used.count(unique); ++k) unique = name + " " + std::to_string(k);
         used.insert(unique);
         json t = {{"name", unique}};
         bool sampler = false;
-        if (!instrument.empty() && !drums) t["plugin"] = instrument;
+        json loopPatch;   // an Apple Loop names the GarageBand patch it was recorded on (its instrument name): played when it plays here
+        if (loop && instrument.empty() && !p.instName.empty()) {
+            std::string e2;
+            const json d = describePatch(p.instName, "", e2);
+            if (d.is_object() && d.value("plays", false)) {
+                if (d.contains("synth")) loopPatch = {{"plugin", "builtin:synth"}, {"preset", d["name"]}};
+                else loopPatch = {{"plugin", "builtin:sampler"}, {"sampler", {{"patch", d["name"]}}}};
+                res.notes.push_back(unique + ": plays the loop's own patch, " + d["name"].get<std::string>());
+            } else if (d.is_object())
+                res.notes.push_back(unique + ": the loop's patch " + p.instName + " doesn't play here (" + d.value("why", std::string("unknown")) + "); a General MIDI sound stands in");
+        }
+        if (!loopPatch.is_null()) {
+            t["plugin"] = loopPatch["plugin"];
+            if (loopPatch.contains("sampler")) { t["sampler"] = loopPatch["sampler"]; sampler = true; }
+            else t["preset"] = loopPatch["preset"];
+        } else if (!instrument.empty() && !drums) t["plugin"] = instrument;
         else {   // General MIDI: a close multisample, else the GM SoundFont (drums: its kit), else builtin:drums
             std::string why;
             const json snd = gmSound(program, drums, why);
