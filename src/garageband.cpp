@@ -526,6 +526,16 @@ struct Project {
     }
 
     // ---- song-wide settings ----
+    // (tick, semitones): the transposition track (class 0x19, id 0), event 0x70 at each point; its extension +5 the
+    // transposition (int8), +6 the root it gives (60 + it)
+    std::vector<std::pair<int64_t, int>> transpositions() const {
+        std::vector<std::pair<int64_t, int>> out;
+        if (const Sequence *s = seq(0x19, 0))
+            for (auto &e : s->events())
+                if (e.type() == 0x70 && !e.ext.empty()) out.push_back({e.pos(), (int8_t)e.ext[0].u8(5)});
+        std::stable_sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+        return out;
+    }
     // (tick, name): the arrangement markers (class 5, id 0), event 0x12 at the marker's start; its extension +0 the
     // TxSq object with its name, +12 its length in ticks
     std::vector<std::pair<int64_t, std::string>> markers() const {
@@ -812,6 +822,14 @@ struct Converter {
     int64_t barTicks = 3840, bar1 = 38400, bias = kRegionBias;
     std::map<uint32_t, Project::Curves> curves;   // each channel's automation, taken as its track converts
     int songTonic = -1;                      // the project key's tonic (0-11), for Apple Loops
+    std::vector<std::pair<int64_t, int>> transposes;   // the transposition track's points
+    // the transposition track's semitones at a song tick: from each point on, MIDI regions and Apple Loops with a key
+    // play transposed (drum regions and loops without a key don't), as Apple's guide describes it
+    int transposeAt(int64_t tick) const {
+        int t = 0;
+        for (auto &[at, semis] : transposes) if (at <= tick) t = semis;
+        return t;
+    }
 
     Converter(const Project &p, const std::string &out) : P(p), outDir(out), patchDir(fs::u8path(out) / "patches") {
         const auto sigs = P.signatures();
@@ -820,6 +838,8 @@ struct Converter {
         barTicks = std::llround(num * 4.0 / den * kTicksPerBeat);
         bar1 = 38400;
         bias = kRegionBias;
+        transposes = P.transpositions();
+        if (std::all_of(transposes.begin(), transposes.end(), [](const auto &x) { return x.second == 0; })) transposes.clear();
         char b[200];
         if (!(den == 4 && (num == 4 || num == 3))) {
             std::snprintf(b, sizeof b, "time signature %lld/%lld: positions read as in 4/4 and 3/4 (other meters not checked)", (long long)num, (long long)den);
@@ -995,6 +1015,7 @@ struct Converter {
                 std::string kerr;
                 if (parseKeyName(loop->key, from, m, kerr)) { int d = ((songTonic - from) % 12 + 12) % 12; if (d > 5) d -= 12; shift += d; }
             }
+            if (loop && !loop->key.empty()) shift += transposeAt(p.start);
             if (shift) clip["pitch"] = shift;
             if (p.gainDb) clip["gain"] = p.gainDb;
             if (p.reverse) clip["reverse"] = true;
@@ -1214,6 +1235,13 @@ struct Converter {
         // notes in beats from bar 1
         if (!notes.empty()) {
             applySustain(notes, ctrl, name);
+            bool drums = t.kind == "drummer";
+            if (Plugin di; ch.instrument(di)) drums |= di.name == "Drum Kit" || di.name == "Ultrabeat";
+            drums |= ch.setting().second.find("Drum") != std::string::npos;
+            if (!transposes.empty() && !drums) {
+                for (auto &n : notes) n.key = std::clamp(n.key + transposeAt(n.tick), 0, 127);
+                warn.push_back(name + ": the transposition track moves its notes (" + std::to_string(transposes.size()) + " points)");
+            }
             std::stable_sort(notes.begin(), notes.end(), [](auto &a, auto &b) { return a.tick != b.tick ? a.tick < b.tick : a.key < b.key; });
             json out = json::array();
             int dropped = 0;

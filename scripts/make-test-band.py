@@ -172,6 +172,10 @@ body += seq(0x16, 0, 'Locators', events(event(0x10, BAR1 + 2 * 3840 - 1, ext=[ex
 # an event 0x12 at each start, extension +0 the name's object, +12 the length
 txsq = lambda oid, name: chunk('TxSq', 0, oid, bytes(0x10) + struct.pack('<II', 0x18, 0x18 + len(name) + 1) + name.encode() + b'\0')
 body += txsq(4, 'Intro') + txsq(8, 'Verse')
+# the transposition track (class 0x19): event 0x70 at each point, extension +5 the semitones, +6 the root they give;
+# +2 from beat 40 moves the last note and the Apple Loop at beat 40
+body += seq(0x19, 0, 'Untitled', events(event(0x70, BAR1, ext=[ext(bytes([0xff] * 5 + [0, 60]), mark=0xb2)]),
+                                         event(0x70, BAR1 + 40 * 960, ext=[ext(bytes([0xff] * 5 + [2, 62]), mark=0xb2)])))
 body += seq(5, 0, 'Untitled', events(event(0x12, BAR1, ext=[ext(struct.pack('<I', 4), u12=8 * 960, mark=0x88)]),
                                      event(0x12, BAR1 + 8 * 960, ext=[ext(struct.pack('<I', 8), u12=8 * 960, mark=0x88)])))
 body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', OUT)
