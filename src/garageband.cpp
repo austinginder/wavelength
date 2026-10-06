@@ -1117,7 +1117,19 @@ struct Converter {
     // an aux or bus channel as a bus named as GarageBand shows it, its effects from its plug-ins
     json &bus(const Channel &ch) {
         if (auto it = busOf.find(ch.r); it != busOf.end()) return buses[it->second];
-        const std::string label = P.label(ch);
+        // an aux GarageBand names from what it holds ("@ (=Context Name)", Logic's placeholder) takes its channel strip
+        // setting's name, as GarageBand shows it; names stay unique, so sends reach the right one
+        std::string label = P.label(ch);
+        if (label.empty() || label[0] == '@') {
+            const auto [setting, category] = ch.setting();
+            label = !setting.empty() ? (category.empty() || category[0] == '.' ? setting : category + "/" + setting) : "Aux " + std::to_string(buses.size() + 1);
+        }
+        auto taken = [&](const std::string &n) { return std::any_of(buses.begin(), buses.end(), [&](const json &b) { return b["name"] == n; }); };
+        if (taken(label)) {
+            int k = 2;
+            while (taken(label + " " + std::to_string(k))) ++k;
+            label += " " + std::to_string(k);
+        }
         const std::string rel = writePatch(ch, label, "_aux");
         json b = {{"name", label}};
         const json fx = channelFx(ch, "bus " + label, rel);
@@ -1171,7 +1183,7 @@ struct Converter {
                 warn.push_back(name + ": plays its project-local instrument " + fs::u8path(exs).filename().u8string() + " (the channel's effects as fx)");
             } else {
                 const std::string why = desc.is_object() && desc.contains("why") ? desc["why"].get<std::string>() : "its channel strip can't be read";
-                const bool sampler = inst.name == "Sampler" || inst.name == "EXS24" || inst.name == "Drum Kit" || inst.name == "Church Orga";
+                const bool sampler = inst.name == "Sampler" || inst.name == "EXS24" || inst.name == "Drum Kit" || inst.name == "Drum Kits" || inst.name == "Church Orga";
                 job["plugin"] = sampler ? "builtin:sampler" : "builtin:synth";
                 if (sampler) job["sampler"] = {{"patch", rel}}; else job["preset"] = rel;
                 const json standIn = {{"plugin", "builtin:synth"}, {"preset", fallbackPreset(inst.name, category, setting)}};

@@ -511,7 +511,10 @@ ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
 ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69), (16, 0.5, 64), (17, 0.5, 64),
                                                                  (18, 0.5, 64), (24.25, 0.5, 61), (40.7083, 0.25, 64), (48.875, 0.25, 62)] and t[0]["notes"][2]["vel"] == 0.5
-ok &= j["buses"] == [{"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100, "pingpong": False}]}]
+ok &= j["buses"][0] == {"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100, "pingpong": False}]}
+# two auxes named by the Logic placeholder take the names of their settings, and the Synth sends reach each of them
+ok &= [b["name"] for b in j["buses"][1:]] == ["Ambience/0.1s Short Ambience", "Large Hall/3.9s Prince Hall One"]
+ok &= sorted(t[0]["sends"]) == ["Ambience/0.1s Short Ambience", "Echo", "Large Hall/3.9s Prince Hall One"]
 ok &= j["import"]["cycle"] == [0, 8] and j["import"]["savedWith"] == "make-test-band.py"
 ok &= j["markers"] == [{"beat": 0, "name": "Intro"}, {"beat": 8, "name": "Verse"}]
 sys.exit(0 if ok else 1)'; then
