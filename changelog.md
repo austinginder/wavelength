@@ -4,6 +4,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- Track `realtime`: renders a plugin at wall-clock speed while its notes play (from 0.5 s before a note-on to 1.5 s after the last held note ends) and at full speed elsewhere, in every plugin format. Some plugins start or feed their voices from a timer on their main thread and rendered silence faster than real time; discoDSP Roboto, a free singing synthesizer, is one, and is paced by default. AGENTS.md shows how to give Roboto its words through its state and place each phrase with a held key.
+
 ## [0.5.0] - 2026-10-06
 
 ### Added
