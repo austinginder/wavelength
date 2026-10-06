@@ -294,7 +294,10 @@ fl2 = bytearray(10 + 2 * len(fname2) + 0x1f0)
 struct.pack_into('<H', fl2, 8, len(fname2))
 fl2[10:10 + 2 * len(fname2)] = fname2.encode('utf-16le')
 b2 = 10 + 2 * len(fname2)
-fl2[b2 + 0x8a:b2 + 0x8a + 11] = b'Audio Files'
+# its folder as an absolute path into the project as it was named when saved (GarageBand writes one when a project
+# starts from an audio file): longer than 64 bytes, and the project has since been renamed; it plays from this Media
+folder2 = b'/Users/someone/Music/GarageBand/An Earlier Name For This Song.band/Media/Audio Files'
+fl2[b2 + 0x8a:b2 + 0x8a + len(folder2)] = folder2
 struct.pack_into('<I', fl2, b2 + 0x1d4, n2)
 struct.pack_into('<H', fl2, b2 + 0x1dc, rate)
 fl2[b2 + 0x1e0], fl2[b2 + 0x1e2] = 1, 16

@@ -535,7 +535,7 @@ ok &= [c["beat"] for c in a["tracks"][1]["clips"]] == [c["beat"] for c in b["tra
 ok &= not any("time signature" in w for w in b["import"]["warnings"])
 sys.exit(0 if ok else 1)'; then band_why="the song in 3/4 did not land on the same beats as in 4/4"; fi
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength, a Groove Track follower; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, pitch bend, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength, a Groove Track follower; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed, found by a moved project's absolute path; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, pitch bend, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
 
 # panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
 # the default constant-power law takes it 7.66 dB down

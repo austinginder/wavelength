@@ -351,8 +351,9 @@ struct Sequence {
     std::vector<Event> events() const { return evsq ? eventsOf(evsq->pl) : std::vector<Event>{}; }
 };
 
-// An audio file (AuFl): its name (UTF-16) and, at fixed distances from the name's end, its folder in Media/
-// and its length in frames, sample rate, channels and bits
+// An audio file (AuFl): its name (UTF-16) and, at fixed distances from the name's end, its folder (up to 256 bytes:
+// a folder in Media/, or an absolute path when the project was started from an audio file) and its length in frames,
+// sample rate, channels and bits
 struct AudioFile {
     std::string name, folder;
     uint32_t frames = 0, rate = 0;
@@ -381,7 +382,7 @@ AudioFile audioFileOf(const Chunk &c) {
     const View &pl = c.pl;
     const size_t n = pl.u16(8), b = 10 + 2 * n;
     f.name = utf16le(pl, 10, n);
-    if (pl.n > b + 0x90) f.folder = pl.cstr(b + 0x8a, b + 0xca);
+    if (pl.n > b + 0x90) f.folder = pl.cstr(b + 0x8a, std::min(pl.n, b + 0x18a));
     if (pl.n > b + 0x1d8) f.frames = pl.u32(b + 0x1d4);
     if (pl.n > b + 0x1de) f.rate = pl.u16(b + 0x1dc);
     return f;
@@ -1061,6 +1062,22 @@ struct Converter {
         if (changed) warn.push_back(name + ": sustain pedal (CC64) played as longer notes (" + std::to_string(changed) + " notes)");
     }
 
+    // where an audio file is: a folder in the project's Media; an absolute folder inside a project's Media (GarageBand
+    // writes the path the project had when saved) read in this one's first, as the project may have moved since
+    fs::path audioFilePath(const AudioFile &af) const {
+        const fs::path media = fs::u8path(P.path) / "Media", file = fs::u8path(af.name);
+        const fs::path folder = fs::u8path(af.folder.empty() ? "Audio Files" : af.folder);
+        if (!folder.is_absolute()) return media / folder / file;
+        std::error_code ec;
+        const std::string g = folder.generic_u8string();
+        if (const size_t at = g.rfind(".band/Media"); at != std::string::npos) {
+            const std::string rest = g.substr(at + 11);
+            const fs::path inside = media / fs::u8path(rest.empty() ? "" : rest.substr(1)) / file;
+            if (fs::exists(inside, ec) || !fs::exists(folder / file, ec)) return inside;
+        }
+        return folder / file;
+    }
+
     json makeClips(const std::vector<Project::Placement> &clips, const std::string &name) {
         json out = json::array();
         for (auto &p : clips) {
@@ -1068,7 +1085,7 @@ struct Converter {
             auto f = P.files.find(p.region->file);
             if (f == P.files.end()) { warn.push_back(name + ": audio region \"" + p.region->name + "\": file record missing, left out"); continue; }
             const AudioFile &af = f->second;
-            const fs::path src = fs::u8path(P.path) / "Media" / fs::u8path(af.folder.empty() ? "Audio Files" : af.folder) / fs::u8path(af.name);
+            const fs::path src = audioFilePath(af);
             std::error_code ec;
             if (!fs::exists(src, ec)) { warn.push_back(name + ": " + src.u8string() + " is not in the project (left out)"); continue; }
             std::string file = src.u8string();
