@@ -1142,6 +1142,72 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             for (size_t i = 0; i < p.params.size(); ++i) if (std::fabs(p.params[i]) < 1e29f) s[(int)i] = p.params[i];
             if (s.count(0) && s[0] < 0.5) notes.push_back(p.name + ": switched off in the patch, left out");
             else for (auto &e : stompFx(p.name, s, notes)) add(e);
+        } else if (p.name == "Echo") {   // #16 note value (dotted, straight, triplet for 1/2, 1/4, 1/8, 1/16 from 0, read from its
+                                         // presets' names), #17 repeat %, #18 color -100..100, #19 dry %, #20 wet %
+            const double dry = v(19) / 100, wet = v(20, 100) / 100;
+            if (wet <= 0) { notes.push_back("Echo: Wet 0 as saved, left out"); continue; }
+            const int k = std::clamp((int)std::lround(v(16, 4)), 0, 11);
+            const double beats = 2.0 / std::pow(2.0, k / 3) * (k % 3 == 0 ? 1.5 : k % 3 == 2 ? 2.0 / 3 : 1.0);
+            // Color as the echoes' low-pass, 6 kHz at 0 and an octave per 50 (a guess); a 100 Hz high-pass
+            json d = {{"type", "delay"}, {"time", r4(beats)}, {"feedback", r4(std::clamp(v(17, 30) / 100, 0.0, 0.95))}, {"pingpong", false},
+                      {"highpass", 100}, {"lowpass", r2(std::min(20000.0, 6000 * std::pow(2.0, v(18) / 50)))}};
+            addMixGain(d, dry, wet);
+            notes.push_back("Echo: its Color plays as a low-pass on the echoes (a guess)");
+        } else if (p.name == "Multipr") {   // Multipressor: #0 bands (2-4, the top ones play: 2 bands are bands 3 and 4), crossovers #24
+                                            // (1/2), #13 (2/3), #2 (3/4); band b's threshold, ratio, make-up, attack, release at
+                                            // #40/#29/#18/#7 + 0..4; bypass #52..#49; #46 master gain dB, #48 auto gain
+            const int n = (int)std::lround(std::clamp(v(0, 4), 2.0, 4.0));
+            const int base[4] = {40, 29, 18, 7}, bypass[4] = {52, 51, 50, 49};
+            const double xo[3] = {v(24, 160), v(13, 1100), v(2, 7500)};
+            json xs = json::array(), bands = json::array();
+            for (int b = 4 - n; b < 4; ++b) {
+                if (b > 4 - n) xs.push_back(r2(xo[b - 1]));
+                json band = json::object();
+                const int q = base[b];
+                if (v(bypass[b]) < 0.5 && v(q + 1, 1) > 1.001)
+                    band["fx"] = json::array({{{"type", "compressor"}, {"threshold", r2(v(q))}, {"ratio", r4(v(q + 1))}, {"makeup", r2(v(q + 2))},
+                                               {"attack", r2(std::max(0.1, v(q + 3, 20)))}, {"release", r2(std::max(1.0, v(q + 4, 250)))}}});
+                else if (v(q + 2) != 0) band["gain"] = r2(v(q + 2));
+                bands.push_back(band);
+            }
+            bool ascending = true;
+            for (size_t i = 1; i < xs.size(); ++i) ascending &= xs[i].get<double>() > xs[i - 1].get<double>();
+            if (!ascending) { notes.push_back("Multipressor: its crossovers don't rise, left out"); continue; }
+            add({{"type", "multiband"}, {"crossovers", xs}, {"bands", bands}});
+            if (v(46) != 0) add({{"type", "gain"}, {"db", r2(v(46))}});
+            if (v(48) >= 0.5) notes.push_back("Multipressor: its auto gain is not played (make-up as saved)");
+            if (v(1) > 0.5) notes.push_back("Multipressor: its lookahead is not played");
+        } else if (p.name == "DirMix") {   // Direction Mixer: #0 input (0 L/R, 1 M/S), #1 direction (degrees), #2 spread (1 = as it is)
+            const double spread = v(2, 1), dir = v(1);
+            if (std::fabs(spread - 1) > 0.01) add({{"type", "width"}, {"amount", r4(std::clamp(spread, 0.0, 2.0))}});
+            if (std::fabs(dir) > 0.5) {   // the image turned toward one side: a pan (90 degrees = all the way; a guess)
+                add({{"type", "pan"}, {"position", r4(std::clamp(dir / 90, -1.0, 1.0))}});
+                notes.push_back("Direction Mixer: its direction plays as a pan");
+            }
+            if (v(0) >= 0.5) notes.push_back("Direction Mixer: its M/S input plays as left and right");
+        } else if (p.name == "Distortion") {   // #0 drive dB, #1 tone Hz (a low-pass after it: a guess), #2 output dB
+            if (v(0) > 0) add({{"type", "saturate"}, {"drive", r2(v(0))}});
+            if (v(1, 20000) < 19000) add({{"type", "eq"}, {"bands", json::array({{{"type", "lowpass"}, {"freq", r2(std::max(200.0, v(1)))}, {"q", 0.7071}}})}});
+            if (v(2) != 0) add({{"type", "gain"}, {"db", r2(v(2))}});
+        } else if (p.name == "Dist II") {   // Distortion II: #0 pre gain dB, #1 drive 0-1, #2 tone dB (a high shelf: a guess), #3 type
+            const double drive = std::max(0.0, v(0)) + 24 * std::clamp(v(1, 0.5), 0.0, 1.0);
+            if (drive >= 0.5) add({{"type", "saturate"}, {"drive", r2(drive)}, {"match", true}});
+            else notes.push_back("Distortion II: Pre Gain and Drive 0 as saved (a Smart Control knob raises them)");
+            if (std::fabs(v(2)) > 0.1) add({{"type", "eq"}, {"bands", json::array({{{"type", "highshelf"}, {"freq", 2000.0}, {"gain", r2(std::clamp(v(2), -24.0, 12.0))}}})}});
+            notes.push_back("Distortion II: drive as tanh saturation, level-matched, tone as a high shelf, its three types alike (guesses)");
+        } else if (p.name == "Exciter") {   // #0 frequency Hz, #1 color, #2 harmonics %, #3 original signal on
+            if (v(2) > 0) {
+                add({{"type", "eq"}, {"bands", json::array({{{"type", "highshelf"}, {"freq", r2(std::clamp(v(0, 4000), 500.0, 15000.0))},
+                                                            {"gain", r2(std::min(9.0, 6 * v(2) / 100))}}})}});
+                notes.push_back("Exciter: its harmonics play as a high shelf (a guess)");
+            }
+        } else if (p.name == "Microphaser") {   // #0 rate Hz, #3 feedback %, #4/#5 sweep floor/ceiling Hz, #6 stages (Phaser's layout), #15 intensity %
+            if (v(15) > 0.5) {
+                add({{"type", "phaser"}, {"rate", r4(std::max(0.02, v(0, 0.5)))}, {"floor", r2(std::max(20.0, v(4, 200)))},
+                     {"ceiling", r2(std::max(v(4, 200) * 1.05, v(5, 4000)))}, {"stages", (int)std::lround(std::clamp(v(6, 4), 2.0, 24.0))},
+                     {"feedback", r4(std::clamp(v(3) / 100, -0.95, 0.95))}, {"mix", r4(0.5 * std::min(1.0, v(15) / 100))}});
+                notes.push_back("Microphaser: its Intensity plays as the phaser's mix (a guess)");
+            } else notes.push_back("Microphaser: Intensity 0 as saved (a Smart Control knob raises it), left out");
         } else {
             notes.push_back(p.name + ": GarageBand's own effect, not played");
         }

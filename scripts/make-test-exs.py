@@ -119,6 +119,17 @@ strip(os.path.join(out, 'patches', 'Test Synth.patch', '#Root.cst'), [record(3, 
 # an effect patch (no instrument), in the Audio folder beside the instrument patches: the same Channel EQ
 os.makedirs(os.path.join(out, 'Audio', 'Test Chain.patch'), exist_ok=True)
 strip(os.path.join(out, 'Audio', 'Test Chain.patch', '#Root.cst'), [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Channel EQ', b'GAME', settings(236, ceq))])
+# Echo (#16 note value 7 = 1/8, #17 repeat 50 %, #18 color, #19 dry 100 %, #20 wet 50 %) and a 3-band Multipressor (#0 bands;
+# the top three play: crossovers #13 500 Hz and #2 4000 Hz; band 3's threshold -20 dB at #18, ratio 4 at #19)
+echo = [0.0] * 21
+echo[16:21] = [7, 50, 37, 100, 50]
+mp = [0.0] * 57
+mp[0], mp[2], mp[13], mp[24] = 3, 4000, 500, 100
+for b in (40, 29, 18, 7): mp[b], mp[b + 1], mp[b + 3], mp[b + 4] = -15, 1, 10, 200
+mp[18], mp[19] = -20, 4
+os.makedirs(os.path.join(out, 'Audio', 'Test Echo.patch'), exist_ok=True)
+strip(os.path.join(out, 'Audio', 'Test Echo.patch', '#Root.cst'),
+      [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Echo', b'GAME', settings(147, echo)), record(5, 'Multipr', b'GAME', settings(194, mp))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):

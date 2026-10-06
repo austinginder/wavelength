@@ -189,26 +189,6 @@ Plugin pluginOf(const Chunk &c) {
     return p;
 }
 
-// Apple parameter #n = params[n]: the values of the record's "TSPP" block after its reserved first one
-std::vector<float> pluginParams(const Plugin &p) {
-    const View &pl = p.c->pl;
-    static const char tag[] = "GAMETSPP";
-    const uint8_t *f = std::search(pl.p, pl.p + pl.n, tag, tag + 8);
-    const size_t g = (size_t)(f - pl.p);
-    if (f == pl.p + pl.n || g < 12) return {};
-    const size_t s = g - 12;
-    const uint32_t count = pl.u32(s + 8);
-    if (count > 4096 || s + 24 + 4 * (size_t)count > pl.n) return {};
-    std::vector<float> v;
-    for (uint32_t i = 1; i < count; ++i) {
-        const uint32_t bits = pl.u32(s + 24 + 4 * (size_t)i);
-        float x;
-        std::memcpy(&x, &bits, 4);
-        v.push_back(x);
-    }
-    return v;
-}
-
 // A send record (44 or 76 bytes): +0x14 the destination's code, +0x18 the level (8.24 fixed point on the fader's
 // 0-127 scale), +0x3c the destination channel's UUID (76-byte records)
 struct Send {
@@ -869,48 +849,17 @@ struct Converter {
 
     // GarageBand's Echo: parameters #16 Time (an index: 1/2., 1/2, 1/2T, 1/4., ... 1/16T), #17 Repeat %, #18 Color,
     // #19 Dry %, #20 Wet %, as a tempo-synced delay (its Color as a low-pass: a guess)
-    static json echoFx(const Plugin &p) {
-        const std::vector<float> v = pluginParams(p);
-        auto g = [&](size_t i, double def) { return i < v.size() && std::isfinite(v[i]) ? (double)v[i] : def; };
-        const long idx = std::lround(std::nearbyint(std::clamp(g(16, 4), -1e6, 1e6)));
-        static const double base[] = {2.0, 1.0, 0.5, 0.25}, mult[] = {1.5, 1.0, 2.0 / 3.0};
-        const double time = base[std::clamp(idx / 3, 0L, 3L)] * mult[(idx % 3 + 3) % 3];
-        const double dry = g(19, 0) / 100.0, wet = g(20, 100) / 100.0;
-        if (wet <= 0) return json::array();
-        json fx = {{"type", "delay"}, {"time", r4(time)}, {"feedback", r4(std::min(0.95, g(17, 30) / 100.0))},
-                   {"mix", dry + wet > 0 ? r4(wet / (dry + wet)) : 1.0}, {"lowpass", r3(std::min(20000.0, 6000.0 * std::pow(2.0, g(18, 0) / 50.0)))},
-                   {"highpass", 100}};
-        json out = json::array({fx});
-        if (dry + wet > 0 && std::fabs(20 * std::log10(dry + wet)) > 0.05) out.push_back({{"type", "gain"}, {"db", r3(20 * std::log10(dry + wet))}});
-        return out;
-    }
-
     // the effects of a channel without an instrument (an audio track, an aux, the master) as Wavelength fx
     json channelFx(const Channel &ch, const std::string &label, const std::string &rel) {
         const json desc = describe(rel);
         json fx = desc.is_object() && desc.contains("effects") ? desc["effects"] : json::array();
         std::vector<std::string> notes;
         if (desc.is_object() && desc.contains("effectNotes"))
-            for (auto &n : desc["effectNotes"])
-                if (n.get<std::string>().rfind("Echo: ", 0) != 0) notes.push_back(n.get<std::string>());
-        // Echo isn't one of the patch effects: played here, first in the chain or after the others
-        std::vector<Plugin> chain;
-        for (auto &p : ch.plugins())
-            if (!p.instrument && !p.midiFx) chain.push_back(p);
-        std::stable_sort(chain.begin(), chain.end(), [](const Plugin &a, const Plugin &b) { return a.order < b.order; });
-        bool echo = false;
-        for (size_t i = 0; i < chain.size(); ++i) {
-            if (chain[i].name != "Echo" || chain[i].bypassed) continue;
-            const json e = echoFx(chain[i]);
-            if (i == 0) fx.insert(fx.begin(), e.begin(), e.end());
-            else fx.insert(fx.end(), e.begin(), e.end());
-            echo = true;
-        }
-        if (echo) notes.push_back("Echo: played as a tempo-synced delay (its Color as a low-pass: a guess)");
+            for (auto &n : desc["effectNotes"]) notes.push_back(n.get<std::string>());
         if (!desc.is_object()) {
             std::string names;
-            for (auto &p : chain)
-                if (!p.bypassed && p.name != "Echo") names += (names.empty() ? "" : ", ") + p.name;
+            for (auto &p : ch.plugins())
+                if (!p.instrument && !p.midiFx && !p.bypassed) names += (names.empty() ? "" : ", ") + p.name;
             if (!names.empty()) notes.push_back("effects not translated (its channel strip can't be read): " + names);
         }
         for (auto &n : notes) warn.push_back(label + ": " + n);

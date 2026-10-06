@@ -455,8 +455,16 @@ lo, hi = db(w, sr, 0.3, 0.9) - db(d, sr, 0.3, 0.9), db(w, sr, 2.3, 2.9) - db(d, 
 print('C2 %+.1f dB, C5 %+.1f dB through the patch' % (lo, hi), file=sys.stderr)
 sys.exit(0 if abs(hi + 3.1) < 0.3 and abs(lo + 22.5) < 1 else 1)
 PY
-then fxpatch_why="its EQ didn't play as saved (see above)"; fi
-if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it"; fi
+then fxpatch_why="its EQ didn't play as saved (see above)"
+elif ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelength" samples --patch "Test Echo" --json 2>/dev/null | python3 -c '
+import json, sys
+fx = json.load(sys.stdin)["patch"]["effects"]
+d = [e for e in fx if e["type"] == "delay"]
+m = [e for e in fx if e["type"] == "multiband"]
+ok = len(d) == 1 and d[0]["time"] == 0.5 and d[0]["feedback"] == 0.5 and len(m) == 1 and m[0]["crossovers"] == [500, 4000]
+ok = ok and len(m[0]["bands"]) == 3 and m[0]["bands"][1]["fx"][0]["threshold"] == -20 and m[0]["bands"][1]["fx"][0]["ratio"] == 4 and "fx" not in m[0]["bands"][0]
+sys.exit(0 if ok else 1)'; then fxpatch_why="Echo or Multipressor didn't map as saved"; fi
+if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo and Multipressor map"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
 # imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,
@@ -485,7 +493,7 @@ ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
 ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69), (16, 0.5, 64), (17, 0.5, 64),
                                                                  (18, 0.5, 64), (24.25, 0.5, 61), (40.7083, 0.25, 62)] and t[0]["notes"][2]["vel"] == 0.5
-ok &= j["buses"] == [{"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100}]}]
+ok &= j["buses"] == [{"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100, "pingpong": False}]}]
 ok &= j["import"]["cycle"] == [0, 8] and j["import"]["savedWith"] == "make-test-band.py"
 sys.exit(0 if ok else 1)'; then
   band_why="the job came out wrong: $(head -c 400 out/check/band/imp/job.json)"
