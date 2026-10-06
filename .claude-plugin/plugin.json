@@ -1,6 +1,6 @@
 {
   "name": "wavelength",
-  "version": "0.5.0-dev",
+  "version": "0.5.0",
   "description": "Compose, arrange, mix and master music with Wavelength, the headless music engine for AI agents: JSON jobs rendered through the synths and sample libraries installed on this computer (or its built-in synth), with loudness reports and a picture of every render. A skill and an MCP server.",
   "author": {
     "name": "Austin Ginder",
