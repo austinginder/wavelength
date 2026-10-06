@@ -155,7 +155,7 @@ def send(index, code, level, target):
 INST, BUS, AUD, OUT = 0x29, 0x4d, 0x31, 0x51       # channel numbers
 LOOP, FILE, FILE2 = 0x10c, 0x200, 0x204           # the audio track's object, its files' ids
 AUTOROOT, AUTOLOOP, AUTOMASTER, AUTOSYNTH = 0x300, 0x304, 0x308, 0x30c   # the automation root folder, the Loop track's, the master's, the Synth's
-TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4 = 0x100, 0x104, 0x108, 8, 12, 16, 20
+TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4, REGION5 = 0x100, 0x104, 0x108, 8, 12, 16, 20, 24
 bus_uuid = bytes([0xd5]) + bytes(range(1, 16))
 retro = [1e30] * 902                               # parameter #n; unused ones hold 1e30
 for n, v in {1: 8, 2: 0, 3: 12, 4: 0, 5: -6, 201: 0, 209: 0, 301: 1, 303: 1, 401: 0, 802: 1, 803: 100, 804: 1, 805: 100, 806: 0}.items():
@@ -187,6 +187,7 @@ auto_point = lambda pos, cc, value, step=False: event(0xb0, pos, struct.pack('<I
 body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), placement(BAR1 + 3840, 3840, REGION2),
                                          placement(BAR1 + 3 * 3840, 3 * 960, REGION3, looped=True),
                                          placement(BAR1 + 5 * 3840, END, REGION4, transpose=2),
+                                         placement(BAR1 + 9 * 3840, END, REGION5),
                                          audio_placement(BAR1 + 7 * 3840, 2000, LOOP, FILE),
                                          audio_placement(BAR1 + 9 * 3840, END, LOOP, FILE2, looped=False, params=bytes([0x20, 6, 0, 0, (-6) & 0xff, 2]))),
             trak(0, 1, TRACK) + trak(1, 1, LOOP) + trak(2, 3, MASTER))
@@ -196,6 +197,7 @@ body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0
 body += region(0x17, REGION3, 'Synth 3', events(note(BAR1, 64, 90, 480)), length=960)
 body += region(0x17, REGION4, 'Synth 4', events(note(BAR1, 57, 90, 480), note(BAR1 + 600, 59, 90, 480, offset=130)), trim=480, length=1920,
                quantize=-6)
+body += region(0x17, REGION5, 'Synth 5', events(note(BAR1 + 480, 62, 90, 240)), length=1920, quantize=-26)   # 1/8 Swing F: the off-beat 8th goes to 17/24 of the pair
 body += channel(INST, 0x43, 0, ' Inst 1', 80, 80, bytes([0xd5]) + bytes(15))
 body += record(INST, 0, send(0, 0, 45, bus_uuid))
 steps = [(0, 100)] * 410

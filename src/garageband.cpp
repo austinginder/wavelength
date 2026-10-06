@@ -48,11 +48,47 @@ double r4(double v) { return std::round(v * 10000) / 10000; }
 // gives +5.98 dB at 127 (the faders' +6 dB top). A guess, not yet checked against GarageBand's own readout.
 double faderDb(double v) { return v <= 0.01 ? -120.0 : 40.0 * std::log10(v / 90.0); }
 
-// A region's Time Quantize code as its grid in ticks (0 = off or not known): -13 to -1 run down Logic's menu, 1/1, 1/2,
-// 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/96 (-6 = 1/16 and -11 = 1/3 seen; the rest follow the menu)
-int64_t quantizeGrid(int code) {
-    static const int64_t grid[13] = {3840, 1920, 1280, 960, 640, 480, 320, 240, 160, 120, 80, 60, 40};
-    return code >= -13 && code <= -1 ? grid[code + 13] : 0;
+// A region's Time Quantize: a note `rel` ticks into the region on its grid, or -1 when the code isn't one (0 = Off). Codes
+// read from projects saved with each menu value (tq.band): -13 to -1 = 1/1, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24,
+// 1/32, 1/48, 1/64, 1/96; -15 to -20 1/16 Swing A-F and -21 to -26 1/8 Swing A-F (the off-beat of each pair at
+// (12 + letter)/24 of it: A straight, F 71 %); -27 5-Tuplet/4 (768 ticks), -28 5-Tuplet/8 (384), -29 7-Tuplet (548),
+// -30 9-Tuplet (426: a whole note divided, rounded down: the line is chosen on the exact division and placed on the
+// rounded one); -31 to -33 1/16 & 1/16 Triplet, 1/16 & 1/8 Triplet, 1/8 & 1/8 Triplet (both grids); -34 1/192. A note
+// exactly halfway goes back here; GarageBand went back on two such ties (1/3, 9-Tuplet) and on for two (5-, 7-Tuplet)
+int64_t quantizeTick(int code, int64_t rel) {
+    auto plain = [&](double exact, int64_t placed) {
+        const int64_t k = (int64_t)std::ceil((double)rel / exact - 0.5 - 1e-9);
+        return k * placed;
+    };
+    auto nearest = [&](std::initializer_list<int64_t> grids) {   // the closest line of any of them (a tie: the earlier)
+        int64_t best = 0, dist = INT64_MAX;
+        for (int64_t g : grids)
+            for (int64_t k = (int64_t)std::floor((double)rel / g); k <= (int64_t)std::floor((double)rel / g) + 1; ++k)
+                if (const int64_t d = std::llabs(rel - k * g); d < dist || (d == dist && k * g < best)) dist = d, best = k * g;
+        return best;
+    };
+    static const int64_t straight[13] = {3840, 1920, 1280, 960, 640, 480, 320, 240, 160, 120, 80, 60, 40};
+    if (code >= -13 && code <= -1) return plain((double)straight[code + 13], straight[code + 13]);
+    if (code >= -26 && code <= -15) {   // swing: pairs of 1/16 (480 ticks) or 1/8 (960), the off-beat moved later
+        const int letter = code >= -20 ? -15 - code : -21 - code;
+        const int64_t pair = code >= -20 ? 480 : 960, off = pair * (12 + letter) / 24;
+        const int64_t k = (int64_t)std::floor((double)rel / pair);
+        int64_t best = 0, dist = INT64_MAX;
+        for (int64_t c : {k * pair, k * pair + off, (k + 1) * pair})
+            if (const int64_t d = std::llabs(rel - c); d < dist) dist = d, best = c;
+        return best;
+    }
+    switch (code) {
+    case -27: return plain(768, 768);
+    case -28: return plain(384, 384);
+    case -29: return plain(3840.0 / 7, 548);
+    case -30: return plain(3840.0 / 9, 426);
+    case -31: return nearest({240, 160});
+    case -32: return nearest({240, 320});
+    case -33: return nearest({480, 320});
+    case -34: return plain(20, 20);
+    default: return -1;
+    }
 }
 
 bool validUtf8(const uint8_t *p, size_t n) {
@@ -679,9 +715,9 @@ struct Project {
             // note's played position on its grid and the rest here); the region's trim hides the content before it
             int64_t t = start + ((int64_t)e.pos() - origin) - s.trim;
             if (st == 0x90 && !e.ext.empty() && e.ext[0].u8(7) == 0x89) t += e.ext[0].u16(4);
-            if (const int64_t g = quantizeGrid(s.quantize)) {   // the grid runs from the region's content start; a tie goes back
-                const int64_t base = start - s.trim;
-                t = base + (int64_t)std::ceil((double)(t - base) / g - 0.5) * g;
+            if (s.quantize) {   // the grid runs from the region's content start
+                const int64_t base = start - s.trim, q = quantizeTick(s.quantize, t - base);
+                if (q >= 0) t = base + q;
             }
             if (t < start || (length && t >= end)) continue;
             const int ch = type & 0x0f, d1 = e.rec.u8(12), d2 = e.rec.u8(11);
@@ -927,7 +963,7 @@ struct Converter {
             std::vector<Project::Note> n;
             std::vector<Project::Ctrl> c;
             P.placeRegion(p, p.start, bar1, bias, n, c);
-            if (p.seq->quantize && !quantizeGrid(p.seq->quantize))
+            if (p.seq->quantize && quantizeTick(p.seq->quantize, 0) < 0)
                 warn.push_back(t.name + ": region \"" + p.seq->name + "\" has a Time Quantize (code " + std::to_string(p.seq->quantize) + ") not decoded, played as recorded");
             if (n.empty() && c.empty()) {
                 char b[64];

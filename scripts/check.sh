@@ -450,7 +450,7 @@ m = j["master"]["automation"]["gain"]
 ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
 ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69), (16, 0.5, 64), (17, 0.5, 64),
-                                                                 (18, 0.5, 64), (24.25, 0.5, 61)] and t[0]["notes"][2]["vel"] == 0.5
+                                                                 (18, 0.5, 64), (24.25, 0.5, 61), (40.7083, 0.25, 62)] and t[0]["notes"][2]["vel"] == 0.5
 ok &= j["buses"] == [{"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100}]}]
 ok &= j["import"]["cycle"] == [0, 8] and j["import"]["savedWith"] == "make-test-band.py"
 sys.exit(0 if ok else 1)'; then
@@ -471,7 +471,7 @@ ok &= [c["beat"] for c in a["tracks"][1]["clips"]] == [c["beat"] for c in b["tra
 ok &= not any("time signature" in w for w in b["import"]["warnings"])
 sys.exit(0 if ok else 1)'; then band_why="the song in 3/4 did not land on the same beats as in 4/4"; fi
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade; the same song in 3/4) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize and swing; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade; the same song in 3/4) and renders its track's own channel strip"; fi
 
 # panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
 # the default constant-power law takes it 7.66 dB down
