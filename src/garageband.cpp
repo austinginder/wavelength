@@ -5,6 +5,7 @@
 #include "harmony.hpp"
 #include "retro_synth.hpp"
 #include "logic_patches.hpp"
+#include "platform.hpp"
 #include "sampler.hpp"
 #include "xml.hpp"
 
@@ -1360,7 +1361,7 @@ struct Converter {
             std::string file = src.u8string();
             if (copyMedia) {
                 fs::create_directories(fs::u8path(outDir) / "media", ec);
-                fs::copy_file(src, fs::u8path(outDir) / "media" / fs::u8path(af.name), fs::copy_options::overwrite_existing, ec);
+                platform::copyFile(src, fs::u8path(outDir) / "media" / fs::u8path(af.name), ec);
                 file = "media/" + af.name;
             }
             json clip = {{"file", file}, {"beat", r4(beat(p.start))}};

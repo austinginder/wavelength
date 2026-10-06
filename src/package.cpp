@@ -516,11 +516,11 @@ bool keepRender(Song &song, const std::string &outDir, const json &report, int r
     if (mp3.empty() || !fs::is_regular_file(mp3, ec)) { err = "the render made no MP3 to keep"; return false; }
     const fs::path dir = song.dir / "render";
     fs::create_directories(dir, ec);
-    fs::copy_file(mp3, dir / "mix.mp3", fs::copy_options::overwrite_existing, ec);
+    platform::copyFile(mp3, dir / "mix.mp3", ec);
     if (ec) { err = "cannot copy " + mp3 + " into render/: " + ec.message(); return false; }
     const std::string png = report.contains("picture") ? report["picture"].value("file", std::string()) : "";
     const bool picture = !png.empty() && fs::is_regular_file(png, ec);
-    if (picture) fs::copy_file(png, dir / "song.png", fs::copy_options::overwrite_existing, ec);
+    if (picture) platform::copyFile(png, dir / "song.png", ec);
     else fs::remove(dir / "song.png", ec);   // an older picture no longer shows this render
     // the report travels with the song: file paths in it relative to the song, never this computer's folders
     json kept = report;

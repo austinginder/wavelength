@@ -161,10 +161,10 @@ void storeFiles(const std::string &key, const std::string &prefix) {
     std::error_code ec;
     fs::create_directories(dir(), ec);
     const fs::path pcm = dir() / (key + ".pcm"), js = dir() / (key + ".json");
-    fs::copy_file(prefix + ".json", js.string() + tmpSuffix(), fs::copy_options::overwrite_existing, ec);
+    platform::copyFile(prefix + ".json", js.string() + tmpSuffix(), ec);
     if (ec || !publish(js.string() + tmpSuffix(), js)) return;
     fs::rename(prefix + ".pcm", pcm.string() + tmpSuffix(), ec);   // same volume: a move; else copy
-    if (ec) { ec.clear(); fs::copy_file(prefix + ".pcm", pcm.string() + tmpSuffix(), fs::copy_options::overwrite_existing, ec); }
+    if (ec) { ec.clear(); platform::copyFile(prefix + ".pcm", pcm.string() + tmpSuffix(), ec); }
     if (!ec) publish(pcm.string() + tmpSuffix(), pcm);
 }
 

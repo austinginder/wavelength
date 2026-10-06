@@ -3,6 +3,7 @@
 #include "audition.hpp"
 #include "catalog.hpp"
 #include "history.hpp"
+#include "platform.hpp"
 #include "presets.hpp"
 #include "review.hpp"
 #include "sampler.hpp"
@@ -131,7 +132,7 @@ struct Upgrader {
             const fs::path dst = song.dir / fs::u8path(rel);
             fs::create_directories(dst.parent_path(), ec);
             if (fs::is_directory(src, ec)) fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::skip_existing, ec);
-            else if (!fs::exists(dst, ec)) fs::copy_file(src, dst, ec);
+            else if (!fs::exists(dst, ec)) platform::copyFile(src, dst, ec);
             if (ec) { problems.push_back("cannot copy " + src.string() + " to " + rel + ": " + ec.message()); return ""; }
         }
         return placed[key] = rel;
@@ -329,8 +330,8 @@ bool run(const std::string &songDir, const Options &opt, json &result, std::stri
             if (!opt.dryRun) {
                 std::string werr;
                 fs::create_directories(song.dir / "render", ec);
-                fs::copy_file(mp3, song.dir / "render/mix.mp3", fs::copy_options::overwrite_existing, ec);
-                if (hasPng) fs::copy_file(png, song.dir / "render/song.png", fs::copy_options::overwrite_existing, ec);
+                platform::copyFile(mp3, song.dir / "render/mix.mp3", ec);
+                if (hasPng) platform::copyFile(png, song.dir / "render/song.png", ec);
                 json rep;
                 try { rep = json::parse(readText(report)); } catch (...) {}
                 if (rep.is_object()) rep["song"] = {{"job", r["job"]}};

@@ -54,6 +54,11 @@ double loadAverage();
 // partial one: write a temporary file named for this process beside it, then rename it over.
 bool writeFileAtomic(const std::filesystem::path &path, const std::string &data, std::string &err);
 
+// Copy a file's bytes over `to` (created or replaced), without its permission bits. libstdc++'s copy_file
+// creates the destination write-only first, which Docker Desktop's bind mounts refuse (and leave behind
+// empty, unreadable); this works there. Not for plugin bundles (their modes matter).
+bool copyFile(const std::filesystem::path &from, const std::filesystem::path &to, std::error_code &ec);
+
 // An exclusive lock between processes on a lock file (created if missing), held until destroyed.
 // Released by the system if the process dies; child processes do not inherit it.
 class FileLock {

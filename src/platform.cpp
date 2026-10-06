@@ -206,6 +206,27 @@ bool writeFileAtomic(const std::filesystem::path &path, const std::string &data,
     return true;
 }
 
+bool copyFile(const std::filesystem::path &from, const std::filesystem::path &to, std::error_code &ec) {
+    ec.clear();
+#ifdef __APPLE__
+    // a clone on APFS; libc++ writes the destination with its final mode, so a bind mount has nothing to refuse
+    if (std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec)) return true;
+    std::error_code gone;
+    std::filesystem::remove(to, gone);
+#endif
+    // libstdc++'s copy_file creates the destination write-only (0200) before copying into it, and Docker Desktop's
+    // bind mounts refuse to open, stat or replace such a file: copy the bytes into a file made the ordinary way
+    std::ifstream in(from, std::ios::binary);
+    if (!in) { if (!ec) ec = std::make_error_code(std::errc::no_such_file_or_directory); return false; }
+    std::ofstream out(to, std::ios::binary | std::ios::trunc);
+    if (!out) { if (!ec) ec = std::make_error_code(std::errc::permission_denied); return false; }
+    out << in.rdbuf();
+    out.flush();
+    if (!out) { if (!ec) ec = std::make_error_code(std::errc::io_error); return false; }
+    ec.clear();
+    return true;
+}
+
 FileLock::~FileLock() { release(); }
 
 bool FileLock::acquire(const std::filesystem::path &path, int timeoutSec, std::string &err) {
