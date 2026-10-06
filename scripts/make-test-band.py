@@ -153,7 +153,8 @@ def send(index, code, level, target):
     return bytes(pl)
 
 
-INST, BUS, AUD, OUT = 0x29, 0x4d, 0x31, 0x51       # channel numbers
+INST, BUS, AUD, OUT, AUI = 0x29, 0x4d, 0x31, 0x51, 0x39   # channel numbers (AUI: a third-party Audio Unit instrument)
+AUTRACK, REGION7 = 0x110, 32
 LOOP, FILE, FILE2 = 0x10c, 0x200, 0x204           # the audio track's object, its files' ids
 AUTOROOT, AUTOLOOP, AUTOMASTER, AUTOSYNTH = 0x300, 0x304, 0x308, 0x30c   # the automation root folder, the Loop track's, the master's, the Synth's
 TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4, REGION5, REGION6 = 0x100, 0x104, 0x108, 8, 12, 16, 20, 24, 28
@@ -179,7 +180,7 @@ body += seq(0x19, 0, 'Untitled', events(event(0x70, BAR1, ext=[ext(bytes([0xff] 
                                          event(0x70, BAR1 + 40 * 960, ext=[ext(bytes([0xff] * 5 + [2, 62]), mark=0xb2)])))
 body += seq(5, 0, 'Untitled', events(event(0x12, BAR1, ext=[ext(struct.pack('<I', 4), u12=8 * 960, mark=0x88)]),
                                      event(0x12, BAR1 + 8 * 960, ext=[ext(struct.pack('<I', 8), u12=8 * 960, mark=0x88)])))
-body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', OUT)
+body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', OUT) + envi(AUTRACK, 'AU Synth', AUI)
 trak = lambda row, kind, obj: chunk('Trak', 0x17, 4, struct.pack('<HHHHI', kind, 0, 0, 0, obj) + bytes(46), sub=row)
 # a region's placement: main +13 bit 0x10 looped; extension 1: the track object and the length (a looped one's whole
 # span), 2: its sequence, 0x8a: its parameters (+5 Transpose)
@@ -201,8 +202,11 @@ body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), p
                                          placement(BAR1 + 9 * 3840, END, REGION5),
                                          placement(BAR1 + 11 * 3840, END, REGION6),
                                          audio_placement(BAR1 + 7 * 3840, 2000, LOOP, FILE),
-                                         audio_placement(BAR1 + 9 * 3840, END, LOOP, FILE2, looped=False, params=bytes([0x20, 6, 0, 0, (-6) & 0xff, 2]))),
-            trak(0, 1, TRACK) + trak(1, 1, LOOP) + trak(2, 3, MASTER))
+                                         audio_placement(BAR1 + 9 * 3840, END, LOOP, FILE2, looped=False, params=bytes([0x20, 6, 0, 0, (-6) & 0xff, 2])),
+                                         event(0x20, BAR1 - 3840, bytes([0, 0, 0, 0, 0, 0x04, 0, 0]),
+                                               ext=[ext(struct.pack('<I', AUTRACK), END), ext(struct.pack('<I', REGION7), mark=0x88)])),
+            trak(0, 1, TRACK) + trak(1, 1, LOOP) + trak(2, 3, MASTER) + trak(3, 1, AUTRACK))
+body += seq(0x17, REGION7, 'AU Synth', events(note(BAR1, 62, 100, 960)))
 body += seq(0x17, REGION1, 'Synth', events(note(BAR1, 60, 100, 1920), note(BAR1 + 1920, 64, 80, 960), note(BAR1 + 2880, 67, 0, 960, hires=16385)))
 body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0, BAR1 + 480, bytes([0, 0, 0, 64, 1, 0, 0, 0])),
                                              note(BAR1 + 3840, 72, 90, 960)))
@@ -293,5 +297,14 @@ body += seq(0x17, AUTOLOOP, '*Automation', events(auto_point(BAR1, 7, 90), auto_
                                                    send_point(BAR1, 0, 0), send_point(BAR1 + 2 * 3840, 0, 90)))
 body += channel(AUD, 0x40, 0, ' Audio 1', 90, 64, bytes([0xd5, 9]) + bytes(14))
 body += record(AUD, 0, send(0, 0, 0, bus_uuid))   # slot 0 to the Echo bus, its level automated
+# a third-party Audio Unit instrument: its name at +120, manufacturer, type and subtype reversed at +132, +136, +140,
+# then its state as its ClassInfo property list (what an .aupreset holds)
+class_info = (b'<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n\t<key>name</key>\n\t<string>Test State</string>\n'
+              b'\t<key>type</key>\n\t<integer>1635085685</integer>\n</dict>\n</plist>\n')
+au = bytearray(160)
+au[120:130] = b'Test Synth'
+au[132:136], au[136:140], au[140:144] = b'Test'[::-1], b'aumu'[::-1], b'Synt'[::-1]
+body += channel(AUI, 0x43, 1, ' Inst 2', 90, 64, bytes([0xd5, 0x39]) + bytes(14))
+body += record(AUI, 1, bytes(au) + struct.pack('<I', len(class_info)) + class_info)
 with open(os.path.join(alt, 'ProjectData'), 'wb') as f:
     f.write(b'#G\xc0\xab' + struct.pack('<HHIII', 0x09d0, 3, 4, 0x00080001, len(body)) + struct.pack('<I', 0) + body)

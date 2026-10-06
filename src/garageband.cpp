@@ -176,6 +176,28 @@ struct Plugin {
 
 bool isPlugin(const Chunk &c) { return c.pl.n >= 140 && (c.pl.has(132, "GAME", 4) || c.pl.has(132, "MELC", 4)); }
 
+// A third-party Audio Unit in a channel strip record: its name at +120, then its manufacturer, type and subtype as
+// four-character codes stored reversed at +132, +136 and +140 (Apple's own plug-ins have "GAME" or "MELC" there), and
+// its state as the unit's ClassInfo property list (what an .aupreset holds) further on
+struct AudioUnitRef { std::string name, type, subtype, manufacturer, classInfo; };
+bool audioUnitOf(const Chunk &c, AudioUnitRef &out) {
+    if (c.pl.n < 144 || isPlugin(c)) return false;
+    auto code = [&](size_t at) {
+        std::string s;
+        for (int k = 3; k >= 0; --k) { const uint8_t ch = c.pl.u8(at + k); if (ch < 0x20 || ch > 0x7e) return std::string(); s += (char)ch; }
+        return s;
+    };
+    out.manufacturer = code(132);
+    out.type = code(136);
+    out.subtype = code(140);
+    if (out.manufacturer.empty() || out.subtype.empty() || (out.type != "aumu" && out.type != "aufx" && out.type != "aumf")) return false;
+    out.name = c.pl.cstr(120, 132);
+    const std::string body(reinterpret_cast<const char *>(c.pl.p), c.pl.n);
+    const size_t a = body.find("<?xml"), b = body.find("</plist>", a == std::string::npos ? 0 : a);
+    if (a != std::string::npos && b != std::string::npos) out.classInfo = body.substr(a, b + 8 - a) + "\n";
+    return true;
+}
+
 Plugin pluginOf(const Chunk &c) {
     Plugin p;
     p.c = &c;
@@ -231,6 +253,12 @@ struct Channel {
         for (const Chunk *c : records)
             if (isPlugin(*c)) out.push_back(pluginOf(*c));
         return out;
+    }
+    // a third-party Audio Unit instrument (no Apple instrument in the strip)
+    bool auInstrument(AudioUnitRef &out) const {
+        for (const Chunk *c : records)
+            if (audioUnitOf(*c, out) && out.type != "aufx") return true;
+        return false;
     }
     bool instrument(Plugin &out) const {
         for (auto &p : plugins())
@@ -1132,6 +1160,19 @@ struct Converter {
             job["plugin"] = "builtin:audio";
             const json fx = channelFx(ch, name, rel);
             if (!fx.empty()) job["fx"] = fx;
+        } else if (AudioUnitRef au; t.kind == "instrument" && ch.auInstrument(au)) {   // a third-party instrument
+            job["plugin"] = au.type + ":" + au.subtype + ":" + au.manufacturer;   // as `wavelength plugins` names Audio Units
+            if (!au.classInfo.empty()) {
+                const std::string file = "patches/" + safeName(name) + ".aupreset";
+                std::error_code ec;
+                fs::create_directories(fs::u8path(outDir) / "patches", ec);
+                std::ofstream(fs::u8path(outDir) / fs::u8path(file), std::ios::binary) << au.classInfo;
+                job["state"] = file;
+            }
+            const auto [setting, category] = ch.setting();
+            job["fallback"] = json::array({{{"plugin", "builtin:synth"}, {"preset", fallbackPreset(au.name, category, setting)}}});
+            warn.push_back(name + ": plays the Audio Unit " + au.name + " (" + au.manufacturer + ") with the state GarageBand saved" +
+                           (au.classInfo.empty() ? " (none saved: its default sound)" : "") + "; a built-in stand-in is the fallback where it isn't installed");
         } else {
             warn.push_back(name + ": track kind " + t.kind + " not converted");
             return nullptr;
