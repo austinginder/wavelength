@@ -1044,13 +1044,13 @@ struct Converter {
     }
 
     // Plug-in automation and Smart Control knobs on a channel's effects, as `automate` curves on the effects that
-    // re-create them. An automated plug-in is translated again (patchEffects) at its curves' points (and 8 steps
-    // between, as the scales and translations bend), with each parameter set on its scale (pluginParamAt), and the
-    // settings that move become curves on its effects. `fx` is the channel's chain as translated (it may start with
-    // the instrument's own effects); `requests` are by insert position: parameter -> points 0..1. What can't be
-    // played is named in `left`; false when the chain doesn't line up with the translation (nothing changed).
-    using NormCurve = std::vector<std::pair<int64_t, double>>;
-    bool automateEffects(const std::vector<PatchPlugin> &chain, const std::map<int, std::map<int, NormCurve>> &requests, json &fx,
+    // re-create them. An automated plug-in is translated again (patchEffects) along its curves (and 4 steps between
+    // their points, as translations bend), and the settings that move become curves on its effects. `fx` is the channel's chain as translated (it may start with
+    // the instrument's own effects); `requests` are by insert position: parameter -> its values over song ticks
+    // (dense: a curve's own shape is drawn in by its source). What can't be played is named in `left`; false when
+    // the chain doesn't line up with the translation (nothing changed).
+    using ValueCurve = std::vector<std::pair<double, double>>;
+    bool automateEffects(const std::vector<PatchPlugin> &chain, const std::map<int, std::map<int, ValueCurve>> &requests, json &fx,
                          std::vector<std::string> &left, std::set<std::pair<int, int>> &done) {
         static const std::map<std::string, std::set<std::string>> movable = {
             {"gain", {"db"}}, {"filter", {"cutoff", "resonance", "mix"}}, {"delay", {"mix"}}, {"reverb", {"decay", "mix"}},
@@ -1083,33 +1083,28 @@ struct Converter {
         for (auto &e : full) fx.push_back(e);
         all = full;
         span = fspan;
-        auto normAt = [](const NormCurve &c, double tick) {
+        auto valueAt = [](const ValueCurve &c, double tick) {
             if (tick <= c.front().first) return c.front().second;
             for (size_t k = 1; k < c.size(); ++k)
-                if (tick <= c[k].first) return c[k - 1].second + (tick - c[k - 1].first) / std::max(1.0, (double)(c[k].first - c[k - 1].first)) * (c[k].second - c[k - 1].second);
+                if (tick <= c[k].first) return c[k - 1].second + (tick - c[k - 1].first) / std::max(1e-9, c[k].first - c[k - 1].first) * (c[k].second - c[k - 1].second);
             return c.back().second;
         };
         for (size_t pi = 0; pi < chain.size(); ++pi) {
             const PatchPlugin &p = chain[pi];
             auto rq = requests.find(p.order);
             if (rq == requests.end()) continue;
-            std::map<int, NormCurve> params;
-            for (auto &[param, c] : rq->second) {
-                double v;
-                if (c.empty()) continue;
-                if (!pluginParamAt(p.name, param, c.front().second, v)) { left.push_back(p.name + " #" + std::to_string(param) + " (its scale isn't known here)"); continue; }
-                params[param] = c;
-            }
+            std::map<int, ValueCurve> params;
+            for (auto &[param, c] : rq->second) if (!c.empty()) params[param] = c;
             if (params.empty()) continue;
             if (p.bypassed || span[pi].second == 0) {
                 for (auto &[param, c] : params) left.push_back(p.name + " #" + std::to_string(param) + " (the plug-in doesn't play here)");
                 continue;
             }
             std::set<double> ticks;
-            for (auto &[param, c] : params) for (auto &[t, v] : c) ticks.insert((double)t);
+            for (auto &[param, c] : params) for (auto &[t, v] : c) ticks.insert(t);
             std::vector<double> at(ticks.begin(), ticks.end()), times;
             for (size_t k = 0; k < at.size(); ++k) {
-                if (k) for (int q = 1; q < 8; ++q) times.push_back(at[k - 1] + (at[k] - at[k - 1]) * q / 8);
+                if (k) for (int q = 1; q < 4; ++q) times.push_back(at[k - 1] + (at[k] - at[k - 1]) * q / 4);
                 times.push_back(at[k]);
             }
             std::vector<json> frames;
@@ -1118,8 +1113,7 @@ struct Converter {
                 PatchPlugin q = p;
                 q.fullForm = true;
                 for (auto &[param, c] : params) {
-                    double v = 0;
-                    pluginParamAt(p.name, param, normAt(c, t), v);
+                    const double v = valueAt(c, t);
                     if ((size_t)param >= q.params.size()) q.params.resize((size_t)param + 1, 0.f);
                     q.params[(size_t)param] = (float)v;
                     if ((size_t)param + 1 < q.values.size()) q.values[(size_t)param + 1] = (float)v;
@@ -1215,8 +1209,26 @@ struct Converter {
             for (auto &p : chain) if (p.order == order) return p.name;
             return order == 0 && read && !pchans[0].instrument.empty() ? pchans[0].instrument : "insert " + std::to_string(order + 1);
         };
-        std::map<int, std::map<int, NormCurve>> req;
-        for (auto &[key, pts] : autos.plugins) req[key.first][key.second] = pts;
+        std::map<int, std::map<int, ValueCurve>> req;
+        std::vector<std::string> left;
+        // plug-in curves: straight between their points in the parameter's normalized range, drawn in 8 steps a segment
+        // through its scale
+        for (auto &[key, pts] : autos.plugins) {
+            const std::string pname = nameAt(key.first);
+            ValueCurve c;
+            double v = 0;
+            if (pts.empty() || !pluginParamAt(pname, key.second, pts[0].second, v)) {
+                left.push_back(pname + " #" + std::to_string(key.second) + " (its scale isn't known here)");
+                continue;
+            }
+            for (size_t k = 0; k < pts.size(); ++k)
+                for (int q = k ? 7 : 0; q >= 0; --q) {
+                    const double f = k ? 1.0 - q / 8.0 : 1.0;
+                    pluginParamAt(pname, key.second, k ? pts[k - 1].second + f * (pts[k].second - pts[k - 1].second) : pts[k].second, v);
+                    c.push_back({k ? pts[k - 1].first + f * (double)(pts[k].first - pts[k - 1].first) : (double)pts[k].first, v});
+                }
+            req[key.first][key.second] = c;
+        }
         std::map<int, std::vector<std::pair<int, int>>> knobTargets;   // a knob -> the (insert, parameter) it moves on effects
         if (read && !autos.knobs.empty())
             for (auto &m : smartControls(dir)) {
@@ -1224,8 +1236,15 @@ struct Converter {
                 if (kp == autos.knobs.end() || m.send || m.slot < 1) continue;
                 const PatchPlugin *pp = nullptr;
                 for (auto &p : chain) if (p.order == m.slot) pp = &p;
-                if (!pp || m.param < 0 || (size_t)m.param >= pp->steps.size() || pp->steps[(size_t)m.param] <= 0 || req[m.slot].count(m.param)) continue;
-                const double top = pp->steps[(size_t)m.param], lo = m.low < 0 ? 0 : m.low, hi = m.high < 0 ? top : m.high;
+                if (!pp || m.param < 0 || req[m.slot].count(m.param)) continue;
+                const int table = (size_t)m.param < pp->steps.size() ? pp->steps[(size_t)m.param] : 0;
+                const double top = knobTopStep(pp->name, m.param, m.fineSteps, table), lo = m.low < 0 ? 0 : m.low, hi = m.high < 0 ? top : m.high;
+                double v = 0;
+                if (top <= 0 || !knobStepValue(pp->name, m.param, lo, m.fineSteps, table, v)) {
+                    left.push_back(pp->name + " #" + std::to_string(m.param) + " (Smart Control \"" + (m.label.empty() ? "knob " + std::to_string(m.knob + 1) : m.label) +
+                                   "\": the parameter's steps aren't known here)");
+                    continue;
+                }
                 auto shape = [&](double k) {   // the knob's response graph (straight lines; a repeated x is a step)
                     if (m.graph.size() < 2) return k;
                     double y = m.graph[0].second;
@@ -1237,23 +1256,23 @@ struct Converter {
                     }
                     return y;
                 };
-                NormCurve c;   // the knob's 0-127 points through the mapping onto the parameter's steps, over its highest step
+                ValueCurve c;   // the knob's 0-127 points (straight between) through the mapping onto the parameter's steps
                 const auto &pts = kp->second;
-                for (size_t k = 0; k < pts.size(); ++k) {
-                    const int parts = k && m.graph.size() > 2 ? 8 : 1;
-                    for (int q = parts - 1; q >= 0; --q) {
-                        const double f = k ? 1.0 - (double)q / parts : 1.0;
-                        const double tick = k ? pts[k - 1].first + f * (pts[k].first - pts[k - 1].first) : pts[k].first;
+                for (size_t k = 0; k < pts.size(); ++k)
+                    for (int q = k ? 7 : 0; q >= 0; --q) {
+                        const double f = k ? 1.0 - q / 8.0 : 1.0;
                         double kn = shape(std::clamp((k ? pts[k - 1].second + f * (pts[k].second - pts[k - 1].second) : pts[k].second) / 127.0, 0.0, 1.0));
                         if (m.flipped) kn = 1 - kn;
-                        c.push_back({(int64_t)std::llround(tick), (lo + kn * (hi - lo)) / top});
+                        knobStepValue(pp->name, m.param, lo + kn * (hi - lo), m.fineSteps, table, v);
+                        c.push_back({k ? pts[k - 1].first + f * (double)(pts[k].first - pts[k - 1].first) : (double)pts[k].first, v});
                     }
-                }
                 req[m.slot][m.param] = c;
                 knobTargets[m.knob].push_back({m.slot, m.param});
             }
-        if (req.empty()) return;
-        std::vector<std::string> left;
+        if (req.empty()) {
+            for (auto &l : left) warn.push_back(name + ": automation not converted: " + l);
+            return;
+        }
         std::set<std::pair<int, int>> done;
         const std::string plugin = job.value("plugin", "");
         const bool sampler = plugin == "builtin:sampler" && job.contains("sampler") && job["sampler"].contains("patch");

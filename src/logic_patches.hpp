@@ -83,6 +83,7 @@ struct SmartMapping {
     int knob = 0, slot = 0, param = 0;
     double low = -1, high = -1;
     bool flipped = false, send = false;            // send: a send's level (parameter 28 + its slot), not a plug-in's
+    bool fineSteps = false;                        // saved by a newer GarageBand (kRangeMappingModeKey): ranges in the plug-ins' current steps
     std::vector<std::pair<double, double>> graph;  // knob 0..1 -> range 0..1 (empty: straight)
     std::string label;                             // the knob's name ("Filter")
 };
@@ -91,6 +92,11 @@ std::vector<SmartMapping> smartControls(const std::string &patchDir);
 // A plug-in parameter's value at a normalized position 0..1 (what automation stores, x 127, and a step over the
 // parameter's highest step), where its scale is known; false when it isn't.
 bool pluginParamAt(const std::string &plugin, int param, double norm, double &value);
+// A Smart Control range's step as the parameter's value, and the parameter's top step (a range end of -1), where
+// known: `fine` for a mapping saved with the current steps, else the plug-in record's step table (`table`, its
+// highest step); false / 0 when not known.
+bool knobStepValue(const std::string &plugin, int param, double step, bool fine, int table, double &value);
+double knobTopStep(const std::string &plugin, int param, bool fine, int table);
 // Wavelength effects for the plug-ins of a channel that have built-in counterparts: Channel EQ and Single Band EQ
 // (eq bands; cuts as cascaded biquads), Compressor (compressor with its gain stages, distortion as a clip, its
 // limiter), Tape Delay, Stereo Delay and Delay Designer (delay), Space Designer (convolve with its room, or a

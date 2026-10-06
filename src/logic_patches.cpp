@@ -1540,6 +1540,7 @@ std::vector<SmartMapping> smartControls(const std::string &patchDir) {
                 if (m.contains("rangeLow") && m["rangeLow"].is_number()) sm.low = m["rangeLow"].get<double>();
                 if (m.contains("rangeHigh") && m["rangeHigh"].is_number()) sm.high = m["rangeHigh"].get<double>();
                 sm.flipped = m.value("rangeIsFlipped", false);
+                sm.fineSteps = m.contains("kRangeMappingModeKey");
                 if (m.contains("scalingGraph") && m["scalingGraph"].is_array())
                     for (auto &g : m["scalingGraph"]) if (g.is_object()) sm.graph.push_back({g.value("x", 0.0), g.value("y", 0.0)});
                 out.push_back(sm);
@@ -1578,6 +1579,35 @@ bool pluginParamAt(const std::string &plugin, int param, double norm, double &va
         return true;
     }
     return false;
+}
+
+// Older mappings count a parameter's steps as its record's step table does (Channel EQ: gains in 96 half-dB steps,
+// frequencies 480 on 20 Hz x 1000^n), so their values follow pluginParamAt. Mappings saved by GarageBand 10.4
+// (kRangeMappingModeKey) count Channel EQ's current, finer steps: gains in 480 tenth-dB steps (a library patch's
+// 32-64 reads 160-320 there), frequencies as GarageBand shows them, 500 Hz at step 500 and 7000 Hz at 890 (its Mid
+// Freq knob turned to each end and saved: exponential between, about 0.68 % a step); other plug-ins' fine steps
+// aren't known.
+bool knobStepValue(const std::string &plugin, int param, double step, bool fine, int table, double &value) {
+    if (!fine) return table > 0 && pluginParamAt(plugin, param, step / table, value);
+    if (plugin == "Channel EQ") {
+        if (param == 32) { value = std::clamp(-24 + step / 10, -24.0, 24.0); return true; }
+        if (param < 0 || param > 31) return false;
+        const int band = param / 4, k = param % 4;
+        if (k == 0) { value = step >= 0.5 ? 1 : 0; return true; }
+        if (k == 1) { value = std::clamp(500 * std::exp((step - 500) * std::log(14.0) / 390), 20.0, 20000.0); return true; }
+        if (k == 2) { value = band == 0 || band == 7 ? std::round(step) : std::clamp(-24 + step / 10, -24.0, 24.0); return true; }
+        return false;
+    }
+    if (plugin == "Tape Delay" && (param == 19 || param == 20) && table > 0) return pluginParamAt(plugin, param, step / table, value);
+    return false;
+}
+
+double knobTopStep(const std::string &plugin, int param, bool fine, int table) {
+    if (!fine || plugin != "Channel EQ") return table;
+    if (param == 32) return 480;
+    if (param < 0 || param > 31) return 0;
+    const int band = param / 4, k = param % 4;
+    return k == 0 ? 1 : k == 1 ? 500 + 390 * std::log(40.0) / std::log(14.0) : k == 2 ? (band == 0 || band == 7 ? 5 : 480) : 0;
 }
 
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err) {
