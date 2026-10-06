@@ -469,8 +469,13 @@ import json, sys
 fx = json.load(sys.stdin)["patch"]["effects"]
 sys.exit(0 if fx == [{"type": "tune", "response": 20, "tolerance": 10, "scale": [0, 3, 5, 7, 10], "detune": 5},
                      {"type": "pitch", "semitones": 7, "keepFormants": True, "formant": -6, "mix": 0.6}, {"type": "pitch", "semitones": 12, "mix": 0.24}] else 1)'; then
-  fxpatch_why="Pitch Correction, Vocal Transformer or Pitch Shifter didn't map as saved"; fi
-if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Pitch Correction, Vocal Transformer and Pitch Shifter map"; fi
+  fxpatch_why="Pitch Correction, Vocal Transformer or Pitch Shifter didn't map as saved"
+elif ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelength" samples --patch "Test Ring" --json 2>/dev/null | python3 -c '
+import json, sys
+fx = json.load(sys.stdin)["patch"]["effects"]
+sys.exit(0 if fx == [{"type": "ringmod", "mode": "dual", "freq": 15.8114, "mix": 0.6, "feedback": 0.3, "delayMs": 120, "delayLevel": 0.5}] else 1)'; then
+  fxpatch_why="Ringshifter didn't map as saved"; fi
+if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Pitch Correction, Vocal Transformer, Pitch Shifter and Ringshifter map"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
 # imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,

@@ -704,7 +704,19 @@ json stompFxRaw(const std::string &name, const std::map<int, double> &s, std::ve
         fx.push_back({{"type", "tremolo"}, {"rate", rate}, {"depth", r4(std::min(1.0, v(3, 50) / 100))},
                       {"shape", v(5) >= 40 ? "sine" : v(4) < 16 ? "square" : "triangle"}});
         addFx(fx, gainOf(v(6)));
-    } else if (name == "Roswell Ringer") notes.push_back("Roswell Ringer: its ring modulation is not played");
+    } else if (name == "Roswell Ringer") {   // #1 Type (1 Exp, 0 Lin), #2 Freq Coarse and #3 Fine (-100..100 %), #4 Feedback %, #5 Mix %
+        // Ringshifter's ring modulator and frequency scales (bounced: Coarse 50 is 15.8 Hz on Exp, 2500 Hz on Lin), the
+        // right side's oscillator a fifth of a cycle on (its width 0.72); Mix 0 is the dry signal
+        const double mix = std::clamp(v(5), 0.0, 100.0) / 100, x = std::clamp((v(2) + v(3)) / 100, -1.0, 1.0), a = std::fabs(x);
+        if (mix <= 0.005) notes.push_back("Roswell Ringer: Mix 0 as saved (a Smart Control raises it), left out");
+        else {
+            const double hz = a < 1e-6 ? 0 : v(1, 1) >= 0.5 ? 5000 * std::pow(10.0, 5 * (a - 1)) : 5000 * a;
+            json f = {{"type", "ringmod"}, {"mode", "ring"}, {"freq", r2(hz)}, {"spread", 0.2}};
+            if (mix < 0.995) f["mix"] = r4(mix);
+            if (v(4) > 0.5) f["feedback"] = r4(std::min(0.95, v(4) / 100));
+            fx.push_back(f);
+        }
+    }
     else if (name == "Dr. Octave") notes.push_back("Dr. Octave: its octaves below are not played (the direct signal plays)");
     else if (name == "Wham") notes.push_back("Wham: its pitch shift is not played (the direct signal plays)");
     else notes.push_back(name + ": not played");
@@ -1277,6 +1289,35 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             const double mix = std::clamp(v(0, 50), 0.0, 100.0) / 100;
             f["mix"] = r4(mix);
             if (mix > 0.005) add(f);
+        } else if (p.name == "Ringshifter") {
+            // #7 Mode (0 ring modulator, 1 side chain, 2 frequency shifter, 3 dual), #1 Frequency -1..1 on #3's scale (Exp:
+            // 5000 Hz x 10^(5(|x| - 1)), Lin: 5000 Hz x; bounced at 0.25-1), #8 Feedback, #11 Dry/Wet, #26 Delay Level, #27
+            // Sync, #28 Time (ms, or a fraction of a whole note), #20 LFO on, #21 Sync, #22 Rate, #5 LFO to the oscillator
+            const int mode = (int)std::lround(v(7, 2));
+            const double wet = std::clamp(v(11), 0.0, 1.0), x = std::clamp(v(1), -1.0, 1.0);
+            const bool expo = v(3, 1) >= 0.5;
+            if (mode == 1) { notes.push_back("Ringshifter: its side-chain ring modulation (the input times another track) isn't played, left out"); continue; }
+            if (wet <= 0.005) { notes.push_back("Ringshifter: Dry/Wet 0 as saved (a Smart Control raises it), left out"); continue; }
+            const double a = std::fabs(x), hz = a < 1e-6 ? 0 : (expo ? 5000 * std::pow(10.0, 5 * (a - 1)) : 5000 * a) * (x < 0 ? -1 : 1);
+            json f = {{"type", "ringmod"}, {"mode", mode == 0 ? "ring" : mode == 3 ? "dual" : "shift"}, {"freq", r4(hz)}};
+            if (wet < 0.995) f["mix"] = r4(wet);
+            if (v(8) > 0.005) f["feedback"] = r4(std::min(0.95, v(8)));
+            if (v(26) > 0.005) {
+                if (v(27) >= 0.5) f["delay"] = r4(4 * std::max(1.0 / 64, v(28)));
+                else f["delayMs"] = r2(std::clamp(v(28), 1.0, 4000.0));
+                f["delayLevel"] = r4(v(26));
+            }
+            if (v(20) >= 0.5 && std::fabs(v(5)) > 0.005 && a > 1e-6) {   // the LFO moves the Frequency knob
+                json l = {{"rate", rateOf(v(21) >= 0.5, v(22, 1))}, {"shape", "sine"}};
+                if (expo) { f["freqScale"] = "exp"; l["depth"] = r4(5 * std::log2(10.0) * v(5) * (x < 0 ? -1 : 1)); }   // 16.6 octaves a full turn
+                else l["depth"] = r2(5000 * v(5));
+                f["lfo"] = {{"freq", l}};
+                if (std::fabs(v(23)) > 0.05 || v(24) > 0.05) notes.push_back("Ringshifter: its LFO's symmetry and smoothing play as a sine");
+            }
+            if ((std::fabs(v(12)) > 0.005 && v(15) >= 0.5) || (std::fabs(v(13)) > 0.005 && v(20) >= 0.5))
+                notes.push_back("Ringshifter: Dry/Wet moving with its envelope follower or LFO isn't played (it holds where saved)");
+            if (v(15) >= 0.5 && std::fabs(v(4)) > 0.005) notes.push_back("Ringshifter: its envelope follower on the frequency isn't played");
+            add(f);
         } else if (p.name == "PitchCor") {   // Pitch Correction: #4-#15 Use C..B, #30 Response, #37 Tolerance, #26 Detune, #3 Ref Pitch, #43 Global Tuning, #36 Bypass All
             if (v(36) >= 0.5) { notes.push_back("Pitch Correction: Bypass All is on in the patch, left out"); continue; }
             json f = {{"type", "tune"}, {"response", r2(std::max(0.0, v(30, 50)))}, {"tolerance", r2(std::clamp(v(37, 10), 0.0, 100.0))}};

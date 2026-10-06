@@ -1469,14 +1469,16 @@ struct Ringmod : Effect {
         const std::string m = j.value("mode", "ring");
         mode = m == "ring" ? 0 : m == "shift" ? 1 : m == "dual" ? 2 : -1;
         if (mode < 0) { err = "ringmod: mode must be \"ring\", \"shift\" or \"dual\""; return; }
-        freq = param(j, "freq", 100, job.tempo);
+        const std::string scale = j.value("freqScale", "linear");
+        if (scale != "linear" && scale != "exp") { err = "ringmod: freqScale must be \"linear\" or \"exp\""; return; }
+        freq = param(j, "freq", 100, job.tempo, scale == "exp");   // exp: its curves glide and its LFO swings in octaves
         mix = param(j, "mix", 1, job.tempo);
         feedback = std::clamp(j.value("feedback", 0.0), 0.0, 0.95);
         if (j.contains("delayMs")) delaySec = std::clamp(j["delayMs"].get<double>(), 0.0, 4000.0) / 1000;
         else if (j.contains("delay")) delaySec = std::clamp(j["delay"].get<double>() * 60 / job.tempo.bpmAtBeat(0), 0.0, 4.0);
         delayLevel = std::clamp(j.value("delayLevel", 1.0), 0.0, 2.0);
         spread = j.value("spread", 0.0);
-        checkKeys(j, {"mode", "freq", "mix", "feedback", "delay", "delayMs", "delayLevel", "spread"}, *this);
+        checkKeys(j, {"mode", "freq", "freqScale", "mix", "feedback", "delay", "delayMs", "delayLevel", "spread"}, *this);
     }
     // a 90-degree phase-difference network (two chains of four second-order all-passes, Olli Niemitalo's coefficients):
     // re and im are the analytic signal of the input, 90 degrees apart from about 20 Hz to 20 kHz at 44.1 kHz
@@ -1525,7 +1527,7 @@ struct Ringmod : Effect {
                 const double pr = phase + off;
                 wr = mode == 1 ? reR * std::cos(pr) + imR * std::sin(pr) : reR * std::cos(pr) - imR * std::sin(pr);
             }
-            phase += 2 * dsp::kPi * freq.at(t) / sr;
+            phase += 2 * dsp::kPi * std::clamp(freq.at(t), -0.45 * sr, 0.45 * sr) / sr;
             if (phase > 2 * dsp::kPi) phase -= 2 * dsp::kPi;
             else if (phase < -2 * dsp::kPi) phase += 2 * dsp::kPi;
             if (D) {

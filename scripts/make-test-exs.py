@@ -143,6 +143,12 @@ os.makedirs(os.path.join(out, 'Audio', 'Test Voice.patch'), exist_ok=True)
 strip(os.path.join(out, 'Audio', 'Test Voice.patch', '#Root.cst'),
       [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'PitchCor', b'GAME', settings(235, pc)), record(5, 'VocalTrf', b'GAME', settings(249, vt)),
        record(6, 'PShft', b'GAME', settings(159, ps))])
+# Ringshifter: #7 Mode 3 (dual), #1 Frequency 0.5 on #3 Exp (15.8 Hz), #11 Dry/Wet 0.6, #8 Feedback 0.3, #26 Delay Level 0.5 at
+# #28 120 ms (#27 Sync off)
+rs = [0.0] * 31
+rs[1], rs[3], rs[7], rs[8], rs[11], rs[26], rs[28] = 0.5, 1, 3, 0.3, 0.6, 0.5, 120
+os.makedirs(os.path.join(out, 'Audio', 'Test Ring.patch'), exist_ok=True)
+strip(os.path.join(out, 'Audio', 'Test Ring.patch', '#Root.cst'), [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Ringshifter', b'GAME', settings(252, rs))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):
