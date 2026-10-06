@@ -277,8 +277,7 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
     // conductor: tempo, time signature, markers (from any track)
     std::vector<std::pair<uint64_t, double>> tempos;
     json markers = json::array();
-    json timeSig;
-    bool extraTimeSig = false;
+    std::vector<std::tuple<double, int, int>> meters;   // (beat, numerator, denominator)
     for (auto &t : tracks)
         for (auto &e : t) {
             if (e.status != 0xff) continue;
@@ -286,9 +285,7 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
                 const uint32_t us = (uint32_t)(uint8_t)e.data[0] << 16 | (uint32_t)(uint8_t)e.data[1] << 8 | (uint8_t)e.data[2];
                 if (us) tempos.push_back({e.tick, 60e6 / us});
             } else if (e.metaType == 0x58 && e.data.size() >= 2) {
-                const json ts = {(int)(uint8_t)e.data[0], 1 << (uint8_t)e.data[1]};
-                if (timeSig.is_null()) timeSig = ts;
-                else if (ts != timeSig) extraTimeSig = true;
+                meters.push_back({beat(e.tick), std::clamp((int)(uint8_t)e.data[0], 1, 64), 1 << std::min<int>((uint8_t)e.data[1], 5)});
             } else if (e.metaType == 0x06 || e.metaType == 0x07) {
                 markers.push_back({{"beat", beat(e.tick)}, {"name", e.data.empty() ? "Marker" : e.data}});
             }
@@ -305,8 +302,7 @@ bool importMidiFile(const std::string &path, const std::string &outDir, const st
         }
         job["tempo"] = map.size() == 1 ? map[0]["bpm"] : map;
     }
-    if (!timeSig.is_null()) job["timeSignature"] = timeSig;
-    if (extraTimeSig) res.notes.push_back("time signature changes after the first are left out (Wavelength keeps one)");
+    writeMeter(job, meters);   // "timeSignature" and any "meterChanges"
 
     // parts: one per (track, channel)
     struct Part {
@@ -586,12 +582,12 @@ bool exportMidiFile(const Job &job, const json &raw, const std::string &path, st
     // conductor track
     std::vector<OutEv> cond;
     cond.push_back({0, 0, meta(0x03, fs::path(path).stem().string())});
-    {
-        std::vector<uint8_t> ts = {0xff, 0x58, 4, (uint8_t)job.tsigNum, 2, 24, 8};
-        int den = job.tsigDen, pow2 = 0;
+    for (const auto &m : job.meter.segs) {   // the time signature at bar 1 and at each change
+        std::vector<uint8_t> ts = {0xff, 0x58, 4, (uint8_t)m.num, 2, 24, 8};
+        int den = m.den, pow2 = 0;
         while (den > 1) { den >>= 1; ++pow2; }
         ts[4] = (uint8_t)pow2;
-        cond.push_back({0, 0, ts});
+        cond.push_back({tickOfBeat(m.beat), 0, ts});
     }
     auto tempoEv = [](double bpm) {
         const uint32_t us = (uint32_t)std::llround(60e6 / std::clamp(bpm, 1.0, 1000.0));

@@ -817,8 +817,8 @@ struct Width : Effect {
             while (e < ein.size() && lost[e]) { si += ein[e]; so += eout[e]; ++e; }
             if (e + span < ein.size()) {   // a collapse that runs into the end of the song is an ending, not a hole
                 const double t0 = w * 0.25, t1 = e * 0.25, f0 = t0 + c.job.leadIn, f1 = t1 + c.job.leadIn;
-                const double bpb = c.job.tsigNum * 4.0 / c.job.tsigDen, loss = 10 * std::log10(si / std::max(so, 1e-30));
-                const int b0 = (int)std::floor(c.job.tempo.secToBeat(t0) / bpb) + 1, b1 = (int)std::floor(c.job.tempo.secToBeat(t1 - 1e-6) / bpb) + 1;
+                const double loss = 10 * std::log10(si / std::max(so, 1e-30));
+                const int b0 = c.job.meter.barIndex(c.job.tempo.secToBeat(t0)) + 1, b1 = c.job.meter.barIndex(c.job.tempo.secToBeat(t1 - 1e-6)) + 1;
                 char buf[400], amount[32], bars[32];
                 if (loss > 60) std::snprintf(amount, sizeof amount, "all");
                 else std::snprintf(amount, sizeof amount, "%.0f dB", loss);

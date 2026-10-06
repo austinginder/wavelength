@@ -1365,12 +1365,15 @@ int cmdRender(const Args &a) {
     // --from/--to BAR: render only those bars (to exclusive), after --preroll bars (default 2) that are
     // rendered and then cut, so reverbs, delays, compressors and held notes are already going
     if (a.has("--from") || a.has("--to")) {
-        const double bpb = j.contains("timeSignature") ? j["timeSignature"][0].get<double>() * 4.0 / j["timeSignature"][1].get<double>() : 4.0;
+        MeterMap meter;
+        try { meter = MeterMap::fromJob(j); } catch (const std::exception &e) { return fail(a, e.what()); }
         const double from = a.has("--from") ? std::atof(a.get("--from").c_str()) : 1, pre = a.has("--preroll") ? std::atof(a.get("--preroll").c_str()) : 2;
         if (!a.has("--to")) return fail(a, "--from needs --to BAR (the bar where the render stops, not included)");
         const double to = std::atof(a.get("--to").c_str());
         if (from < 1 || to <= from) return fail(a, "--from/--to are bars: --from 41 --to 45 renders bars 41-44");
-        j["window"] = {{"from", (from - 1) * bpb}, {"to", (to - 1) * bpb}, {"preroll", std::max(0.0, pre) * bpb}};
+        // the preroll's bars are counted back from --from in the meter there (before bar 1, in the first one)
+        const double fromBeat = meter.barToBeat(from), preBeats = fromBeat - meter.barToBeat(from - std::max(0.0, pre));
+        j["window"] = {{"from", fromBeat}, {"to", meter.barToBeat(to)}, {"preroll", preBeats}};
         if (a.has("--loop")) { j["window"]["loop"] = true; j["window"]["preroll"] = 0; }   // the bars alone, their tail folded back in
     } else if (a.has("--loop")) return fail(a, "--loop needs --from BAR --to BAR (the loop's bars, to exclusive)");
     if (!only.empty() || j.contains("window") || swapped > 0 || mixed) {   // workers re-read the job by track index: the changed job goes to a file next to it
@@ -1504,8 +1507,8 @@ int cmdRender(const Args &a) {
     if (!r.pictureFile.empty()) report["picture"] = {{"file", r.pictureFile}, {"width", r.pictureWidth}, {"height", r.pictureHeight}};
     if (!only.empty()) report["onlyTracks"] = only;
     if (job.window.on) {   // the files hold bars from..to only; songStart = where that is in the song (seconds)
-        const double bpb = job.tsigNum * 4.0 / job.tsigDen;
-        report["window"] = {{"fromBar", r1(job.window.fromBeat / bpb + 1)}, {"toBar", r1(job.window.toBeat / bpb + 1)},
+        auto barAt = [&](double beat) { const auto &sg = job.meter.atBeat(beat); return sg.bar + (beat - sg.beat) / sg.bpb(); };
+        report["window"] = {{"fromBar", r1(barAt(job.window.fromBeat))}, {"toBar", r1(barAt(job.window.toBeat))},
                             {"fromBeat", job.window.fromBeat}, {"toBeat", job.window.toBeat}, {"songStart", std::round(job.window.songStartSec * 1e6) / 1e6},
                             {"seconds", std::round((job.window.loop ? job.window.loopSec : job.length - job.window.trimSec) * 1000) / 1000}};
         if (job.window.loop)
@@ -1796,7 +1799,6 @@ int cmdTimeline(const Args &a) {
     std::string err;
     if (!parseJob(j, fs::absolute(path).parent_path().string(), job, err)) return fail(a, err);
     const int every = std::max(1, std::atoi(a.get("--every", "8").c_str()));
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
     double end = 0;   // the render's length: the last note or clip plus the tail, or "length"
     for (const auto &t : job.tracks) for (const auto &n : t.notes) end = std::max(end, n.start + n.length);
     for (const auto &t : job.tracks) if (!t.clips.empty()) end = std::max(end, clipsEndSeconds(job, t));
@@ -1807,16 +1809,19 @@ int cmdTimeline(const Args &a) {
         return std::string(buf);
     };
     auto row = [&](double beat, const std::string &kind, const std::string &name) {
-        const double sec = job.tempo.beatToSec(beat), bar = std::floor(beat / bpb + 1e-9);
-        return json{{"kind", kind}, {"name", name}, {"bar", (int)bar + 1}, {"beatInBar", std::round((beat - bar * bpb + 1) * 1000) / 1000},
+        const double sec = job.tempo.beatToSec(beat);
+        const int bar = job.meter.barIndex(beat);
+        return json{{"kind", kind}, {"name", name}, {"bar", bar + 1}, {"beatInBar", std::round((beat - job.meter.barToBeat(bar + 1) + 1) * 1000) / 1000},
                     {"beat", std::round(beat * 1000) / 1000}, {"seconds", std::round(sec * 1000) / 1000},
                     {"fileSeconds", std::round((sec + job.leadIn) * 1000) / 1000}, {"time", mmss(sec)},
                     {"bpm", std::round(job.tempo.bpmAtBeat(beat) * 100) / 100}};
     };
     std::vector<json> rows;
     const double lastBeat = job.tempo.secToBeat(songEnd);
-    for (double b = 0; b <= lastBeat + 1e-9; b += every * bpb) rows.push_back(row(b, "bar", ""));
+    for (int bar = 1; job.meter.barToBeat(bar) <= lastBeat + 1e-9; bar += every) rows.push_back(row(job.meter.barToBeat(bar), "bar", ""));
     for (const auto &m : job.markers) rows.push_back(row(m.beat, "marker", m.name));
+    for (size_t k = 1; k < job.meter.segs.size(); ++k)
+        rows.push_back(row(job.meter.segs[k].beat, "meter", std::to_string(job.meter.segs[k].num) + "/" + std::to_string(job.meter.segs[k].den)));
     {
         json r = row(job.tempo.secToBeat(lastSound), "last sound", "");
         rows.push_back(r);
@@ -1826,14 +1831,15 @@ int cmdTimeline(const Args &a) {
     }
     std::stable_sort(rows.begin(), rows.end(), [](const json &x, const json &y) { return x["beat"].get<double>() < y["beat"].get<double>(); });
     if (a.has("--json")) {
-        json out = {{"ok", true}, {"leadIn", job.leadIn}, {"beatsPerBar", bpb}, {"seconds", std::round(songEnd * 1000) / 1000},
+        json out = {{"ok", true}, {"leadIn", job.leadIn}, {"beatsPerBar", job.meter.segs[0].bpb()}, {"seconds", std::round(songEnd * 1000) / 1000},
                     {"duration", std::round((songEnd + job.leadIn) * 1000) / 1000}, {"rows", rows}};
         emit(out.dump(2, ' ', false, json::error_handler_t::replace));
         return 0;
     }
     std::fprintf(OUT, "%-10s %-24s %6s %8s %9s  %10s %7s\n", "", "", "bar|beat", "beat", "song time", "file time", "bpm");
     for (auto &r : rows) {
-        const std::string label = r["kind"] == "marker" ? r["name"].get<std::string>() : r["kind"] == "bar" ? "" : r["kind"].get<std::string>();
+        const std::string label = r["kind"] == "marker" ? r["name"].get<std::string>() : r["kind"] == "meter" ? "meter " + r["name"].get<std::string>() :
+                                  r["kind"] == "bar" ? "" : r["kind"].get<std::string>();
         char bar[24];
         std::snprintf(bar, sizeof bar, "%d|%g", r["bar"].get<int>(), r["beatInBar"].get<double>());
         std::fprintf(OUT, "%-10s %-24.24s %6s %8g %9s  %10s %7g\n", r["kind"] == "marker" ? "marker" : "", label.c_str(), bar,

@@ -42,6 +42,7 @@ struct NoteEv {
 struct Measure {
     double length = 0;               // beats reached in this measure (pickups are short)
     double nominal = 0;              // beats from the time signature
+    int tsNum = 0, tsDen = 0;        // the time signature this measure sets (0: none)
     std::vector<NoteEv> notes;
     std::vector<std::pair<double, double>> tempos;       // at, quarter bpm
     std::vector<std::pair<double, double>> dynamics;     // at, level 0-1
@@ -161,7 +162,7 @@ void readPart(const xml::Node &p, Part &part) {
                     double beats = 0;
                     for (auto &part2 : endingNumbers(t->childText("beats"))) beats += part2;   // "3+2" additive meters
                     const double type = t->childNum("beat-type", 4);
-                    if (beats > 0 && type > 0) beatsPerMeasure = beats * 4.0 / type;
+                    if (beats > 0 && type > 0) { beatsPerMeasure = beats * 4.0 / type; m.tsNum = (int)beats; m.tsDen = (int)type; }
                 }
                 if (const xml::Node *tr = c.child("transpose")) transpose = (int)tr->childNum("chromatic", 0) + 12 * (int)tr->childNum("octave-change", 0);
             } else if (c.tag == "backup") {
@@ -462,20 +463,24 @@ bool importMusicXml(const std::string &path, const std::string &outDir, const st
             if (map.empty() || std::fabs(map.back()["bpm"].get<double>() - bpm) > 1e-6) map.push_back({{"beat", map.empty() ? 0.0 : b}, {"bpm", r6(bpm)}});
         job["tempo"] = map.size() == 1 ? map[0]["bpm"] : map;
     }
-    // the first time signature
+    // the meter: each measure's as written (carried forward in score order), at its start in playing order
     {
-        const xml::Node *first = nullptr;
-        std::vector<const xml::Node *> times;
-        root->walk("time", times);
-        for (auto *tm : times) if (tm->child("beats")) { first = tm; break; }
-        if (first) {
-            int beats = 0;
-            for (int b : endingNumbers(first->childText("beats"))) beats += b;
-            job["timeSignature"] = {beats > 0 ? beats : 4, (int)first->childNum("beat-type", 4)};
-            std::set<std::string> distinct;
-            for (auto *tm : times) if (tm->child("beats")) distinct.insert(tm->childText("beats") + "/" + tm->childText("beat-type"));
-            if (distinct.size() > 1) res.notes.push_back("time signature changes are kept in the timing but not in \"timeSignature\" (Wavelength keeps one)");
+        std::vector<std::pair<int, int>> written(count);
+        std::pair<int, int> cur{0, 0};
+        for (size_t k = 0; k < count; ++k) {
+            if (shape[k].tsNum > 0) cur = {shape[k].tsNum, shape[k].tsDen};
+            written[k] = cur;
         }
+        std::vector<std::tuple<double, int, int>> pts;
+        for (size_t o = 0; o < order.size(); ++o) {
+            const auto m = written[order[o]];
+            if (m.first <= 0 || (!pts.empty() && std::get<1>(pts.back()) == m.first && std::get<2>(pts.back()) == m.second)) continue;
+            pts.push_back({pts.empty() ? 0.0 : r6(startOf[o]), m.first, std::clamp(m.second, 1, 32)});
+        }
+        try { writeMeter(job, pts); MeterMap::fromJob(job); }
+        catch (const std::exception &e) { job.erase("meterChanges"); res.notes.push_back(std::string("time signatures: ") + e.what()); }
+        if (job.contains("meterChanges") && !shape.empty() && length[0] + 1e-6 < shape[0].nominal)
+            res.notes.push_back("the score starts with a pickup: bar numbers count it as a whole bar, so meter changes fall at the bar line after their measure starts");
     }
     if (!markers.empty()) job["markers"] = markers;
     if (!keys.empty()) job["keys"] = keys;

@@ -409,7 +409,7 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
             tempoAuto << "<TempoAutomation id=\"" << w.id() << "\" unit=\"bpm\"><Target parameter=\"" << tempoId << "\"/>";
             double prevBpm = bpm0;
             for (auto &p : tj) {
-                const double beat = p.contains("bar") ? (p["bar"].get<double>() - 1) * job.tsigNum * 4.0 / job.tsigDen : p.value("beat", 0.0);
+                const double beat = p.contains("bar") ? job.meter.barToBeat(p["bar"].get<double>()) : p.value("beat", 0.0);
                 const double v = p.value("bpm", prevBpm);
                 // a step holds the previous tempo up to the point; a ramp slides to it
                 if (!p.value("ramp", false) && beat > 0) tempoAuto << "<RealPoint time=\"" << num(beat) << "\" value=\"" << num(prevBpm) << "\" interpolation=\"hold\"/>";
@@ -418,6 +418,14 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
             }
             tempoAuto << "</TempoAutomation>";
         }
+    }
+    const std::string tsigId = w.id();
+    std::ostringstream tsigAuto;   // the meter changes
+    if (!job.meter.constant()) {
+        tsigAuto << "<TimeSignatureAutomation id=\"" << w.id() << "\"><Target parameter=\"" << tsigId << "\"/>";
+        for (auto &m : job.meter.segs)
+            tsigAuto << "<TimeSignaturePoint time=\"" << num(m.beat) << "\" numerator=\"" << m.num << "\" denominator=\"" << m.den << "\"/>";
+        tsigAuto << "</TimeSignatureAutomation>";
     }
     std::ostringstream markers;
     if (!job.markers.empty()) {
@@ -429,10 +437,10 @@ bool exportDawproject(const Job &job, const json &raw, const std::string &jobPat
     project << "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Project version=\"1.0\">"
             << "<Application name=\"Wavelength\" version=\"" << WAVELENGTH_VERSION << "\"/>"
             << "<Transport><Tempo id=\"" << tempoId << "\" name=\"Tempo\" unit=\"bpm\" min=\"20\" max=\"666\" value=\"" << num(bpm0) << "\"/>"
-            << "<TimeSignature id=\"" << w.id() << "\" name=\"Time Signature\" numerator=\"" << job.tsigNum << "\" denominator=\"" << job.tsigDen << "\"/></Transport>"
+            << "<TimeSignature id=\"" << tsigId << "\" name=\"Time Signature\" numerator=\"" << job.tsigNum << "\" denominator=\"" << job.tsigDen << "\"/></Transport>"
             << "<Structure>" << structure.str() << "</Structure>"
             << "<Arrangement id=\"" << w.id() << "\"><Lanes id=\"" << w.id() << "\" timeUnit=\"beats\">" << lanes.str() << "</Lanes>"
-            << markers.str() << tempoAuto.str() << "</Arrangement></Project>\n";
+            << markers.str() << tempoAuto.str() << tsigAuto.str() << "</Arrangement></Project>\n";
     const std::string title = raw.value("title", fs::path(jobPath).parent_path().filename().string());
     zip.add("project.xml", project.str());
     zip.add("metadata.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<MetaData><Title>" + esc(title) +

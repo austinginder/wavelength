@@ -884,6 +884,42 @@ PY
 )
 fi
 if [ -n "$ring_why" ]; then echo "FAIL ringmod: $ring_why"; fail=1; else echo "ok   ringmod: ring, shift and dual modes make the sidebands they should"; fi
+# meter changes: 3/4 then 4/4 at bar 3 and 6/8 at bar 5 put bar 4 at beat 10 and bar 6 at beat 17 (timeline), a key and
+# --from/--to by bar follow them, and a MIDI file keeps them both ways
+mkdir -p out/check/meter
+cat > out/check/meter/m.json <<'JOB'
+{"tempo": 120, "timeSignature": [3, 4], "meterChanges": [{"bar": 3, "sig": [4, 4]}, {"bar": 5, "sig": [6, 8]}],
+ "keys": [{"bar": 1, "key": "C major"}, {"bar": 4, "key": "G major"}],
+ "tracks": [{"name": "Keys", "plugin": "builtin:synth", "preset": "KY Electric Piano",
+             "notes": [{"beat": 0, "dur": 1, "key": 60, "vel": 0.8}, {"beat": 10, "dur": 1, "key": 67, "vel": 0.8}, {"beat": 20, "dur": 1, "key": 71, "vel": 0.8}]}]}
+JOB
+meter_why=""
+if ! "./$build/wavelength" timeline out/check/meter/m.json --every 1 --json 2>/dev/null | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)["rows"]
+bars = {r["bar"]: r["beat"] for r in rows if r["kind"] == "bar"}
+meters = [(r["bar"], r["name"]) for r in rows if r["kind"] == "meter"]
+sys.exit(0 if bars.get(4) == 10 and bars.get(6) == 17 and meters == [(3, "4/4"), (5, "6/8")] else 1)'; then
+  meter_why="timeline put the bars or meter changes in the wrong place"
+elif ! "./$build/wavelength" lint out/check/meter/m.json --harmony --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if [(k["from"], k["to"], k["key"]) for k in d["keys"]] == [(1, 3, "C major"), (4, 7, "G major")] else 1)'; then
+  meter_why="lint --harmony put the bar-4 key change elsewhere"
+elif ! "./$build/wavelength" render out/check/meter/m.json --out out/check/meter/win --from 4 --to 5 --json 2>/dev/null | python3 -c '
+import json, sys
+w = json.load(sys.stdin)["window"]
+sys.exit(0 if w["fromBeat"] == 10 and w["toBeat"] == 14 else 1)'; then
+  meter_why="render --from 4 --to 5 did not cover beats 10-14"
+elif ! { "./$build/wavelength" export out/check/meter/m.json --out out/check/meter/m.mid > /dev/null 2>&1 &&
+         "./$build/wavelength" import out/check/meter/m.mid --out out/check/meter/in > /dev/null 2>&1 &&
+         python3 -c '
+import json, sys
+j = json.load(open("out/check/meter/in/job.json"))
+sys.exit(0 if j["timeSignature"] == [3, 4] and j.get("meterChanges") == [{"bar": 3, "sig": [4, 4]}, {"bar": 5, "sig": [6, 8]}] else 1)'; }; then
+  meter_why="a MIDI file did not keep the meter changes"
+fi
+if [ -n "$meter_why" ]; then echo "FAIL meter: $meter_why"; fail=1; else echo "ok   meter: changes by bar move bars, keys, render windows and MIDI files"; fi
 # gate as a noise gate: a 220 Hz tone at -6 dB for a second, then at -50 dB: with a -30 dB threshold the quiet second goes
 # silent and the loud one stays; phaser: a saw through it keeps its pitch, sounds, and turns stereo
 rm -rf out/check/gate && mkdir -p out/check/gate

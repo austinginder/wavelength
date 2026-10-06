@@ -411,16 +411,15 @@ bool Vst2Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             evs->reserved = 0;
             // transport, read by the plugin through hostGetTime
             const double sec = std::max<int64_t>(0, pos) / sr, beat = job.tempo.secToBeat(sec);
-            const double barBeats = job.tsigNum * 4.0 / job.tsigDen;
             TimeInfo &t = im.time;
             t = TimeInfo{};
             t.samplePos = (double)std::max<int64_t>(0, pos);
             t.sampleRate = sr;
             t.ppqPos = beat;
             t.tempo = job.tempo.bpmAtBeat(beat);
-            t.barStartPos = std::floor(beat / barBeats) * barBeats;
-            t.timeSigNumerator = job.tsigNum;
-            t.timeSigDenominator = job.tsigDen;
+            t.barStartPos = job.meter.barStart(beat);
+            t.timeSigNumerator = job.meter.atBeat(beat).num;
+            t.timeSigDenominator = job.meter.atBeat(beat).den;
             t.flags = kPpqPosValid | kTempoValid | kBarsValid | kTimeSigValid | (pos >= 0 ? kTransportPlaying : 0);
             if (count) fx->dispatcher(fx, effProcessEvents, 0, 0, evs, 0.f);
             // inputs: silence, the effect's source on 0/1 and its sidechain on 2/3

@@ -50,7 +50,7 @@ bool writePicture(const std::string &path, const Job &job, const Picture &pic, i
     const int lanesY = specY + specH + (rendered ? gap : 0), axisY = lanesY + laneH * (int)n;
     const int H = axisY + axisH + footH;
     Canvas cv(W, H, kBg);
-    const double tsig = std::max(1, job.tsigNum);
+    const MeterMap &meter = job.meter;
 
     // ---- header -----------------------------------------------------------------------------
     font.draw(cv, S(16), S(32), ascii(font.fit(pic.title, S(22), W - S(32))), S(22), kText);
@@ -93,16 +93,16 @@ bool writePicture(const std::string &path, const Job &job, const Picture &pic, i
     }
     font.draw(cv, S(10), rulerY + S(16), "Sections", S(13), kDim);
     font.draw(cv, S(10), rulerY + S(34), "Bars", S(11), kDim);
-    const double firstBar = std::floor(job.tempo.secToBeat(t0) / tsig) + 1, lastBar = std::floor(job.tempo.secToBeat(t1) / tsig) + 1;
+    const double firstBar = meter.barIndex(job.tempo.secToBeat(t0)) + 1, lastBar = meter.barIndex(job.tempo.secToBeat(t1)) + 1;
     int barStep = 1;
     for (int s : {1, 2, 4, 8, 16, 32, 64, 128}) {
         barStep = s;
         const double b = std::max(1.0, firstBar);
-        if (X(job.tempo.beatToSec((b - 1 + s) * tsig)) - X(job.tempo.beatToSec((b - 1) * tsig)) >= S(34)) break;
+        if (X(job.tempo.beatToSec(meter.barToBeat(b + s))) - X(job.tempo.beatToSec(meter.barToBeat(b))) >= S(34)) break;
     }
     std::vector<double> barLines;   // x of labelled bars, for faint guides in the lanes
     for (double b = std::max(1.0, firstBar); b <= lastBar; ++b) {
-        const double x = X(job.tempo.beatToSec((b - 1) * tsig));
+        const double x = X(job.tempo.beatToSec(meter.barToBeat(b)));
         if (x < plotX - 0.5 || x > plotX + plotW) continue;
         const bool labelled = ((long)b - 1) % barStep == 0;
         cv.rect(x, rulerY + S(22), x + 1, rulerY + S(labelled ? 28 : 25), labelled ? kDim : kGrid);

@@ -536,17 +536,16 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             }
             // transport
             const double sec = std::max<int64_t>(0, pos) / sr, beat = job.tempo.secToBeat(sec);
-            const double barBeats = job.tsigNum * 4.0 / job.tsigDen;
             ctx.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid | ProcessContext::kProjectTimeMusicValid |
                         ProcessContext::kBarPositionValid | (pos >= 0 ? ProcessContext::kPlaying : 0);
             ctx.sampleRate = sr;
             ctx.projectTimeSamples = std::max<int64_t>(0, pos);
             ctx.continousTimeSamples = pos + warm;
             ctx.projectTimeMusic = beat;
-            ctx.barPositionMusic = std::floor(beat / barBeats) * barBeats;
+            ctx.barPositionMusic = job.meter.barStart(beat);
             ctx.tempo = job.tempo.bpmAtBeat(beat);
-            ctx.timeSigNumerator = job.tsigNum;
-            ctx.timeSigDenominator = job.tsigDen;
+            ctx.timeSigNumerator = job.meter.atBeat(beat).num;
+            ctx.timeSigDenominator = job.meter.atBeat(beat).den;
 
             // inputs: silence, or the effect's source audio on bus 0; outputs cleared
             for (int32 b = 0; b < data.numInputs; ++b)

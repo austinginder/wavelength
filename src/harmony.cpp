@@ -131,11 +131,11 @@ Chord chordOf(const PC &w, int bass, bool sharps = false) {
 
 struct N { double b0, b1; int key; size_t track; };
 
-std::string barBeat(double beat, double bpb) {
+std::string barBeat(double beat, const MeterMap &meter) {
     const double b = std::round(beat * 1000) / 1000;
     char buf[48];
-    const double bar = std::floor(b / bpb);
-    std::snprintf(buf, sizeof buf, "bar %d beat %.2f", (int)bar + 1, b - bar * bpb + 1);
+    const int bar = meter.barIndex(b);
+    std::snprintf(buf, sizeof buf, "bar %d beat %.2f", bar + 1, b - meter.barToBeat(bar + 1) + 1);
     return buf;
 }
 
@@ -171,7 +171,8 @@ bool parseKeyName(const std::string &in, int &tonic, bool &minor, std::string &e
 }
 
 json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+    const MeterMap &M = job.meter;
+    auto bs = [&](int b) { return M.barToBeat(b + 1); };   // the first beat of bar b (0-based)
     std::vector<N> notes;
     double end = 0;
     for (size_t ti : o.tracks)
@@ -183,10 +184,10 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
         }
     json out = {{"keys", json::array()}, {"bars", json::array()}, {"problems", json::array()}, {"info", json::array()}};
     if (notes.empty()) return out;
-    const int bars = (int)std::ceil(end / bpb - 1e-9);
+    const int bars = M.barIndex(end - 1e-9) + 1;
     std::vector<std::vector<size_t>> byBar((size_t)bars);
     for (size_t i = 0; i < notes.size(); ++i) {
-        const int a = std::max(0, (int)std::floor(notes[i].b0 / bpb)), z = std::min(bars - 1, (int)std::floor((notes[i].b1 - 1e-9) / bpb));
+        const int a = std::max(0, M.barIndex(notes[i].b0)), z = std::min(bars - 1, M.barIndex(notes[i].b1 - 1e-9));
         for (int b = a; b <= z; ++b) byBar[(size_t)b].push_back(i);
     }
     // sample every 16th: each distinct sounding pitch class weighs its time, the bass gets as much again.
@@ -197,14 +198,14 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
     std::vector<int> bassNote((size_t)bars, -1);
     for (int b = 0; b < bars; ++b) {
         std::map<int, double> bassTime;
-        for (double t = b * bpb; t < (b + 1) * bpb - 1e-9; t += step) {
+        for (double t = bs(b); t < bs(b + 1) - 1e-9; t += step) {
             const double c = t + step / 2;
             std::set<int> pcs;
             int lo = 999;
             for (size_t i : byBar[(size_t)b])
                 if (notes[i].b0 <= c && c < notes[i].b1) { pcs.insert(notes[i].key % 12); lo = std::min(lo, notes[i].key); }
             if (pcs.empty()) continue;
-            PC &h = (c - b * bpb) < bpb / 2 ? half0[(size_t)b] : half1[(size_t)b];
+            PC &h = (c - bs(b)) < (bs(b + 1) - bs(b)) / 2 ? half0[(size_t)b] : half1[(size_t)b];
             for (int p : pcs) {
                 all[(size_t)b][(size_t)p] += step;
                 h[(size_t)p] += step;
@@ -224,7 +225,7 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
     if (!o.keys.empty()) {
         for (int b = 0; b < bars; ++b) {
             const KeyMark *m = &o.keys.front();
-            for (auto &k : o.keys) if (k.beat <= b * bpb + 1e-6) m = &k;
+            for (auto &k : o.keys) if (k.beat <= bs(b) + 1e-6) m = &k;
             key[(size_t)b] = {m->tonic, m->minor, m->checks, "declared", m->mode};
         }
     } else {
@@ -347,7 +348,7 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
             for (int p : outPcs[(size_t)b]) names.push_back(pcName(p, sharpKey(k.tonic, k.minor)));
             row["outside"] = names;
         }
-        if (inRange(b * bpb)) out["bars"].push_back(row);
+        if (inRange(bs(b))) out["bars"].push_back(row);
     }
     for (int b = 0; b < bars;) {
         if (!outside[(size_t)b]) { ++b; continue; }
@@ -356,7 +357,7 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
         const K &k = key[(size_t)b];
         const int len = e - b + 1;
         const bool before = b > 0 && !outside[(size_t)(b - 1)], after = e + 1 < bars && !outside[(size_t)(e + 1)];
-        if (len <= o.maxExcursionBars && before && after && k.checks && inRange(b * bpb)) {
+        if (len <= o.maxExcursionBars && before && after && k.checks && inRange(bs(b))) {
             PC w{};
             for (int x = b; x <= e; ++x) for (int p = 0; p < 12; ++p) w[(size_t)p] += all[(size_t)x][(size_t)p];
             const Chord c = chordOf(w, bassNote[(size_t)e], sharpKey(k.tonic, k.minor));
@@ -397,7 +398,7 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
                 const N &p = notes[ids[x]], &q = notes[ids[y]];
                 if (p.track == q.track || p.b1 - p.b0 < 1 || q.b1 - q.b0 < 1) continue;
                 const double s = std::max(p.b0, q.b0), e = std::min(p.b1, q.b1);
-                if (e - s < 1 || std::floor(s / bpb) != b) continue;   // report once, in the bar the overlap starts
+                if (e - s < 1 || M.barIndex(s) != b) continue;   // report once, in the bar the overlap starts
                 const N &hi = p.key > q.key ? p : q, &lo = p.key > q.key ? q : p;
                 const int d = hi.key - lo.key;
                 if (d <= 0 || d % 12 != 1) continue;
@@ -412,12 +413,12 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
                     // one chord early or late). Grouped per pair of tracks; worth a look, not an error.
                     json &r = rubs[{hi.track, lo.track}];
                     if (r.is_null()) r = {{"tracks", {job.tracks[hi.track].name, job.tracks[lo.track].name}}, {"count", 0}, {"bars", json::array()},
-                                          {"example", keyName(hi.key) + " over " + keyName(lo.key) + " (" + (d == 1 ? "minor 2nd" : "minor 9th") + ", " + held + " beats, " + barBeat(s, bpb) + ")"}};
+                                          {"example", keyName(hi.key) + " over " + keyName(lo.key) + " (" + (d == 1 ? "minor 2nd" : "minor 9th") + ", " + held + " beats, " + barBeat(s, M) + ")"}};
                     r["count"] = r["count"].get<int>() + 1;
                     if (r["bars"].empty() || r["bars"].back().get<int>() != b + 1) r["bars"].push_back(b + 1);
                     continue;
                 }
-                out["problems"].push_back({{"kind", "clash"}, {"bars", {b + 1, b + 1}}, {"at", barBeat(s, bpb)},
+                out["problems"].push_back({{"kind", "clash"}, {"bars", {b + 1, b + 1}}, {"at", barBeat(s, M)},
                                            {"tracks", {job.tracks[hi.track].name, job.tracks[lo.track].name}},
                                            {"notes", {keyName(hi.key), keyName(lo.key)}},
                                            {"detail", job.tracks[hi.track].name + " " + keyName(hi.key) + " against " + job.tracks[lo.track].name + " " +
@@ -510,12 +511,11 @@ std::vector<std::pair<double, std::string>> detectChords(const Job &job) {
     std::vector<std::pair<double, std::string>> out;
     if (o.tracks.empty()) return out;
     const json r = analyzeHarmony(job, o);
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
     for (const auto &b : r["bars"]) {
-        const double beat = (b["bar"].get<int>() - 1) * bpb;
+        const double beat = job.meter.barToBeat(b["bar"].get<int>()), half = (job.meter.barToBeat(b["bar"].get<int>() + 1) - beat) / 2;
         if (b.contains("halves")) {
             out.push_back({beat, b["halves"][0].get<std::string>()});
-            out.push_back({beat + bpb / 2, b["halves"][1].get<std::string>()});
+            out.push_back({beat + half, b["halves"][1].get<std::string>()});
         } else if (b["chord"].get<std::string>() != "-") out.push_back({beat, b["chord"].get<std::string>()});
     }
     return out;

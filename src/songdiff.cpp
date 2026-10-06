@@ -89,7 +89,7 @@ bool sameValue(const json &a, const json &b) {
 }
 
 // bars where two curves differ; `whole` when an LFO or an unreadable curve changed
-std::vector<std::pair<int, int>> curveBars(const json &ja, const json &jb, double bpb, int lastBar, bool &whole) {
+std::vector<std::pair<int, int>> curveBars(const json &ja, const json &jb, const MeterMap &meter, int lastBar, bool &whole) {
     std::vector<std::pair<int, int>> bars;
     if (ja == jb) return bars;
     const Curve a = curveOf(ja), b = curveOf(jb);
@@ -104,9 +104,9 @@ std::vector<std::pair<int, int>> curveBars(const json &ja, const json &jb, doubl
     double prevBeat = 0;
     for (double x : probe) {
         const bool diff = !sameValue(valueAt(a, x), valueAt(b, x));
-        const int bar = (int)std::floor(x / bpb + 1e-9) + 1;
+        const int bar = meter.barIndex(x) + 1;
         // a difference found at this probe may start right after the last probe that matched: include its bar
-        if (diff) addBars(bars, x == probe.front() ? bar : (int)std::floor(prevBeat / bpb + 1e-9) + 1, bar);
+        if (diff) addBars(bars, x == probe.front() ? bar : meter.barIndex(prevBeat) + 1, bar);
         prevBeat = x;
     }
     return bars;
@@ -116,19 +116,17 @@ std::vector<std::pair<int, int>> curveBars(const json &ja, const json &jb, doubl
 using NoteKey = std::tuple<long, int, long, long>;   // start (1/48 beat), key, length (1/48 beat), velocity (1/100)
 std::map<int, std::multiset<NoteKey>> notesByBar(const Job &job, const Track &t) {
     std::map<int, std::multiset<NoteKey>> out;
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
     for (const auto &n : t.notes) {
         const double b = job.tempo.secToBeat(n.start), e = job.tempo.secToBeat(n.start + n.length);
-        out[(int)std::floor(b / bpb + 1e-9) + 1].insert({std::lround(b * 48), n.key, std::lround((e - b) * 48), std::lround(n.velocity * 100)});
+        out[job.meter.barIndex(b) + 1].insert({std::lround(b * 48), n.key, std::lround((e - b) * 48), std::lround(n.velocity * 100)});
     }
     return out;
 }
 
 int lastBarOf(const Job &job) {
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
     double end = 0;
     for (auto &t : job.tracks) for (auto &n : t.notes) end = std::max(end, job.tempo.secToBeat(n.start + n.length));
-    return (int)std::ceil(end / bpb);
+    return end > 1e-9 ? job.meter.barIndex(end - 1e-9) + 1 : 0;
 }
 
 const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "drum", "transpose", "articulations",
@@ -152,7 +150,7 @@ void compareKey(const json &a, const json &b, const std::string &key, std::vecto
     } else lines.push_back(key + " " + show(va) + " -> " + show(vb));
 }
 
-void compareFx(const json &fa, const json &fb, double bpb, int lastBar, PartDiff &p, std::vector<std::string> *songLines) {
+void compareFx(const json &fa, const json &fb, const MeterMap &meter, int lastBar, PartDiff &p, std::vector<std::string> *songLines) {
     const json a = fa.is_array() ? fa : json::array(), b = fb.is_array() ? fb : json::array();
     auto say = [&](const std::string &s) { if (songLines) songLines->push_back(s); else p.changes.push_back(s); };
     if (a.size() != b.size()) { say("fx: " + std::to_string(a.size()) + " -> " + std::to_string(b.size()) + " effects"); p.whole = true; }
@@ -178,7 +176,7 @@ void compareFx(const json &fa, const json &fb, double bpb, int lastBar, PartDiff
         for (auto &[k, v] : autoB.items()) params.insert(k);
         for (auto &k : params) {
             bool whole = false;
-            const auto bars = curveBars(autoA.contains(k) ? autoA[k] : json(), autoB.contains(k) ? autoB[k] : json(), bpb, lastBar, whole);
+            const auto bars = curveBars(autoA.contains(k) ? autoA[k] : json(), autoB.contains(k) ? autoB[k] : json(), meter, lastBar, whole);
             if (bars.empty()) continue;
             for (auto &[s, e] : bars) addBars(p.bars, s, e);
             lines.push_back(k + " automation (" + barsText(bars) + ")");
@@ -190,7 +188,7 @@ void compareFx(const json &fa, const json &fb, double bpb, int lastBar, PartDiff
     }
 }
 
-void compareAutomation(const json &a, const json &b, double bpb, int lastBar, PartDiff &p) {
+void compareAutomation(const json &a, const json &b, const MeterMap &meter, int lastBar, PartDiff &p) {
     const json aa = a.is_object() ? a : json::object(), ab = b.is_object() ? b : json::object();
     std::set<std::string> keys;
     for (auto &[k, v] : aa.items()) keys.insert(k);
@@ -211,7 +209,7 @@ void compareAutomation(const json &a, const json &b, double bpb, int lastBar, Pa
         } else curves.push_back({k, {x, y}});
         for (auto &[name, pair] : curves) {
             bool whole = false;
-            const auto bars = curveBars(pair.first, pair.second, bpb, lastBar, whole);
+            const auto bars = curveBars(pair.first, pair.second, meter, lastBar, whole);
             if (bars.empty()) continue;
             for (auto &[s, e] : bars) addBars(p.bars, s, e);
             p.changes.push_back("automation " + name + " (" + barsText(bars) + ")");
@@ -232,15 +230,15 @@ bool diffJobs(const json &ja, const json &jb, const std::string &baseDir, SongDi
     Job a, b;
     if (!parseJob(ja, baseDir, a, err, false)) { err = "the older job: " + err; return false; }
     if (!parseJob(jb, baseDir, b, err, false)) { err = "the newer job: " + err; return false; }
-    const double bpb = b.tsigNum * 4.0 / b.tsigDen;
+    const MeterMap &meter = b.meter;
     const int lastBar = std::max(lastBarOf(a), lastBarOf(b));
 
-    for (const char *k : {"tempo", "timeSignature", "keys", "chords", "groove", "length", "tail", "sampleRate", "leadIn"}) compareKey(ja, jb, k, d.song);
+    for (const char *k : {"tempo", "timeSignature", "meterChanges", "keys", "chords", "groove", "length", "tail", "sampleRate", "leadIn"}) compareKey(ja, jb, k, d.song);
     {   // markers by name
         std::map<std::string, double> ma, mb;
         for (auto &m : ja.value("markers", json::array())) ma[m.value("name", std::string())] = m.value("beat", 0.0);
         for (auto &m : jb.value("markers", json::array())) mb[m.value("name", std::string())] = m.value("beat", 0.0);
-        auto bar = [&](double beat) { return std::to_string((int)std::floor(beat / bpb + 1e-9) + 1); };
+        auto bar = [&](double beat) { return std::to_string(meter.barIndex(beat) + 1); };
         for (auto &[n, beat] : mb)
             if (!ma.count(n)) d.song.push_back("marker '" + n + "' added at bar " + bar(beat));
             else if (std::fabs(ma[n] - beat) > 1e-9) d.song.push_back("marker '" + n + "' moved from bar " + bar(ma[n]) + " to bar " + bar(beat));
@@ -253,9 +251,9 @@ bool diffJobs(const json &ja, const json &jb, const std::string &baseDir, SongDi
             std::vector<std::string> lines;
             for (const char *k : {"gain", "loudness", "loudnessGain"}) compareKey(xa, xb, k, lines);
             for (auto &l : lines) d.song.push_back("master " + l);
-            compareFx(xa.value("fx", json::array()), xb.value("fx", json::array()), bpb, lastBar, p, &d.song);
+            compareFx(xa.value("fx", json::array()), xb.value("fx", json::array()), meter, lastBar, p, &d.song);
             for (auto &l : d.song) if (l.rfind("fx", 0) == 0) l = "master " + l;
-            compareAutomation(xa.value("automation", json::object()), xb.value("automation", json::object()), bpb, lastBar, p);
+            compareAutomation(xa.value("automation", json::object()), xb.value("automation", json::object()), meter, lastBar, p);
             for (auto &c : p.changes) d.song.push_back("master " + c);
         }
     }
@@ -285,8 +283,8 @@ bool diffJobs(const json &ja, const json &jb, const std::string &baseDir, SongDi
             for (const char *k : kSoundKeys) compareKey(x, y, k, p.changes);
             for (const char *k : kMixKeys) compareKey(x, y, k, p.changes);
             if (p.changes.size() > before) p.whole = true;
-            compareFx(x.value("fx", json::array()), y.value("fx", json::array()), bpb, lastBar, p, nullptr);
-            compareAutomation(x.value("automation", json::object()), y.value("automation", json::object()), bpb, lastBar, p);
+            compareFx(x.value("fx", json::array()), y.value("fx", json::array()), meter, lastBar, p, nullptr);
+            compareAutomation(x.value("automation", json::object()), y.value("automation", json::object()), meter, lastBar, p);
             if (std::string(kind) == "track") {
                 if (x.value("clips", json::array()) != y.value("clips", json::array())) { p.changes.push_back("audio clips changed"); p.whole = true; }
                 // notes, bar by bar (the parsed jobs keep the tracks in the same order as the JSON)

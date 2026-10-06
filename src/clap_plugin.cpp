@@ -210,17 +210,17 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             std::stable_sort(in.ptrs.begin(), in.ptrs.end(), [](auto *a, auto *b) { return a->time < b->time; });
 
             const double sec = std::max<int64_t>(0, pos) / sr, beat = job.tempo.secToBeat(sec);
-            const double barBeats = job.tsigNum * 4.0 / job.tsigDen;
+            const MeterMap::Seg &meter = job.meter.atBeat(beat);   // the time signature in force there
             transport.header = {sizeof(transport), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0};
             transport.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE |
                               CLAP_TRANSPORT_HAS_TIME_SIGNATURE | (pos >= 0 ? CLAP_TRANSPORT_IS_PLAYING : 0);
             transport.song_pos_beats = (clap_beattime)std::llround(beat * CLAP_BEATTIME_FACTOR);
             transport.song_pos_seconds = (clap_sectime)std::llround(sec * CLAP_SECTIME_FACTOR);
             transport.tempo = job.tempo.bpmAtBeat(beat);
-            transport.bar_number = (int32_t)std::floor(beat / barBeats);
-            transport.bar_start = (clap_beattime)std::llround(transport.bar_number * barBeats * CLAP_BEATTIME_FACTOR);
-            transport.tsig_num = (uint16_t)job.tsigNum;
-            transport.tsig_denom = (uint16_t)job.tsigDen;
+            transport.bar_number = (int32_t)job.meter.barIndex(beat);
+            transport.bar_start = (clap_beattime)std::llround(job.meter.barStart(beat) * CLAP_BEATTIME_FACTOR);
+            transport.tsig_num = (uint16_t)meter.num;
+            transport.tsig_denom = (uint16_t)meter.den;
 
             for (auto &port : outStore) for (auto &c : port) std::fill(c.begin(), c.begin() + n, 0.f);
             for (auto &port : inStore) for (auto &c : port) std::fill(c.begin(), c.begin() + n, 0.f);

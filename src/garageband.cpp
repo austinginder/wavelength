@@ -853,7 +853,9 @@ struct Converter {
     std::set<std::string> usedNames;
     std::vector<json> buses;                 // in the order first sent to
     std::map<uint32_t, size_t> busOf;        // channel number -> its bus
-    int64_t barTicks = 3840, bar1 = 38400, bias = kRegionBias;
+    int64_t bar1 = 38400, bias = kRegionBias;
+    json meterJson = json::object();   // "timeSignature" and "meterChanges", from the signature events
+    MeterMap meter;
     std::map<uint32_t, Project::Curves> curves;   // each channel's automation, taken as its track converts
     int songTonic = -1;                      // the project key's tonic (0-11), for Apple Loops
     std::vector<std::pair<int64_t, int>> transposes;   // the transposition track's points
@@ -867,22 +869,25 @@ struct Converter {
 
     Converter(const Project &p, const std::string &out) : P(p), outDir(out), patchDir(fs::u8path(out) / "patches") {
         const auto sigs = P.signatures();
-        const int64_t num = sigs[0][1], den = std::max<int64_t>(1, sigs[0][2]);
         // bar 1 is tick 38400 and a region shows 3840 ticks after its stored position whatever the meter (4/4 and 3/4 seen)
-        barTicks = std::llround(num * 4.0 / den * kTicksPerBeat);
         bar1 = 38400;
+        std::vector<std::tuple<double, int, int>> pts;
+        // GarageBand keeps one meter: the last signature event at or before bar 1 (t7 holds a leftover 3/4 at tick 960 and
+        // 4/4 at bar 1, and GarageBand shows 4/4); a later one would be a change
+        auto sorted = sigs;
+        std::stable_sort(sorted.begin(), sorted.end(), [](auto &a, auto &b) { return a[0] < b[0]; });
+        for (auto &sg : sorted) pts.push_back({std::max(0.0, beat(sg[0])), (int)std::clamp<int64_t>(sg[1], 1, 64), (int)std::clamp<int64_t>(sg[2], 1, 32)});
+        writeMeter(meterJson, pts);
+        try { meter = MeterMap::fromJob(meterJson); } catch (const std::exception &e) { warn.push_back(std::string("time signatures: ") + e.what()); meterJson = json::object(); }
         bias = kRegionBias;
         transposes = P.transpositions();
         if (std::all_of(transposes.begin(), transposes.end(), [](const auto &x) { return x.second == 0; })) transposes.clear();
         char b[200];
-        if (!(den == 4 && (num == 4 || num == 3))) {
-            std::snprintf(b, sizeof b, "time signature %lld/%lld: positions read as in 4/4 and 3/4 (other meters not checked)", (long long)num, (long long)den);
-            warn.push_back(b);
-        }
-        if (sigs.size() > 1) {
-            std::snprintf(b, sizeof b, "%zu time signature changes: only the first (%lld/%lld) is written", sigs.size() - 1, (long long)num, (long long)den);
-            warn.push_back(b);
-        }
+        for (auto &m : meter.segs)
+            if (!(m.den == 4 && (m.num == 4 || m.num == 3))) {
+                std::snprintf(b, sizeof b, "time signature %d/%d: positions read as in 4/4 and 3/4 (other meters not checked)", m.num, m.den);
+                warn.push_back(b);
+            }
     }
 
     double beat(int64_t tick) const { return (double)(tick - bar1) / kTicksPerBeat; }
@@ -1013,7 +1018,9 @@ struct Converter {
                 warn.push_back(t.name + ": region \"" + p.seq->name + "\" has a Time Quantize (code " + std::to_string(p.seq->quantize) + ") not decoded, played as recorded");
             if (n.empty() && c.empty()) {
                 char b[64];
-                std::snprintf(b, sizeof b, "%.2f", 1 + (double)(p.start - bar1) / barTicks);
+                const double bt = beat(p.start);
+                const auto &sg = meter.atBeat(bt);
+                std::snprintf(b, sizeof b, "%.2f", sg.bar + (bt - sg.beat) / sg.bpb());
                 warn.push_back(t.name + ": region \"" + p.seq->name + "\" at bar " + b + " holds no notes");
             }
             notes.insert(notes.end(), n.begin(), n.end());
@@ -1439,8 +1446,7 @@ struct Converter {
             // (a bounce of a 100 to 140 BPM ramp: every beat within 2 ms of these steps)
             for (auto &[t, bpm] : tempos) job["tempo"].push_back({{"beat", r4(std::max(0.0, beat(t)))}, {"bpm", r4(bpm)}});
         }
-        const auto sig = P.signatures()[0];
-        job["timeSignature"] = {sig[1], sig[2]};
+        for (auto &[k, v] : meterJson.items()) job[k] = v;   // the meter, with its changes
         if (!P.key().empty()) {
             const json key = {{"bar", 1}, {"key", P.key()}};
             job["keys"] = json::array({key});

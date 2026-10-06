@@ -290,8 +290,7 @@ Audio foldLoop(const Audio &a, size_t loopFrames) {
 
 // "bars 17-48" / "bar 17" of a stretch of render seconds
 std::string barsOf(const Job &job, double s0, double s1) {
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
-    const int b0 = (int)std::floor(job.tempo.secToBeat(s0) / bpb + 1e-9) + 1, b1 = (int)std::floor(job.tempo.secToBeat(std::max(s0, s1 - 1e-6)) / bpb + 1e-9) + 1;
+    const int b0 = job.meter.barIndex(job.tempo.secToBeat(s0)) + 1, b1 = job.meter.barIndex(job.tempo.secToBeat(std::max(s0, s1 - 1e-6))) + 1;
     return b0 == b1 ? "bar " + std::to_string(b0) : "bars " + std::to_string(b0) + "-" + std::to_string(b1);
 }
 
@@ -442,11 +441,12 @@ void mixChecks(const Job &job, const std::vector<TrackResult> &tracks, double se
 // The same bars over and over: a stretch of 32 bars or more where every track plays the same 1-, 2-, 4- or
 // 8-bar block again and nothing moves (no automation turns inside it). Listeners stop hearing it.
 void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
-    const double bpb = job.tsigNum * 4.0 / job.tsigDen;
+    const MeterMap &M = job.meter;
     double lastBeat = 0;
     for (const auto &t : job.tracks)
         for (const auto &n : t.notes) lastBeat = std::max(lastBeat, job.tempo.secToBeat(n.start + n.length));
-    const int bars = (int)std::ceil(lastBeat / bpb - 1e-9);
+    const int bars = lastBeat > 1e-9 ? M.barIndex(lastBeat - 1e-9) + 1 : 0;
+    const double endBeat = M.barToBeat(bars + 1);
     if (bars < 32) return;
     // each bar's content: every note that starts in it (track, key, position and length to 1/24 beat)
     std::vector<std::vector<long>> sig((size_t)bars);
@@ -454,20 +454,20 @@ void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
         if (job.tracks[ti].mute) continue;
         for (const auto &n : job.tracks[ti].notes) {
             const double b = job.tempo.secToBeat(n.start), e = job.tempo.secToBeat(n.start + n.length);
-            const int bar = (int)std::floor(b / bpb + 1e-9);
+            const int bar = M.barIndex(b);
             if (bar < 0 || bar >= bars) continue;
-            sig[(size_t)bar].push_back((((long)ti * 128 + n.key) * 4096 + std::lround((b - bar * bpb) * 24)) * 8192 + std::lround((e - b) * 24));
+            sig[(size_t)bar].push_back((((long)ti * 128 + n.key) * 4096 + std::lround((b - M.barToBeat(bar + 1)) * 24)) * 8192 + std::lround((e - b) * 24));
         }
     }
     for (auto &s : sig) std::sort(s.begin(), s.end());
     // bars where something is moving: any automation corner (track, bus, master) makes the stretch vary
     std::vector<bool> moving((size_t)bars + 1, false);
     auto markBeats = [&](double beat0, double beat1) {
-        const int b0 = (int)std::floor(beat0 / bpb), b1 = (int)std::floor(beat1 / bpb);
+        const int b0 = M.barIndex(beat0), b1 = M.barIndex(beat1);
         for (int b = std::max(0, b0); b <= std::min(bars, b1); ++b) moving[(size_t)b] = true;
     };
     auto mark = [&](const Envelope &e) {
-        if (e.hasLfo()) { markBeats(0, bars * bpb); return; }   // an LFO moves all the time
+        if (e.hasLfo()) { markBeats(0, endBeat); return; }   // an LFO moves all the time
         const auto &pts = e.corners();
         for (size_t k = 1; k < pts.size(); ++k)
             if (pts[k].second != pts[k - 1].second) markBeats(job.tempo.secToBeat(pts[k - 1].first), job.tempo.secToBeat(pts[k].first));
@@ -476,7 +476,7 @@ void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
     // an effect's "lfo" block; curves written straight on a setting count too
     std::function<void(const nlohmann::json &)> markCurve = [&](const nlohmann::json &c) {
         if (c.is_object()) {
-            if (c.contains("lfo")) markBeats(0, bars * bpb);
+            if (c.contains("lfo")) markBeats(0, endBeat);
             if (c.contains("points")) markCurve(c["points"]);
             return;
         }
@@ -493,7 +493,7 @@ void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
             for (auto &[k, v] : fx.items()) {
                 if (k == "loopFx" || k == "bands") { if (v.is_array()) markFx(v); continue; }
                 if (k == "automate" && v.is_object()) { for (auto &[pk, pv] : v.items()) markCurve(pv); continue; }
-                if (k == "lfo" && v.is_object() && !v.empty()) { markBeats(0, bars * bpb); continue; }
+                if (k == "lfo" && v.is_object() && !v.empty()) { markBeats(0, endBeat); continue; }
                 markCurve(v);
             }
         }
@@ -511,7 +511,7 @@ void repetitionChecks(const Job &job, std::vector<std::string> &warnings) {
     for (const auto &c : job.masterGainAutomation.parts) mark(c);
     markFx(job.masterFx);
     auto quiet = [&](int b) {   // inside a section marked "checks": false
-        const double s = job.tempo.beatToSec(b * bpb);
+        const double s = job.tempo.beatToSec(M.barToBeat(b + 1));
         for (size_t m = 0; m < job.markers.size(); ++m) {
             const double a = job.markers[m].sec, e = m + 1 < job.markers.size() ? job.markers[m + 1].sec : 1e18;
             if (s >= a && s < e) return !job.markers[m].checks;

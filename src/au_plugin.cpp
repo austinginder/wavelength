@@ -695,16 +695,15 @@ bool AuPlugin::render(const Job &job, const std::vector<TimedEvent> &events, con
         const int64_t warm = (int64_t)(0.1 * sr), end = total + lat;
         size_t next = 0;
         std::vector<float> lastAuto(autos.size(), NAN);
-        const double barBeats = job.tsigNum * 4.0 / job.tsigDen;
         for (int64_t pos = -warm; pos < end;) {
             const UInt32 n = (UInt32)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
             im.pos = pos;
             const double sec = std::max<int64_t>(0, pos) / sr;
             im.beat = job.tempo.secToBeat(sec);
             im.tempo = job.tempo.bpmAtBeat(im.beat);
-            im.barStart = std::floor(im.beat / barBeats) * barBeats;
-            im.tsigNum = job.tsigNum;
-            im.tsigDen = job.tsigDen;
+            im.barStart = job.meter.barStart(im.beat);
+            im.tsigNum = job.meter.atBeat(im.beat).num;
+            im.tsigDen = job.meter.atBeat(im.beat).den;
             im.playing = pos >= 0;
             if (pos >= 0 && pos < block) for (const auto &v : initial) AudioUnitSetParameter(u, v.id, kAudioUnitScope_Global, 0, (AudioUnitParameterValue)v.value, 0);
             if (pos >= 0)

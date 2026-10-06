@@ -37,7 +37,8 @@ A job is one JSON object. Unknown fields are ignored.
 | `sampleRate` | 48000 | Output sample rate (Hz). |
 | `blockSize` | 512 | Frames per `process()` call. |
 | `tempo` | 120 | A BPM number, or a tempo map: `[{"beat": 0, "bpm": 76}, {"beat": 8, "bpm": 138}]`. Points step by default; `"ramp": true` on a point reaches its bpm by a smooth ramp from the previous point (accelerando / ritardando). Also sent to plugins as transport, so tempo-synced LFOs and delays follow it. |
-| `timeSignature` | `[4, 4]` | Sent to plugins as transport. |
+| `timeSignature` | `[4, 4]` | The meter from bar 1: bar numbers (`keys`, `chords`, `render --from/--to`, `timeline`, `lint --harmony`, the picture's ruler) count in it, and plugins get it as transport. |
+| `meterChanges` | none | Meter changes by bar: `[{"bar": 9, "sig": [4, 4]}, {"bar": 17, "sig": [6, 8]}]`. Bars after a change count in its meter (bar 9 of a 3/4 song then starts at beat 24) and plugins get the meter in force; notes stay in beats. MIDI, MusicXML and DAWproject imports write them, and MIDI and DAWproject exports keep them. |
 | `tail` | 3 | Seconds rendered after the last note-off, for releases and reverb. |
 | `warmup` | 0.4 | Wall-clock seconds each plugin gets after activation to finish loading samples or restoring state. |
 | `length` | 0 | Fixed render length in seconds (0 = last note + `tail`). |

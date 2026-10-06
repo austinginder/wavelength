@@ -823,6 +823,12 @@ bool buildJob(Ctx &c, const xml::Node &rootNode, const std::string &path, const 
     if (!arrangement) { err = path + " has no arrangement (only launcher clips?)"; return false; }
     const xml::Node *arrLanes = arrangement->child("Lanes");
     if (arrLanes && arrLanes->get("timeUnit", "beats") != "beats") res.notes.push_back("arrangement is timed in seconds; times were read as beats (check the tempo)");
+    if (const xml::Node *ts = arrangement->child("TimeSignatureAutomation")) {   // meter changes
+        std::vector<std::tuple<double, int, int>> pts;
+        if (job.contains("timeSignature")) pts.push_back({0, job["timeSignature"][0].get<int>(), job["timeSignature"][1].get<int>()});
+        for (const xml::Node *p : ts->all("TimeSignaturePoint")) pts.push_back({p->num("time"), (int)p->num("numerator", 4), (int)p->num("denominator", 4)});
+        writeMeter(job, pts);
+    }
     if (const xml::Node *ta = arrangement->child("TempoAutomation")) {   // a tempo map
         json map = json::array();
         for (const xml::Node *p : ta->all("RealPoint"))

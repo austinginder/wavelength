@@ -209,7 +209,7 @@ void replaceFollow(json &j, const std::function<json(const json &)> &f) {
 }
 
 // "chords": [[beat, "C#m"], ...] or [{"bar": 9, "chord": "C#m"}, {"beat": 36, "chord": "A"}]
-std::vector<std::pair<double, ChordTones>> parseChordList(const json &list, double beatsPerBar) {
+std::vector<std::pair<double, ChordTones>> parseChordList(const json &list, const MeterMap &meter) {
     if (!list.is_array()) throw std::runtime_error("\"chords\" is a list: [[beat, \"C#m\"], ...] or [{\"bar\": 1, \"chord\": \"C#m\"}, ...]");
     std::vector<std::pair<double, ChordTones>> out;
     for (const auto &c : list) {
@@ -217,7 +217,7 @@ std::vector<std::pair<double, ChordTones>> parseChordList(const json &list, doub
         std::string name;
         if (c.is_array() && c.size() == 2 && c[0].is_number() && c[1].is_string()) { beat = c[0].get<double>(); name = c[1].get<std::string>(); }
         else if (c.is_object() && c.contains("chord") && (c.contains("bar") || c.contains("beat"))) {
-            beat = c.contains("bar") ? (c["bar"].get<double>() - 1) * beatsPerBar : c["beat"].get<double>();
+            beat = c.contains("bar") ? meter.barToBeat(c["bar"].get<double>()) : c["beat"].get<double>();
             name = c["chord"].get<std::string>();
         } else throw std::runtime_error("each \"chords\" entry is [beat, \"C#m\"] or {\"bar\": 9, \"chord\": \"C#m\"}");
         if (name == "-" || name == "N.C." || name == "NC") continue;   // no chord: the previous one holds
@@ -380,10 +380,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
     try {
         // curves that follow the chords ({"follow": "root", "octave": 4}) become step curves first: from the
         // job's "chords", or the chords lint --harmony reads from the notes
+        const MeterMap meter = MeterMap::fromJob(j);
         if (hasFollow(j)) {
-            const double bpb = j.contains("timeSignature") ? j["timeSignature"][0].get<double>() * 4 / j["timeSignature"][1].get<double>() : 4.0;
             std::vector<std::pair<double, ChordTones>> chords;
-            if (j.contains("chords")) chords = parseChordList(j["chords"], bpb);
+            if (j.contains("chords")) chords = parseChordList(j["chords"], meter);
             else {
                 json plain = j;
                 replaceFollow(plain, [](const json &) { return json{{"value", 1.0}}; });
@@ -392,10 +392,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 if (!parseJob(plain, baseDir, notes, perr, false)) throw std::runtime_error(perr);
                 json detected = json::array();
                 for (auto &[b, name] : detectChords(notes)) detected.push_back({b, name});
-                chords = parseChordList(detected, bpb);
+                chords = parseChordList(detected, meter);
             }
             replaceFollow(j, [&](const json &spec) { return followCurve(spec, chords); });
-        } else if (j.contains("chords")) parseChordList(j["chords"], 4);   // still check it
+        } else if (j.contains("chords")) parseChordList(j["chords"], meter);   // still check it
         out.baseDir = baseDir;
         out.parallel = j.value("parallel", -1);
         out.retries = std::clamp(j.value("retries", 2), 0, 10);
@@ -407,7 +407,9 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         out.leadIn = j.value("leadIn", 0.0);
         if (out.leadIn < 0 || out.leadIn > 30) throw std::runtime_error("\"leadIn\" is seconds of silence before the song, 0 to 30");
         if (j.contains("normalize") && !j["normalize"].is_null()) { out.hasNormalize = true; out.normalizeDb = j["normalize"].get<double>(); }
-        if (j.contains("timeSignature")) { out.tsigNum = j["timeSignature"][0]; out.tsigDen = j["timeSignature"][1]; }
+        out.meter = meter;
+        out.tsigNum = meter.segs[0].num;
+        out.tsigDen = meter.segs[0].den;
 
         std::vector<TempoPoint> tp;
         if (!j.contains("tempo") || j["tempo"].is_number()) tp.push_back({0, j.value("tempo", 120.0)});
@@ -759,14 +761,13 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         }
         if (j.contains("keys")) {   // [{"bar": 1, "key": "D minor"}, {"bar": 69, "key": "E minor"}]: read by lint --harmony
             if (!j["keys"].is_array()) throw std::runtime_error("\"keys\" is a list: [{\"bar\": 1, \"key\": \"D minor\"}, ...]");
-            const double beatsPerBar = out.tsigNum * 4.0 / out.tsigDen;
             for (auto &k : j["keys"]) {
                 if (!k.is_object() || !k.contains("key") || !(k.contains("bar") || k.contains("beat")))
                     throw std::runtime_error("each \"keys\" entry needs \"key\" (\"D minor\") and \"bar\" (or \"beat\")");
                 KeyMark km{};
                 std::string kerr;
                 if (!parseKeyName(k["key"].get<std::string>(), km.tonic, km.minor, kerr, &km.mode)) throw std::runtime_error("\"keys\": " + kerr);
-                km.beat = k.contains("bar") ? (k["bar"].get<double>() - 1) * beatsPerBar : k["beat"].get<double>();
+                km.beat = k.contains("bar") ? out.meter.barToBeat(k["bar"].get<double>()) : k["beat"].get<double>();
                 km.checks = k.value("checks", true);
                 out.keys.push_back(km);
             }

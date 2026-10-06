@@ -2,6 +2,7 @@
 // A render job: the JSON document agents write. See docs/job-format.md.
 #include "automation.hpp"
 #include "encode.hpp"
+#include "meter.hpp"
 #include "tempo.hpp"
 
 #include <nlohmann/json.hpp>
@@ -98,7 +99,8 @@ struct Job {
     int sampleRate = 48000;
     int blockSize = 512;
     TempoMap tempo;
-    int tsigNum = 4, tsigDen = 4;
+    int tsigNum = 4, tsigDen = 4;   // the meter at bar 1 (meter: with its changes)
+    MeterMap meter;
     double tail = 3.0;          // seconds rendered after the last note-off
     double warmup = 0.4;        // seconds of wall-clock settling after activation
     double length = 0;          // optional fixed length in seconds (0 = auto)
