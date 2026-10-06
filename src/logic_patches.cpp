@@ -984,28 +984,43 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
         } else if (p.name == "Enveloper") {   // transient shaping isn't played: only its output level (#6)
             if (v(6) != 0) add({{"type", "gain"}, {"db", r2(v(6))}});
             notes.push_back("Enveloper: its transient shaping is not played");
-        } else if (p.name == "St-Delay") {   // Stereo Delay: one delay from the left side; ping-pong when its crossfeed bounces
+        } else if (p.name == "St-Delay") {   // Stereo Delay: each side its own time and feedback, with crossfeed; ping-pong when the
+                                             // crossfeed bounces one input between the sides
             const double mix = (v(0) + v(1)) / 200;
             if (mix <= 0) { notes.push_back("Stereo Delay: Mix 0 as saved (a Smart Control knob raises it), left out"); continue; }
             json d = {{"type", "delay"}};
-            if (v(10) != 0 && v(11) > 0) d["time"] = r4(4 / v(11) * (1 + v(12) / 100));
-            else d["ms"] = r2(std::max(1.0, v(2)));
+            const bool sync = v(10) != 0;
+            auto setTime = [&](json &o, double note, double groove, double ms) {   // #11/#13 note value, #12/#14 groove, #2/#3 ms
+                if (sync && note > 0) o["time"] = r4(4 / note * (1 + groove / 100));
+                else o["ms"] = r2(std::max(1.0, ms));
+            };
+            setTime(d, v(11), v(12), v(2));
             double fb = (v(4) + v(5)) / 200;
             const double xf = std::max(v(6), v(7)) / 100;
             const int inL = (int)std::lround(v(15, 1)), inR = (int)std::lround(v(16, 2));   // 0 off, 1 left, 2 right, 3 L+R, 4 L-R
             const bool pingpong = xf >= 0.5 && (inL == 0 || inR == 0 || (inL == 3 && inR == 3));
+            const bool apart = sync ? std::fabs(v(11) - v(13)) > 1e-3 || std::fabs(v(12) - v(14)) > 1e-3 : std::fabs(v(2) - v(3)) > 1;
             if (pingpong) fb = std::max({v(4), v(5), std::sqrt(std::max(0.0, v(6) * v(7)))}) / 100;
+            else if (apart || std::fabs(v(4) - v(5)) > 1 || xf > 0.005) {
+                fb = v(4) / 100;
+                json right = json::object();
+                setTime(right, v(13), v(14), v(3));
+                right["feedback"] = r4(std::min(v(5) / 100, 0.97));
+                d["right"] = right;
+                if (xf > 0.005) d["crossfeed"] = json::array({r4(std::min(v(6) / 100, 0.97)), r4(std::min(v(7) / 100, 0.97))});
+            }
             d["feedback"] = r4(std::min(fb, 0.97));
             d["highpass"] = r2(v(23) > 0 ? v(23) : v(9) > 0 ? v(9) : 20);
             d["lowpass"] = r2(v(22) > 0 ? v(22) : v(8) > 0 ? v(8) : 20000);
-            d["pingpong"] = pingpong;
+            if (!d.contains("right")) d["pingpong"] = pingpong;
             d["mix"] = r4(mix);
             add(d);
-            if (std::fabs(v(2) - v(3)) > 1 || std::fabs(v(11) - v(13)) > 1e-3) notes.push_back("Stereo Delay: its two sides' times differ, the left one plays");
+            if (pingpong && apart) notes.push_back("Stereo Delay: ping-pong at the left side's time (its two sides' times differ)");
+            if (!pingpong && (inL >= 3 || inR >= 3)) notes.push_back("Stereo Delay: its L+R or L-R inputs play as each side's own input");
         } else if (p.name == "Delay D") {   // Delay Designer: values[0..7] = sync, grid, swing, feedback on, feedback tap, feedback dB, dry dB,
                                             // wet dB; then chunks "TapA".."TapZ" of 20 floats (ms, steps, level dB, mute, pan, ..., HP, LP, filter on)
             auto val = [&](size_t i, double def = 0) { return i < p.values.size() ? (double)p.values[i] : def; };
-            struct Tap { double ms, steps, hp, lp; bool mute, filter; };
+            struct Tap { double ms, steps, level, pan, hp, lp; bool mute, filter, pitch; };
             std::vector<Tap> taps;
             for (size_t i = 24 + 4 * p.values.size(); i + 8 <= p.block.size();) {
                 const uint32_t n = le32(&p.block[i + 4]);
@@ -1014,24 +1029,51 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
                 if (tap && n >= 8 + 80) {
                     float f[20];
                     std::memcpy(f, &p.block[i + 8], 80);
-                    taps.push_back({f[0], f[1], f[13], f[14], f[3] != 0, f[15] != 0});
+                    // 0 ms, 1 grid steps, 2 level dB, 3 mute, 4 pan -100..100, 13 high-pass, 14 low-pass, 15 filter on, 19 pitch on
+                    taps.push_back({f[0], f[1], f[2], f[4], f[13], f[14], f[3] != 0, f[15] != 0, f[19] != 0});
                 }
                 i += n;
             }
-            const double dry = dbLin(val(6, -6)), wet = dbLin(val(7, -12));
+            const double dry = dbLin(val(6, -6));
+            double wet = dbLin(val(7, -12));
             const bool fbOn = val(3) != 0;
             const size_t idx = (size_t)std::max(0.0, val(4));
-            const Tap *t = fbOn && idx < taps.size() ? &taps[idx] : nullptr;
-            for (auto &x : taps) if (!t && !x.mute) t = &x;
-            if (!t || wet <= 0) { notes.push_back("Delay Designer: no tap or Wet off as saved, left out"); continue; }
-            json d = {{"type", "delay"}, {"pingpong", false}};   // one tap, in the middle
-            if (val(0) != 0 && t->steps > 0 && val(1) > 0) d["time"] = r4(t->steps * val(1) * 4);
-            else d["ms"] = r2(std::max(1.0, t->ms));
-            d["feedback"] = fbOn ? r4(std::min(dbLin(val(5, -100)), 0.97)) : 0.0;
-            d["highpass"] = t->filter ? r2(t->hp) : 20.0;
-            d["lowpass"] = t->filter ? r2(t->lp) : 20000.0;
+            // every tap that isn't muted, at its time, level, pan and filters; the feedback tap (muted or not) feeds back
+            json list = json::array();
+            int fbIndex = -1;
+            bool pitched = false;
+            for (size_t k = 0; k < taps.size(); ++k) {
+                const Tap &x = taps[k];
+                const bool feeds = fbOn && k == idx;
+                if (x.mute && !feeds) continue;
+                json o = json::object();
+                if (val(0) != 0 && x.steps > 0 && val(1) > 0) o["time"] = r4(x.steps * val(1) * 4);
+                else o["ms"] = r2(std::max(1.0, x.ms));
+                o["level"] = x.mute ? -120.0 : r2(std::clamp(x.level, -120.0, 24.0));
+                if (std::fabs(x.pan) > 0.5) o["pan"] = r4(std::clamp(x.pan / 100, -1.0, 1.0));
+                if (x.filter) { o["highpass"] = r2(x.hp); o["lowpass"] = r2(x.lp); }
+                if (feeds) fbIndex = (int)list.size();
+                pitched = pitched || (x.pitch && !x.mute);
+                list.push_back(o);
+            }
+            if (list.empty() || wet <= 0) { notes.push_back("Delay Designer: no tap or Wet off as saved, left out"); continue; }
+            json d = {{"type", "delay"}};
+            const double fbAmount = fbIndex >= 0 ? r4(std::min(dbLin(val(5, -100)), 0.97)) : 0.0;
+            if (list.size() == 1 && !list[0].contains("pan")) {   // one tap in the middle: a plain delay, both sides kept apart
+                const json &o = list[0];
+                if (o.contains("time")) d["time"] = o["time"]; else d["ms"] = o["ms"];
+                d["pingpong"] = false;
+                d["highpass"] = o.value("highpass", 20.0);
+                d["lowpass"] = o.value("lowpass", 20000.0);
+                d["feedback"] = fbAmount;
+                if (std::fabs(o.value("level", 0.0)) >= 0.01) wet *= dbLin(o.value("level", 0.0));
+            } else {
+                d["taps"] = list;
+                d["feedback"] = fbAmount;
+                if (fbIndex > 0) d["feedbackTap"] = fbIndex;
+            }
             addMixGain(d, dry, wet);
-            if (taps.size() > 1) notes.push_back("Delay Designer: " + std::to_string(taps.size()) + " taps, one plays");
+            if (pitched) notes.push_back("Delay Designer: its taps' pitch shifting is not played");
         } else if (p.name == "Space D") {   // Space Designer: its room by name (the IR file, as convolve plays it) or, synthesized, a reverb
             auto w = [&](size_t i) -> double {   // word i of the block (words past its values sit in the trailing structure)
                 if (24 + 4 * i + 4 > p.block.size()) return 0;

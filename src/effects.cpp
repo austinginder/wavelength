@@ -122,6 +122,14 @@ struct Delay : Effect {
     bool pingpong, filterEchoes;   // filterEchoes: every echo passes the filters, the first included (Logic's Tape Delay)
     Envelope mix;
     std::vector<std::unique_ptr<Effect>> loop;   // "loopFx": effects inside the feedback loop
+    // "right": the right side's own time and feedback, "crossfeed": each side's echo into the other's line
+    bool sides = false;
+    double timeBeatsR = 0, timeMsR = 0, feedbackR = 0, crossLR = 0, crossRL = 0;
+    // "taps": echoes of the input's mono sum, each at its time, level, pan and filters; one of them feeds back
+    struct Tap { double beats = 0, ms = 0, gain = 1, pan = 0, hp = 0, lp = 0; };
+    std::vector<Tap> taps;
+    int feedbackTap = 0;
+    double secondsOf(double beats, double ms, const Job &job) const { return ms > 0 ? ms / 1000.0 : beats * 60.0 / job.tempo.bpmAtBeat(0); }
     Delay(const json &j, const Job &job, std::string &err) {
         label = "delay";
         timeBeats = j.value("time", 0.75);
@@ -132,6 +140,52 @@ struct Delay : Effect {
         pingpong = j.value("pingpong", true);
         filterEchoes = j.value("filterEchoes", false);
         mix = param(j, "mix", 0.25, job.tempo);
+        if (j.contains("right")) {
+            const json &r = j["right"];
+            if (!r.is_object()) { err = "delay: \"right\" is {\"time\": 0.5, \"feedback\": 0.3} (the right side's own time and feedback)"; return; }
+            for (auto &[k, v] : r.items())
+                if (k != "time" && k != "ms" && k != "feedback") warnings.push_back("delay: unknown key 'right." + k + "' ignored");
+            sides = true;
+            timeBeatsR = r.value("time", r.contains("ms") ? 0.0 : timeBeats);
+            timeMsR = r.value("ms", r.contains("time") ? 0.0 : timeMs);
+            feedbackR = std::clamp(r.value("feedback", feedback), 0.0, 0.97);
+        }
+        if (j.contains("crossfeed")) {
+            const json &x = j["crossfeed"];
+            if (x.is_number()) crossLR = crossRL = x.get<double>();
+            else if (x.is_array() && x.size() == 2 && x[0].is_number() && x[1].is_number()) { crossLR = x[0].get<double>(); crossRL = x[1].get<double>(); }
+            else { err = "delay: \"crossfeed\" is a number or [left to right, right to left], 0-1"; return; }
+            crossLR = std::clamp(crossLR, 0.0, 0.97); crossRL = std::clamp(crossRL, 0.0, 0.97);
+            sides = true;
+            if (!j.contains("right")) { timeBeatsR = timeBeats; timeMsR = timeMs; feedbackR = feedback; }
+        }
+        if (j.contains("taps")) {
+            const json &t = j["taps"];
+            if (!t.is_array() || t.empty() || t.size() > 32) { err = "delay: \"taps\" is a list of 1 to 32 taps, each {\"time\": 0.5, \"level\": -6, \"pan\": -0.5}"; return; }
+            for (size_t i = 0; i < t.size(); ++i) {
+                const json &x = t[i];
+                if (!x.is_object() || !(x.contains("time") || x.contains("ms"))) { err = "delay: taps[" + std::to_string(i) + "] needs a \"time\" (beats) or \"ms\""; return; }
+                for (auto &[k, v] : x.items())
+                    if (k != "time" && k != "ms" && k != "level" && k != "pan" && k != "highpass" && k != "lowpass")
+                        warnings.push_back("delay: unknown key 'taps[" + std::to_string(i) + "]." + k + "' ignored");
+                Tap tp;
+                tp.beats = x.value("time", 0.0);
+                tp.ms = x.value("ms", 0.0);
+                tp.gain = std::pow(10.0, std::clamp(x.value("level", 0.0), -120.0, 24.0) / 20);
+                tp.pan = std::clamp(x.value("pan", 0.0), -1.0, 1.0);
+                tp.hp = x.value("highpass", 0.0);
+                tp.lp = x.value("lowpass", 0.0);
+                taps.push_back(tp);
+            }
+            feedbackTap = j.value("feedbackTap", 0);
+            if (feedbackTap < 0 || feedbackTap >= (int)taps.size()) { err = "delay: \"feedbackTap\" is the index (from 0) of the tap that feeds back"; return; }
+            if (sides) { err = "delay: \"taps\" doesn't combine with \"right\" or \"crossfeed\""; return; }
+            if (j.contains("time") || j.contains("ms") || j.contains("pingpong"))
+                warnings.push_back("delay: with \"taps\", each tap has its own time and pan; \"time\", \"ms\" and \"pingpong\" are ignored");
+        } else if (j.contains("feedbackTap")) warnings.push_back("delay: \"feedbackTap\" only applies with \"taps\"; ignored");
+        if ((sides || !taps.empty()) && j.contains("loopFx")) { err = "delay: \"loopFx\" doesn't combine with \"right\", \"crossfeed\" or \"taps\" yet"; return; }
+        if (sides && pingpong && j.contains("pingpong")) warnings.push_back("delay: \"pingpong\" is ignored with \"right\" or \"crossfeed\" (set the crossfeed instead)");
+        if (sides) pingpong = false;
         if (j.contains("loopFx")) {
             if (!j["loopFx"].is_array()) { err = "delay: \"loopFx\" must be an array of effects"; return; }
             for (size_t i = 0; i < j["loopFx"].size(); ++i) {
@@ -144,29 +198,68 @@ struct Delay : Effect {
                 loop.push_back(std::move(fx));
             }
         }
-        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx", "filterEchoes"}, *this);
+        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx", "filterEchoes", "right", "crossfeed", "taps", "feedbackTap"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate;
-        const double secs = timeMs > 0 ? timeMs / 1000.0 : timeBeats * 60.0 / c.job.tempo.bpmAtBeat(0);
-        const double d = std::max(1.0, secs * sr);
+        if (!taps.empty()) return processTaps(a, c);
+        const double d = std::max(1.0, secondsOf(timeBeats, timeMs, c.job) * sr);
         if (!loop.empty()) return processLoop(a, c, d, err);
+        const double dR = sides ? std::max(1.0, secondsOf(timeBeatsR, timeMsR, c.job) * sr) : d;
+        const double fbGainR = sides ? feedbackR : feedback;
         dsp::DelayLine L, R;
-        L.resize((size_t)d + 4); R.resize((size_t)d + 4);
+        L.resize((size_t)d + 4); R.resize((size_t)dR + 4);
         Biquad hpl, hpr, lpl, lpr;
         hpl.set(Biquad::HighPass, hp, 0.7071, 0, sr); hpr = hpl;
         lpl.set(Biquad::LowPass, lp, 0.7071, 0, sr); lpr = lpl;
         for (size_t i = 0; i < a.frames(); ++i) {
-            double tl = L.tap(d), tr = R.tap(d);
+            double tl = L.tap(d), tr = R.tap(dR);
             const double ftl = lpl.process(hpl.process(tl)), ftr = lpr.process(hpr.process(tr));
-            const double fbl = ftl * feedback, fbr = ftr * feedback;
+            const double fbl = ftl * feedback, fbr = ftr * fbGainR;
             if (filterEchoes) tl = ftl, tr = ftr;
             const double inL = a.left[i], inR = a.right[i];
             if (pingpong) { L.push((inL + inR) * 0.5 + fbr); R.push(fbl); }
-            else { L.push(inL + fbl); R.push(inR + fbr); }
+            else { L.push(inL + fbl + ftr * crossRL); R.push(inR + fbr + ftl * crossLR); }
             const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
             a.left[i] = blend(a.left[i], tl, m);
             a.right[i] = blend(a.right[i], tr, m);
+        }
+        return true;
+    }
+    // taps: one line of the input's mono sum; each tap reads it at its time through its own filters, at its level and
+    // pan (the near side at full level, the far side falling as (1 - |pan|)^2); the feedback tap's echo goes back in
+    bool processTaps(Audio &a, const FxContext &c) {
+        const double sr = c.job.sampleRate;
+        struct Live { double d, gl, gr; Biquad h, l; bool hp, lp; };
+        std::vector<Live> live;
+        double longest = 1;
+        for (auto &t : taps) {
+            Live x;
+            x.d = std::max(1.0, secondsOf(t.beats, t.ms, c.job) * sr);
+            x.gl = t.gain * (t.pan > 0 ? (1 - t.pan) * (1 - t.pan) : 1.0);
+            x.gr = t.gain * (t.pan < 0 ? (1 + t.pan) * (1 + t.pan) : 1.0);
+            x.hp = t.hp > 0; x.lp = t.lp > 0 && t.lp < 0.49 * sr;
+            if (x.hp) x.h.set(Biquad::HighPass, t.hp, 0.7071, 0, sr);
+            if (x.lp) x.l.set(Biquad::LowPass, t.lp, 0.7071, 0, sr);
+            longest = std::max(longest, x.d);
+            live.push_back(x);
+        }
+        dsp::DelayLine line;
+        line.resize((size_t)longest + 4);
+        for (size_t i = 0; i < a.frames(); ++i) {
+            double wl = 0, wr = 0, back = 0;
+            for (size_t k = 0; k < live.size(); ++k) {
+                Live &x = live[k];
+                double v = line.tap(x.d);
+                if (x.hp) v = x.h.process(v);
+                if (x.lp) v = x.l.process(v);
+                if ((int)k == feedbackTap) back = v;
+                wl += v * x.gl; wr += v * x.gr;
+            }
+            line.push((a.left[i] + a.right[i]) * 0.5 + back * feedback);
+            const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+            a.left[i] = blend(a.left[i], wl, m);
+            a.right[i] = blend(a.right[i], wr, m);
         }
         return true;
     }

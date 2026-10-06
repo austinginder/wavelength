@@ -551,6 +551,48 @@ sys.exit(0 if ok else 1)
 PY
 then keytrack_why="the levels or decays were off (see above)"; fi
 if [ -n "$keytrack_why" ]; then echo "FAIL synth keytrack: $keytrack_why"; fail=1; else echo "ok   synth keytrack: oscillator level across the keys, amp decay by key"; fi
+
+# delay sides and taps: a blip through "right" echoes left at 100 ms and right at 250 ms; through two taps, left at
+# 100 ms, right at 300 ms 6 dB down, and the right tap feeds back at half level (left again at 400 ms)
+rm -rf out/check/delaytaps && mkdir -p out/check/delaytaps
+cat > out/check/delaytaps/job.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "master": {"gain": 0}, "tracks": [
+ {"name": "Sides", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}, "amp": {"attack": 0.001, "decay": 0.01, "sustain": 0, "release": 0.005}},
+  "notes": [{"beat": 0, "dur": 0.05, "key": "C6"}],
+  "fx": [{"type": "delay", "ms": 100, "right": {"ms": 250}, "feedback": 0, "highpass": 20, "lowpass": 20000, "mix": 0.5}]},
+ {"name": "Taps", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}, "amp": {"attack": 0.001, "decay": 0.01, "sustain": 0, "release": 0.005}},
+  "notes": [{"beat": 0, "dur": 0.05, "key": "C6"}],
+  "fx": [{"type": "delay", "taps": [{"ms": 100, "pan": -1}, {"ms": 300, "pan": 1, "level": -6}], "feedback": 0.5, "feedbackTap": 1, "mix": 0.5}]}]}
+JOB
+delaytaps_why=""
+if ! "./$build/wavelength" render out/check/delaytaps/job.json --out "out/check/delaytaps/$build" --json > /dev/null 2> out/check/delaytaps/err.txt; then
+  delaytaps_why="the job did not render: $(tail -1 out/check/delaytaps/err.txt)"
+elif ! python3 - "out/check/delaytaps/$build" <<'PY'
+import math, struct, sys
+def lr(p):
+    b = open(p, 'rb').read(); i = 12; fmt = None
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack('<I', b[i + 4:i + 8])[0]
+        if cid == b'fmt ': fmt = struct.unpack('<HHIIHH', b[i + 8:i + 24])
+        if cid == b'data':
+            ch, sr, bits = fmt[1], fmt[2], fmt[5]
+            v = struct.unpack('<%d%s' % (n // (bits // 8), 'f' if bits == 32 else 'd'), b[i + 8:i + 8 + n])
+            return v[0::ch], v[1::ch], sr
+        i += 8 + n + (n & 1)
+def pk(x, sr, t0, t1):
+    return 20 * math.log10(max(abs(v) for v in x[int(t0 * sr):int(t1 * sr)]) + 1e-9)
+d = sys.argv[1] + '/stems/'
+L, R, sr = lr(d + '01-sides.wav')
+s = [pk(L, sr, 0.09, 0.13), pk(R, sr, 0.09, 0.13), pk(L, sr, 0.24, 0.28), pk(R, sr, 0.24, 0.28)]
+L, R, sr = lr(d + '02-taps.wav')
+t = [pk(L, sr, 0.09, 0.13), pk(R, sr, 0.09, 0.13), pk(R, sr, 0.29, 0.33), pk(L, sr, 0.29, 0.33), pk(L, sr, 0.39, 0.43)]
+ok = s[0] - s[1] > 40 and s[3] - s[2] > 40 and abs(s[0] - s[3]) < 0.5
+ok = ok and t[0] - t[1] > 40 and abs(t[0] - t[2] - 6) < 0.5 and t[2] - t[3] > 40 and abs(t[0] - t[4] - 6) < 0.5
+print('sides L100 %.1f R100 %.1f L250 %.1f R250 %.1f; taps L100 %.1f R100 %.1f R300 %.1f L300 %.1f L400 %.1f' % tuple(s + t), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+then delaytaps_why="the echoes landed off their times, sides or levels (see above)"; fi
+if [ -n "$delaytaps_why" ]; then echo "FAIL delay sides and taps: $delaytaps_why"; fail=1; else echo "ok   delay sides and taps: each side its own time, taps panned with their levels, the feedback tap"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir
