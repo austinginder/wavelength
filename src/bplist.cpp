@@ -15,6 +15,7 @@ struct Reader {
     std::vector<uint64_t> offsets;
     int depth = 0;
     bool keepData = false;   // data objects as their bytes (JSON binary), else their size
+    bool markUids = false;   // UIDs as {"CF$UID": n}, else plain integers
 
     uint64_t be(size_t at, size_t bytes) const {
         uint64_t v = 0;
@@ -85,7 +86,12 @@ struct Reader {
             out = s;
             break;
         }
-        case 0x8: { const size_t bytes = (size_t)(m & 0x0F) + 1; ok = at + bytes <= n && bytes <= 8; if (ok) out = be(at, bytes); break; }   // UID
+        case 0x8: {   // UID
+            const size_t bytes = (size_t)(m & 0x0F) + 1;
+            ok = at + bytes <= n && bytes <= 8;
+            if (ok) out = markUids ? json{{"CF$UID", be(at, bytes)}} : json(be(at, bytes));
+            break;
+        }
         case 0xA: case 0xC: {   // array, set
             uint64_t c;
             ok = count(at, m, c) && at + c * refSize <= n;
@@ -116,9 +122,9 @@ struct Reader {
 };
 } // namespace
 
-bool parseBinaryPlist(const uint8_t *d, size_t n, json &out, bool keepData) {
+bool parseBinaryPlist(const uint8_t *d, size_t n, json &out, bool keepData, bool markUids) {
     if (n < 8 + 32 || std::memcmp(d, "bplist0", 7)) return false;
-    Reader r{d, n, 1, {}, 0, keepData};
+    Reader r{d, n, 1, {}, 0, keepData, markUids};
     const uint8_t *t = d + n - 32;   // trailer: 6 unused, offset size, ref size, object count, top object, table offset
     const size_t offSize = t[6];
     r.refSize = t[7];
@@ -126,6 +132,40 @@ bool parseBinaryPlist(const uint8_t *d, size_t n, json &out, bool keepData) {
     if (!offSize || offSize > 8 || !r.refSize || r.refSize > 8 || count > n || table >= n || table + count * offSize > n - 32) return false;
     for (uint64_t i = 0; i < count; ++i) r.offsets.push_back(r.be((size_t)(table + i * offSize), offSize));
     return r.object(top, out);
+}
+
+namespace {
+json follow(const json &objs, const json &v, int depth) {
+    if (depth > 64) return nullptr;
+    if (v.is_object() && v.size() == 1 && v.contains("CF$UID")) {
+        const uint64_t i = v["CF$UID"].get<uint64_t>();
+        return i < objs.size() ? follow(objs, objs[i], depth + 1) : json(nullptr);
+    }
+    if (v.is_string()) return v == "$null" ? json(nullptr) : v;
+    if (v.is_array()) { json a = json::array(); for (auto &x : v) a.push_back(follow(objs, x, depth + 1)); return a; }
+    if (!v.is_object()) return v;
+    if (v.contains("NS.keys") && v.contains("NS.objects") && v["NS.keys"].is_array() && v["NS.objects"].is_array()) {
+        json o = json::object();
+        for (size_t k = 0; k < v["NS.keys"].size() && k < v["NS.objects"].size(); ++k) {
+            const json key = follow(objs, v["NS.keys"][k], depth + 1);
+            o[key.is_string() ? key.get<std::string>() : key.dump()] = follow(objs, v["NS.objects"][k], depth + 1);
+        }
+        return o;
+    }
+    if (v.contains("NS.objects") && v["NS.objects"].is_array()) return follow(objs, v["NS.objects"], depth + 1);
+    if (v.contains("NS.string")) return follow(objs, v["NS.string"], depth + 1);
+    json o = json::object();
+    for (auto &[k, x] : v.items()) if (k != "$class") o[k] = follow(objs, x, depth + 1);
+    return o;
+}
+} // namespace
+
+bool parseKeyedArchive(const uint8_t *d, size_t n, json &out) {
+    json p;
+    if (!parseBinaryPlist(d, n, p, false, true) || !p.is_object() || !p.contains("$objects") || !p.contains("$top") || !p["$objects"].is_array()) return false;
+    const json &top = p["$top"];
+    out = follow(p["$objects"], top.contains("root") ? top["root"] : top, 0);
+    return true;
 }
 
 } // namespace wl

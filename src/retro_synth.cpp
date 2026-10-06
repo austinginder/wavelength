@@ -295,6 +295,15 @@ double closedFilterHz(const nlohmann::json &s) {
 }
 } // namespace
 
+bool retroSynthParam(int param, double value, std::string &name, double &out) {
+    switch (param) {
+    case 403: name = "cutoff"; out = r(cutoffHz(value), 10); return true;
+    case 404: name = "resonance"; out = r(std::clamp(value, 0.0, 1.0)); return true;
+    case 407: name = "env"; out = r(std::clamp(value * kEnvOct, -8.0, 8.0)); return true;
+    default: return false;
+    }
+}
+
 bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::string *why) {
     // a patch by name, or a patch folder by path (an imported GarageBand project's track: its own channel strip)
     LogicPatch byPath;

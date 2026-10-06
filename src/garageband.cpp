@@ -3,6 +3,8 @@
 #include "apple_loops.hpp"
 #include "bplist.hpp"
 #include "harmony.hpp"
+#include "retro_synth.hpp"
+#include "logic_patches.hpp"
 #include "sampler.hpp"
 #include "xml.hpp"
 
@@ -705,8 +707,13 @@ struct Project {
     // +8 the value in 8.24, +12 the controller (7 volume on the fader's scale, 90 = 0 dB; 10 pan, 0-128 with 64 in the
     // middle), +15 0x40 on the steps GarageBand stores between the points (the curve runs straight between points on
     // those scales: checked against a bounce). Send levels are 0x50 records with parameter 28 + the send's slot at
-    // +12, on the fader's scale too (t6). Other records (plug-in parameters) are counted.
-    struct Curves { std::vector<std::pair<int64_t, double>> volume, pan; std::map<int, std::vector<std::pair<int64_t, double>>> sends; int other = 0; };
+    // +12, on the fader's scale too (t6); a Smart Control knob is a 0x50 record with its knob (0-based) at +12 and 1 at
+    // +13, its position 0-127 (t7). Step flags carry bit 0x40 (0x40, 0x41). Other records (plug-in parameters) are counted.
+    struct Curves {
+        std::vector<std::pair<int64_t, double>> volume, pan;
+        std::map<int, std::vector<std::pair<int64_t, double>>> sends, knobs;   // by send slot; by Smart Control knob
+        int other = 0;
+    };
     std::map<uint32_t, Curves> automation() const {
         std::map<uint32_t, Curves> out;
         const Sequence *root = nullptr;
@@ -719,17 +726,18 @@ struct Project {
                 if (e.type() == 0xf1) continue;
                 Curves &c = out[p.envi];
                 if (e.type() != 0xb0 && e.type() != 0x50) { ++c.other; continue; }
-                if (e.rec.u8(15) == 0x40) continue;
+                if (e.rec.u8(15) & 0x40) continue;
                 const double v = e.rec.u32(8) / 16777216.0;
                 const int id = e.rec.u8(12);
-                if (id == 7) c.volume.push_back({(int64_t)e.pos(), v});
+                if (e.type() == 0x50 && e.rec.u8(13) == 1) c.knobs[id].push_back({(int64_t)e.pos(), v});
+                else if (id == 7) c.volume.push_back({(int64_t)e.pos(), v});
                 else if (id == 10) c.pan.push_back({(int64_t)e.pos(), v});
                 else if (id >= 28 && id < 36) c.sends[id - 28].push_back({(int64_t)e.pos(), v});
                 else ++c.other;
             }
         }
         for (auto it = out.begin(); it != out.end();)
-            it = it->second.volume.empty() && it->second.pan.empty() && it->second.sends.empty() && !it->second.other ? out.erase(it) : std::next(it);
+            it = it->second.volume.empty() && it->second.pan.empty() && it->second.sends.empty() && it->second.knobs.empty() && !it->second.other ? out.erase(it) : std::next(it);
         return out;
     }
 };
@@ -1142,6 +1150,63 @@ struct Converter {
             if (automated) autos.sends.erase(curve);
         }
         if (!autos.sends.empty()) warn.push_back(name + ": automation of " + std::to_string(autos.sends.size()) + " send(s) whose bus could not be found, not converted");
+        // Smart Control automation: a knob's position through its mapping (the parameter's steps between the range's
+        // ends, a centred parameter's middle step = 0) onto the instrument, played as the builtin:synth parameter the
+        // re-created instrument has for it (Retro Synth's cutoff, resonance and filter envelope depth)
+        if (!autos.knobs.empty()) {
+            const std::string dir = (fs::u8path(outDir) / fs::u8path(rel)).u8string();
+            const auto maps = smartControls(dir);
+            std::vector<PatchChannel> pchans;
+            std::string perr;
+            const bool haveInst = readPatchChannels(dir, pchans, perr) && !pchans.empty();
+            for (auto &[knob, pts] : autos.knobs) {
+                std::string label = "knob " + std::to_string(knob + 1);
+                bool done = false;
+                for (auto &m : maps) {
+                    if (m.knob != knob) continue;
+                    if (!m.label.empty()) label = m.label;
+                    if (m.send || m.slot != 0 || !haveInst || inst.name != "Retro Synth" || job.value("plugin", std::string()) != "builtin:synth") continue;
+                    const PatchPlugin &ps = pchans[0].settings;
+                    if (m.param < 0 || m.param >= (int)ps.steps.size() || ps.steps[(size_t)m.param] <= 0) continue;
+                    const double top = ps.steps[(size_t)m.param], def = ps.stepDefaults[(size_t)m.param];
+                    const double lo = m.low < 0 ? 0 : m.low, hi = m.high < 0 ? top : m.high;
+                    auto shape = [&](double k) {   // the knob's response graph (straight lines; a repeated x is a step)
+                        if (m.graph.size() < 2) return k;
+                        double y = m.graph[0].second;
+                        for (size_t g = 1; g < m.graph.size(); ++g) {
+                            const auto &[x0, y0] = m.graph[g - 1];
+                            const auto &[x1, y1] = m.graph[g];
+                            if (k >= x1) { y = y1; continue; }
+                            if (k >= x0) { y = x1 > x0 ? y0 + (k - x0) / (x1 - x0) * (y1 - y0) : y1; break; }
+                        }
+                        return y;
+                    };
+                    std::string pname;
+                    auto valueAt = [&](double knobPos, double &out) {
+                        double k = shape(std::clamp(knobPos / 127.0, 0.0, 1.0));
+                        if (m.flipped) k = 1 - k;
+                        const double step = lo + k * (hi - lo);
+                        const double v = def > 0 && 2 * def == top ? (step - def) / def : step / top;
+                        return retroSynthParam(m.param, v, pname, out);
+                    };
+                    json curve = json::array();
+                    bool ok = true;
+                    for (size_t k = 0; k < pts.size() && ok; ++k) {
+                        const int parts = k && m.graph.size() > 2 ? 8 : 1;   // a shaped response gets points in between
+                        for (int q = parts - 1; q >= 0 && ok; --q) {
+                            const double f = k ? 1.0 - (double)q / parts : 1.0;
+                            const double tick = k ? pts[k - 1].first + f * (pts[k].first - pts[k - 1].first) : pts[k].first;
+                            const double pos = k ? pts[k - 1].second + f * (pts[k].second - pts[k - 1].second) : pts[k].second;
+                            double out = 0;
+                            ok = valueAt(pos, out);
+                            curve.push_back({r4(std::max(0.0, beat((int64_t)std::llround(tick)))), out});
+                        }
+                    }
+                    if (ok && !pname.empty()) { job["automation"]["params"][pname] = curve; done = true; }
+                }
+                warn.push_back(name + ": Smart Control \"" + label + "\" automation " + (done ? "played on the re-created instrument's parameter" : "not converted (what it moves has no counterpart here)"));
+            }
+        }
         if (!sends.empty()) job["sends"] = sends;
         // notes in beats from bar 1
         if (!notes.empty()) {
@@ -1287,6 +1352,7 @@ struct Converter {
             std::snprintf(b, sizeof b, "object %x", oid);
             size_t n = c.volume.size() + c.pan.size() + (size_t)c.other;
             for (auto &[slot, v] : c.sends) n += v.size();
+            for (auto &[knob, v] : c.knobs) n += v.size();
             warn.push_back((e ? e->name : std::string(b)) + ": " + std::to_string(n) + " automation points not converted");
         }
         int64_t c0 = 0, c1 = 0;

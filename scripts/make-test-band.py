@@ -16,9 +16,12 @@ and Reverse Playback (in D minor it moves G -> D, -5, so it plays -3). Its autom
 at bar 3 (a step GarageBand stores between them is a decoy), pan from the middle at bar 1 to hard left at bar 5. The
 master fades out from bar 1 to silence at bar 3 (its output channel's volume automation).
 Cycle bars 1-2.
-The audio track also sends to the Echo bus, its send automated from silence at bar 1 to 0 dB at bar 3.
+The audio track also sends to the Echo bus, its send automated from silence at bar 1 to 0 dB at bar 3. The Synth
+track's channel maps Smart Control knob 3 ("Filter") onto Retro Synth's Cutoff by Env (#407, steps 100-150 of 0-200),
+automated from 0 at bar 1 to full at bar 3 (envelope depth 0 to half: 4.98 octaves).
 Usage: make-test-band.py <dir> [3]   (3: the same song in 3/4; GarageBand still puts bar 1 at tick 38400)"""
 import math, os, plistlib, struct, sys
+from plistlib import UID
 
 METER = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 out = os.path.join(sys.argv[1], 'Test Song.band')
@@ -114,7 +117,7 @@ def record(number, slot, payload):
     return chunk('AuCU', 0x0e, 4 * number, payload, ref=number, sub=slot)
 
 
-def plugin(order, name, flags, plugin_id, values, preset='#default.pst'):
+def plugin(order, name, flags, plugin_id, values, preset='#default.pst', steps=None):
     # a plug-in record: +6 insert order, +14 settings name, +120 plug-in name, +132 maker, then a 32-byte prefix (flags
     # at payload +148) and the settings block (u32 size, u16 version, u8 big-endian flag, u8, u32 count, "GAME" "TSPP",
     # u32 plug-in id, count float32 values, the first one reserved)
@@ -125,7 +128,18 @@ def plugin(order, name, flags, plugin_id, values, preset='#default.pst'):
     pl[132:136] = b'GAME'
     vals = [0.0] + values
     block = struct.pack('<IHBBI', 24 + 4 * len(vals), 1, 0, 0, len(vals)) + b'GAMETSPP' + struct.pack('<I', plugin_id) + struct.pack('<%df' % len(vals), *vals)
-    return bytes(pl) + struct.pack('<III', plugin_id, 0, flags) + struct.pack('<I', len(block)) + bytes(16) + block
+    table = b''.join(struct.pack('<iii', d, h, d) for d, h in (steps or []))   # (default, highest, default) steps per parameter
+    return bytes(pl) + struct.pack('<III', plugin_id, 0, flags) + struct.pack('<I', len(block)) + bytes(16) + table + block
+
+
+def archive(top, objects):
+    # an NSKeyedArchiver binary plist: $objects[0] is $null, references are UIDs
+    return plistlib.dumps({'$version': 100000, '$archiver': 'NSKeyedArchiver', '$top': top, '$objects': ['$null'] + objects}, fmt=plistlib.FMT_BINARY)
+
+
+def archived_record(index, bp):
+    # a channel's record of kind 7: u16 7, u16 its index, then the archive's length at +16 and the archive at +20
+    return struct.pack('<HH', 7, index) + bytes(12) + struct.pack('<I', len(bp)) + bp
 
 
 def send(index, code, level, target):
@@ -140,7 +154,7 @@ def send(index, code, level, target):
 
 INST, BUS, AUD, OUT = 0x29, 0x4d, 0x31, 0x51       # channel numbers
 LOOP, FILE, FILE2 = 0x10c, 0x200, 0x204           # the audio track's object, its files' ids
-AUTOROOT, AUTOLOOP, AUTOMASTER = 0x300, 0x304, 0x308   # the automation root folder, the Loop track's and the master's
+AUTOROOT, AUTOLOOP, AUTOMASTER, AUTOSYNTH = 0x300, 0x304, 0x308, 0x30c   # the automation root folder, the Loop track's, the master's, the Synth's
 TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4 = 0x100, 0x104, 0x108, 8, 12, 16, 20
 bus_uuid = bytes([0xd5]) + bytes(range(1, 16))
 retro = [1e30] * 902                               # parameter #n; unused ones hold 1e30
@@ -184,7 +198,21 @@ body += region(0x17, REGION4, 'Synth 4', events(note(BAR1, 57, 90, 480), note(BA
                quantize=-6)
 body += channel(INST, 0x43, 0, ' Inst 1', 80, 80, bytes([0xd5]) + bytes(15))
 body += record(INST, 0, send(0, 0, 45, bus_uuid))
-body += record(INST, 1, plugin(0, 'Retro Synth', 0x08000000, 279, retro))
+steps = [(0, 100)] * 410
+steps[407] = (100, 200)                            # Cutoff by Env: 0-200, 100 = none
+body += record(INST, 1, plugin(0, 'Retro Synth', 0x08000000, 279, retro, steps=steps))
+# Smart Controls: knob 2 -> Retro Synth (slot 0) #407 over steps 100-150; its label "Filter" in a second archive
+cls_dict = {'$classname': 'NSDictionary', '$classes': ['NSDictionary', 'NSObject']}
+cls_arr = {'$classname': 'NSArray', '$classes': ['NSArray', 'NSObject']}
+mapping = archive({'dictionary': UID(1)}, [
+    {'NS.keys': [UID(2)], 'NS.objects': [UID(3)], '$class': UID(10)}, '2', {'NS.objects': [UID(4)], '$class': UID(11)},
+    {'NS.keys': [UID(5), UID(6), UID(7), UID(8), UID(9)], 'NS.objects': [407, 0, 100, 150, False], '$class': UID(10)},
+    'parameterIndex_1', 'slot', 'rangeLow', 'rangeHigh', 'rangeIsFlipped', cls_dict, cls_arr])
+labels = archive({'dictionary': UID(1)}, [
+    {'NS.keys': [UID(2)], 'NS.objects': [UID(3)], '$class': UID(9)}, 'kLgControlLabelLookupKey',
+    {'NS.keys': [UID(4)], 'NS.objects': [UID(6)], '$class': UID(9)}, {'uuidString': UID(5), 'autogenerated': False}, 'Smart Knob 3',
+    {'NS.keys': [UID(7)], 'NS.objects': [UID(8)], '$class': UID(9)}, 'customLabel', 'Filter', cls_dict])
+body += record(INST, 2, archived_record(1, mapping)) + record(INST, 3, archived_record(2, labels))
 body += channel(BUS, 0x45, 0, ' Bus 1', 90, 64, bus_uuid)
 body += record(BUS, 0, plugin(1, 'Echo', 0, 0, echo))
 # the audio track: its file in Media/Audio Files, the file's record (AuFl: UTF-16 name, then at fixed distances from
@@ -237,8 +265,11 @@ rg2[0x4c:0x56] = b'Apple Loop'
 body += chunk('AuFl', 0x05, FILE2, bytes(fl2)) + chunk('AuRg', 0x05, FILE2, bytes(rg2), ref=0)
 # automation: the root folder places one "*Automation" sequence per track (extension 1: the track object, 2: the sequence)
 body += seq(0x17, AUTOROOT, 'Track Automation Root Folder', events(event(0x20, BAR1 - 3840, ext=[ext(struct.pack('<I', LOOP), END), ext(struct.pack('<I', AUTOLOOP), mark=0x88)]),
-                                                                  event(0x20, BAR1 - 3840, ext=[ext(struct.pack('<I', MASTER), END), ext(struct.pack('<I', AUTOMASTER), mark=0x88)])))
+                                                                  event(0x20, BAR1 - 3840, ext=[ext(struct.pack('<I', MASTER), END), ext(struct.pack('<I', AUTOMASTER), mark=0x88)]),
+                                                                  event(0x20, BAR1 - 3840, ext=[ext(struct.pack('<I', TRACK), END), ext(struct.pack('<I', AUTOSYNTH), mark=0x88)])))
 body += seq(0x17, AUTOMASTER, '*Automation', events(auto_point(BAR1, 7, 90), auto_point(BAR1 + 2 * 3840, 7, 0)))
+knob_point = lambda pos, knob, value: event(0x50, pos, struct.pack('<I', int(value * (1 << 24))) + bytes([knob, 1, 0, 1]))     # +13 1: a Smart Control
+body += seq(0x17, AUTOSYNTH, '*Automation', events(knob_point(BAR1, 2, 0), knob_point(BAR1 + 2 * 3840, 2, 127)))
 body += channel(OUT, 0x4c, 0, 'Output 1-2', 90, 64, bytes([0xd5, 0x51]) + bytes(14))
 send_point = lambda pos, slot, value: event(0x50, pos, struct.pack('<I', int(value * (1 << 24))) + bytes([28 + slot, 0, 0, 1]))   # 0x50: parameter 28 + slot
 body += seq(0x17, AUTOLOOP, '*Automation', events(auto_point(BAR1, 7, 90), auto_point(BAR1 + 3840, 7, 70, step=True), auto_point(BAR1 + 2 * 3840, 7, 45),

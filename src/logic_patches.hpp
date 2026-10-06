@@ -26,6 +26,7 @@ struct PatchPlugin {
     std::vector<uint8_t> block;  // the whole block, little-endian (Space Designer's IR name, Delay Designer's taps)
     bool bypassed = false;       // switched off in the patch (payload byte +112; a Smart Control often switches it on)
     std::vector<int> steps;      // per parameter, its highest step index (a channel strip's table before the block; none in a .pst)
+    std::vector<int> stepDefaults;   // and its default step (the middle one of a parameter centred on 0)
 };
 
 struct PatchChannel {
@@ -66,6 +67,19 @@ const std::vector<LogicPatch> &logicPatches();
 const LogicPatch *logicPatchNamed(const std::string &name);
 // A patch folder's channels (root channel first) with their instruments; sampler channels read whole.
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err);
+
+// A Smart Control knob's mapping onto a parameter. A channel strip keeps them in a keyed archive (a record of kind 7:
+// its length at +16, the bplist at +20) as knob -> mappings: slot (0 the instrument, then the effects), parameter
+// number, the range in the parameter's steps (-1 = that end of the parameter), flipped, and an optional response graph.
+struct SmartMapping {
+    int knob = 0, slot = 0, param = 0;
+    double low = -1, high = -1;
+    bool flipped = false, send = false;            // send: a send's level (parameter 28 + its slot), not a plug-in's
+    std::vector<std::pair<double, double>> graph;  // knob 0..1 -> range 0..1 (empty: straight)
+    std::string label;                             // the knob's name ("Filter")
+};
+// The Smart Controls of a patch folder's root channel strip (or a project's channel written as one).
+std::vector<SmartMapping> smartControls(const std::string &patchDir);
 // Wavelength effects for the plug-ins of a channel that have built-in counterparts: Channel EQ and Single Band EQ
 // (eq bands; cuts as cascaded biquads), Compressor (compressor with its gain stages, distortion as a clip, its
 // limiter), Tape Delay, Stereo Delay and Delay Designer (delay), Space Designer (convolve with its room, or a

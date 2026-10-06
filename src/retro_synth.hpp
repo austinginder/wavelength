@@ -40,6 +40,10 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vec
 // moving grains, content that isn't installed, or samples, which the sampler plays; a Sculpture patch played by
 // side-chain audio, or made of movement a static voice can't play).
 bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::string *why = nullptr);
+// A Retro Synth parameter's value (as its settings block stores it) as the builtin:synth parameter that plays it, for
+// automation: #403 Cutoff -> "cutoff" (Hz), #404 Resonance -> "resonance", #407 Cutoff by Env -> "env" (octaves), on the
+// same scales the re-created patches use. False for a parameter with no counterpart.
+bool retroSynthParam(int param, double value, std::string &name, double &out);
 // "Retro Synth (Analog mode)", "Alchemy (virtual analog)", "Sculpture (plucked)": the instrument a re-created patch
 // plays and its mode
 std::string garageBandSynthKind(const GarageBandSynth &g);

@@ -10,7 +10,11 @@
 
 namespace wl {
 
-// The property list in d[0, n) as JSON; false when it isn't a well-formed binary property list.
-bool parseBinaryPlist(const uint8_t *d, size_t n, nlohmann::json &out, bool keepData = false);
+// The property list in d[0, n) as JSON; false when it isn't a well-formed binary property list. `markUids` keeps
+// UIDs apart from integers as {"CF$UID": n} (keyed archives need it).
+bool parseBinaryPlist(const uint8_t *d, size_t n, nlohmann::json &out, bool keepData = false, bool markUids = false);
+// An NSKeyedArchiver property list (a bplist with $objects and $top) with its references followed: dictionaries
+// (NS.keys / NS.objects) as objects, arrays and sets as arrays, NS.string as a string; the root object (or $top).
+bool parseKeyedArchive(const uint8_t *d, size_t n, nlohmann::json &out);
 
 } // namespace wl

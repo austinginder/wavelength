@@ -82,7 +82,7 @@ PatchPlugin settingsOf(const std::vector<uint8_t> &d, size_t a, size_t b, const 
         // a channel strip's plug-in data (from payload +140) starts with a 32-byte prefix and, for most plug-ins, a
         // table of (default, highest, default) step indices per parameter up to the block
         if (s >= a + 172 && (s - a - 172) % 12 == 0)
-            for (size_t t = a + 172; t + 12 <= s; t += 12) p.steps.push_back((int)le32(&d[t + 4]));
+            for (size_t t = a + 172; t + 12 <= s; t += 12) { p.steps.push_back((int)le32(&d[t + 4])); p.stepDefaults.push_back((int)le32(&d[t])); }
         break;
     }
     return p;
@@ -1204,6 +1204,47 @@ const LogicPatch *logicPatchNamed(const std::string &name) {
     if (q.size() > 6 && q.compare(q.size() - 6, 6, ".patch") == 0) q.resize(q.size() - 6);
     for (auto &p : logicPatches()) if (lower(p.name) == q) return &p;
     return nullptr;
+}
+
+std::vector<SmartMapping> smartControls(const std::string &patchDir) {
+    std::vector<SmartMapping> out;
+    const auto files = channelFiles(patchDir);
+    std::vector<uint8_t> d;
+    if (files.empty() || !readWhole(files[0], d)) return out;
+    std::map<int, std::string> labels;   // "Smart Knob 3" -> knob 2 (in its own archive, beside the mappings')
+    for (size_t s = 20; s + 8 <= d.size(); ++s) {
+        if (std::memcmp(&d[s], "bplist00", 8)) continue;
+        const uint32_t len = le32(&d[s - 4]);
+        json a;
+        if (len < 40 || s + len > d.size() || !parseKeyedArchive(&d[s], len, a) || !a.is_object()) continue;
+        const json &top = a.contains("dictionary") && a["dictionary"].is_object() ? a["dictionary"] : a;
+        if (top.contains("kLgControlLabelLookupKey") && top["kLgControlLabelLookupKey"].is_object())
+            for (auto &[k, v] : top["kLgControlLabelLookupKey"].items()) {
+                const size_t p = k.find("Smart Knob ");
+                if (p != std::string::npos && v.is_object() && v.contains("customLabel") && v["customLabel"].is_string())
+                    labels[std::atoi(k.c_str() + p + 11) - 1] = v["customLabel"].get<std::string>();
+            }
+        if (!a.contains("dictionary") || !a["dictionary"].is_object() || !out.empty()) continue;
+        for (auto &[k, list] : a["dictionary"].items()) {
+            if (k.empty() || !std::isdigit((unsigned char)k[0]) || !list.is_array()) continue;
+            for (auto &m : list) {
+                if (!m.is_object() || !m.contains("parameterIndex_1") || !m["parameterIndex_1"].is_number()) continue;
+                SmartMapping sm;
+                sm.knob = std::atoi(k.c_str());
+                sm.param = m["parameterIndex_1"].get<int>();
+                sm.slot = m.contains("slot") && m["slot"].is_number() ? m["slot"].get<int>() : 0;
+                sm.send = m.contains("isSendMuteMapping") || !m.contains("slot");
+                if (m.contains("rangeLow") && m["rangeLow"].is_number()) sm.low = m["rangeLow"].get<double>();
+                if (m.contains("rangeHigh") && m["rangeHigh"].is_number()) sm.high = m["rangeHigh"].get<double>();
+                sm.flipped = m.value("rangeIsFlipped", false);
+                if (m.contains("scalingGraph") && m["scalingGraph"].is_array())
+                    for (auto &g : m["scalingGraph"]) if (g.is_object()) sm.graph.push_back({g.value("x", 0.0), g.value("y", 0.0)});
+                out.push_back(sm);
+            }
+        }
+    }
+    for (auto &sm : out) if (auto it = labels.find(sm.knob); it != labels.end()) sm.label = it->second;
+    return out;
 }
 
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err) {
