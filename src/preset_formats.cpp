@@ -1448,7 +1448,7 @@ std::string niString(NiFile &f, uint64_t at) {
 
 void niWalk(NiFile &f, uint64_t at, int depth, std::string bank, std::vector<std::string> &out) {
     std::vector<NiFrame> frames;
-    uint64_t children, end;
+    uint64_t children = 0, end = 0;
     if (depth > 12 || !niItem(f, at, frames, children, end)) return;
     for (const auto &fr : frames) {
         if (fr.domain != "NISD") continue;
