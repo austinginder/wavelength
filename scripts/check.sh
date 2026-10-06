@@ -509,6 +509,48 @@ sys.exit(0 if abs((b[0] - b[1]) - 12.04) < 0.05 and abs((p[0] - p[1]) - 7.66) < 
 PY
 then panlaw_why="half left didn't take the right 12.04 dB down (balance) and 7.66 dB (constant power)"; fi
 if [ -n "$panlaw_why" ]; then echo "FAIL pan law: $panlaw_why"; fail=1; else echo "ok   pan law: balance (GarageBand's) and constant power"; fi
+
+# builtin:synth key scaling: an oscillator's keytrack -12 from C4 leaves C3 at its level and takes C5 12 dB down;
+# amp keytrack 1 halves the decay an octave up (12 dB down 0.3 s into C4, 24 into C5)
+rm -rf out/check/keytrack && mkdir -p out/check/keytrack
+cat > out/check/keytrack/job.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "master": {"gain": 0}, "tracks": [
+ {"name": "Osc", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine", "keytrack": -12, "keycenter": "C4"}], "filter": {"type": "off"}},
+  "notes": [{"beat": 0, "dur": 1, "key": "C3"}, {"beat": 2, "dur": 1, "key": "C4"}, {"beat": 4, "dur": 1, "key": "C5"}]},
+ {"name": "Amp", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"},
+  "amp": {"attack": 0.001, "decay": 1, "sustain": 0, "release": 0.1, "keytrack": 1}},
+  "notes": [{"beat": 0, "dur": 4, "key": "C4"}, {"beat": 8, "dur": 4, "key": "C5"}]}]}
+JOB
+keytrack_why=""
+if ! "./$build/wavelength" render out/check/keytrack/job.json --out "out/check/keytrack/$build" --json > out/check/keytrack/report.json 2> out/check/keytrack/err.txt; then
+  keytrack_why="the job did not render"
+elif grep -q "keytrack\|keycenter" out/check/keytrack/err.txt; then
+  keytrack_why="keytrack or keycenter warned: $(grep -m1 "keytrack\|keycenter" out/check/keytrack/err.txt)"
+elif ! python3 - "out/check/keytrack/$build" <<'PY'
+import math, struct, sys
+def mono(p):
+    b = open(p, 'rb').read(); i = 12; fmt = None
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack('<I', b[i + 4:i + 8])[0]
+        if cid == b'fmt ': fmt = struct.unpack('<HHIIHH', b[i + 8:i + 24])
+        if cid == b'data':
+            ch, sr, bits = fmt[1], fmt[2], fmt[5]
+            v = struct.unpack('<%d%s' % (n // (bits // 8), 'f' if bits == 32 else 'd'), b[i + 8:i + 8 + n])
+            return [v[k] for k in range(0, len(v), ch)], sr
+        i += 8 + n + (n & 1)
+def db(x, sr, t0, t1):
+    s = x[int(t0 * sr):int(t1 * sr)]
+    return 20 * math.log10(math.sqrt(sum(v * v for v in s) / len(s)) + 1e-12)
+d = sys.argv[1] + '/stems/'
+o, sr = mono(d + '01-osc.wav'); a, sr2 = mono(d + '02-amp.wav')
+c3, c4, c5 = db(o, sr, 0.1, 0.4), db(o, sr, 1.1, 1.4), db(o, sr, 2.1, 2.4)
+d4 = db(a, sr2, 0.29, 0.31) - db(a, sr2, 0.005, 0.015); d5 = db(a, sr2, 4.29, 4.31) - db(a, sr2, 4.005, 4.015)
+ok = abs(c3 - c4) < 0.3 and abs(c5 - c4 + 12) < 0.3 and abs(d4 + 11.6) < 1 and abs(d5 + 23.2) < 1.5
+print('C3 %+.2f C5 %+.2f dB from C4; decay at 0.3 s C4 %.1f C5 %.1f dB' % (c3 - c4, c5 - c4, d4, d5), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+then keytrack_why="the levels or decays were off (see above)"; fi
+if [ -n "$keytrack_why" ]; then echo "FAIL synth keytrack: $keytrack_why"; fail=1; else echo "ok   synth keytrack: oscillator level across the keys, amp decay by key"; fi
 # convolve: a click through a generated stereo IR (scripts/make-test-ir.py) comes out as that IR, each channel at unit
 # energy and nothing before the click; with predelay 100 ms it comes 100 ms later
 rm -rf out/check/ir && mkdir -p out/check/ir

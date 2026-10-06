@@ -92,6 +92,15 @@ const EPModel kEPModels[] = {
     {17, "reed", "Wurlitzer, classic", true}, {18, "tine", "Rhodes Mk II, bright", false}};
 // guess: relative tine brightness by model
 double epBright(int model) { return model == 13 || model == 18 ? 1.25 : model == 2 || model == 3 ? 1.12 : model == 12 ? 1.08 : 1.0; }
+// the pickup's bark: harmonics 2-8 of GarageBand's Classic Electric Piano (tine) and Wurlitzer Classic (reed) at C3,
+// measured from a bounce (t10), relative to the strongest
+const double kTineBark[7] = {1.0, 0.55, 0.62, 0.385, 0.19, 0.22, 0.038};
+const double kReedBark[7] = {0.30, 1.0, 0.51, 0.22, 0.355, 0.157, 0.105};
+json barkPartials(const double (&a)[7]) {
+    json p = json::array();
+    for (int k = 0; k < 7; ++k) p.push_back({a[k], k + 2});
+    return p;
+}
 
 // ---- Vintage Clav
 // model index -> family (14 models; Apple's guide names them but not their order: identified by the factory settings)
@@ -211,29 +220,38 @@ GarageBandSynth vintageEPPatch(const std::vector<float> &params) {
     const std::string fam = m ? m->family : "tine";
     out.engine = fam == "electra" ? "Electra" : fam;
     const double bright = epBright(model);
-    // guess: Decay 130 (its default) = a 4.5 s fall, scaling with Decay^0.75; Release 100 = 0.12 s
-    const double decay = std::clamp(4.5 * std::pow(std::max(V(1), 10.0) / 130.0, 0.75), 0.25, 20.0);
+    // Decay 130 (its default) = an 11.5 s fall at C4 on a tine, 6.8 s on a reed (fitted, t10), 4.5 s on the Electra (a guess),
+    // scaling with Decay^0.75 (a guess); Release 100 = 0.12 s
+    const double decay = std::clamp((fam == "tine" ? 11.5 : fam == "reed" ? 6.8 : 4.5) * std::pow(std::max(V(1), 10.0) / 130.0, 0.75), 0.25, 40.0);
     const double rel = std::clamp(0.12 * std::max(V(2), 5.0) / 100.0, 0.02, 3.0);
     const double bell = std::max(0.0, V(3));
     json oscs = json::array(), filt, amp;
+    // fitted to GarageBand's Classic Electric Piano and Wurlitzer Classic at C3, C4 and C5 (t10): the pickup's bark
+    // (the measured harmonics, through the filter) rules the low keys and fades above C3; the body, a sine with a
+    // ratio-1 FM edge that skips the filter, grows up to F#4; lower keys ring longer
     if (fam == "tine") {
-        // a sine with a ratio-1 FM bark, plus the tine bell: a ratio-14 FM "ding" (sidebands at 13f and 15f) dying within
-        // a few hundred ms, its level from Bell Volume; voiced against KY Electric Piano (spectral centroid at C3)
-        oscs.push_back({{"wave", "sine"}, {"fm", {{"ratio", 1}, {"index", r(1.6 * bright, 100)}, {"decay", r(std::clamp(0.35 * std::pow(decay, 0.5), 0.2, 2.0))},
-                                                  {"sustain", 0.22}}}});
+        // the bark is gone by C4; plus the tine bell: a ratio-14 FM "ding" (sidebands at 13f and 15f) dying within a few
+        // hundred ms, its level from Bell Volume
+        oscs.push_back({{"wave", "sine"}, {"filter", false}, {"keytrack", 16.6}, {"keycenter", 66},
+                        {"fm", {{"ratio", 1}, {"index", r(1.89 * bright, 100)}, {"decay", r(std::clamp(0.155 * std::sqrt(decay), 0.1, 2.0))}, {"sustain", 0.22}}}});
+        oscs.push_back({{"wave", "additive"}, {"partials", barkPartials(kTineBark)}, {"level", 0.41}, {"keytrack", -31.5}, {"keycenter", 48}, {"decay", r(1.72 * decay)}});
         if (bell > 0.02)
             oscs.push_back({{"wave", "sine"}, {"level", r(std::min(0.5, 0.14 * std::pow(bell, 0.7)))}, {"decay", r(std::clamp(0.3 * std::pow(bell, 0.25), 0.08, 0.8))},
                             {"filter", false}, {"fm", {{"ratio", 14}, {"index", r(std::min(3.0, 0.9 + 0.25 * bell), 100)}, {"decay", 0.05}}}});
-        filt = {{"type", "lowpass"}, {"slope", 12}, {"cutoff", r(5000 * bright, 10)}, {"keytrack", 0.3}, {"velocity", 1.0}};
+        filt = {{"type", "lowpass"}, {"slope", 12}, {"cutoff", r(1910 * bright, 10)}, {"velocity", 1.0}};
         amp = adsr(0.002, decay, 0, rel, 0.75);
+        amp["keytrack"] = 1;
     } else if (fam == "reed") {
-        // a sine with a light FM edge plus a decaying square for the odd-harmonic bark, which comes in with velocity
-        // through the filter
-        oscs.push_back({{"wave", "sine"}, {"fm", {{"ratio", 1}, {"index", 0.9}, {"decay", r(std::clamp(0.3 * std::pow(decay, 0.5), 0.15, 1.5))}, {"sustain", 0.25}}}});
-        oscs.push_back({{"wave", "square"}, {"level", r(0.32 * std::pow(std::clamp(bell, 0.3, 2.5), 0.3))}, {"decay", r(std::clamp(0.35 * std::pow(decay, 0.5), 0.15, 1.5))}});
-        filt = {{"type", "lowpass"}, {"slope", 12}, {"cutoff", 1700.0}, {"keytrack", 0.5}, {"velocity", 2.2}, {"drive", 0.15}};
-        amp = adsr(0.002, decay * 0.6, 0, rel * 0.8, 0.8);
-        notes.push_back("the reed as a sine and a decaying square under a velocity-opened filter (builtin:synth has no velocity -> FM)");
+        // the reed's odd-rich bark fades slowly (about 2 dB an octave) and dies within about 1.6 s; Bell Volume moves
+        // it (a guess, from the Wurlitzer Classic's 1.18)
+        oscs.push_back({{"wave", "sine"}, {"filter", false}, {"keytrack", 12.1}, {"keycenter", 66},
+                        {"fm", {{"ratio", 1}, {"index", 1.64}, {"decay", r(std::clamp(0.127 * std::sqrt(decay), 0.05, 1.5))}, {"sustain", 0.22}}}});
+        oscs.push_back({{"wave", "additive"}, {"partials", barkPartials(kReedBark)}, {"level", r(0.8 * std::pow(std::clamp(bell, 0.3, 2.5) / 1.18, 0.3))},
+                        {"keytrack", -2.1}, {"keycenter", 48}, {"decay", r(std::clamp(0.625 * std::sqrt(decay), 0.3, 4.0))}});
+        filt = {{"type", "lowpass"}, {"slope", 12}, {"cutoff", 1050.0}, {"velocity", 2.2}};
+        amp = adsr(0.002, decay, 0, rel * 0.8, 0.8);
+        amp["keytrack"] = 0.78;
+        notes.push_back("the reed as a sine body and its measured bark under a velocity-opened filter (builtin:synth has no velocity -> FM)");
     } else {   // Electra: brighter, faster-decaying, harmonically rich
         oscs.push_back({{"wave", "sine"}, {"fm", {{"ratio", 1}, {"index", 2.0}, {"decay", 0.3}, {"sustain", 0.2}}}});
         oscs.push_back({{"wave", "saw"}, {"level", 0.25}, {"decay", r(std::clamp(0.25 * std::pow(decay, 0.5), 0.1, 1.0))}});
@@ -244,14 +262,14 @@ GarageBandSynth vintageEPPatch(const std::vector<float> &params) {
     json synth = {{"osc", oscs}, {"filter", filt}, {"amp", amp}};
     if (ri(V(8)) == 1) synth["mono"] = true;
     // a level per family (see the header): the piano's own Volume isn't applied
-    synth["level"] = fam == "tine" ? -9.2 : fam == "reed" ? -10.6 : -4.7;
+    synth["level"] = fam == "tine" ? -5.6 : fam == "reed" ? -3.5 : -4.7;
     out.synth = synth;
     const bool sure = m && m->sure;
     notes.insert(notes.begin(), "model " + std::to_string(model) + " = " + (m ? m->what : "unused by the factory settings, played as a generic tine piano") +
                                     ": a " + out.engine + " voice" + (m && !sure ? " (model identification uncertain)" : ""));
     notes.insert(notes.begin(), closeness(fam == "tine" && m));
     notes.push_back("Decay " + gnum(V(1)) + " -> amp decay " + num(decay, 2) + " s, Release " + gnum(V(2)) + " -> " + num(rel, 2) +
-                    " s (scales a guess); no key scaling of the decay");
+                    " s at C4 (scales a guess)" + (fam == "electra" ? "; no key scaling of the decay" : "; low keys ring longer (fitted)"));
     if (V(4) > 0.05) notes.push_back("Damper Volume " + num(V(4), 2) + " (felt noise at key-up) isn't played");
     if (V(10) > 0.05 || std::fabs(V(5)) > 0.05 || std::fabs(V(6)) > 0.05)
         notes.push_back("Warmth " + num(V(10), 2) + " and stretch tuning " + num(V(5), 2) + ", " + num(V(6), 2) + " (per-note detune) aren't played");

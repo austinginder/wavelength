@@ -230,6 +230,7 @@ struct Osc {
     bool sync = false;      // hard sync: restarts whenever the first oscillator starts a cycle
     std::shared_ptr<const AdditiveSet> add;   // Additive: its partials
     double lowcut = 0, highcut = 0;           // Noise: its band in Hz (0 = open), 12 dB/oct each
+    double keyDb = 0, keyCenter = 60;         // keytrack: dB per octave away from keyCenter, never above level
 };
 
 struct SynthLfo {
@@ -247,6 +248,7 @@ struct Patch {
     double velToCutoff = 0;       // octaves at velocity 0 (1 = an octave darker when soft)
     Adsr amp, fenv{0, 0.3, 0, 0.3};
     double ampVel = 0.6;
+    double ampKey = 0;            // 1: amp decay and release halve every octave above C4
     double pitchEnvAmt = 0, pitchEnvDecay = 0.05;
     bool mono = false, legato = true;
     std::vector<SynthLfo> lfos;
@@ -387,7 +389,8 @@ std::shared_ptr<const AdditiveSet> parseAdditive(const json &o, const std::strin
 Adsr parseAdsr(const json &o, Adsr d, const std::string &where, std::vector<std::string> &warnings) {
     if (o.is_null()) return d;
     if (!o.is_object()) throw std::runtime_error("synth: '" + where + "' must be an object with attack, decay, sustain, release");
-    checkKeys(o, {"attack", "decay", "sustain", "release", "velocity"}, where + ".", warnings);
+    if (where == "amp") checkKeys(o, {"attack", "decay", "sustain", "release", "velocity", "keytrack"}, where + ".", warnings);
+    else checkKeys(o, {"attack", "decay", "sustain", "release", "velocity"}, where + ".", warnings);
     d.a = std::max(0.0, num(o, "attack", d.a, where + "."));
     d.d = std::max(0.0, num(o, "decay", d.d, where + "."));
     d.s = std::clamp(num(o, "sustain", d.s, where + "."), 0.0, 1.0);
@@ -416,13 +419,18 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         else if (wave == "additive") x.wave = Osc::Additive;
         else throw std::runtime_error("synth: " + w + "wave '" + wave + "' must be saw, square (or pulse), triangle, sine, noise or additive");
         checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync", "partials", "harmonics", "partialWave", "shiftHz",
-                      "lowcut", "highcut"}, w, warnings);
+                      "lowcut", "highcut", "keytrack", "keycenter"}, w, warnings);
         for (const char *k : {"partials", "harmonics", "partialWave", "shiftHz"})
             if (x.wave != Osc::Additive && o.contains(k)) warnings.push_back("synth: " + w + k + " only applies to \"wave\": \"additive\"; ignored");
         x.level = std::max(0.0, num(o, "level", 1, w));
         x.pitch = 12 * num(o, "octave", 0, w) + num(o, "semi", 0, w) + num(o, "cents", 0, w) / 100;
         x.pw = std::clamp(num(o, "pw", 0.5, w), 0.02, 0.98);
         x.decay = std::max(0.0, num(o, "decay", 0, w));
+        x.keyDb = std::clamp(num(o, "keytrack", 0, w), -48.0, 48.0);
+        if (o.contains("keycenter")) {
+            if (!o.contains("keytrack")) warnings.push_back("synth: " + w + "keycenter only applies with keytrack; ignored");
+            x.keyCenter = parseKey(o["keycenter"]);
+        }
         x.filtered = o.value("filter", true);
         x.sync = o.value("sync", false);
         if (o.contains("lowcut") || o.contains("highcut")) {
@@ -490,7 +498,10 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         P.velToCutoff = std::clamp(num(f, "velocity", 0, "filter."), 0.0, 4.0);
     }
     P.amp = parseAdsr(j.value("amp", json()), Adsr{}, "amp", warnings);
-    if (j.contains("amp") && j["amp"].is_object()) P.ampVel = std::clamp(num(j["amp"], "velocity", 0.6, "amp."), 0.0, 1.0);
+    if (j.contains("amp") && j["amp"].is_object()) {
+        P.ampVel = std::clamp(num(j["amp"], "velocity", 0.6, "amp."), 0.0, 1.0);
+        P.ampKey = std::clamp(num(j["amp"], "keytrack", 0, "amp."), -2.0, 2.0);
+    }
     P.fenv = parseAdsr(j.value("filterEnv", json()), P.fenv, "filterEnv", warnings);
     if (j.contains("pitchEnv")) {
         const auto &pe = j["pitchEnv"];
@@ -618,6 +629,7 @@ struct Voice {
     std::vector<double> oscDecayLevel;
     std::vector<double> fmLevel;              // per osc FM index envelope (1 at the attack)
     std::vector<double> fmCoef;
+    std::vector<double> oscKey;               // per osc level from its keytrack at the target key
     std::vector<Phasor> sines;                // additive sine banks' partials, per unit
 
     void start(const Patch &patch, double sampleRate, uint32_t seed) {
@@ -658,6 +670,7 @@ struct Voice {
         oscDecayLevel.assign(P->osc.size(), 1.0);
         fmLevel.assign(P->osc.size(), 1.0);
         fmCoef.assign(P->osc.size(), 1.0);
+        oscKey.assign(P->osc.size(), 1.0);
         for (size_t o = 0; o < P->osc.size(); ++o) {
             if (P->osc[o].decay > 0) oscDecay[o] = std::exp(-4.6 / (P->osc[o].decay * sr));
             if (P->osc[o].fm && P->osc[o].fmDecay > 0) fmCoef[o] = std::exp(-4.6 / (P->osc[o].fmDecay * sr));
@@ -668,8 +681,17 @@ struct Voice {
     void attack(double k, double v, double t0, bool retrigger) {
         target = k;
         vel = v;
+        for (size_t o = 0; o < oscKey.size(); ++o)
+            if (P->osc[o].keyDb != 0) oscKey[o] = std::pow(10.0, std::min(0.0, P->osc[o].keyDb * (k - P->osc[o].keyCenter) / 240.0));
         if (retrigger) {
             noteStart = t0;
+            if (P->ampKey != 0) {
+                Adsr a = P->amp;
+                const double scale = std::pow(2.0, -P->ampKey * (k - 60) / 12.0);
+                a.d *= scale;
+                a.r *= scale;
+                amp.setup(a, sr);
+            }
             amp.gate(true);
             fenv.gate(true);
             for (size_t o = 0; o < oscDecayLevel.size(); ++o) { oscDecayLevel[o] = 1; fmLevel[o] = 1; }
@@ -1019,7 +1041,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 double own = 1;
                 if (osc.decay > 0) { own = v.oscDecayLevel[o]; v.oscDecayLevel[o] *= v.oscDecay[o]; }
                 const double pw = std::clamp((pwParam ? pwNow : osc.pw) + lfoPw, 0.02, 0.98);
-                const double g = osc.level * own * unitNorm;
+                const double g = osc.level * own * v.oscKey[o] * unitNorm;
                 double &sumL = osc.filtered ? L : postL, &sumR = osc.filtered ? R : postR;
                 for (int u = 0; u < U; ++u) {
                     const size_t idx = o * (size_t)U + (size_t)u;
