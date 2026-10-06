@@ -896,14 +896,14 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (v(0)) cutStages(bands, "highpass", v(1), (int)std::lround(v(2)) * 6, v(3));
             const char *kinds[6] = {"lowshelf", "peak", "peak", "peak", "peak", "highshelf"};
             for (int b = 1; b <= 6; ++b)
-                if (v(4 * b) && v(4 * b + 2) != 0)
+                if (v(4 * b) && (v(4 * b + 2) != 0 || p.fullForm))
                     bands.push_back({{"type", kinds[b - 1]}, {"freq", r2(v(4 * b + 1))}, {"gain", r2(v(4 * b + 2))}, {"q", r4(v(4 * b + 3))}});
             if (v(28)) cutStages(bands, "lowpass", v(29), (int)std::lround(v(30)) * 6, v(31));
             const bool onlyLowCut = v(0) && std::all_of(bands.begin(), bands.end(), [](const json &b) { return b["type"] == "highpass"; });
             if ((int)std::lround(v(45)) == 4 && onlyLowCut)   // #45 = 4 read as side-only processing: a low cut on the sides = mono below it
                 fx.push_back({{"type", "width"}, {"monoBelow", r2(v(1))}});
             else if (!bands.empty()) fx.push_back({{"type", "eq"}, {"bands", bands}});
-            if (v(32) != 0) fx.push_back({{"type", "gain"}, {"db", r2(v(32))}});
+            if (v(32) != 0 || p.fullForm) fx.push_back({{"type", "gain"}, {"db", r2(v(32))}});
             if (v(41) && std::any_of(bands.begin(), bands.end(), [](const json &b) { return b["type"] != "highpass" && b["type"] != "lowpass"; }))
                 notes.push_back("Channel EQ: Gain-Q coupling is on in GarageBand (Q as saved here)");
         } else if (p.name == "Single EQ") {   // Single Band EQ, as channel strips name it
@@ -939,9 +939,9 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             const double kHalfPi = 1.5707963267948966;
             const double dry = std::sin(kHalfPi * std::clamp((legacy ? 100 : v(19, 100)) / 100, 0.0, 1.0));
             const double wet = std::sin(kHalfPi * std::clamp((legacy ? v(0, 30) : v(20)) / 100, 0.0, 1.0));
-            if (wet <= 0) { notes.push_back("Tape Delay: Wet is 0 as saved (GarageBand's Delay knob raises it), left out"); continue; }
+            if (wet <= 0 && !p.fullForm) { notes.push_back("Tape Delay: Wet is 0 as saved (GarageBand's Delay knob raises it), left out"); continue; }
             json d = {{"type", "delay"}, {"feedback", r4(std::min(v(3) / 100, 0.97))}, {"highpass", r2(v(5, 20))}, {"lowpass", r2(v(4, 20000))},
-                      {"mix", r4(wet / (dry + wet))}, {"filterEchoes", true}, {"pingpong", false}};   // its echoes stay in the middle (the bounce)
+                      {"mix", r4(dry + wet > 0 ? wet / (dry + wet) : 0)}, {"filterEchoes", true}, {"pingpong", false}};   // its echoes stay in the middle (the bounce)
             if (v(6) && v(7) > 0) d["time"] = r4(4 / v(7));
             else d["ms"] = r2(std::max(1.0, legacy ? v(1) + v(2) : v(22, 200)));
             if (std::fabs(v(8)) > 0.5 && !legacy) notes.push_back("Tape Delay: its groove (swung repeats) is not played");
@@ -952,7 +952,7 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (!legacy && v(11) > 0.5 && v(10) > 0) d["flutter"] = {{"rate", r4(v(10))}, {"depth", r4(std::min(100.0, v(11)) / 100)}};
             if (legacy && (v(11) || v(13))) notes.push_back("Tape Delay: wow and flutter of the older layout are not played");
             fx.push_back(d);
-            if (std::fabs(dry + wet - 1) > 1e-3) fx.push_back({{"type", "gain"}, {"db", r2(20 * std::log10(dry + wet))}});
+            if (std::fabs(dry + wet - 1) > 1e-3 || p.fullForm) fx.push_back({{"type", "gain"}, {"db", r2(20 * std::log10(std::max(1e-6, dry + wet)))}});
         } else if (p.name == "Overdrive") {   // #0 drive (dB of tanh drive: a guess), #1 tone (a low-pass after it: a guess), #2 output dB
             if (v(0) > 0) add({{"type", "saturate"}, {"drive", r2(v(0))}});
             else notes.push_back("Overdrive: Drive 0 as saved (a Smart Control knob raises it)");
@@ -1006,7 +1006,7 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (v(0) != 0) add({{"type", "gain"}, {"db", r2(v(0))}});
             add({{"type", "limiter"}, {"ceiling", r2(v(4))}, {"release", r2(std::max(1.0, v(3, 80)))}, {"lookahead", r2(v(1, 5))}, {"truePeak", v(6) != 0}});
         } else if (p.name == "Gain") {   // #2 balance, #4 gain dB, #8 mono (polarity and swap aren't played)
-            if (v(4) != 0) add({{"type", "gain"}, {"db", r2(v(4))}});
+            if (v(4) != 0 || p.fullForm) add({{"type", "gain"}, {"db", r2(v(4))}});
             if (v(8) != 0) add({{"type", "width"}, {"amount", 0}});
             if (v(2) != 0) add({{"type", "pan"}, {"position", r4(v(2) / 100)}});
             if (v(5) != 0 || v(6) != 0) notes.push_back("Gain: its polarity flip is not played");
@@ -1550,6 +1550,36 @@ std::vector<SmartMapping> smartControls(const std::string &patchDir) {
     return out;
 }
 
+// The scales, from the plug-ins' step tables (each parameter's default step of its highest, against the default
+// value) and GarageBand's bounces: Gain's gain -96 to +24 dB (a bounce of its automation dropped the 52.3 dB the
+// value gives); Channel EQ's frequencies 20 Hz x 1000^n (480 steps: the defaults 30, 80, 200, 500, 3500, 10000 and
+// 17000 Hz sit on their steps), its gains -24 to +24 dB (96 half-dB steps), the cuts' and peaks' Q 0.1 x 1000^n
+// (default 0.71 at step 36 of 127), the cut slopes 0-5 and the band switches; Tape Delay's Dry and Wet 0-100 %
+// (100 steps)
+bool pluginParamAt(const std::string &plugin, int param, double norm, double &value) {
+    const double n = std::clamp(norm, 0.0, 1.0);
+    if (plugin == "Gain") {
+        if (param == 4) { value = -96 + 120 * n; return true; }
+        return false;
+    }
+    if (plugin == "Tape Delay") {   // #19 Dry and #20 Wet in % (100 steps)
+        if (param == 19 || param == 20) { value = 100 * n; return true; }
+        return false;
+    }
+    if (plugin == "Channel EQ") {
+        if (param == 32) { value = -24 + 48 * n; return true; }
+        if (param < 0 || param > 31) return false;
+        const int band = param / 4, k = param % 4;
+        if (k == 0) { value = n >= 0.5 ? 1 : 0; return true; }
+        if (k == 1) { value = 20 * std::pow(1000.0, n); return true; }
+        if (k == 2) { value = band == 0 || band == 7 ? std::round(5 * n) : -24 + 48 * n; return true; }
+        if (band == 1 || band == 6) return false;   // the shelves' Q: 52 steps on a scale not read yet
+        value = 0.1 * std::pow(1000.0, n);
+        return true;
+    }
+    return false;
+}
+
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err) {
     out.clear();
     for (auto &f : channelFiles(patchDir)) {
@@ -1578,6 +1608,7 @@ bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &o
         for (auto *x : fx) {
             c.chain.push_back(settingsOf(d, x->at, std::min(d.size(), x->at + x->size), x->name));
             c.chain.back().bypassed = x->bypassed;
+            c.chain.back().order = x->order;
         }
         c.sampler = r && isSamplerInstrument(r->name);
         if (c.sampler) {

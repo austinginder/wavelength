@@ -314,12 +314,19 @@ body += seq(0x17, AUTOMASTER, '*Automation', events(auto_point(BAR1, 7, 90), aut
 knob_point = lambda pos, knob, value: event(0x50, pos, struct.pack('<I', int(value * (1 << 24))) + bytes([knob, 1, 0, 1]))     # +13 1: a Smart Control
 body += seq(0x17, AUTOSYNTH, '*Automation', events(knob_point(BAR1, 2, 0), knob_point(BAR1 + 2 * 3840, 2, 127)))
 body += channel(OUT, 0x4c, 0, 'Output 1-2', 90, 64, bytes([0xd5, 0x51]) + bytes(14))
+param_point = lambda pos, insert, param, norm: event(0x51 + insert, pos, struct.pack('<I', int(norm * 127 * (1 << 24))) + struct.pack('<H', param) + bytes([0, 1]))
 send_point = lambda pos, slot, value: event(0x50, pos, struct.pack('<I', int(value * (1 << 24))) + bytes([28 + slot, 0, 0, 1]))   # 0x50: parameter 28 + slot
 body += seq(0x17, AUTOLOOP, '*Automation', events(auto_point(BAR1, 7, 90), auto_point(BAR1 + 3840, 7, 70, step=True), auto_point(BAR1 + 2 * 3840, 7, 45),
                                                    auto_point(BAR1, 10, 64), auto_point(BAR1 + 4 * 3840, 10, 0),
-                                                   send_point(BAR1, 0, 0), send_point(BAR1 + 2 * 3840, 0, 90)))
+                                                   send_point(BAR1, 0, 0), send_point(BAR1 + 2 * 3840, 0, 90),
+                                                   param_point(BAR1, 0, 4, 0.75), param_point(BAR1 + 2 * 3840, 0, 4, 0.55)))
 body += channel(AUD, 0x40, 0, ' Audio 1', 90, 64, bytes([0xd5, 9]) + bytes(14))
 body += record(AUD, 0, send(0, 0, 0, bus_uuid))   # slot 0 to the Echo bus, its level automated
+# a Gain plug-in in its first insert (#4 gain -6 dB), automated: event 0x51 + its insert position, +12 the parameter,
+# +8 its normalized value x 127 (Gain's -96 to +24 dB): -6 dB at bar 1 down to -30 dB at bar 3
+gain_values = [0.0] * 10
+gain_values[4] = -6.0
+body += record(AUD, 1, plugin(0, 'Gain', 0, 0x1f5, gain_values))
 # a third-party Audio Unit instrument: its name at +120, manufacturer, type and subtype reversed at +132, +136, +140,
 # then its state as its ClassInfo property list (what an .aupreset holds)
 class_info = (b'<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n\t<key>name</key>\n\t<string>Test State</string>\n'

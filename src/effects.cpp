@@ -58,10 +58,12 @@ struct Gain : Effect {
 };
 
 // ------------------------------------------------------------------------------------ eq
+// a band's freq, q and gain are automatable: "automate" (and "lfo") on the band itself,
+// {"type": "peak", "freq": 1000, "gain": 0, "automate": {"gain": [[0, 0], [16, 6]]}}
 struct Eq : Effect {
-    struct Band { Biquad::Type type; double freq, q, gain; };
+    struct Band { Biquad::Type type; Envelope freq, q, gain; bool moving = false; };
     std::vector<Band> bands;
-    Eq(const json &j, const Job &, std::string &err) {
+    Eq(const json &j, const Job &job, std::string &err) {
         label = "eq";
         static const std::map<std::string, Biquad::Type> types = {
             {"highpass", Biquad::HighPass}, {"lowpass", Biquad::LowPass}, {"bandpass", Biquad::BandPass},
@@ -69,17 +71,39 @@ struct Eq : Effect {
         for (auto &b : j.value("bands", json::array())) {
             auto t = types.find(b.value("type", "peak"));
             if (t == types.end()) { err = "eq band type must be one of highpass, lowpass, bandpass, peak, lowshelf, highshelf"; return; }
-            bands.push_back({t->second, b.value("freq", 1000.0), b.value("q", 0.7071), b.value("gain", 0.0)});
+            Band band{t->second, param(b, "freq", 1000, job.tempo, true), param(b, "q", 0.7071, job.tempo), param(b, "gain", 0, job.tempo)};
+            band.moving = !band.freq.constant() || !band.q.constant() || !band.gain.constant();
+            if (band.moving) {
+                const std::string n = "bands[" + std::to_string(bands.size()) + "].";
+                for (auto [k, e] : {std::pair<const char *, const Envelope *>{"freq", &band.freq}, {"q", &band.q}, {"gain", &band.gain}})
+                    if (!e->constant()) bandCurves.push_back({n + k, *e});
+            }
+            bands.push_back(std::move(band));
         }
         checkKeys(j, {"bands"}, *this);
     }
+    std::vector<Curve> bandCurves;   // the moving bands' curves, for the report (makeEffect adds them)
     bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
         for (const auto &b : bands) {
-            for (int ch = 0; ch < 2; ++ch) {
-                Biquad f;
-                f.set(b.type, b.freq, b.q, b.gain, c.job.sampleRate);
-                auto &x = ch ? a.right : a.left;
-                for (auto &s : x) s = (float)f.process(s);
+            if (!b.moving) {
+                for (int ch = 0; ch < 2; ++ch) {
+                    Biquad f;
+                    f.set(b.type, b.freq.at(0), b.q.at(0), b.gain.at(0), sr);
+                    auto &x = ch ? a.right : a.left;
+                    for (auto &s : x) s = (float)f.process(s);
+                }
+                continue;
+            }
+            Biquad fl, fr;   // new coefficients every 32 samples, the filters' state kept
+            for (size_t i = 0; i < a.frames(); ++i) {
+                if (i % 32 == 0) {
+                    const double t = i / sr;
+                    fl.set(b.type, b.freq.at(t), b.q.at(t), b.gain.at(t), sr);
+                    fr.b0 = fl.b0; fr.b1 = fl.b1; fr.b2 = fl.b2; fr.a1 = fl.a1; fr.a2 = fl.a2;
+                }
+                a.left[i] = (float)fl.process(a.left[i]);
+                a.right[i] = (float)fr.process(a.right[i]);
             }
         }
         return true;
@@ -1954,6 +1978,10 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
     }
     fx->automated = (j.contains("automate") && j["automate"].is_object() && !j["automate"].empty()) ||
                     (j.contains("lfo") && j["lfo"].is_object() && !j["lfo"].empty());
+    if (auto *eq = dynamic_cast<Eq *>(fx.get()); eq && !eq->bandCurves.empty()) {   // curves on its bands
+        fx->automated = true;
+        fx->curves.insert(fx->curves.end(), eq->bandCurves.begin(), eq->bandCurves.end());
+    }
     if (fx->automated && !j.contains("plugin")) {   // built-in settings: the same curves the effect runs (plugin effects add theirs in process)
         std::set<std::string> keys;
         for (const char *k : {"automate", "lfo"})

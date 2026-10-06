@@ -25,6 +25,8 @@ struct PatchPlugin {
     std::vector<float> values;   // every value as stored, the reserved first one included (Delay Designer counts from it)
     std::vector<uint8_t> block;  // the whole block, little-endian (Space Designer's IR name, Delay Designer's taps)
     bool bypassed = false;       // switched off in the patch (payload byte +112; a Smart Control often switches it on)
+    int order = -1;              // its slot: the insert position (0 the instrument, then the effects in order)
+    bool fullForm = false;       // translate every part a setting can move (flat bands, a 0 dB gain, a silent delay): automation
     std::vector<int> steps;      // per parameter, its highest step index (a channel strip's table before the block; none in a .pst)
     std::vector<int> stepDefaults;   // and its default step (the middle one of a parameter centred on 0)
 };
@@ -86,6 +88,9 @@ struct SmartMapping {
 };
 // The Smart Controls of a patch folder's root channel strip (or a project's channel written as one).
 std::vector<SmartMapping> smartControls(const std::string &patchDir);
+// A plug-in parameter's value at a normalized position 0..1 (what automation stores, x 127, and a step over the
+// parameter's highest step), where its scale is known; false when it isn't.
+bool pluginParamAt(const std::string &plugin, int param, double norm, double &value);
 // Wavelength effects for the plug-ins of a channel that have built-in counterparts: Channel EQ and Single Band EQ
 // (eq bands; cuts as cascaded biquads), Compressor (compressor with its gain stages, distortion as a clip, its
 // limiter), Tape Delay, Stereo Delay and Delay Designer (delay), Space Designer (convolve with its room, or a

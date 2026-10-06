@@ -796,9 +796,13 @@ struct Project {
     // those scales: checked against a bounce). Send levels are 0x50 records with parameter 28 + the send's slot at
     // +12, on the fader's scale too (t6); a Smart Control knob is a 0x50 record with its knob (0-based) at +12 and 1 at
     // +13, its position 0-127 (t7). Step flags carry bit 0x40 (0x40, 0x41). Other records (plug-in parameters) are counted.
+    // A plug-in's parameter is an event 0x51 + the plug-in's insert position (0 the instrument or an audio strip's
+    // first effect), +12 the parameter number, +8 its normalized value x 127 (pa1, pa2: Gain's #4 and Channel EQ's
+    // #32), straight between points.
     struct Curves {
         std::vector<std::pair<int64_t, double>> volume, pan;
         std::map<int, std::vector<std::pair<int64_t, double>>> sends, knobs;   // by send slot; by Smart Control knob
+        std::map<std::pair<int, int>, std::vector<std::pair<int64_t, double>>> plugins;   // by (insert position, parameter): 0..1
         int other = 0;
     };
     std::map<uint32_t, Curves> automation() const {
@@ -812,9 +816,10 @@ struct Project {
             for (auto &e : p.seq->events()) {
                 if (e.type() == 0xf1) continue;
                 Curves &c = out[p.envi];
-                if (e.type() != 0xb0 && e.type() != 0x50) { ++c.other; continue; }
                 if (e.rec.u8(15) & 0x40) continue;
                 const double v = e.rec.u32(8) / 16777216.0;
+                if (e.type() >= 0x51 && e.type() <= 0x5f) { c.plugins[{e.type() - 0x51, e.rec.u16(12)}].push_back({(int64_t)e.pos(), std::clamp(v / 127, 0.0, 1.0)}); continue; }
+                if (e.type() != 0xb0 && e.type() != 0x50) { ++c.other; continue; }
                 const int id = e.rec.u8(12);
                 if (e.type() == 0x50 && e.rec.u8(13) == 1) c.knobs[id].push_back({(int64_t)e.pos(), v});
                 else if (id == 7) c.volume.push_back({(int64_t)e.pos(), v});
@@ -824,7 +829,8 @@ struct Project {
             }
         }
         for (auto it = out.begin(); it != out.end();)
-            it = it->second.volume.empty() && it->second.pan.empty() && it->second.sends.empty() && it->second.knobs.empty() && !it->second.other ? out.erase(it) : std::next(it);
+            it = it->second.volume.empty() && it->second.pan.empty() && it->second.sends.empty() && it->second.knobs.empty() && it->second.plugins.empty() &&
+                 !it->second.other ? out.erase(it) : std::next(it);
         return out;
     }
 };
@@ -1035,6 +1041,250 @@ struct Converter {
             notes.insert(notes.end(), n.begin(), n.end());
             ctrl.insert(ctrl.end(), c.begin(), c.end());
         }
+    }
+
+    // Plug-in automation and Smart Control knobs on a channel's effects, as `automate` curves on the effects that
+    // re-create them. An automated plug-in is translated again (patchEffects) at its curves' points (and 8 steps
+    // between, as the scales and translations bend), with each parameter set on its scale (pluginParamAt), and the
+    // settings that move become curves on its effects. `fx` is the channel's chain as translated (it may start with
+    // the instrument's own effects); `requests` are by insert position: parameter -> points 0..1. What can't be
+    // played is named in `left`; false when the chain doesn't line up with the translation (nothing changed).
+    using NormCurve = std::vector<std::pair<int64_t, double>>;
+    bool automateEffects(const std::vector<PatchPlugin> &chain, const std::map<int, std::map<int, NormCurve>> &requests, json &fx,
+                         std::vector<std::string> &left, std::set<std::pair<int, int>> &done) {
+        static const std::map<std::string, std::set<std::string>> movable = {
+            {"gain", {"db"}}, {"filter", {"cutoff", "resonance", "mix"}}, {"delay", {"mix"}}, {"reverb", {"decay", "mix"}},
+            {"convolve", {"mix"}}, {"saturate", {"drive", "mix"}}, {"clip", {"drive"}}, {"chorus", {"mix"}}, {"width", {"amount"}},
+            {"tremolo", {"depth"}}, {"pan", {"position"}}, {"gate", {"mix"}}, {"phaser", {"mix"}}, {"rotary", {"mix", "speed"}},
+            {"autowah", {"mix"}}, {"bitcrush", {"bits", "downsample", "mix"}}, {"vibrato", {"depth"}}, {"pitch", {"semitones", "cents", "mix"}},
+            {"tune", {"mix"}}, {"ringmod", {"freq", "mix"}}};
+        std::vector<std::string> notes;
+        std::vector<std::pair<size_t, size_t>> span;   // each plug-in's effects in the chain's translation
+        json all = json::array();
+        for (auto &p : chain) {
+            const json one = patchEffects({p}, notes);
+            span.push_back({all.size(), one.size()});
+            for (auto &e : one) all.push_back(e);
+        }
+        if (!fx.is_array() || fx.size() < all.size()) return false;
+        const size_t lead = fx.size() - all.size();   // the instrument's own effects come first
+        for (size_t i = 0; i < all.size(); ++i) if (fx[lead + i] != all[i]) return false;
+        // an automated plug-in in its full form (the parts a setting can bring in kept, flat), so its shape holds still
+        json full = json::array();
+        std::vector<std::pair<size_t, size_t>> fspan;
+        for (auto &p : chain) {
+            PatchPlugin q = p;
+            q.fullForm = requests.count(p.order) > 0;
+            const json one = patchEffects({q}, notes);
+            fspan.push_back({full.size(), one.size()});
+            for (auto &e : one) full.push_back(e);
+        }
+        fx.erase(fx.begin() + (long)lead, fx.end());
+        for (auto &e : full) fx.push_back(e);
+        all = full;
+        span = fspan;
+        auto normAt = [](const NormCurve &c, double tick) {
+            if (tick <= c.front().first) return c.front().second;
+            for (size_t k = 1; k < c.size(); ++k)
+                if (tick <= c[k].first) return c[k - 1].second + (tick - c[k - 1].first) / std::max(1.0, (double)(c[k].first - c[k - 1].first)) * (c[k].second - c[k - 1].second);
+            return c.back().second;
+        };
+        for (size_t pi = 0; pi < chain.size(); ++pi) {
+            const PatchPlugin &p = chain[pi];
+            auto rq = requests.find(p.order);
+            if (rq == requests.end()) continue;
+            std::map<int, NormCurve> params;
+            for (auto &[param, c] : rq->second) {
+                double v;
+                if (c.empty()) continue;
+                if (!pluginParamAt(p.name, param, c.front().second, v)) { left.push_back(p.name + " #" + std::to_string(param) + " (its scale isn't known here)"); continue; }
+                params[param] = c;
+            }
+            if (params.empty()) continue;
+            if (p.bypassed || span[pi].second == 0) {
+                for (auto &[param, c] : params) left.push_back(p.name + " #" + std::to_string(param) + " (the plug-in doesn't play here)");
+                continue;
+            }
+            std::set<double> ticks;
+            for (auto &[param, c] : params) for (auto &[t, v] : c) ticks.insert((double)t);
+            std::vector<double> at(ticks.begin(), ticks.end()), times;
+            for (size_t k = 0; k < at.size(); ++k) {
+                if (k) for (int q = 1; q < 8; ++q) times.push_back(at[k - 1] + (at[k] - at[k - 1]) * q / 8);
+                times.push_back(at[k]);
+            }
+            std::vector<json> frames;
+            bool same = true;
+            for (double t : times) {
+                PatchPlugin q = p;
+                q.fullForm = true;
+                for (auto &[param, c] : params) {
+                    double v = 0;
+                    pluginParamAt(p.name, param, normAt(c, t), v);
+                    if ((size_t)param >= q.params.size()) q.params.resize((size_t)param + 1, 0.f);
+                    q.params[(size_t)param] = (float)v;
+                    if ((size_t)param + 1 < q.values.size()) q.values[(size_t)param + 1] = (float)v;
+                }
+                json one = patchEffects({q}, notes);
+                if (one.size() != span[pi].second) { same = false; break; }
+                for (size_t i = 0; i < one.size(); ++i) same &= one[i].value("type", "") == all[span[pi].first + i].value("type", "");
+                if (!same) break;
+                frames.push_back(one);
+            }
+            if (!same) {
+                for (auto &[param, c] : params) left.push_back(p.name + " #" + std::to_string(param) + " (it switches parts of the effect on or off as played here)");
+                continue;
+            }
+            // each moving setting: (effect index, band or -1, key) -> values over `times`
+            std::map<std::tuple<size_t, int, std::string>, std::vector<double>> moving;
+            auto collect = [&](size_t i, int band, const json &obj, const std::string &key) {
+                std::vector<double> v;
+                for (auto &f : frames) {
+                    const json &o = band < 0 ? f[i] : f[i]["bands"][(size_t)band];
+                    if (!o.contains(key) || !o[key].is_number()) return;
+                    v.push_back(o[key].get<double>());
+                }
+                const double v0 = obj[key].get<double>();
+                if (std::any_of(v.begin(), v.end(), [&](double x) { return std::fabs(x - v0) > 1e-6 * std::max(1.0, std::fabs(v0)); }))
+                    moving[{i, band, key}] = v;
+            };
+            const size_t s0 = span[pi].first;
+            for (size_t i = 0; i < span[pi].second; ++i) {
+                const json &e = all[s0 + i];
+                for (auto &[k, v] : e.items()) if (v.is_number()) collect(i, -1, e, k);
+                if (e.contains("bands") && e["bands"].is_array())
+                    for (size_t b = 0; b < e["bands"].size(); ++b)
+                        for (auto &[k, v] : e["bands"][b].items()) if (v.is_number()) collect(i, (int)b, e["bands"][b], k);
+            }
+            bool any = false;
+            for (auto &[where, vals] : moving) {
+                const auto &[i, band, key] = where;
+                const std::string type = all[s0 + i].value("type", "");
+                const bool ok = band >= 0 ? (type == "eq" && (key == "freq" || key == "q" || key == "gain"))
+                                          : movable.count(type) && movable.at(type).count(key);
+                if (!ok) { left.push_back(p.name + ": " + type + " " + key + " moves, which can't be automated here (held at its saved value)"); continue; }
+                const bool logScale = key == "freq" || key == "cutoff";
+                auto y = [&](double v) { return logScale ? std::log(std::max(1e-9, v)) : v; };
+                double lo = 1e300, hi = -1e300;
+                for (double v : vals) { lo = std::min(lo, y(v)); hi = std::max(hi, y(v)); }
+                const double tol = logScale ? 0.005 : 0.002 * std::max(hi - lo, 1e-6);
+                std::vector<size_t> keep{0};   // drop the points on a straight line (in the curve's own interpolation)
+                for (size_t k = 1; k + 1 < times.size(); ++k) {
+                    const size_t a = keep.back();
+                    const double f = (times[k] - times[a]) / std::max(1e-9, times[k + 1] - times[a]);
+                    if (std::fabs(y(vals[k]) - (y(vals[a]) + f * (y(vals[k + 1]) - y(vals[a])))) > tol) keep.push_back(k);
+                }
+                if (times.size() > 1) keep.push_back(times.size() - 1);
+                json pts = json::array();
+                for (size_t k : keep) pts.push_back({r4(std::max(0.0, beat((int64_t)std::llround(times[k])))), logScale ? std::round(vals[k] * 10) / 10 : r4(vals[k])});
+                json &target = band < 0 ? fx[lead + s0 + i] : fx[lead + s0 + i]["bands"][(size_t)band];
+                target["automate"][key] = pts;
+                any = true;
+            }
+            if (any) for (auto &[param, c] : params) done.insert({p.order, param});
+            else if (moving.empty()) for (auto &[param, c] : params) left.push_back(p.name + " #" + std::to_string(param) + " (no setting played here moves with it)");
+        }
+        // the full form's neutral parts that carry no curve go again: flat bands, 0 dB gains, an eq left with no band
+        for (size_t i = lead; i < fx.size();) {
+            json &e = fx[i];
+            const std::string type = e.value("type", "");
+            if (type == "eq" && e.contains("bands")) {
+                json kept = json::array();
+                for (auto &b : e["bands"]) {
+                    const std::string bt = b.value("type", "");
+                    if ((bt == "peak" || bt == "lowshelf" || bt == "highshelf") && b.value("gain", 1.0) == 0 && !b.contains("automate")) continue;
+                    kept.push_back(b);
+                }
+                e["bands"] = kept;
+            }
+            const bool neutral = !e.contains("automate") && ((type == "eq" && e["bands"].empty()) || (type == "gain" && e.value("db", 1.0) == 0));
+            if (neutral) fx.erase(fx.begin() + (long)i); else ++i;
+        }
+        return true;
+    }
+
+    // A track's plug-in automation and its Smart Control knobs that move effects, played on the effects that re-create
+    // them (audio and Audio Unit tracks' fx, or a sampler patch's own effects, moved to the track's fx with
+    // "effects": false so they can carry curves). The knobs it plays go in `knobsDone`.
+    void effectAutomation(json &job, const std::string &name, const std::string &rel, Project::Curves &autos, std::set<int> &knobsDone) {
+        const std::string dir = (fs::u8path(outDir) / fs::u8path(rel)).u8string();
+        std::vector<PatchChannel> pchans;
+        std::string perr;
+        const bool read = readPatchChannels(dir, pchans, perr) && !pchans.empty();
+        const std::vector<PatchPlugin> none, &chain = read ? pchans[0].chain : none;
+        auto nameAt = [&](int order) {
+            for (auto &p : chain) if (p.order == order) return p.name;
+            return order == 0 && read && !pchans[0].instrument.empty() ? pchans[0].instrument : "insert " + std::to_string(order + 1);
+        };
+        std::map<int, std::map<int, NormCurve>> req;
+        for (auto &[key, pts] : autos.plugins) req[key.first][key.second] = pts;
+        std::map<int, std::vector<std::pair<int, int>>> knobTargets;   // a knob -> the (insert, parameter) it moves on effects
+        if (read && !autos.knobs.empty())
+            for (auto &m : smartControls(dir)) {
+                auto kp = autos.knobs.find(m.knob);
+                if (kp == autos.knobs.end() || m.send || m.slot < 1) continue;
+                const PatchPlugin *pp = nullptr;
+                for (auto &p : chain) if (p.order == m.slot) pp = &p;
+                if (!pp || m.param < 0 || (size_t)m.param >= pp->steps.size() || pp->steps[(size_t)m.param] <= 0 || req[m.slot].count(m.param)) continue;
+                const double top = pp->steps[(size_t)m.param], lo = m.low < 0 ? 0 : m.low, hi = m.high < 0 ? top : m.high;
+                auto shape = [&](double k) {   // the knob's response graph (straight lines; a repeated x is a step)
+                    if (m.graph.size() < 2) return k;
+                    double y = m.graph[0].second;
+                    for (size_t g = 1; g < m.graph.size(); ++g) {
+                        const auto &[x0, y0] = m.graph[g - 1];
+                        const auto &[x1, y1] = m.graph[g];
+                        if (k >= x1) { y = y1; continue; }
+                        if (k >= x0) { y = x1 > x0 ? y0 + (k - x0) / (x1 - x0) * (y1 - y0) : y1; break; }
+                    }
+                    return y;
+                };
+                NormCurve c;   // the knob's 0-127 points through the mapping onto the parameter's steps, over its highest step
+                const auto &pts = kp->second;
+                for (size_t k = 0; k < pts.size(); ++k) {
+                    const int parts = k && m.graph.size() > 2 ? 8 : 1;
+                    for (int q = parts - 1; q >= 0; --q) {
+                        const double f = k ? 1.0 - (double)q / parts : 1.0;
+                        const double tick = k ? pts[k - 1].first + f * (pts[k].first - pts[k - 1].first) : pts[k].first;
+                        double kn = shape(std::clamp((k ? pts[k - 1].second + f * (pts[k].second - pts[k - 1].second) : pts[k].second) / 127.0, 0.0, 1.0));
+                        if (m.flipped) kn = 1 - kn;
+                        c.push_back({(int64_t)std::llround(tick), (lo + kn * (hi - lo)) / top});
+                    }
+                }
+                req[m.slot][m.param] = c;
+                knobTargets[m.knob].push_back({m.slot, m.param});
+            }
+        if (req.empty()) return;
+        std::vector<std::string> left;
+        std::set<std::pair<int, int>> done;
+        const std::string plugin = job.value("plugin", "");
+        const bool sampler = plugin == "builtin:sampler" && job.contains("sampler") && job["sampler"].contains("patch");
+        const json desc = read && (sampler || plugin == "builtin:audio" || plugin.find(':') == 4) ? describe(rel) : json();
+        json fx = desc.is_object() ? desc.value("effects", json::array()) : json::array();
+        json own = job.value("fx", json::array()), tail = json::array();   // the track's fx after the strip's own (Audio Units)
+        bool lined = desc.is_object();
+        if (lined && !sampler) {   // the track's fx start with the strip's effects
+            lined = own.size() >= fx.size();
+            for (size_t i = 0; lined && i < fx.size(); ++i) lined = own[i] == fx[i];
+            for (size_t i = fx.size(); lined && i < own.size(); ++i) tail.push_back(own[i]);
+        } else tail = own;
+        if (lined && automateEffects(chain, req, fx, left, done) && !done.empty()) {
+            for (auto &e : tail) fx.push_back(e);
+            job["fx"] = fx;
+            if (sampler) job["sampler"]["effects"] = false;
+        } else done.clear();
+        std::string played;
+        for (auto &[order, param] : done) if (autos.plugins.count({order, param})) played += (played.empty() ? "" : ", ") + nameAt(order) + " #" + std::to_string(param);
+        if (!played.empty()) warn.push_back(name + ": plug-in automation played on the effects that re-create it: " + played);
+        for (auto &[knob, targets] : knobTargets)
+            if (std::any_of(targets.begin(), targets.end(), [&](auto &t) { return done.count(t) > 0; })) knobsDone.insert(knob);
+        for (auto &l : left) warn.push_back(name + ": automation not converted: " + l);
+        std::string rest;   // the ones no reason above names
+        for (auto &[key, pts] : autos.plugins) {
+            const std::string what = nameAt(key.first) + " #" + std::to_string(key.second);
+            if (!done.count(key) && std::none_of(left.begin(), left.end(), [&](auto &l) { return l.rfind(what + " ", 0) == 0; }))
+                rest += (rest.empty() ? "" : ", ") + what;
+        }
+        if (!rest.empty()) warn.push_back(name + ": plug-in automation not converted: " + rest + (plugin == "builtin:synth" ? " (on a re-created synth's patch, its effects play inside it)" : ""));
+        for (auto it = autos.plugins.begin(); it != autos.plugins.end();) it = done.count(it->first) ? autos.plugins.erase(it) : std::next(it);
     }
 
     // CC64 as note lengths: a note released while the pedal is down sounds until the pedal comes up
@@ -1292,6 +1542,9 @@ struct Converter {
             if (automated) autos.sends.erase(curve);
         }
         if (!autos.sends.empty()) warn.push_back(name + ": automation of " + std::to_string(autos.sends.size()) + " send(s) whose bus could not be found, not converted");
+        // plug-in automation and Smart Control knobs on the strip's effects
+        std::set<int> knobsOnFx;
+        if (!autos.plugins.empty() || !autos.knobs.empty()) effectAutomation(job, name, rel, autos, knobsOnFx);
         // Smart Control automation: a knob's position through its mapping (the parameter's steps between the range's
         // ends, a centred parameter's middle step = 0) onto the instrument, played as the builtin:synth parameter the
         // re-created instrument has for it (Retro Synth's cutoff, resonance and filter envelope depth)
@@ -1303,7 +1556,7 @@ struct Converter {
             const bool haveInst = readPatchChannels(dir, pchans, perr) && !pchans.empty();
             for (auto &[knob, pts] : autos.knobs) {
                 std::string label = "knob " + std::to_string(knob + 1);
-                bool done = false;
+                bool done = knobsOnFx.count(knob) > 0;
                 for (auto &m : maps) {
                     if (m.knob != knob) continue;
                     if (!m.label.empty()) label = m.label;
@@ -1346,7 +1599,7 @@ struct Converter {
                     }
                     if (ok && !pname.empty()) { job["automation"]["params"][pname] = curve; done = true; }
                 }
-                warn.push_back(name + ": Smart Control \"" + label + "\" automation " + (done ? "played on the re-created instrument's parameter" : "not converted (what it moves has no counterpart here)"));
+                warn.push_back(name + ": Smart Control \"" + label + "\" automation " + (knobsOnFx.count(knob) ? "played on the effects it moves" : done ? "played on the re-created instrument's parameter" : "not converted (what it moves has no counterpart here)"));
             }
         }
         if (!sends.empty()) job["sends"] = sends;
@@ -1429,7 +1682,7 @@ struct Converter {
             m["automation"]["gain"] = pts;
             g -= ch->gainDb();
             if (m.contains("fx")) warn.push_back("master: its volume automation plays before the master's effects (GarageBand fades after them)");
-            if (!it->second.pan.empty() || it->second.other) warn.push_back("master: pan and plug-in automation not converted");
+            if (!it->second.pan.empty() || it->second.other || !it->second.plugins.empty()) warn.push_back("master: pan and plug-in automation not converted");
             curves.erase(it);
             break;
         }
@@ -1518,6 +1771,7 @@ struct Converter {
             size_t n = c.volume.size() + c.pan.size() + (size_t)c.other;
             for (auto &[slot, v] : c.sends) n += v.size();
             for (auto &[knob, v] : c.knobs) n += v.size();
+            for (auto &[key, v] : c.plugins) n += v.size();
             warn.push_back((e ? e->name : std::string(b)) + ": " + std::to_string(n) + " automation points not converted");
         }
         int64_t c0 = 0, c1 = 0;
