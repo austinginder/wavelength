@@ -1385,6 +1385,97 @@ struct Pitch : Effect {
     }
 };
 
+// ringmod: a ring modulator and frequency shifter (Logic's Ringshifter, Pedalboard's Roswell Ringer). "mode": "ring"
+// multiplies the input by a sine at "freq" Hz: both sidebands, so a 1 kHz tone at 100 Hz becomes 900 and 1100 Hz (bells,
+// robots; a few Hz is a tremolo that flips polarity). "shift" moves every frequency by "freq" Hz (negative: down) and keeps
+// one sideband, so harmonics stop being harmonic; a few Hz is a slow phasing. "dual" shifts the left side up and the right
+// side down. "delay" (beats, or "delayMs") adds an echo of the effect at "delayLevel"; "feedback" sends the output back
+// in (with a delay: a barber-pole spiral, each echo shifted again); "spread" starts the right side's oscillator that far
+// into its cycle; "mix" crossfades.
+struct Ringmod : Effect {
+    Envelope freq, mix;
+    int mode = 0;   // 0 ring, 1 shift, 2 dual
+    double feedback = 0, delaySec = 0, delayLevel = 1, spread = 0;
+    Ringmod(const json &j, const Job &job, std::string &err) {
+        label = "ringmod";
+        const std::string m = j.value("mode", "ring");
+        mode = m == "ring" ? 0 : m == "shift" ? 1 : m == "dual" ? 2 : -1;
+        if (mode < 0) { err = "ringmod: mode must be \"ring\", \"shift\" or \"dual\""; return; }
+        freq = param(j, "freq", 100, job.tempo);
+        mix = param(j, "mix", 1, job.tempo);
+        feedback = std::clamp(j.value("feedback", 0.0), 0.0, 0.95);
+        if (j.contains("delayMs")) delaySec = std::clamp(j["delayMs"].get<double>(), 0.0, 4000.0) / 1000;
+        else if (j.contains("delay")) delaySec = std::clamp(j["delay"].get<double>() * 60 / job.tempo.bpmAtBeat(0), 0.0, 4.0);
+        delayLevel = std::clamp(j.value("delayLevel", 1.0), 0.0, 2.0);
+        spread = j.value("spread", 0.0);
+        checkKeys(j, {"mode", "freq", "mix", "feedback", "delay", "delayMs", "delayLevel", "spread"}, *this);
+    }
+    // a 90-degree phase-difference network (two chains of four second-order all-passes, Olli Niemitalo's coefficients):
+    // re and im are the analytic signal of the input, 90 degrees apart from about 20 Hz to 20 kHz at 44.1 kHz
+    struct Hilbert {
+        double st[2][4][4] = {};   // per path and section: x[n-1], x[n-2], y[n-1], y[n-2]
+        double late = 0;           // the first path is a sample later
+        void process(double x, double &re, double &im) {
+            static const double a[2][4] = {{0.6923878, 0.9360654322959, 0.9882295226860, 0.9987488452737},
+                                           {0.4021921162426, 0.8561710882420, 0.9722909545651, 0.9952884791278}};
+            double out[2];
+            for (int p = 0; p < 2; ++p) {
+                double v = x;
+                for (int k = 0; k < 4; ++k) {
+                    double *z = st[p][k];
+                    const double y = a[p][k] * a[p][k] * (v + z[3]) - z[1];
+                    z[1] = z[0]; z[0] = v; z[3] = z[2]; z[2] = y;
+                    v = y;
+                }
+                out[p] = v;
+            }
+            re = late; late = out[0];
+            im = out[1];
+        }
+    };
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        const size_t n = a.frames();
+        Hilbert hl, hr;
+        const size_t D = delaySec > 0 ? std::max<size_t>(1, (size_t)std::llround(delaySec * sr)) : 0;
+        std::vector<double> dl(D ? D : 1, 0.0), dr(D ? D : 1, 0.0);   // the echo lines on the effect signal
+        size_t di = 0;
+        double phase = 0, outL = 0, outR = 0;   // the effect's last output, fed back
+        const double off = 2 * dsp::kPi * spread;
+        for (size_t i = 0; i < n; ++i) {
+            const double t = i / sr;
+            const double inL = a.left[i] + feedback * outL, inR = a.right[i] + feedback * outR;
+            double wl, wr;
+            if (mode == 0) {
+                wl = inL * std::cos(phase);
+                wr = inR * std::cos(phase + off);
+            } else {
+                double reL, imL, reR, imR;
+                hl.process(inL, reL, imL);
+                hr.process(inR, reR, imR);
+                wl = reL * std::cos(phase) + imL * std::sin(phase);   // up by freq
+                const double pr = phase + off;
+                wr = mode == 1 ? reR * std::cos(pr) + imR * std::sin(pr) : reR * std::cos(pr) - imR * std::sin(pr);
+            }
+            phase += 2 * dsp::kPi * freq.at(t) / sr;
+            if (phase > 2 * dsp::kPi) phase -= 2 * dsp::kPi;
+            else if (phase < -2 * dsp::kPi) phase += 2 * dsp::kPi;
+            if (D) {
+                const double el = dl[di], er = dr[di];
+                dl[di] = wl; dr[di] = wr;
+                di = (di + 1) % D;
+                wl += delayLevel * el;
+                wr += delayLevel * er;
+            }
+            outL = wl; outR = wr;
+            const double m = mix.constant() ? mix.at(0) : mix.at(t);
+            a.left[i] = blend(a.left[i], wl, m);
+            a.right[i] = blend(a.right[i], wr, m);
+        }
+        return true;
+    }
+};
+
 // tape stop / varispeed: plays the incoming audio at "speed" (1 = normal, 0 = stopped), pitch
 // and time together. Whenever speed is back at 1 the output is in sync with the input again.
 struct TapeStop : Effect {
@@ -1690,7 +1781,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "convolve", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "pitch", "tapestop", "repeat", "multiband", "patch"};
+            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "pitch", "ringmod", "tapestop", "repeat", "multiband", "patch"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -1722,6 +1813,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
             else if (t == "vibrato") fx = std::make_unique<Vibrato>(j, job);
             else if (t == "pitch") fx = std::make_unique<Pitch>(j, job);
+            else if (t == "ringmod") fx = std::make_unique<Ringmod>(j, job, err);
             else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
             else if (t == "repeat") fx = std::make_unique<Repeat>(j, job);
             else if (t == "multiband") fx = std::make_unique<Multiband>(j, job, err);

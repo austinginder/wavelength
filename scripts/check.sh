@@ -817,6 +817,38 @@ PY
 )
 fi
 if [ -n "$pitch_why" ]; then echo "FAIL pitch: $pitch_why"; fail=1; else echo "ok   pitch: semitones, keepFormants, formant, an automated shift, lined up with the input"; fi
+# ringmod: a 988 Hz sine ring-modulated at 100 Hz gives 888 and 1088 Hz; shifted +100 Hz only 1088 (the other sideband
+# 40 dB down); dual mode shifts the left side up and the right side down
+mkdir -p out/check/ringmod
+python3 - <<'PY'
+import json
+syn = {"osc": [{"wave": "sine"}], "filter": {"type": "off"}, "amp": {"attack": 0.01, "decay": 0, "sustain": 1, "release": 0.05}}
+tr = lambda n, fx: {"name": n, "plugin": "builtin:synth", "synth": syn, "fx": fx, "notes": [{"beat": 0.25, "dur": 3, "key": 83.21, "vel": 1}]}
+json.dump({"tempo": 60, "leadIn": 0, "tail": 0.5, "tracks": [tr("Ring", [{"type": "ringmod", "mode": "ring", "freq": 100}]),
+           tr("Shift", [{"type": "ringmod", "mode": "shift", "freq": 100}]), tr("Dual", [{"type": "ringmod", "mode": "dual", "freq": 100, "mix": 1}])]},
+          open("out/check/ringmod/ring.json", "w"))
+PY
+ring_why=""
+if ! "./$build/wavelength" render out/check/ringmod/ring.json --out out/check/ringmod/out --json > /dev/null 2>&1; then
+  ring_why="the job did not render"
+else
+  ring_why=$(python3 - "./$build/wavelength" <<'PY'
+import json, subprocess, sys
+def an(f):
+    return json.loads(subprocess.run([sys.argv[1], "analyze", "out/check/ringmod/out/stems/" + f, "--start", "1", "--end", "3", "--peaks", "--top", "4", "--json"],
+                                     capture_output=True, text=True).stdout)
+def strong(d):
+    ps = [(round(p["hz"]), p["levelDb"]) for p in d["spectrum"]["peaks"]["peaks"]]
+    top = max(l for _, l in ps)
+    return sorted(h for h, l in ps if l > top - 40)
+ring, shift, dual = an("01-ring.wav"), an("02-shift.wav"), an("03-dual.wav")
+if strong(ring) != [888, 1088]: print("ring mode gave", strong(ring))
+elif strong(shift) != [1088]: print("shift mode gave", strong(shift))
+elif strong(dual) != [888, 1088] or dual["stereo"]["width"] < 0.9: print("dual mode gave", strong(dual), "at width", dual["stereo"]["width"])
+PY
+)
+fi
+if [ -n "$ring_why" ]; then echo "FAIL ringmod: $ring_why"; fail=1; else echo "ok   ringmod: ring, shift and dual modes make the sidebands they should"; fi
 # gate as a noise gate: a 220 Hz tone at -6 dB for a second, then at -50 dB: with a -30 dB threshold the quiet second goes
 # silent and the loud one stays; phaser: a saw through it keeps its pitch, sounds, and turns stereo
 rm -rf out/check/gate && mkdir -p out/check/gate
