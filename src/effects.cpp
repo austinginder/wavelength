@@ -742,20 +742,22 @@ struct Clip : Effect {
 
 // -------------------------------------------------------------------------------- chorus
 struct Chorus : Effect {
-    double rate, depthMs, delayMs;
+    double rate, depthMs, delayMs, spread;
     Envelope mix;
     Chorus(const json &j, const Job &job) {
         label = "chorus";
         rate = j.value("rate", 0.3);
-        depthMs = j.value("depth", 4.0);
-        delayMs = j.value("delay", 14.0);
+        depthMs = std::max(0.0, j.value("depth", 4.0));
+        delayMs = std::max(0.0, j.value("delay", 14.0));
+        spread = j.value("spread", 0.25);   // the right side's sweep that far into its cycle (0.5: opposite, a widener)
         mix = param(j, "mix", 0.35, job.tempo);
-        checkKeys(j, {"rate", "depth", "delay", "mix"}, *this);
+        checkKeys(j, {"rate", "depth", "delay", "spread", "mix"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
         dsp::DelayLine L, R;
         const size_t cap = (size_t)((delayMs + depthMs + 5) * 0.001 * sr);
+        const double off = 2 * dsp::kPi * spread;
         L.resize(cap); R.resize(cap);
         double ph = 0;
         const double inc = 2 * dsp::kPi * rate / sr;
@@ -763,7 +765,7 @@ struct Chorus : Effect {
             L.push(a.left[i]); R.push(a.right[i]);
             ph += inc;
             const double dl = (delayMs + depthMs * 0.5 * (1 + std::sin(ph))) * 0.001 * sr;
-            const double dr = (delayMs + depthMs * 0.5 * (1 + std::sin(ph + dsp::kPi / 2))) * 0.001 * sr;
+            const double dr = (delayMs + depthMs * 0.5 * (1 + std::sin(ph + off))) * 0.001 * sr;
             const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
             a.left[i] = blend(a.left[i], L.tap(dl), m);
             a.right[i] = blend(a.right[i], R.tap(dr), m);

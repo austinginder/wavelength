@@ -148,7 +148,10 @@ strip(os.path.join(out, 'Audio', 'Test Voice.patch', '#Root.cst'),
 rs = [0.0] * 31
 rs[1], rs[3], rs[7], rs[8], rs[11], rs[26], rs[28] = 0.5, 1, 3, 0.3, 0.6, 0.5, 120
 os.makedirs(os.path.join(out, 'Audio', 'Test Ring.patch'), exist_ok=True)
-strip(os.path.join(out, 'Audio', 'Test Ring.patch', '#Root.cst'), [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Ringshifter', b'GAME', settings(252, rs))])
+# and a Spreader after it: #0 Intensity 50, #1 Speed 1 (0.5 Hz), #3 Mix 100 %
+spd = [50.0, 1.0, 0.0, 100.0]
+strip(os.path.join(out, 'Audio', 'Test Ring.patch', '#Root.cst'), [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Ringshifter', b'GAME', settings(252, rs)),
+                                                                   record(5, 'Spreader', b'GAME', settings(258, spd))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):

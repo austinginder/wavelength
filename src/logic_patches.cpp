@@ -1289,6 +1289,13 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             const double mix = std::clamp(v(0, 50), 0.0, 100.0) / 100;
             f["mix"] = r4(mix);
             if (mix > 0.005) add(f);
+        } else if (p.name == "Spreader") {
+            // #0 LFO Intensity, #1 LFO Speed, #2 Channel Delay (samples), #3 Mix %. Bounced on 1 kHz and 200 Hz sines: a
+            // delay swept from 0 for each side, the two in opposite phase, at Speed / 2 Hz; Intensity sets the pitch
+            // wobble (+-0.95 % at 50, at either Speed); Mix crossfades. The Channel Delay changed nothing measurable.
+            const double mix = std::clamp(v(3, 100), 0.0, 100.0) / 100, rate = std::max(0.01, v(1, 1) / 2), wobble = 0.00947 * std::max(0.0, v(0)) / 50;
+            if (mix <= 0.005 || wobble <= 0) { notes.push_back("Spreader: Mix or Intensity 0 as saved, left out"); continue; }
+            add({{"type", "chorus"}, {"rate", r4(rate)}, {"depth", r4(2000 * wobble / (2 * M_PI * rate))}, {"delay", 0}, {"spread", 0.5}, {"mix", r4(mix)}});
         } else if (p.name == "Ringshifter") {
             // #7 Mode (0 ring modulator, 1 side chain, 2 frequency shifter, 3 dual), #1 Frequency -1..1 on #3's scale (Exp:
             // 5000 Hz x 10^(5(|x| - 1)), Lin: 5000 Hz x; bounced at 0.25-1), #8 Feedback, #11 Dry/Wet, #26 Delay Level, #27
