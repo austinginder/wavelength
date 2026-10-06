@@ -1403,8 +1403,11 @@ std::vector<PatchSend> readPatchSends(const std::string &patchDir) {
     return out;
 }
 
-// Church Organ ("Church Orga") is a sampler too: it names its EXS instrument ("Full Organ.exs", in the Sound Library)
-bool isSamplerInstrument(const std::string &name) { return name == "Sampler" || name == "EXS24" || name == "Drum Kit" || name == "Church Orga"; }
+// Church Organ ("Church Orga") is a sampler too: it names its EXS instrument ("Full Organ.exs", in the Sound Library), and
+// so does GarageBand's older "Drum Kits" instrument (the Chinese Kit names "Chinese Kit.exs", also in the Sound Library)
+bool isSamplerInstrument(const std::string &name) {
+    return name == "Sampler" || name == "EXS24" || name == "Drum Kit" || name == "Drum Kits" || name == "Church Orga";
+}
 
 std::vector<std::string> logicPatchRoots() {
     std::vector<std::string> out;
