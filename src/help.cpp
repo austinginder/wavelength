@@ -18,9 +18,9 @@ const char *kUsage = R"(Wavelength, a headless music engine for AI agents (https
 
 Usage:
   wavelength plugins [--rescan] [--json] | plugins --block <plugin> [--reason TEXT] | --unblock <plugin>
-      List installed CLAP, VST3 and VST2 plugins and the built-in instruments (cached; --rescan
-      reloads every bundle). A blocked plugin (one that opens a licence window on every load,
-      or crashes) is never loaded: render, params, presets and audition refuse it by name.
+      List installed CLAP, VST3 and VST2 plugins, Audio Units (macOS) and the built-in instruments
+      (cached; --rescan reloads every bundle). A blocked plugin (one that opens a licence window on
+      every load, or crashes) is never loaded: render, params, presets and audition refuse it by name.
   wavelength presets <plugin> [--search TEXT] [--rescan] [--json]
       List a plugin's presets to use as "preset": CLAP preset discovery, VST3 program lists,
       preset files in its preset folders, NKS presets, DX7 cartridges, bank entries.
@@ -118,7 +118,8 @@ Usage:
   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
       Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,
-      markers, volume/pan automation. Lists what the file can't carry (a DAW's own devices).
+      markers, audio clips, automation of volume, pan and the instrument's parameters. Lists what
+      the file can't carry (a DAW's own devices).
       `render project.dawproject` imports into <out>/import and renders in one go.
   wavelength import <project.bwproject> [--out DIR] [--list] [--json]
       Turn a Bitwig Studio project into a job without exporting it: tempo, tracks with their
@@ -132,9 +133,12 @@ Usage:
       Designer instruments on builtin:sampler, Apple's synths re-created on builtin:synth, audio
       tracks' effects as fx), faders, pans, sends to buses carrying the aux effects, the master's
       effects, MIDI and Drummer regions as notes, audio regions as clips, tempo, time signature and
-      key. Tracks without regions are left out unless --all-tracks; --copy-media copies audio files
-      into <out>/media. Not read yet (listed): mute and solo, region loops and parameters, tempo
-      changes, automation; the fader law is a guess. `render song.band` imports and renders.
+      key, mute and solo, region loops, trims, Transpose and Time Quantize, Groove Track followers,
+      tempo changes, volume, pan, send and master fade automation, and the plug-in and Smart Control
+      automation that moves something Wavelength re-creates. Tracks without regions are left out
+      unless --all-tracks; --copy-media copies audio files into <out>/media. Not read yet (the result
+      lists them): other plug-in and Smart Control automation, effect automation on re-created synths,
+      controller data the built-in instruments don't play. `render song.band` imports and renders.
   wavelength import <score.musicxml | score.mxl> [--out DIR] [--instrument PLUGIN] [--json]
       Turn a MusicXML score (MuseScore, Sibelius, Finale, Dorico, music21) into a job: a track per
       part, repeats and endings played out, ties, chords and voices, concert pitch for transposing
@@ -163,12 +167,14 @@ Usage:
       installed elsewhere is skipped unless --force.
   wavelength docs [agents | job-format | effects | song-format] [--section TEXT] [--json]
       The docs that match this binary, built in: the operating guide for agents (read it first), the
-      job format and the effects reference. --section prints one part (a heading or part of one).
+      job format, the effects reference and the song format. --section prints one part (a heading or
+      part of one).
   wavelength mcp
       Runs a Model Context Protocol server on stdin/stdout for MCP clients (Claude Desktop, Claude Code,
-      Cursor): tools to read the guide, list instruments, presets, samples and parameters, lint, render
-      (with the song picture), draw an arrangement, analyze, find bars and import MIDI/MusicXML/DAWproject/Bitwig/GarageBand projects;
-      for songs: save, history, undo, diff, comments and replies, fallbacks, pack.
+      Cursor): tools to read the guide, list instruments, presets, samples, Apple Loops and parameters,
+      draw patch cards, lint, render (with the song picture), stage faders, draw an arrangement,
+      analyze, find bars and import MIDI/MusicXML/DAWproject/Bitwig/GarageBand projects; for songs:
+      save, history, undo, diff, comments and replies, fallbacks, pack.
   wavelength picture <job.json> [--out FILE.png] [--width PX] [--json]
       Draws the arrangement before rendering: sections, bars and a lane per track with its notes
       (default: arrangement.png next to the job). render --png draws the full picture with levels.

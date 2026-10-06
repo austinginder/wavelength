@@ -7,6 +7,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ### Added
 - Track `realtime`: renders a plugin at wall-clock speed while its notes play (from 0.5 s before a note-on to 1.5 s after the last held note ends) and at full speed elsewhere, in every plugin format. Some plugins start or feed their voices from a timer on their main thread and rendered silence faster than real time; discoDSP Roboto, a free singing synthesizer, is one, and is paced by default. AGENTS.md shows how to give Roboto its words through its state and place each phrase with a held key.
 
+### Fixed
+- Docs caught up with 0.5.0. `wavelength help import` said a GarageBand import doesn't read mute and solo, region loops, tempo changes or automation (it reads them all); `help plugins`, `help docs` and `help mcp` now name Audio Units, the song format and the stage, loops and patch card tools. AGENTS.md's known limits said Audio Units and GarageBand automation were missing, and put float stems at 8 MB per track-minute (stereo 32-bit at 48 kHz is about 23 MB). The job format said the mod wheel and pressure do nothing on `builtin:synth` and that no GarageBand re-creation was measured against GarageBand; both are fixed, and `phaser`, `ringmod`, `pitch` and `tune` are in AGENTS.md's list of built-in effects. Documented keys the engine already took: `vibrato` `shape`/`phase`, a synth LFO's `phase`, a plugin effect's `warmup` and state `format`, and `deliver` `bits`.
+
 ## [0.5.0] - 2026-10-06
 
 ### Added
