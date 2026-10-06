@@ -950,6 +950,66 @@ sys.exit(0 if not d["silent"] and d["stereo"]["width"] > 0 else 1)'; then
   additive_why="the inharmonic bell was silent or mono"
 fi
 if [ -n "$additive_why" ]; then echo "FAIL additive: $additive_why"; fail=1; else echo "ok   additive: a 200-partial saw at C7 in tune with nothing aliased below it, an inharmonic panned bank of sines"; fi
+# tuned filters: noise through a comb tuned to the note (A3) peaks at its harmonics and, negative, between them; a ring
+# modulator at 110 Hz turns A4 into 330 and 550 Hz; an FM filter at depth 0 plays a 1 kHz sine whatever goes in; F7
+# held at 4 kHz aliases to 1.2 kHz; two formants in parallel lift their bands; a notch takes out C4 while the G4
+# that joins the chain after it passes
+mkdir -p out/check/tuned
+cat > out/check/tuned/job.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0.2, "stems": "16", "tracks": [
+ {"name": "Comb", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "noise"}], "filter": {"type": "comb", "cutoff": 261.63, "keytrack": 1, "resonance": 0.95}},
+  "notes": [{"beat": 0, "dur": 1.2, "key": "A3"}]},
+ {"name": "Hollow", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "noise"}], "filter": {"type": "comb", "cutoff": 261.63, "keytrack": 1, "resonance": 0.95, "negative": true}},
+  "notes": [{"beat": 0, "dur": 1.2, "key": "A3"}]},
+ {"name": "Ring", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "ring", "cutoff": 110}}, "notes": [{"beat": 0, "dur": 1.2, "key": "A4"}]},
+ {"name": "Fm", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "saw"}], "filter": {"type": "fm", "cutoff": 1000, "depth": 0}}, "notes": [{"beat": 0, "dur": 1.2, "key": "C3"}]},
+ {"name": "Down", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "downsample", "cutoff": 2000}}, "notes": [{"beat": 0, "dur": 1.2, "key": "F7"}]},
+ {"name": "Bank", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "noise"}],
+  "filter": [{"type": "formant", "cutoff": 500, "q": 4}, {"type": "formant", "cutoff": 2000, "q": 4, "parallel": true}]}, "notes": [{"beat": 0, "dur": 1.2, "key": "C4"}]},
+ {"name": "Join", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}, {"wave": "sine", "semi": 7, "filter": 1}],
+  "filter": [{"type": "notch", "cutoff": 261.63, "q": 2}, {"type": "lowpass", "cutoff": 20000}]}, "notes": [{"beat": 0, "dur": 1.2, "key": "C4"}]}]}
+JOB
+tuned_why=""
+if ! "./$build/wavelength" render out/check/tuned/job.json --out "out/check/tuned/$build" --json > /dev/null 2> out/check/tuned/err.txt; then
+  tuned_why="the job did not render"
+elif grep -q "synth:" out/check/tuned/err.txt; then
+  tuned_why="a setting warned: $(grep -m1 "synth:" out/check/tuned/err.txt)"
+elif ! python3 - "out/check/tuned/$build/stems" <<'PY'
+import math, sys, wave
+def mono(p):
+    w = wave.open(p)
+    sr, ch, raw = w.getframerate(), w.getnchannels(), w.readframes(w.getnframes())
+    x = [int.from_bytes(raw[i:i + 2], "little", signed=True) for i in range(0, len(raw), 2 * ch)][int(0.2 * sr):int(0.2 * sr) + 32768]
+    return [s * (0.5 - 0.5 * math.cos(2 * math.pi * i / (len(x) - 1))) for i, s in enumerate(x)], sr
+def db(x, sr, hz):   # Goertzel: the windowed segment's level at hz
+    c, a, b = 2 * math.cos(2 * math.pi * hz / sr), 0.0, 0.0
+    for v in x: a, b = v + c * a - b, a
+    return 10 * math.log10(max(1e-30, a * a + b * b - c * a * b))
+d = sys.argv[1] + '/'
+ok, out = True, []
+for name, sign in (('01-comb.wav', 1), ('02-hollow.wav', -1)):   # peaks at k x 220 Hz, or at (k + 1/2) x 220
+    x, sr = mono(d + name)
+    on = sum(db(x, sr, 220 * k) for k in range(2, 9)) / 7
+    off = sum(db(x, sr, 220 * (k + 0.5)) for k in range(2, 9)) / 7
+    ok &= sign * (on - off) > 12
+    out.append('%s %+.1f dB' % (name[3:-4], on - off))
+x, sr = mono(d + '03-ring.wav')
+ok &= min(db(x, sr, 330), db(x, sr, 550)) - db(x, sr, 440) > 40
+x, sr = mono(d + '04-fm.wav')
+ok &= db(x, sr, 1000) - max(db(x, sr, 130.81), db(x, sr, 261.63), db(x, sr, 392.44)) > 40
+x, sr = mono(d + '05-down.wav')
+ok &= abs(db(x, sr, 4000 - 2793.83) - db(x, sr, 2793.83)) < 12 and db(x, sr, 4000 - 2793.83) - db(x, sr, 600) > 30
+x, sr = mono(d + '06-bank.wav')
+bands = (db(x, sr, 500) + db(x, sr, 2000)) / 2 - (db(x, sr, 1000) + db(x, sr, 6000)) / 2
+ok &= bands > 10
+x, sr = mono(d + '07-join.wav')
+ok &= db(x, sr, 392.0) - db(x, sr, 261.63) > 25
+out.append('formant bands %+.1f dB' % bands)
+print(', '.join(out), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+then tuned_why="a filter's spectrum was off (see above)"; fi
+if [ -n "$tuned_why" ]; then echo "FAIL tuned filters: $tuned_why"; fail=1; else echo "ok   tuned filters: comb, hollow comb, ring, FM, downsample, a formant bank, an oscillator joining after a notch"; fi
 # arp: a C major chord held two beats at 1/16 up-and-down (top and bottom once) over two octaves plays C4 E4 G4 C5
 # E5 G5 E5 C5 (read back from a MIDI export); a patch's Arpeggiator (make-test-exs.py's Test Arp: 1/16 up over two
 # octaves, note length 50 %, swing 60, the grid note 127, rest, chord 64, note 100 tied over 2, note 64) plays by

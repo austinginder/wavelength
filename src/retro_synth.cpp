@@ -292,21 +292,27 @@ namespace {
 // A low- or band-pass that reads as closed at middle C even with its envelope fully open, in front of nearly all the
 // level: what opens it in GarageBand (an unmapped control or modulation, a filter type only inferred) isn't re-created,
 // and the patch would play choked (A Simpler Time read as a 20 Hz band-pass that its effects then drove into fuzz).
-// Its cutoff in Hz, else 0.
+// Its cutoff in Hz, else 0. With a chain of filters, any of them that takes most of the voice.
 double closedFilterHz(const nlohmann::json &s) {
-    if (!s.contains("filter") || !s["filter"].is_object()) return 0;
-    const auto &f = s["filter"];
-    const std::string type = f.value("type", "lowpass");
-    if (type != "lowpass" && type != "bandpass") return 0;
-    const double cut = f.value("cutoff", 20000.0), env = std::max(0.0, f.value("env", 0.0));
-    if (cut * std::pow(2.0, env) >= 80) return 0;
-    double in = 0, all = 0;   // the oscillators' level through the filter, and in all
-    for (auto &o : s.value("osc", nlohmann::json::array())) {
-        const double l = o.value("level", 1.0);
-        all += l;
-        if (o.value("filter", true)) in += l;
+    if (!s.contains("filter")) return 0;
+    const nlohmann::json list = s["filter"].is_array() ? s["filter"] : nlohmann::json::array({s["filter"]});
+    for (size_t k = 0; k < list.size(); ++k) {
+        const auto &f = list[k];
+        if (!f.is_object()) continue;
+        const std::string type = f.value("type", "lowpass");
+        if (type != "lowpass" && type != "bandpass") continue;
+        const double cut = f.value("cutoff", 20000.0), env = std::max(0.0, f.value("env", 0.0));
+        if (cut * std::pow(2.0, env) >= 80 || f.value("mix", 1.0) < 0.8) continue;
+        double in = 0, all = 0;   // the oscillators' level through the filter (joining the chain at it or before), and in all
+        for (auto &o : s.value("osc", nlohmann::json::array())) {
+            const double l = o.value("level", 1.0);
+            const auto &j = o.contains("filter") ? o["filter"] : nlohmann::json(true);
+            all += l;
+            if (j.is_number() ? j.get<double>() <= (double)k : j.is_boolean() && j.get<bool>()) in += l;
+        }
+        if (all > 0 && all - in < 0.2 * all) return cut;   // unless a fifth of the level skips it (80s Sine Synth: its sine)
     }
-    return all > 0 && all - in < 0.2 * all ? cut : 0;   // unless a fifth of the level skips it (80s Sine Synth: its sine)
+    return 0;
 }
 } // namespace
 
@@ -358,7 +364,10 @@ bool garageBandSynthPatch(const std::string &name, GarageBandSynth &out, std::st
             if (!refused.empty()) { if (why) *why = refused; return false; }
         } else continue;
         if (const double hz = closedFilterHz(out.synth); hz > 0) {
-            if (why) *why = "its filter reads as closed (a " + std::to_string((int)std::lround(hz)) + " Hz " + out.synth["filter"].value("type", std::string("lowpass")) +
+            std::string type = "lowpass";
+            for (auto &f : out.synth["filter"].is_array() ? out.synth["filter"] : nlohmann::json::array({out.synth["filter"]}))
+                if (f.is_object() && f.value("cutoff", 20000.0) == hz) type = f.value("type", type);
+            if (why) *why = "its filter reads as closed (a " + std::to_string((int)std::lround(hz)) + " Hz " + type +
                             " at middle C, its envelope open) with the controls at rest: what opens it in GarageBand isn't re-created";
             return false;
         }

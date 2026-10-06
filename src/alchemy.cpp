@@ -234,22 +234,25 @@ struct Ctx {
         if (m.modmap && mapped(m.modmap, v, y)) v = y;
         return true;
     }
-    double depth(const Mod &m) const {   // -1..1, its own still modulators included
+    // -1..1, its own still modulators included. nested: how far they move it. Measured on tuned filters (Quantum Grains'
+    // key follow switched off by a knob, Noise Crush's envelope depth) they move it half as far as read here elsewhere;
+    // the other filters and targets keep the old reading until their bounces say so.
+    double depth(const Mod &m, double nested = 1) const {
         const Param *d = m.depth.empty() ? nullptr : &m.depth[0];
         double base = d && d->has ? d->value : 0.5;
         if (d)
             for (auto &mm : d->mods) {
                 double s;
-                if (still(mm, s) && !mm.depth.empty() && mm.depth[0].has) base += (2 * mm.depth[0].value - 1) * s;
+                if (still(mm, s) && !mm.depth.empty() && mm.depth[0].has) base += nested * (2 * mm.depth[0].value - 1) * s;
             }
         return 2 * std::min(1.0, std::max(0.0, base)) - 1;
     }
-    Eff eff(const Param *p) const {   // its value at rest (0..1) and its moving modulations
+    Eff eff(const Param *p, double nested = 1) const {   // its value at rest (0..1) and its moving modulations
         Eff e;
         if (!p) return e;
         e.v = p->has ? p->value : 0.0;
         for (auto &m : p->mods) {
-            const double d = depth(m);
+            const double d = depth(m, nested);
             double s;
             if (still(m, s)) e.v += d * s;
             else if (std::fabs(d) > 1e-4) e.dyn.push_back({m.type, m.id, d, m.modmap});
@@ -298,16 +301,48 @@ double fraction(const std::string &s) {
     return slash == std::string::npos ? num(s) : num(s.substr(0, slash)) / num(s.substr(slash + 1));
 }
 
-// The filter types (main, source, MM Filter and delay filters share one list of 39), inferred from their use: 0-8
-// low-pass (6-8 24 dB), 9-16 band-pass (15-16 24 dB), 17-25 high-pass (23-25 24 dB), 26, 30, 32, 33 and 37 drive
-// types (distortion, bit reduction, compression), the rest note-tuned (comb, ring, FM, formant, notch, peak)
+// The filter types (main, source, MM Filter and delay filters share one list of 39), inferred from their use and from
+// the names patches give the Perform knobs that move them: 0-8 low-pass (6-8 24 dB), 9-16 band-pass (15-16 24 dB),
+// 17-25 high-pass (23-25 24 dB); 26, 30, 33 and 37 distortion types (26 bit reduction: "Bit Crusher", "Lo-Fi"), 38
+// the downsampler ("Sample Rate", "Downsample Mix"); and the note-tuned ones: 27 comb with bipolar feedback ("Comb
+// Polarity", "Odd / Even"; the int is the comb's polarity, 0 both ways), 28 comb with negative feedback (its peaks
+// measured between the cutoff's multiples), 29 comb with positive feedback, 31 FM ("FM Mod", "FM Feedback"), 32 formant
+// ("Formant Shift"; three in parallel make a vowel), 34 notch (the one left), 35 peaking ("Peak Filter Gain"), 36 ring
+// modulation ("Ring Mod Mix", "Weird")
 std::pair<std::string, int> filterKind(double code) {
     const int c = (int)code;
     if (c >= 0 && c <= 8) return {"lowpass", c >= 6 ? 24 : 12};
     if (c >= 9 && c <= 16) return {"bandpass", c >= 15 ? 24 : 12};
     if (c >= 17 && c <= 25) return {"highpass", c >= 23 ? 24 : 12};
-    if (c == 26 || c == 30 || c == 32 || c == 33 || c == 37) return {"drive", 0};
-    return {"tuned", 0};
+    static const std::map<int, std::pair<std::string, int>> kinds = {{27, {"comb", 0}}, {28, {"comb", -1}}, {29, {"comb", 1}}, {31, {"fm", 0}},
+        {32, {"formant", 0}}, {34, {"notch", 0}}, {35, {"peak", 0}}, {36, {"ring", 0}}, {38, {"downsample", 0}}};
+    auto it = kinds.find(c);
+    return it == kinds.end() ? std::pair<std::string, int>{"drive", 0} : it->second;
+}
+// the per-voice kinds builtin:synth plays beside its filter, and how notes name them
+bool tunedKind(const std::string &k) { return k == "comb" || k == "fm" || k == "formant" || k == "notch" || k == "peak" || k == "ring" || k == "downsample"; }
+std::string kindName(const std::string &k, int polarity) {
+    if (k == "comb") return polarity > 0 ? "comb (positive feedback)" : polarity < 0 ? "comb (negative feedback)" : "comb (bipolar feedback)";
+    return k == "fm" ? "FM" : k == "ring" ? "ring modulator" : k == "downsample" ? "downsampler" : k;
+}
+// a note-tuned filter's frequency: ten octaves from C0 (16.35 Hz), C4 at 0.4, so 0.4 with full key follow is the played
+// note (measured on ring and FM carriers within 0.1 %, a comb's spacing and formant peaks); the low-, band- and
+// high-pass types keep cutoffHz
+double tunedHz(double v) { return 16.352 * std::pow(2.0, 10 * v); }
+const double kTunedOct = 10;
+// the knobs' scales on the other types are guesses checked against few bounces: FM's Mod as the phase-modulation depth
+// the voice gives the carrier (Quantum Grains' sidebands), Q from a formant's or notch's Amount and a peak's BW
+const double kFmDepth = 12;
+double formantQ(double amount) { return 0.7 + 2.5 * std::min(1.0, std::max(0.0, amount)); }
+double notchQ(double amount) { return 8 / (1 + 7 * std::min(1.0, std::max(0.0, amount))); }
+double peakQ(double bw) { return 8 / (1 + 7 * std::min(1.0, std::max(0.0, bw))); }
+// what a played tuned filter approximates, for the notes
+std::string approximation(const std::string &kind) {
+    if (kind == "ring") return "a sine carrier; Mix as its offset and Weird squaring it are guesses";
+    if (kind == "fm") return "a sine its input phase-modulates; Mod and F-Back scaled from one bounce";
+    if (kind == "comb") return "one delay line of the cutoff's period; feedback and damping scales guessed";
+    if (kind == "downsample") return "held at twice its frequency, from one bounce";
+    return kind == "peak" ? "its gain and bandwidth scales guessed" : "its Amount as Q, a guess";
 }
 
 std::string replaceAll(std::string s, const std::string &a, const std::string &b) {
@@ -427,6 +462,7 @@ struct Filt {
     int code = 0, slope = 0, slot = 0;
     double cutoff = 0, res = 0, drive = 0, fxSend = 0;
     std::vector<FMod> mods;
+    std::vector<FMod> resMods, driveMods;   // the moving modulations of its resonance and drive knobs
     std::string fxRack;
     std::vector<std::string> skipped;   // filters left out for it (covering little of the level)
 };
@@ -830,11 +866,14 @@ struct Decoder {
         std::tie(f.kind, f.slope) = filterKind(code);
         f.where = where;
         f.code = (int)code;
-        const Eff c = C.eff(cut);
+        const double nested = tunedKind(f.kind) ? 0.5 : 1;   // see Ctx::depth
+        const Eff c = C.eff(cut, nested), rs = C.eff(res, nested), dr = C.eff(drv, nested);
         f.cutoff = r(c.v, 10000);
-        f.res = r(C.at(res));
-        f.drive = drv ? r(C.at(drv)) : 0.0;
+        f.res = r(rs.v);
+        f.drive = drv ? r(dr.v) : 0.0;
         for (auto &d : c.dyn) f.mods.push_back({srcName(d.t, d.i), r(d.d), d.t, d.i});
+        for (auto &d : rs.dyn) f.resMods.push_back({srcName(d.t, d.i), r(d.d), d.t, d.i});
+        for (auto &d : dr.dyn) f.driveMods.push_back({srcName(d.t, d.i), r(d.d), d.t, d.i});
         return f;
     }
 
@@ -1306,9 +1345,89 @@ struct Decoder {
         return spec;
     }
 
+    // ---- a note-tuned filter as one of builtin:synth's filters: its frequency on the tuned scale, its key, envelope and
+    // velocity follow, a sweep at the middle of its range, and its type's own knobs (Res and Drive are renamed per type)
+    json tunedStage(const Filt &f, json &synth, int &envIdx) {
+        json s = {{"type", f.kind}};
+        double v = f.cutoff, sweep = 0, vel = 0;
+        for (auto &m : f.mods) if ((m.t == 3 || m.t == 4) && m.d > 0) sweep += m.d;
+        v = (v + std::min(1.0, v + sweep)) / 2;   // the middle of the range it sweeps (up to the top of the scale)
+        if (sweep != 0) notes.push_back(f.where + ": its MSEG or sequencer sweep plays as the middle of its range");
+        bool haveEnv = false;
+        for (auto &m : f.mods) {
+            if (m.t == 5 && (m.i == 1 || m.i == 2)) s["keytrack"] = r(std::min(1.0, std::max(0.0, m.d)));
+            else if (m.t == 5 && m.i == 0) vel = std::max(0.0, m.d);
+            else if (m.t == 2 && !haveEnv) {
+                haveEnv = true;
+                const Adsr fe = ahdsr(m.i);
+                if (!fe.ok) continue;
+                if (envIdx < 0) {   // the filter envelope builtin:synth has: this one's, unless the first filter's is
+                    synth["filterEnv"] = adsrJson(fe);
+                    envIdx = m.i;
+                }
+                if (envIdx == m.i) s["env"] = r(std::max(-8.0, std::min(8.0, m.d * kTunedOct)));
+                else {   // another AHDSR than the filter envelope's: held where it sustains
+                    v += m.d * fe.sustain;
+                    notes.push_back(f.where + ": its AHDSR " + std::to_string(m.i + 1) + " held at its sustain level (the filter envelope is AHDSR " +
+                                    std::to_string(envIdx + 1) + "'s)");
+                }
+            }
+        }
+        if (vel > 0) s["velocity"] = r(std::min(4.0, vel * kTunedOct));
+        s["cutoff"] = r(std::min(20000.0, std::max(20.0, tunedHz(std::min(1.0, v + vel)))), 10);
+        // the other two knobs where their modulation holds them on average: an envelope at its sustain, a unipolar LFO,
+        // MSEG or sequencer half way
+        auto held = [&](double v0, const std::vector<FMod> &ms, const char *knob) {
+            double x = v0;
+            bool moved = false;
+            for (auto &m : ms) {
+                double add = 0;
+                if (m.t == 2) { const Adsr e = ahdsr(m.i); add = e.ok ? m.d * e.sustain : 0; }
+                else if (m.t == 1) add = lfoUnipolar(m.i) ? m.d / 2 : 0;
+                else if (m.t == 3 || m.t == 4) add = m.d / 2;
+                moved |= std::fabs(add) > 0.005 || m.t == 1;
+                x += add;
+            }
+            if (moved) notes.push_back(f.where + ": its " + knob + " knob's modulation plays as where it holds on average");
+            return std::min(1.0, std::max(0.0, x));
+        };
+        const double res = held(f.res, f.resMods, "second"), drv = held(f.drive, f.driveMods, "third");
+        if (f.kind == "comb") {   // F-Back as the feedback (bipolar about the middle for the PM comb), Damp as the damping
+            const double fb = f.slope ? f.slope * res : 2 * res - 1;
+            s["resonance"] = r(std::min(0.99, std::fabs(fb)));
+            if (fb < 0) s["negative"] = true;
+            if (drv > 0.005) s["damp"] = r(drv);
+        } else if (f.kind == "ring") {   // Mix as the carrier's offset (patches saved before ConvertedRingModMix at half), Weird as its shape
+            const double off = res * (P.val("extensions", "ConvertedRingModMix", 0) == 1 ? 1.0 : 0.5);
+            if (off > 0.005) s["offset"] = r(off);
+            if (drv > 0.005) s["weird"] = r(drv);
+        } else if (f.kind == "fm") {   // Mod as how far the voice moves the carrier's phase, F-Back as its own feedback
+            s["depth"] = r(kFmDepth * res);
+            if (drv > 0.005) s["feedback"] = r(std::min(1.5, drv * drv));
+        } else if (f.kind == "peak") s["gain"] = r(24 * res, 10), s["q"] = r(peakQ(drv));   // Gain and BW
+        else if (f.kind == "formant") s["q"] = r(formantQ(res));                          // Amount
+        else if (f.kind == "notch") s["q"] = r(notchQ(res));                              // Amount
+        else if (f.kind == "downsample" && res < 0.995) s["mix"] = r(res);                // Mix
+        return s;
+    }
+
+    // a low-, band- or high-pass in a source's bank of parallel filters, as the static ones after the voices (key follow kept)
+    json linearStage(const Filt &f) const {
+        json s = {{"type", f.kind}, {"slope", f.slope}, {"cutoff", r(std::min(20000.0, std::max(20.0, cutoffHz(f.cutoff))), 10)}, {"resonance", r(f.res)}};
+        for (auto &m : f.mods) if (m.t == 5 && (m.i == 1 || m.i == 2)) s["keytrack"] = r(std::min(1.0, std::max(0.0, m.d)));
+        return s;
+    }
+
+    bool lfoUnipolar(int i) const {
+        for (auto &p : P.sec("lfo", (size_t)i)) if (p.key == "LfoBiPol") return !(p.has && p.value == 1);
+        return false;
+    }
+
     // ---- the one per-voice filter builtin:synth gets: the one covering most of the level, then the most modulated;
     // others covering half the level play after the voices, the rest are left out
-    const Filt *pickFilter(const std::vector<const Filt *> &mf, std::vector<const Filt *> &rest, std::vector<const Filt *> &special, std::vector<std::string> &skipped) const {
+    struct Cover { const Filt *f; double cov; bool par; };   // a filter, the share of the level it covers, in a parallel bank
+    const Filt *pickFilter(const std::vector<const Filt *> &mf, std::vector<const Filt *> &rest, std::vector<const Filt *> &special, std::vector<std::string> &skipped,
+                           std::vector<Cover> *tuned = nullptr, double *shares = nullptr) const {
         const auto srcs = audible();
         std::map<char, double> lv;
         double tot = 0;
@@ -1322,7 +1441,8 @@ struct Decoder {
                 else if (dest == "F2") share2 += part * lv[s->letter] / tot;
             }
         share2 += share1 * series;
-        struct Cand { const Filt *f; double cov; bool par; };
+        if (shares) shares[0] = std::min(1.0, share1), shares[1] = std::min(1.0, share2);
+        using Cand = Cover;
         std::vector<Cand> cands;
         for (auto *f : mf) cands.push_back({f, std::min(1.0, f->slot == 1 ? share1 : share2), false});
         for (auto *s : srcs) for (auto &f : s->filters) cands.push_back({&f, lv[s->letter] / tot, s->parallel});
@@ -1333,8 +1453,10 @@ struct Decoder {
         auto linear = [](const Filt *f) { return f->kind == "lowpass" || f->kind == "highpass" || f->kind == "bandpass"; };
         std::vector<Cand> lin;
         for (auto &c : cands) {
-            if (!linear(c.f)) special.push_back(c.f);
-            else if (!transparent(c.f, c.par)) lin.push_back(c);
+            if (!linear(c.f)) {
+                special.push_back(c.f);
+                if (tuned && tunedKind(c.f->kind)) tuned->push_back(c);
+            } else if (!transparent(c.f, c.par)) lin.push_back(c);
         }
         if (lin.empty()) return nullptr;
         auto dyn = [](const Filt *f) { int n = 0; for (auto &m : f->mods) n += (m.t >= 1 && m.t <= 4) || (m.t == 5 && m.i == 0); return n; };
@@ -1447,14 +1569,14 @@ struct Decoder {
             return out.empty() ? json(nullptr) : out;
         }
         if (t == 5) {   // MM Filter
-            const auto kind = filterKind(g("FilType")).first;
+            const auto [kind, pol] = filterKind(g("FilType"));
             const double mix = g("FilMix");
             if (mix < 0.005) return nullptr;
             if (kind == "lowpass" || kind == "highpass" || kind == "bandpass")
                 return {{"type", "filter"}, {"mode", kind}, {"cutoff", r(std::min(20000.0, std::max(20.0, cutoffHz(g("FilCut")))), 10)},
                         {"resonance", r(0.7071 + 8 * std::pow(g("FilRes"), 2.0))}, {"mix", r(mix)}};
             if (kind == "drive" && g("FilRes") > 0.01) return {{"type", "saturate"}, {"drive", r(distortionDb(g("FilCut")), 10)}, {"mix", r(std::min(1.0, mix * g("FilRes")))}};
-            notes.push_back("MM Filter type #" + std::to_string((int)g("FilType")) + " (tuned family) not played");
+            if (kind != "drive") notes.push_back("MM Filter: " + kindName(kind, pol) + " (type #" + std::to_string((int)g("FilType")) + ") not played (builtin:synth plays this type per voice only)");
             return nullptr;
         }
         if (t == 6) {   // Bandpass Filter: a low and a high cut
@@ -1526,6 +1648,9 @@ struct Decoder {
         return acc / tot;
     }
     bool voiceDrive = false;   // building for builtin:synth: distortion-type filters go to its filter's drive
+    std::string firstWhere;               // builtin:synth: the filter its first one plays (LFOs to cutoff move it)
+    std::vector<const Filt *> chainF;     // builtin:synth with tuned filters: the filter each of its chain plays
+    std::vector<json> moreFilters;        // builtin:synth: the filters after the first
 
     // the effects racks the signal reaches (A-D, then Main), after the filters builtin:synth can't hold per voice
     json effects(const std::set<std::string> &rk, const std::vector<const Filt *> &rest, const std::vector<const Filt *> &special) {
@@ -1542,8 +1667,9 @@ struct Decoder {
             fx.push_back({{"type", "saturate"}, {"drive", r(dDb, 10)}, {"mix", 1.0}});
             notes.push_back("distortion-type filters as one saturate after the instrument (a guess; Alchemy distorts each voice)");
         }
-        for (auto *f : special)
-            if (f->kind == "tuned") notes.push_back(f->where + ": tuned filter #" + std::to_string(f->code) + " (comb, ring, FM or formant family) not played");
+        if (!voiceDrive)   // the sampler: builtin:synth plays them in its voices (toSynth notes what it leaves out)
+            for (auto *f : special)
+                if (tunedKind(f->kind)) notes.push_back(f->where + ": " + kindName(f->kind, f->slope) + " filter (type #" + std::to_string(f->code) + ") not played");
         std::vector<std::string> order;
         for (const char *k : {"A", "B", "C", "D", "Main"}) if (rk.count(k)) order.push_back(k);
         if (held && order.size() > 2) {   // racks A-D each serve their own sources: in series one's pan or filter would cut the others
@@ -1896,7 +2022,94 @@ struct Decoder {
         // the filter
         std::vector<const Filt *> rest, special;
         std::vector<std::string> skipped;
-        const Filt *prim = pickFilter(mf, rest, special, skipped);
+        std::vector<Cover> tunedCov;
+        double shares[2] = {1, 1};
+        const Filt *prim = pickFilter(mf, rest, special, skipped, &tunedCov, shares);
+        // the note-tuned filters (and the downsampler) builtin:synth plays per voice in a chain with that one: those
+        // covering a tenth of the level, the same filter on several sources as one; of the sources' own filters, one
+        // source's (or one set's sharing the same) play, the others' sources joining the chain at the main filters
+        struct TS { const Filt *f; double cov; bool par; std::set<char> srcs; };
+        std::vector<TS> ts;
+        auto isMain = [](const Filt *f) { return f->where.rfind("main", 0) == 0; };
+        auto sameMods = [](const Filt *a, const Filt *b) {
+            if (a->mods.size() != b->mods.size()) return false;
+            for (size_t k = 0; k < a->mods.size(); ++k) if (a->mods[k].name != b->mods[k].name || std::fabs(a->mods[k].d - b->mods[k].d) > 0.05) return false;
+            return true;
+        };
+        for (auto &c : tunedCov) {
+            const std::string what = c.f->where + ": " + kindName(c.f->kind, c.f->slope) + " filter (type #" + std::to_string(c.f->code) + ")";
+            if (c.cov < 0.1) { notes.push_back(what + " gets " + fmt("%.0f", 100 * c.cov) + "% of the level: not played"); continue; }
+            // a comb with no feedback or a peak with no gain passes the voice as it is
+            if (c.f->resMods.empty() && ((c.f->kind == "comb" && std::fabs(c.f->slope ? c.f->res : 2 * c.f->res - 1) < 0.02) || (c.f->kind == "peak" && c.f->res < 0.02)))
+                continue;
+            bool merged = false;
+            if (!isMain(c.f))
+                for (auto &t : ts)
+                    if (!isMain(t.f) && t.f->kind == c.f->kind && t.f->slope == c.f->slope && t.f->where.substr(1) == c.f->where.substr(1) && t.par == c.par &&
+                        std::fabs(t.f->cutoff - c.f->cutoff) < 0.02 && std::fabs(t.f->res - c.f->res) < 0.1 && std::fabs(t.f->drive - c.f->drive) < 0.1 && sameMods(t.f, c.f)) {
+                        t.cov += c.cov;
+                        t.srcs.insert(c.f->where[0]);
+                        merged = true;
+                        notes.push_back(what + " plays with " + t.f->where + "'s, its settings alike");
+                        break;
+                    }
+            if (!merged) ts.push_back({c.f, c.cov, c.par, isMain(c.f) ? std::set<char>{} : std::set<char>{c.f->where[0]}});
+        }
+        std::set<char> group;   // the sources whose own filters play
+        double groupCov = 0;
+        for (auto &t : ts) if (!t.srcs.empty() && t.cov > groupCov) group = t.srcs, groupCov = t.cov;
+        const bool primSrc = prim && !isMain(prim);
+        if (primSrc && !group.empty() && !group.count(prim->where[0])) group = {prim->where[0]};   // another source's own filter plays: its tuned ones too
+        std::vector<TS> chain;   // in Alchemy's order: the sources' own filters (one per slot), then the main ones
+        std::map<char, size_t> slotAt;
+        for (auto &t : ts) {
+            if (t.srcs.empty()) { chain.push_back(t); continue; }
+            if (!std::includes(group.begin(), group.end(), t.srcs.begin(), t.srcs.end())) {
+                notes.push_back(t.f->where + ": " + kindName(t.f->kind, t.f->slope) + " filter not played (source " + std::string(group.begin(), group.end()) +
+                                "'s own filters play per voice; builtin:synth filters one set of sources apart)");
+                continue;
+            }
+            const char slot = t.f->where.back();
+            auto it = slotAt.find(slot);
+            if (it == slotAt.end()) { slotAt[slot] = chain.size(); chain.push_back(t); continue; }
+            TS &o = chain[it->second];   // two of the set's sources with their own at one slot: the one covering more plays for both
+            const TS &lose = t.cov > o.cov ? o : t;
+            notes.push_back(lose.f->where + ": plays as " + (t.cov > o.cov ? t : o).f->where + "'s (one filter per slot for sources " + std::string(group.begin(), group.end()) + ")");
+            if (t.cov > o.cov) o = t;
+        }
+        // a source whose filters play in parallel (and one of them tuned): its low-, band- and high-passes join the bank,
+        // static (they used to play after the voices, in series)
+        std::vector<const Filt *> bank;
+        for (auto *s : audible()) {
+            bool tunedIn = false;
+            for (auto &t : chain) tunedIn |= t.par && t.srcs.count(s->letter);
+            if (!s->parallel || !tunedIn) continue;
+            for (auto &f : s->filters) {
+                const bool lin = f.kind == "lowpass" || f.kind == "highpass" || f.kind == "bandpass";
+                const bool open = f.mods.empty() && ((f.kind == "lowpass" && (f.cutoff >= 0.99 || f.cutoff <= 0.02)) || (f.kind == "highpass" && f.cutoff <= 0.01));
+                if (!lin || open || &f == prim || slotAt.count(f.where.back())) continue;
+                slotAt[f.where.back()] = chain.size();
+                chain.push_back({&f, 1, true, {s->letter}});
+                bank.push_back(&f);
+            }
+        }
+        for (auto *f : bank) {
+            rest.erase(std::remove(rest.begin(), rest.end(), f), rest.end());
+            skipped.erase(std::remove(skipped.begin(), skipped.end(), f->where), skipped.end());
+        }
+        const bool tunedChain = !chain.empty();
+        if (tunedChain && prim) {
+            bool par = false;
+            for (auto *s : audible()) if (primSrc && s->letter == prim->where[0]) par = s->parallel;
+            chain.push_back({prim, 1, par, primSrc ? std::set<char>{prim->where[0]} : std::set<char>{}});
+            if (primSrc) group.insert(prim->where[0]);
+        }
+        auto order = [&](const TS &t) { return isMain(t.f) ? 10 + t.f->slot : (t.f->where.back() - '0'); };
+        std::stable_sort(chain.begin(), chain.end(), [&](const TS &a, const TS &b) { return order(a) < order(b); });
+        if (chain.size() > 4) {
+            notes.push_back(std::to_string(chain.size()) + " filters per voice: the first 4 play");
+            chain.resize(4);
+        }
         if (prim) {
             json fl = {{"type", prim->kind}, {"slope", prim->slope}, {"cutoff", r(std::min(20000.0, std::max(20.0, cutoffHz(prim->cutoff))), 10)}, {"resonance", r(prim->res)}};
             double sweep = 0;
@@ -1927,7 +2140,7 @@ struct Decoder {
             }
             if (prim->drive > 0.01) fl["drive"] = r(std::min(1.0, prim->drive));
             synth["filter"] = fl;
-            if (prim->where.size() > 2 && prim->where[1] == ' ' && prim->where[0] >= 'A' && prim->where[0] <= 'D') {
+            if (!tunedChain && prim->where.size() > 2 && prim->where[1] == ' ' && prim->where[0] >= 'A' && prim->where[0] <= 'D') {
                 // a source's own filter: the other sources skip it, unless they have one of its kind (not played, so it stands in)
                 auto through = [&](char letter) {
                     if (letter == prim->where[0]) return true;
@@ -1946,6 +2159,64 @@ struct Decoder {
             }
             notes.push_back("filter: " + prim->where + " type #" + std::to_string(prim->code) + " as " + prim->kind + " " + std::to_string(prim->slope) + " dB (type order inferred)");
         } else synth["filter"] = {{"type", "off"}};
+        firstWhere = prim ? prim->where : "";
+        chainF.clear();
+        moreFilters.clear();
+        if (tunedChain) {   // the chain: each filter its share of the level (main filters in parallel side by side), the
+                            // sources it doesn't filter joining at the main filters (or after them all)
+            int envIdx = -1;   // the AHDSR builtin:synth's filter envelope plays
+            if (prim && synth.contains("filterEnv"))
+                for (auto &m : prim->mods) if (m.t == 2) { envIdx = m.i; break; }
+            json list = json::array();
+            size_t mainAt = chain.size();
+            int mains = 0;
+            for (auto &t : chain) mains += isMain(t.f);
+            const bool bothMains = mains == 2;
+            for (size_t k = 0; k < chain.size(); ++k) {
+                const TS &t = chain[k];
+                const bool inBank = std::find(bank.begin(), bank.end(), t.f) != bank.end();
+                json st = t.f == prim ? synth["filter"] : inBank ? linearStage(*t.f) : tunedStage(*t.f, synth, envIdx);
+                if (isMain(t.f)) {
+                    if (mainAt == chain.size()) mainAt = k;
+                    // the tuned ones take their share of the level, a low-, band- or high-pass all of it (or all but its tuned
+                    // partner's in parallel: no unfiltered noise slips past it). F2 fed mostly through F1 (the series knob)
+                    // follows it, taking the series share of its output; fed mostly by the sources, it plays beside it.
+                    const double through = shares[0] * series, direct = std::max(0.0, shares[1] - through);
+                    const bool beside = direct > through;
+                    double share = t.f->slot == 1 ? shares[0] : bothMains && !beside ? std::min(1.0, series + direct) : shares[1];
+                    if (k > mainAt && beside) st["parallel"] = true;   // F2 beside F1
+                    if (t.f == prim) {
+                        share = 1;
+                        if (bothMains && beside)
+                            for (auto &u : chain) if (u.f != prim && isMain(u.f)) share = std::max(0.05, 1 - shares[u.f->slot == 1 ? 0 : 1]);
+                    }
+                    if (share < 0.995) st["mix"] = r(std::max(0.0, share) * st.value("mix", 1.0));
+                    if (share < 0.995 && t.f->kind == "fm") st["depth"] = r(st["depth"].get<double>() * std::max(0.0, share));   // it hears only its share
+                } else if (t.par && k > 0 && !isMain(chain[k - 1].f) && chain[k - 1].par) st["parallel"] = true;   // a source's filters in parallel
+                if (inBank) notes.push_back(t.f->where + ": in parallel with its source's tuned filters, per voice (static: its modulation not played)");
+                else if (t.f != prim) {
+                    std::string how = t.f->where + ": " + kindName(t.f->kind, t.f->slope) + " filter (type #" + std::to_string(t.f->code) + ") per voice";
+                    if (t.srcs.size() > 1) how += " on sources " + std::string(t.srcs.begin(), t.srcs.end());
+                    notes.push_back(how + " (" + approximation(t.f->kind) + ")");
+                }
+                if (st.contains("drive") && k > 0) st.erase("drive");
+                list.push_back(st);
+            }
+            if (synth["filter"].contains("drive") && list[0].is_object() && !list[0].contains("drive")) list[0]["drive"] = synth["filter"]["drive"];
+            synth["filter"] = list[0];
+            firstWhere = chain[0].f->where;
+            for (auto &t : chain) chainF.push_back(t.f);
+            for (size_t k = 1; k < list.size(); ++k) moreFilters.push_back(list[k]);
+            if (mainAt > 0) {   // who enters where: the sources with their own filters at the first, the rest at the main filters
+                std::string after;
+                for (size_t k = 0; k < oscs.size() && k < 12; ++k) {
+                    if (!oscs[k].from || oscs[k].level <= 0 || group.count(oscs[k].from)) continue;
+                    synth["osc"][k]["filter"] = mainAt < chain.size() ? json((int)mainAt) : json(false);
+                    if (after.find(oscs[k].from) == std::string::npos) after += oscs[k].from;
+                }
+                if (!after.empty()) notes.push_back("filters: source" + std::string(after.size() > 1 ? "s " : " ") + after + (mainAt < chain.size() ? " join at the main filters" : " skip them"));
+            }
+        }
         if (const double dDb = voiceDriveDb(special); dDb > 0.05) {   // distortion-type filters: the voice's drive (gain 1 + 7 x drive)
             const double d = std::min(1.0, (std::pow(10.0, dDb / 20) - 1) / 7);
             synth["filter"]["drive"] = r(std::max(synth["filter"].value("drive", 0.0), d));
@@ -1974,31 +2245,44 @@ struct Decoder {
         // LFOs to pitch, cutoff, amp, pulse width and pan
         json lfos = json::array();
         std::set<std::pair<int, std::string>> seen;
-        const std::string fw = prim ? prim->where : "";
+        const std::string fw = firstWhere;
+        std::vector<Route> lfoRoutes;   // the routes from LFOs; with a chain of filters, each filter's own as "chain.<k>"
+        for (auto &rt : routes)
+            if (rt.src.rfind("lfo", 0) == 0 && (chainF.empty() || !(rt.tgt == "filters.F1Cut" || rt.tgt == "filters.F2Cut" || rt.tgt.rfind("source.SF", 0) == 0)))
+                lfoRoutes.push_back(rt);
+        for (size_t k = 0; k < chainF.size(); ++k)
+            for (auto &m : chainF[k]->mods) if (m.t == 1) lfoRoutes.push_back({m.name, "chain." + std::to_string(k), m.d});
         bool square = false;
         for (auto &o : synth["osc"]) square |= o["wave"] == "square";
-        for (auto &rt : routes) {
-            if (rt.src.rfind("lfo", 0) != 0 || std::fabs(rt.d) < 0.01) continue;
+        for (auto &rt : lfoRoutes) {
+            if (std::fabs(rt.d) < 0.01) continue;
             const int i = std::atoi(rt.src.c_str() + 3) - 1;
             std::string to;
             double dep = 0;
+            size_t fk = 0;
             const bool mainF = fw.rfind("main", 0) == 0;
             if (rt.tgt == "master.TuneFine" || rt.tgt == "source.STunFin") to = "pitch", dep = rt.d * 2.0;   // +-100 cents per 1.0
             else if (rt.tgt == "master.TuneCrs" || rt.tgt == "source.STunCrs") to = "pitch", dep = rt.d * 96;
-            else if (!fw.empty() && (((rt.tgt == "filters.F1Cut" || rt.tgt == "filters.F2Cut") && mainF) || (rt.tgt.rfind("source.SF", 0) == 0 && !mainF)))
+            else if (rt.tgt.rfind("chain.", 0) == 0) {   // a chain's filter
+                fk = (size_t)std::atoi(rt.tgt.c_str() + 6);
+                to = "cutoff", dep = rt.d * (chainF[fk]->kind == "lowpass" || chainF[fk]->kind == "highpass" || chainF[fk]->kind == "bandpass" ? kCutOct : kTunedOct);
+            } else if (chainF.empty() && !fw.empty() && (((rt.tgt == "filters.F1Cut" || rt.tgt == "filters.F2Cut") && mainF) || (rt.tgt.rfind("source.SF", 0) == 0 && !mainF)))
                 to = "cutoff", dep = rt.d * kCutOct;
             else if (rt.tgt == "master.Amp" || rt.tgt == "source.SAmp" || rt.tgt == "master.Volume") to = "amp", dep = std::fabs(rt.d) * 2;
             else if (rt.tgt == "source.SVASym" && square) to = "pw", dep = rt.d;
             else if (rt.tgt == "source.SPan" || rt.tgt == "master.Pan") to = "pan", dep = rt.d * 2;
-            if (to.empty() || seen.count({i, to}) || lfos.size() >= 4) continue;
+            const std::string key = to + (fk ? std::to_string(fk) : "");
+            if (to.empty() || seen.count({i, key}) || lfos.size() >= 4) continue;
             json spec = lfoSpec(i, dep, to);
             if (spec.is_null()) continue;
+            if (fk) spec["filter"] = (int)fk;
             lfos.push_back(spec);
-            seen.insert({i, to});
+            seen.insert({i, key});
             bool bip = false;   // a unipolar LFO on the cutoff sweeps above it: the base moves up half its depth
             for (auto &p : P.sec("lfo", (size_t)i)) bip |= p.key == "LfoBiPol" && p.has && p.value == 1;
-            if (to == "cutoff" && !bip && synth["filter"].contains("cutoff"))
-                synth["filter"]["cutoff"] = r(std::min(20000.0, std::max(20.0, synth["filter"]["cutoff"].get<double>() * std::pow(2.0, dep / 2))), 10);
+            json &tf = fk ? moreFilters[fk - 1] : synth["filter"];
+            if (to == "cutoff" && !bip && tf.contains("cutoff"))
+                tf["cutoff"] = r(std::min(20000.0, std::max(20.0, tf["cutoff"].get<double>() * std::pow(2.0, dep / 2))), 10);
         }
         if (!lfos.empty()) synth["lfo"] = lfos;
         // voices, glide, level (master volume and the Perform volume against their usual 0.63 and 0.794, and Amp)
@@ -2031,6 +2315,11 @@ struct Decoder {
             std::string l;
             for (size_t k = 0; k < un.size() && k < 6; ++k) l += (k ? "; " : "") + un[k];
             notes.push_back("not played: " + l + (un.size() > 6 ? " ..." : ""));
+        }
+        if (!moreFilters.empty()) {   // the filters after the first, in series or parallel
+            json list = json::array({synth["filter"]});
+            for (auto &x : moreFilters) list.push_back(x);
+            synth["filter"] = list;
         }
         return synth;
     }

@@ -226,7 +226,8 @@ struct Osc {
     double level = 1, pitch = 0, pw = 0.5, decay = 0;   // pitch in semitones; decay: own amplitude decay (s), 0 = none
     bool fm = false;
     double fmRatio = 1, fmIndex = 0, fmDecay = 0, fmSustain = 0;
-    bool filtered = true;   // false: joins after the filter (Retro Synth's sine level)
+    bool filtered = true;   // false: joins after the filters (Retro Synth's sine level)
+    int join = 0;           // filtered: the filter it joins the chain at (0: all of them)
     bool sync = false;      // hard sync: restarts whenever the first oscillator starts a cycle
     std::shared_ptr<const AdditiveSet> add;   // Additive: its partials
     double lowcut = 0, highcut = 0;           // Noise: its band in Hz (0 = open), 12 dB/oct each
@@ -237,14 +238,32 @@ struct Osc {
 struct SynthLfo {
     Lfo lfo;
     enum Dest { Pitch, Cutoff, Amp, Pw, Pan } to = Pitch;
+    size_t filter = 0;            // Cutoff: which of the filters
     double delay = 0, fade = 0;   // seconds after the note starts
+};
+
+// One filter of the voice's chain (the first one's cutoff, resonance, key tracking, envelope and velocity amounts
+// are kept with the patch's parameters, so they can be automated)
+struct Stage {
+    enum Type { Off, Lowpass, Highpass, Bandpass, Peak, Notch, Formant, Comb, Ring, Fm, Downsample } type = Lowpass;
+    int slope = 12;
+    double cutoff = 8000, res = 0, keytrack = 0, env = 0, velocity = 0;
+    double mix = 1;              // the share of the voice it takes (the rest passes by)
+    bool parallel = false;       // takes the same signal as the filter before it, their outputs added
+    double gain = 0, q = 2;      // peak: gain in dB; peak, notch, formant: Q
+    bool negative = false;       // comb: negative feedback
+    double damp = 0;             // comb: high frequencies lost on each pass, 0-1
+    double offset = 0, weird = 0;          // ring: dry voice on the carrier, carrier shape
+    double depth = 0, feedback = 0;        // fm: the voice's and the carrier's own phase modulation (radians)
 };
 
 struct Patch {
     std::vector<Osc> osc;
     double p[P_COUNT] = {};
     int unison = 1;
-    enum FType { Off, Lowpass, Highpass, Bandpass } ftype = Lowpass;
+    Stage::Type ftype = Stage::Lowpass;
+    Stage first;                  // the first filter's own settings beyond the parameters (mix, q, gain, comb, ring, fm)
+    std::vector<Stage> more;      // the filters after it, in series or parallel
     int slope = 12;
     double velToCutoff = 0;       // octaves at velocity 0 (1 = an octave darker when soft)
     Adsr amp, fenv{0, 0.3, 0, 0.3};
@@ -399,6 +418,50 @@ Adsr parseAdsr(const json &o, Adsr d, const std::string &where, std::vector<std:
     return d;
 }
 
+// One filter object: its type, the keys every type takes, and its type's own
+Stage parseStage(const json &f, const std::string &w, bool first, std::vector<std::string> &warnings) {
+    if (!f.is_object()) throw std::runtime_error("synth: '" + w.substr(0, w.size() - 1) + "' must be an object like {\"type\": \"lowpass\", \"cutoff\": 800}");
+    Stage s;
+    const std::string t = f.value("type", "lowpass");
+    static const std::pair<const char *, Stage::Type> types[] = {
+        {"lowpass", Stage::Lowpass}, {"lp", Stage::Lowpass}, {"highpass", Stage::Highpass}, {"hp", Stage::Highpass}, {"bandpass", Stage::Bandpass},
+        {"bp", Stage::Bandpass}, {"peak", Stage::Peak}, {"notch", Stage::Notch}, {"formant", Stage::Formant}, {"comb", Stage::Comb},
+        {"ring", Stage::Ring}, {"fm", Stage::Fm}, {"downsample", Stage::Downsample}, {"off", Stage::Off}, {"none", Stage::Off}};
+    bool known = false;
+    for (auto &[name, ty] : types) if (t == name) s.type = ty, known = true;
+    if (!known) throw std::runtime_error("synth: " + w + "type '" + t + "' must be lowpass, highpass, bandpass, peak, notch, formant, comb, ring, fm, downsample or off");
+    checkKeys(f, {"type", "slope", "cutoff", "resonance", "keytrack", "env", "velocity", "drive", "mix", "parallel", "gain", "q", "negative", "damp", "offset",
+                  "weird", "depth", "feedback"}, w, warnings);
+    // the keys only some types take: which ones, for the warning when another type has them
+    const bool svf = s.type == Stage::Lowpass || s.type == Stage::Highpass || s.type == Stage::Bandpass || s.type == Stage::Off;
+    const std::pair<const char *, bool> own[] = {{"slope", svf}, {"resonance", svf || s.type == Stage::Comb}, {"gain", s.type == Stage::Peak},
+        {"q", s.type == Stage::Peak || s.type == Stage::Notch || s.type == Stage::Formant}, {"negative", s.type == Stage::Comb}, {"damp", s.type == Stage::Comb},
+        {"offset", s.type == Stage::Ring}, {"weird", s.type == Stage::Ring}, {"depth", s.type == Stage::Fm}, {"feedback", s.type == Stage::Fm}, {"drive", first},
+        {"parallel", !first}};
+    for (auto &[k, ok] : own)
+        if (f.contains(k) && !ok)
+            warnings.push_back("synth: " + w + k + (std::string(k) == "drive" ? " only applies to the first filter" : std::string(k) == "parallel" ? " applies to the filters after the first" :
+                                                    " doesn't apply to a " + t + " filter") + "; ignored");
+    s.slope = f.value("slope", 12);
+    if (s.slope != 12 && s.slope != 24) throw std::runtime_error("synth: " + w + "slope is 12 or 24 (dB per octave)");
+    s.cutoff = std::clamp(num(f, "cutoff", 8000, w), 20.0, 20000.0);
+    s.res = std::clamp(num(f, "resonance", 0, w), 0.0, s.type == Stage::Comb ? 0.99 : 1.0);
+    s.keytrack = std::clamp(num(f, "keytrack", 0, w), 0.0, 1.0);
+    s.env = std::clamp(num(f, "env", 0, w), -8.0, 8.0);
+    s.velocity = std::clamp(num(f, "velocity", 0, w), 0.0, 4.0);
+    s.mix = std::clamp(num(f, "mix", 1, w), 0.0, 1.0);
+    s.gain = std::clamp(num(f, "gain", 12, w), -24.0, 24.0);
+    s.q = std::clamp(num(f, "q", 2, w), 0.3, 30.0);
+    s.parallel = !first && f.value("parallel", false);
+    s.negative = f.value("negative", false);
+    s.damp = std::clamp(num(f, "damp", 0, w), 0.0, 1.0);
+    s.offset = std::clamp(num(f, "offset", 0, w), 0.0, 1.0);
+    s.weird = std::clamp(num(f, "weird", 0, w), 0.0, 1.0);
+    s.depth = std::clamp(num(f, "depth", 1, w), 0.0, 20.0);
+    s.feedback = std::clamp(num(f, "feedback", 0, w), 0.0, 1.5);
+    return s;
+}
+
 Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnings) {
     Patch P;
     for (size_t i = 0; i < kParams.size(); ++i) P.p[i] = kParams[i].def;
@@ -432,7 +495,8 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
             if (!o.contains("keytrack")) warnings.push_back("synth: " + w + "keycenter only applies with keytrack; ignored");
             x.keyCenter = parseKey(o["keycenter"]);
         }
-        x.filtered = o.value("filter", true);
+        if (o.contains("filter") && o["filter"].is_number()) x.join = (int)std::max(0.0, std::floor(o["filter"].get<double>()));   // resolved with the filters
+        else x.filtered = o.value("filter", true);
         x.sync = o.value("sync", false);
         if (o.contains("phase")) { const double ph = num(o, "phase", 0, w); x.phase = ph - std::floor(ph); }
         if (o.contains("lowcut") || o.contains("highcut")) {
@@ -480,24 +544,28 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         if (u.is_number()) P.p[P_DETUNE] = 20;
         P.unison = std::clamp(P.unison, 1, 16);
     }
-    if (j.contains("filter")) {
-        const auto &f = j["filter"];
-        if (!f.is_object()) throw std::runtime_error("synth: 'filter' must be an object");
-        checkKeys(f, {"type", "slope", "cutoff", "resonance", "keytrack", "env", "velocity", "drive"}, "filter.", warnings);
-        const std::string t = f.value("type", "lowpass");
-        if (t == "lowpass" || t == "lp") P.ftype = Patch::Lowpass;
-        else if (t == "highpass" || t == "hp") P.ftype = Patch::Highpass;
-        else if (t == "bandpass" || t == "bp") P.ftype = Patch::Bandpass;
-        else if (t == "off" || t == "none") P.ftype = Patch::Off;
-        else throw std::runtime_error("synth: filter.type '" + t + "' must be lowpass, highpass, bandpass or off");
-        P.slope = f.value("slope", 12);
-        if (P.slope != 12 && P.slope != 24) throw std::runtime_error("synth: filter.slope is 12 or 24 (dB per octave)");
-        P.p[P_CUTOFF] = std::clamp(num(f, "cutoff", 8000, "filter."), 20.0, 20000.0);
-        P.p[P_RES] = std::clamp(num(f, "resonance", 0, "filter."), 0.0, 1.0);
-        P.p[P_KEYTRACK] = std::clamp(num(f, "keytrack", 0, "filter."), 0.0, 1.0);
-        P.p[P_ENV] = std::clamp(num(f, "env", 0, "filter."), -8.0, 8.0);
-        P.p[P_DRIVE] = std::clamp(num(f, "drive", 0, "filter."), 0.0, 1.0);
-        P.velToCutoff = std::clamp(num(f, "velocity", 0, "filter."), 0.0, 4.0);
+    if (j.contains("filter")) {   // one filter, or a list of them in series (the first one's values are the parameters)
+        const json &fj = j["filter"];
+        const json list = fj.is_array() ? fj : json::array({fj});
+        if (list.empty() || list.size() > 4) throw std::runtime_error("synth: 'filter' is an object or a list of 1 to 4 of them, played in series");
+        for (size_t i = 0; i < list.size(); ++i) {
+            const std::string w = fj.is_array() ? "filter[" + std::to_string(i) + "]." : std::string("filter.");
+            const Stage s = parseStage(list[i], w, i == 0, warnings);
+            if (i) { P.more.push_back(s); continue; }
+            P.first = s;
+            P.ftype = s.type;
+            P.slope = s.slope;
+            P.p[P_CUTOFF] = s.cutoff;
+            P.p[P_RES] = s.res;
+            P.p[P_KEYTRACK] = s.keytrack;
+            P.p[P_ENV] = s.env;
+            P.p[P_DRIVE] = std::clamp(num(list[i], "drive", 0, w), 0.0, 1.0);
+            P.velToCutoff = s.velocity;
+        }
+    }
+    for (auto &o : P.osc) {   // an oscillator joining at filter n: past the last one it skips them all; inside a parallel group, at its start
+        if (o.join > (int)P.more.size()) o.filtered = false, o.join = 0;
+        while (o.join > 0 && P.more[(size_t)o.join - 1].parallel) --o.join;
     }
     P.amp = parseAdsr(j.value("amp", json()), Adsr{}, "amp", warnings);
     if (j.contains("amp") && j["amp"].is_object()) {
@@ -517,7 +585,7 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         for (const auto &l : list) {
             if (!l.is_object() || !l.contains("rate") || !l.contains("depth"))
                 throw std::runtime_error("synth: an LFO is {\"rate\": 5 or \"1/8\", \"depth\": 0.2, \"to\": \"pitch\"}");
-            checkKeys(l, {"rate", "depth", "shape", "phase", "to", "delay", "fade", "beats"}, "lfo.", warnings);
+            checkKeys(l, {"rate", "depth", "shape", "phase", "to", "filter", "delay", "fade", "beats"}, "lfo.", warnings);
             SynthLfo s;
             s.lfo = Lfo::parse(l, job.tempo);
             const std::string to = l.value("to", "pitch");
@@ -529,6 +597,13 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
             else throw std::runtime_error("synth: lfo.to '" + to + "' must be pitch (semitones), cutoff (octaves), amp (0-1), pw or pan");
             s.delay = std::max(0.0, num(l, "delay", 0, "lfo."));
             s.fade = std::max(0.0, num(l, "fade", 0, "lfo."));
+            if (l.contains("filter")) {
+                const double k = num(l, "filter", 0, "lfo.");
+                if (s.to != SynthLfo::Cutoff) warnings.push_back("synth: lfo.filter only applies to \"to\": \"cutoff\"; ignored");
+                else if (k < 0 || k > (double)P.more.size() || k != std::floor(k))
+                    warnings.push_back("synth: lfo.filter names no filter (0 is the first, " + std::to_string(P.more.size()) + " the last); the first moves");
+                else s.filter = (size_t)k;
+            }
             P.lfos.push_back(s);
         }
     }
@@ -559,6 +634,117 @@ struct Svf {
         band = v1;
         high = v0 - k * v1 - v2;
         return v2;
+    }
+};
+
+// One filter of a voice: its state, and its coefficients for the current block
+struct StageState {
+    Svf l1, r1, l2, r2;
+    std::vector<float> bl, br;   // comb: the delay lines (a power of two long)
+    size_t w = 0;
+    double lpl = 0, lpr = 0;     // comb: the damping inside its loop
+    double phase = 1, yl = 0, yr = 0, hl = 0, hr = 0;   // ring, fm, downsample: the carrier's or the hold's phase; fm: last outputs; downsample: held values
+    double delay = 2, fb = 0, a = 1, norm = 1, inc = 0, boost = 0;
+    void start(const Stage &s, double sr) {
+        if (s.type != Stage::Comb) return;
+        size_t n = 16;
+        while (n < (size_t)(sr / 20) + 8) n *= 2;   // the longest delay: one cycle of 20 Hz
+        bl.assign(n, 0.0f);
+        br.assign(n, 0.0f);
+    }
+    // the block's coefficients at cutoff fc (Hz) and resonance res
+    void tune(const Stage &s, Stage::Type type, int slope, double fc, double res, double sr) {
+        const double g = std::tan(dsp::kPi * fc / sr);
+        switch (type) {
+        case Stage::Lowpass: case Stage::Highpass: case Stage::Bandpass: {
+            const double kRes = std::pow(0.05 / 1.414, res);   // 1 at res 0, down to Q ~20
+            if (slope == 24) {
+                l1.set(g, 1.848); r1.set(g, 1.848);
+                l2.set(g, 0.765 * kRes); r2.set(g, 0.765 * kRes);
+            } else { l1.set(g, 1.414 * kRes); r1.set(g, 1.414 * kRes); }
+            break;
+        }
+        case Stage::Peak: {   // a bell: the band boosted (or cut) by gain at constant Q
+            const double A = std::pow(10.0, s.gain / 40), k = 1 / (s.q * A);
+            l1.set(g, k); r1.set(g, k);
+            boost = k * (A * A - 1);
+            break;
+        }
+        case Stage::Notch: case Stage::Formant: l1.set(g, 1 / s.q); r1.set(g, 1 / s.q); break;
+        case Stage::Comb: {   // a delay of one cycle of fc, res of it fed back; damp: a one-pole low-pass in the loop, whose own
+                              // delay at fc comes off the line's so the peaks stay in tune
+            fb = (s.negative ? -1 : 1) * std::min(res, 0.99);
+            a = s.damp > 0 ? 1 - std::exp(-TAU * 20000 * std::pow(2.0, -7 * s.damp) / sr) : 1.0;
+            const double wc = TAU * fc / sr, lag = std::atan2((1 - a) * std::sin(wc), 1 - (1 - a) * std::cos(wc)) / wc;
+            delay = std::max(2.0, sr / fc - lag);
+            norm = std::sqrt(1 - fb * fb);   // white noise passes at its level
+            break;
+        }
+        case Stage::Ring: case Stage::Fm: inc = fc / sr; break;
+        case Stage::Downsample: inc = std::min(1.0, 2 * fc / sr); break;   // held at twice the cutoff: the cutoff is its Nyquist
+        case Stage::Off: break;
+        }
+    }
+    inline double comb(std::vector<float> &b, double &lp, double x) {
+        const size_t mask = b.size() - 1;
+        double rp = (double)w - delay;
+        if (rp < 0) rp += (double)b.size();
+        const size_t i0 = (size_t)rp;
+        const double fr = rp - (double)i0, d = b[i0 & mask] + fr * (b[(i0 + 1) & mask] - b[i0 & mask]);
+        lp += a * (d - lp);
+        const double y = x + fb * lp;
+        b[w] = (float)y;
+        return y * norm;
+    }
+    // one sample of both channels through it
+    inline void run(const Stage &s, Stage::Type type, int slope, double &L, double &R) {
+        const double xL = L, xR = R;
+        double bL, hL, bR, hR;
+        switch (type) {
+        case Stage::Lowpass: case Stage::Highpass: case Stage::Bandpass: {
+            const double lL = l1.run(L, bL, hL), lR = r1.run(R, bR, hR);
+            double oL = type == Stage::Lowpass ? lL : type == Stage::Highpass ? hL : bL * l1.k;
+            double oR = type == Stage::Lowpass ? lR : type == Stage::Highpass ? hR : bR * r1.k;
+            if (slope == 24) {   // a second, resonant stage of the same kind
+                const double l2L = l2.run(oL, bL, hL), l2R = r2.run(oR, bR, hR);
+                oL = type == Stage::Lowpass ? l2L : type == Stage::Highpass ? hL : bL * l2.k;
+                oR = type == Stage::Lowpass ? l2R : type == Stage::Highpass ? hR : bR * r2.k;
+            }
+            L = oL; R = oR;
+            break;
+        }
+        case Stage::Peak: l1.run(L, bL, hL); r1.run(R, bR, hR); L += boost * bL; R += boost * bR; break;
+        case Stage::Notch: l1.run(L, bL, hL); r1.run(R, bR, hR); L -= l1.k * bL; R -= r1.k * bR; break;
+        case Stage::Formant: l1.run(L, bL, hL); r1.run(R, bR, hR); L = bL; R = bR; break;   // a resonance: q times the level at the centre
+        case Stage::Comb:
+            L = comb(bl, lpl, L);
+            R = comb(br, lpr, R);
+            w = (w + 1) & (bl.size() - 1);
+            break;
+        case Stage::Ring: {   // the voice times a sine (squared towards a square by weird) plus offset
+            double c = std::sin(TAU * phase);
+            if (s.weird > 0) c += s.weird * (std::tanh(4 * c) / std::tanh(4.0) - c);
+            L *= c + s.offset;
+            R *= c + s.offset;
+            phase += inc;
+            phase -= std::floor(phase);
+            break;
+        }
+        case Stage::Fm:   // a sine at the cutoff, its phase moved by the voice (depth) and by itself (feedback)
+            yl = std::sin(TAU * phase + s.depth * xL + s.feedback * yl);
+            yr = std::sin(TAU * phase + s.depth * xR + s.feedback * yr);
+            L = 0.8 * yl;   // about one oscillator's level
+            R = 0.8 * yr;
+            phase += inc;
+            phase -= std::floor(phase);
+            break;
+        case Stage::Downsample:
+            phase += inc;
+            if (phase >= 1) { phase -= std::floor(phase); hl = L; hr = R; }
+            L = hl; R = hr;
+            break;
+        case Stage::Off: break;
+        }
     }
 };
 
@@ -623,7 +809,8 @@ struct Voice {
     size_t bendStart = 0;                     // frame the bend points are measured from
     std::vector<Unit> units;                  // osc-major: units[o * unison + u]
     Env amp, fenv;
-    Svf fL1, fR1, fL2, fR2;
+    StageState f0;                            // the first filter
+    std::vector<StageState> fx;               // and the ones after it
     dsp::Noise noise;
     double subPhase = 0;
     bool done = false;
@@ -677,6 +864,10 @@ struct Voice {
             if (P->osc[o].decay > 0) oscDecay[o] = std::exp(-4.6 / (P->osc[o].decay * sr));
             if (P->osc[o].fm && P->osc[o].fmDecay > 0) fmCoef[o] = std::exp(-4.6 / (P->osc[o].fmDecay * sr));
         }
+        f0 = StageState{};
+        f0.start(P->first, sr);
+        fx.assign(P->more.size(), StageState{});
+        for (size_t k = 0; k < fx.size(); ++k) fx[k].start(P->more[k], sr);
         amp.setup(P->amp, sr);
         fenv.setup(P->fenv, sr);
     }
@@ -934,6 +1125,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
         double pwNow = 0.5, fmMul = 1, lfoMul = 1, cutoffBase = 8000, res = 0, drive = 0, envAmt = 0, keytrack = 0, sub = 0, nz = 0, level = 1,
                spread = 0.5, detune = 0, glideCoef = 0, subInc = 0;
         double lfoPitch = 0, lfoCut = 0, lfoAmp = 0, lfoPw = 0, lfoPan = 0;
+        std::vector<double> lfoMore(P.more.size(), 0.0);   // LFOs on the cutoffs of the filters after the first
         double panL = 1, panR = 1;
         std::vector<double> uL(v.units.size(), 1.0), uR(v.units.size(), 1.0);
         double driveGain = 1, driveNorm = 1;
@@ -947,6 +1139,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 const double glide = param(P_GLIDE, t);
                 glideCoef = P.mono && glide > 0 ? std::exp(-4.6 / (glide * sr / block)) : 0.0;
                 lfoPitch = lfoCut = lfoAmp = lfoPw = lfoPan = 0;
+                std::fill(lfoMore.begin(), lfoMore.end(), 0.0);
                 const double since = t - v.noteStart;
                 for (const auto &l : P.lfos) {
                     double dep = l.lfo.depthAt(t) * lfoMul;
@@ -955,7 +1148,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                     const double wv = l.lfo.wave(t), w = wv * dep;
                     switch (l.to) {
                     case SynthLfo::Pitch: lfoPitch += w; break;
-                    case SynthLfo::Cutoff: lfoCut += w; break;
+                    case SynthLfo::Cutoff: (l.filter ? lfoMore[l.filter - 1] : lfoCut) += w; break;
                     case SynthLfo::Amp: lfoAmp += std::fabs(dep) * (0.5 - 0.5 * wv); break;   // depth 1 = down to silence
                     case SynthLfo::Pw: lfoPw += w; break;
                     case SynthLfo::Pan: lfoPan += w; break;
@@ -1017,15 +1210,15 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                     const double ang = (std::clamp(lfoPan, -1.0, 1.0) + 1) * dsp::kPi / 4;
                     panL = std::cos(ang) * M_SQRT2; panR = std::sin(ang) * M_SQRT2;
                 }
-                if (P.ftype != Patch::Off) {
+                if (P.ftype != Stage::Off) {
                     const double oct = keytrack * (v.key - 60) / 12.0 + envAmt * v.fenv.level + P.velToCutoff * (v.vel - 1) + lfoCut;
                     const double fc = std::clamp(cutoffBase * std::pow(2.0, oct), 20.0, nyq);
-                    const double g = std::tan(dsp::kPi * fc / sr);
-                    const double kRes = std::pow(0.05 / 1.414, res);   // 1 at res 0, down to Q ~20
-                    if (P.slope == 24) {
-                        v.fL1.set(g, 1.848); v.fR1.set(g, 1.848);
-                        v.fL2.set(g, 0.765 * kRes); v.fR2.set(g, 0.765 * kRes);
-                    } else { v.fL1.set(g, 1.414 * kRes); v.fR1.set(g, 1.414 * kRes); }
+                    v.f0.tune(P.first, P.ftype, P.slope, fc, res, sr);
+                }
+                for (size_t k = 0; k < P.more.size(); ++k) {   // the filters after the first: their own cutoffs
+                    const Stage &s = P.more[k];
+                    const double oct = s.keytrack * (v.key - 60) / 12.0 + s.env * v.fenv.level + s.velocity * (v.vel - 1) + lfoMore[k];
+                    v.fx[k].tune(s, s.type, s.slope, std::clamp(s.cutoff * std::pow(2.0, oct), 20.0, nyq), s.res, sr);
                 }
                 driveGain = 1 + 7 * drive;
                 driveNorm = 1.0 / std::tanh(driveGain);
@@ -1034,6 +1227,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             v.fenv.next(sr);
             if (v.amp.stage == 4) { v.done = true; break; }
             double L = 0, R = 0, postL = 0, postR = 0;   // post: oscillators that skip the filter
+            double joinL[4] = {}, joinR[4] = {};          // ones that join the filters at a later one
             for (size_t o = 0; o < P.osc.size(); ++o) {
                 const Osc &osc = P.osc[o];
                 double fmAmt = 0;
@@ -1046,7 +1240,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 if (osc.decay > 0) { own = v.oscDecayLevel[o]; v.oscDecayLevel[o] *= v.oscDecay[o]; }
                 const double pw = std::clamp((pwParam ? pwNow : osc.pw) + lfoPw, 0.02, 0.98);
                 const double g = osc.level * own * v.oscKey[o] * unitNorm;
-                double &sumL = osc.filtered ? L : postL, &sumR = osc.filtered ? R : postR;
+                double &sumL = !osc.filtered ? postL : osc.join ? joinL[osc.join] : L, &sumR = !osc.filtered ? postR : osc.join ? joinR[osc.join] : R;
                 for (int u = 0; u < U; ++u) {
                     const size_t idx = o * (size_t)U + (size_t)u;
                     Unit &x = v.units[idx];
@@ -1116,17 +1310,30 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 L += s; R += s;
             }
             if (drive > 0) { L = std::tanh(L * driveGain) * driveNorm; R = std::tanh(R * driveGain) * driveNorm; }
-            if (P.ftype != Patch::Off) {
-                double bL, hL, bR, hR;
-                const double lL = v.fL1.run(L, bL, hL), lR = v.fR1.run(R, bR, hR);
-                double oL = P.ftype == Patch::Lowpass ? lL : P.ftype == Patch::Highpass ? hL : bL * v.fL1.k;
-                double oR = P.ftype == Patch::Lowpass ? lR : P.ftype == Patch::Highpass ? hR : bR * v.fR1.k;
-                if (P.slope == 24) {   // a second, resonant stage of the same kind
-                    const double l2L = v.fL2.run(oL, bL, hL), l2R = v.fR2.run(oR, bR, hR);
-                    oL = P.ftype == Patch::Lowpass ? l2L : P.ftype == Patch::Highpass ? hL : bL * v.fL2.k;
-                    oR = P.ftype == Patch::Lowpass ? l2R : P.ftype == Patch::Highpass ? hR : bR * v.fR2.k;
+            if (P.more.empty() && P.first.mix >= 1) {
+                if (P.ftype != Stage::Off) v.f0.run(P.first, P.ftype, P.slope, L, R);
+            } else {   // in groups: a filter and those after it marked parallel share one signal, each taking its mix of it
+                double inL = L, inR = R, dry = 1;
+                L = R = 0;
+                for (size_t k = 0; k <= P.more.size(); ++k) {
+                    const Stage &s = k ? P.more[k - 1] : P.first;
+                    if (k && !s.parallel) {   // a new group: what the last one made goes in
+                        dry = std::max(0.0, dry);
+                        if (drive > 0 && (joinL[k] != 0 || joinR[k] != 0)) {   // the drive takes what joins here too
+                            joinL[k] = std::tanh(joinL[k] * driveGain) * driveNorm;
+                            joinR[k] = std::tanh(joinR[k] * driveGain) * driveNorm;
+                        }
+                        L += dry * inL + joinL[k]; R += dry * inR + joinR[k];
+                        inL = L; inR = R; L = R = 0; dry = 1;
+                    }
+                    double oL = inL, oR = inR;
+                    if (k) v.fx[k - 1].run(s, s.type, s.slope, oL, oR);
+                    else if (P.ftype != Stage::Off) v.f0.run(s, P.ftype, P.slope, oL, oR);
+                    L += s.mix * oL; R += s.mix * oR;
+                    dry -= s.mix;
                 }
-                L = oL; R = oR;
+                dry = std::max(0.0, dry);
+                L += dry * inL; R += dry * inR;
             }
             L += postL; R += postR;
             const double velGain = 1 - P.ampVel * (1 - v.vel);
