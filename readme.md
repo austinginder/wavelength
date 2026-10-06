@@ -112,6 +112,8 @@ cmake --build build -j
 scripts/check.sh              # build + render the examples; fails on errors, silence or clipping
 ```
 
+`scripts/fuzz.py` mutates the regression fixtures and feeds them to every file reader (`wavelength __parse`) in a sanitizer build; its header has the build line.
+
 `scripts/build-release.sh <tag>` builds the release archives for all four targets from a git tag on one Mac: macOS natively, Linux in Docker, Windows cross-compiled with llvm-mingw and smoke-tested under Wine. `--upload` attaches them to the GitHub release. The whole release checklist is in [docs/releasing.md](docs/releasing.md).
 
 ## Try it

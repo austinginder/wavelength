@@ -6,6 +6,7 @@ out/
 third_party/
 build-dev/
 build-compat/
+build-asan/
 __pycache__/
 dist/
 build-linux*/
