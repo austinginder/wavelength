@@ -307,9 +307,11 @@ struct Sequence {
     uint32_t oid = 0;
     std::string name;
     // a region's own settings, after its name (padded to an even length): +4 its left trim (the ticks of content
-    // hidden before its start), +0x3c its length (one pass, trims included), +0x48 its Time Quantize (-6 = 1/16)
+    // hidden before its start), +0x3c its length (one pass, trims included), +0x48 its Time Quantize (-6 = 1/16),
+    // +0x56 its quantize Strength as an int8 offset from 100 (-53 = 47 %)
     int64_t trim = 0, passLen = 0;
     int quantize = 0;
+    double strength = 1;
     std::vector<const Chunk *> traks;
     const Chunk *evsq = nullptr;
     std::vector<Event> events() const { return evsq ? eventsOf(evsq->pl) : std::vector<Event>{}; }
@@ -495,6 +497,7 @@ struct Project {
                     s.trim = c.pl.u32(e + 4);
                     s.passLen = c.pl.u32(e + 0x3c);
                     s.quantize = (int16_t)c.pl.u16(e + 0x48);
+                    if (c.pl.n > e + 0x56) s.strength = std::clamp((100 + (int8_t)c.pl.u8(e + 0x56)) / 100.0, 0.0, 1.0);
                     if (s.trim >= kToEnd || s.passLen >= kToEnd) s.trim = s.passLen = 0;
                 }
                 auto it = seqAt.find({s.cls, s.oid});
@@ -719,13 +722,16 @@ struct Project {
             // MIDI events reuse MIDI status bytes: +12 = data 1 (the key), +11 = data 2 (velocity, value)
             const uint8_t type = e.type(), st = type & 0xf0;
             if (type < 0x80 || type >= 0xf0 || e.pos() >= kToEnd) continue;
-            // a note's length extension +4: ticks past its stored position (a region's Time Quantize keeps each
-            // note's played position on its grid and the rest here); the region's trim hides the content before it
-            int64_t t = start + ((int64_t)e.pos() - origin) - s.trim;
-            if (st == 0x90 && !e.ext.empty() && e.ext[0].u8(7) == 0x89) t += e.ext[0].u16(4);
-            if (s.quantize) {   // the grid runs from the region's content start
+            // a note's length extension +4: ticks past its stored position, signed (a region's Time Quantize keeps
+            // each note's played position as stored and the rest here; under a Strength below 100 % both carry a
+            // fraction of a tick, /65536, at +2); the region's trim hides the content before it
+            double tf = (double)(start + ((int64_t)e.pos() - origin) - s.trim);
+            if (st == 0x90 && !e.ext.empty() && e.ext[0].u8(7) == 0x89)
+                tf += (int16_t)e.ext[0].u16(4) + (e.rec.u16(2) + e.ext[0].u16(2)) / 65536.0;
+            int64_t t = std::llround(tf);
+            if (s.quantize) {   // the grid runs from the region's content start; Strength moves the note part of the way
                 const int64_t base = start - s.trim, q = quantizeTick(s.quantize, t - base);
-                if (q >= 0) t = base + q;
+                if (q >= 0) t = std::llround(tf + s.strength * ((double)(base + q) - tf));
             }
             if (t < start || (length && t >= end)) continue;
             const int ch = type & 0x0f, d1 = e.rec.u8(12), d2 = e.rec.u8(11);
