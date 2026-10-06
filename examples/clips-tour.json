@@ -18,6 +18,12 @@
     "kit": "Legend 909"
    },
    "gain": -8,
+   "fallback": [
+    {
+     "gain": -17.5,
+     "plugin": "builtin:drums"
+    }
+   ],
    "notes": [
     {
      "beat": 0,

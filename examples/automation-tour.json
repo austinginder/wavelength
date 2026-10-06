@@ -67,6 +67,21 @@
     "release": 0.4
    },
    "gain": 4,
+   "fallback": [
+    {
+     "gain": -0.5,
+     "plugin": "builtin:sampler",
+     "sampler": {
+      "program": 0,
+      "soundfont": "MuseScore_General"
+     }
+    },
+    {
+     "gain": -7.5,
+     "plugin": "builtin:synth",
+     "preset": "KY Electric Piano"
+    }
+   ],
    "notes": [
     {
      "beat": 0,
@@ -240,6 +255,21 @@
    },
    "gain": 2,
    "harmony": false,
+   "fallback": [
+    {
+     "gain": 6.0,
+     "plugin": "builtin:sampler",
+     "sampler": {
+      "program": 73,
+      "soundfont": "MuseScore_General"
+     }
+    },
+    {
+     "gain": 5.0,
+     "plugin": "builtin:synth",
+     "preset": "LD Soft"
+    }
+   ],
    "notes": [
     {
      "beat": 0,

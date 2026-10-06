@@ -19,6 +19,13 @@
         "Filter Cutoff": 0.55,
         "Reverb Mix": 0.35
       },
+      "fallback": [
+        {
+          "gain": -1.5,
+          "plugin": "builtin:synth",
+          "preset": "PD Warm"
+        }
+      ],
       "notes": [
         {
           "beat": 0,
@@ -173,6 +180,13 @@
       "params": {
         "Filter Cutoff": 0.45
       },
+      "fallback": [
+        {
+          "gain": -1.5,
+          "plugin": "builtin:synth",
+          "preset": "BA Analog"
+        }
+      ],
       "notes": [
         {
           "beat": 0.0,
@@ -565,6 +579,13 @@
       "plugin": "org.surge-synth-team.OB-Xf",
       "gain": -6,
       "pan": -0.3,
+      "fallback": [
+        {
+          "gain": -8.0,
+          "plugin": "builtin:synth",
+          "preset": "KY Electric Piano"
+        }
+      ],
       "notes": [
         {
           "beat": 0,
@@ -717,6 +738,13 @@
       "plugin": "audio.vital.synth",
       "gain": -4,
       "pan": 0.2,
+      "fallback": [
+        {
+          "gain": 0.5,
+          "plugin": "builtin:synth",
+          "preset": "LD Saw"
+        }
+      ],
       "notes": [
         {
           "beat": 16,

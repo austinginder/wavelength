@@ -5,6 +5,11 @@ import json
 import sys
 
 
+def unexpected(warnings):
+    """The warnings that count: a track playing its fallback (no plugin or library here) is expected."""
+    return [w for w in warnings or [] if "; it plays its fallback " not in w]
+
+
 def arrangement_tour(d):
     """examples/arrangement-tour.json: rides, clip, level-matched saturate, vibrato, a skipped
     stem, a loudness target and the arrangement checks on a build that does its job."""
@@ -14,8 +19,8 @@ def arrangement_tour(d):
         bad.append(f"loudness target -14 missed: {mix['lufs']}")
     if "lra" not in mix:
         bad.append("no mix.lra")
-    if d.get("warnings"):
-        bad.append("warnings: " + " | ".join(w[:60] for w in d["warnings"]))
+    if unexpected(d.get("warnings")):
+        bad.append("warnings: " + " | ".join(w[:60] for w in unexpected(d["warnings"])))
     if d.get("dropouts"):
         bad.append(f"dropouts: {d['dropouts']}")
     sections = {s["name"]: s for s in d["sections"]}
@@ -35,8 +40,8 @@ def arrangement_tour(d):
 def automation_tour(d):
     """examples/automation-tour.json: chord-following and switch curves, send throws, a bus stem."""
     bad = []
-    if d.get("warnings"):
-        bad.append("warnings: " + " | ".join(w[:60] for w in d["warnings"]))
+    if unexpected(d.get("warnings")):
+        bad.append("warnings: " + " | ".join(w[:60] for w in unexpected(d["warnings"])))
     buses = {b["name"]: b for b in d["buses"]}
     echo = buses.get("Echo", {})
     if not echo.get("file", "").endswith("bus-echo.wav"):
@@ -56,8 +61,8 @@ def automation_tour(d):
 def synth_tour(d):
     """examples/synth-tour.json: every melodic part on builtin:synth, no plugins installed needed."""
     bad = []
-    if d.get("warnings"):
-        bad.append("warnings: " + " | ".join(w[:60] for w in d["warnings"]))
+    if unexpected(d.get("warnings")):
+        bad.append("warnings: " + " | ".join(w[:60] for w in unexpected(d["warnings"])))
     for t in d["tracks"]:
         if t["plugin"] == "builtin:synth" and not -30 < t["lufs"] < -8:
             bad.append(f"{t['name']} at {t['lufs']} LUFS: a patch level is off")

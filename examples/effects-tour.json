@@ -140,6 +140,13 @@
         "Amp Attack Time": 0.5,
         "Amp Release Time": 0.6
       },
+      "fallback": [
+        {
+          "gain": 5.5,
+          "plugin": "builtin:synth",
+          "preset": "PD Warm"
+        }
+      ],
       "fx": [
         {
           "type": "eq",
@@ -246,6 +253,13 @@
     {
       "name": "Lead",
       "plugin": "audio.vital.synth",
+      "fallback": [
+        {
+          "gain": 4.5,
+          "plugin": "builtin:synth",
+          "preset": "LD Saw"
+        }
+      ],
       "automation": {
         "params": {
           "Filter 1 Cutoff": [

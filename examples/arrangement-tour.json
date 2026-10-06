@@ -784,6 +784,21 @@
         "multisample": "Grand Piano",
         "release": 0.4
       },
+      "fallback": [
+        {
+          "gain": -3.5,
+          "plugin": "builtin:sampler",
+          "sampler": {
+            "program": 0,
+            "soundfont": "MuseScore_General"
+          }
+        },
+        {
+          "gain": -10.5,
+          "plugin": "builtin:synth",
+          "preset": "KY Electric Piano"
+        }
+      ],
       "notes": [
         {
           "beat": 0.0,
@@ -1121,6 +1136,21 @@
         "multisample": "Grand Piano",
         "release": 0.1
       },
+      "fallback": [
+        {
+          "gain": -3.0,
+          "plugin": "builtin:sampler",
+          "sampler": {
+            "program": 0,
+            "soundfont": "MuseScore_General"
+          }
+        },
+        {
+          "gain": -8.0,
+          "plugin": "builtin:synth",
+          "preset": "KY Electric Piano"
+        }
+      ],
       "notes": [
         {
           "beat": 16.5,
@@ -1407,6 +1437,21 @@
         "multisample": "Farfisa SO Flute",
         "attack": 0.02
       },
+      "fallback": [
+        {
+          "gain": -1.0,
+          "plugin": "builtin:sampler",
+          "sampler": {
+            "program": 73,
+            "soundfont": "MuseScore_General"
+          }
+        },
+        {
+          "gain": 0.0,
+          "plugin": "builtin:synth",
+          "preset": "LD Soft"
+        }
+      ],
       "notes": [
         {
           "beat": 32.0,

@@ -1513,8 +1513,10 @@ if "$w" migrate "$up" --license CC0-1.0 --author Tester >/dev/null &&
 else
   echo "FAIL migrate"; fail=1
 fi
-# fallbacks: every CLAP track of hello gets a built-in stand-in, and render --fallbacks plays them all
-rm -rf out/check/fallbacks && mkdir -p out/check/fallbacks && cp examples/hello.json out/check/fallbacks/job.json
+# fallbacks: every CLAP track of hello (its own fallbacks taken out) gets a built-in stand-in, and render --fallbacks
+# plays them all
+rm -rf out/check/fallbacks && mkdir -p out/check/fallbacks
+python3 -c 'import json; j = json.load(open("examples/hello.json")); [t.pop("fallback", None) for t in j["tracks"]]; json.dump(j, open("out/check/fallbacks/job.json", "w"), indent=2)'
 if "$w" fallbacks out/check/fallbacks/job.json --suggest --write --no-measure >/dev/null &&
    "$w" render out/check/fallbacks/job.json --fallbacks --out out/check/fallbacks/out --json 2>/dev/null |
    python3 -c 'import json,sys;r=json.load(sys.stdin);n=len(json.load(open("examples/hello.json"))["tracks"]);sys.exit(0 if len(r.get("fallbacks",[]))==n and all(t["lufs"]>-40 for t in r["tracks"]) else 1)'; then

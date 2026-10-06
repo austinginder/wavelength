@@ -5,6 +5,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- The examples render on a computer without their plugins or Bitwig's sound content: every track that names one carries level-matched built-in `fallback`s (a General MIDI SoundFont sound, then a `builtin:synth` patch), so `render examples/hello.json` from a release archive plays on a fresh machine. `harmony-tour`'s snare names its sample as `lib:Legend 909/...`. Only `clips-tour` still needs Bitwig's loops.
 - Track `realtime`: renders a plugin at wall-clock speed while its notes play (from 0.5 s before a note-on to 1.5 s after the last held note ends) and at full speed elsewhere, in every plugin format. Some plugins start or feed their voices from a timer on their main thread and rendered silence faster than real time; discoDSP Roboto, a free singing synthesizer, is one, and is paced by default. AGENTS.md shows how to give Roboto its words through its state and place each phrase with a held key.
 
 ### Fixed

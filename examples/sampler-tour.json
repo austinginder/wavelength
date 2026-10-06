@@ -31,6 +31,12 @@
     "kit": "Legend 707"
    },
    "gain": -10,
+   "fallback": [
+    {
+     "gain": -15.5,
+     "plugin": "builtin:drums"
+    }
+   ],
    "notes": [
     {
      "beat": 0,
@@ -381,6 +387,21 @@
    "sends": {
     "Room": -10
    },
+   "fallback": [
+    {
+     "gain": 3.5,
+     "plugin": "builtin:sampler",
+     "sampler": {
+      "program": 0,
+      "soundfont": "MuseScore_General"
+     }
+    },
+    {
+     "gain": -4.0,
+     "plugin": "builtin:synth",
+     "preset": "KY Electric Piano"
+    }
+   ],
    "notes": [
     {
      "beat": 0,
@@ -515,6 +536,21 @@
    "sends": {
     "Room": -12
    },
+   "fallback": [
+    {
+     "gain": -7.0,
+     "plugin": "builtin:sampler",
+     "sampler": {
+      "program": 19,
+      "soundfont": "MuseScore_General"
+     }
+    },
+    {
+     "gain": -3.5,
+     "plugin": "builtin:synth",
+     "preset": "KY Organ"
+    }
+   ],
    "notes": [
     {
      "beat": 0,
