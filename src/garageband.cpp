@@ -1109,9 +1109,7 @@ struct Converter {
             }
             out.push_back(clip);
         }
-        if (!out.empty())
-            warn.push_back(name + ": audio region fades are not decoded yet");
-        return out;
+        return out;   // (GarageBand for Mac gives audio regions no fades: nothing to read)
     }
 
     // an aux or bus channel as a bus named as GarageBand shows it, its effects from its plug-ins
