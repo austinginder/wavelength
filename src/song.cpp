@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -290,7 +291,7 @@ std::vector<FileRef> fileRefs(json &job) {
         if (!slot.is_string()) return;
         std::string path = slot.get<std::string>(), suffix;
         if (path.empty() || path.rfind("lib:", 0) == 0 || path[0] == '*') return;   // a library's file by name, a built-in generator
-        for (const char *pick : {".syx#", ".mtdrum#"})   // "<cartridge>.syx#3": one program of the file
+        for (const char *pick : {".syx#", ".mtdrum#", ".dsbundle#", ".dslibrary#"})   // "<cartridge>.syx#3": one program of the file
             if (const size_t at = lower(path).rfind(pick); at != std::string::npos) {
                 suffix = path.substr(at + std::strlen(pick) - 1);
                 path.resize(at + std::strlen(pick) - 1);
@@ -303,20 +304,32 @@ std::vector<FileRef> fileRefs(json &job) {
         if (s.is_string()) add(where + " state", s, o, true);
         else if (s.is_object() && s.contains("file")) add(where + " state", s["file"], o, true);
     };
-    auto chain = [&](json &o, const std::string &where) {
-        if (!o.contains("fx") || !o["fx"].is_array()) return;
-        for (size_t i = 0; i < o["fx"].size(); ++i) {
-            json &e = o["fx"][i];
+    std::function<void(json &, const std::string &, const char *, int)> chain = [&](json &o, const std::string &where, const char *key, int depth) {
+        if (!o.contains(key) || !o[key].is_array() || depth > 8) return;
+        for (size_t i = 0; i < o[key].size(); ++i) {
+            json &e = o[key][i];
             if (!e.is_object()) continue;
-            state(e, where + " fx " + std::to_string(i + 1));
+            const std::string at = where + " " + key + " " + std::to_string(i + 1);
+            state(e, at);
             // a GarageBand or Logic patch's effect chain by its folder (by name, it's the library's)
             if (e.contains("type") && e["type"] == "patch" && e.contains("patch") && e["patch"].is_string() && hasExt(e["patch"].get<std::string>(), {".patch"}))
-                add(where + " fx " + std::to_string(i + 1) + " patch", e["patch"], e);
+                add(at + " patch", e["patch"], e);
+            // an impulse response by path or file name (a bare name is an installed room)
+            if (e.contains("ir") && e["ir"].is_string()) {
+                const std::string ir = e["ir"].get<std::string>();
+                if (ir.find('/') != std::string::npos || ir.find('\\') != std::string::npos ||
+                    hasExt(ir, {".wav", ".aif", ".aiff", ".caf", ".flac", ".mp3", ".ogg", ".sdir"}))
+                    add(at + " ir", e["ir"], e);
+            }
+            chain(e, at, "loopFx", depth + 1);   // effects inside a delay's feedback loop
+            if (e.contains("bands") && e["bands"].is_array())   // a multiband's chain per band
+                for (size_t b = 0; b < e["bands"].size(); ++b)
+                    if (e["bands"][b].is_object()) chain(e["bands"][b], at + " band " + std::to_string(b + 1), "fx", depth + 1);
         }
     };
     auto sound = [&](json &o, const std::string &where) {
         state(o, where);
-        chain(o, where);
+        chain(o, where, "fx", 0);
         // a GarageBand or Logic patch folder (an imported project's track keeps its own channel strip as one)
         if (o.contains("preset") && o["preset"].is_string() && hasExt(o["preset"].get<std::string>(), {".patch"})) add(where + " preset", o["preset"], o);
         if (!o.contains("sampler") || !o["sampler"].is_object()) return;
@@ -324,10 +337,12 @@ std::vector<FileRef> fileRefs(json &job) {
         if (sm.contains("patch") && sm["patch"].is_string() && hasExt(sm["patch"].get<std::string>(), {".patch"})) add(where + " sampler.patch", sm["patch"], o);
         // file or library name, by key (docs/song-format.md section 4.2): a sample is always a file
         if (sm.contains("sample") && sm["sample"].is_string()) add(where + " sampler.sample", sm["sample"], o);
-        for (const char *k : {"multisample", "sfz", "soundfont", "exs"})
+        for (const char *k : {"multisample", "sfz", "soundfont", "exs", "dspreset"})
             if (sm.contains(k) && sm[k].is_string()) {
-                const std::string v = sm[k].get<std::string>();
-                if (v.find('/') != std::string::npos || hasExt(v, {".multisample", ".sfz", ".sf2", ".sf3", ".exs"})) add(where + " sampler." + k, sm[k], o);
+                const std::string v = sm[k].get<std::string>(), file = v.substr(0, v.find('#'));
+                if (v.find('/') != std::string::npos ||
+                    hasExt(file, {".multisample", ".sfz", ".sf2", ".sf3", ".exs", ".dspreset", ".dsbundle", ".dslibrary"}))
+                    add(where + " sampler." + k, sm[k], o);
             }
         const bool namedKit = sm.contains("kit") && sm["kit"].is_string();
         if (namedKit && sm["kit"].get<std::string>().find('/') != std::string::npos) add(where + " sampler.kit", sm["kit"], o);
@@ -346,8 +361,10 @@ std::vector<FileRef> fileRefs(json &job) {
             const std::string where = "track '" + t.value("name", std::string("track")) + "'";
             sound(t, where);
             if (t.contains("clips") && t["clips"].is_array())
-                for (auto &c : t["clips"])
+                for (auto &c : t["clips"]) {
                     if (c.is_object() && c.contains("file")) add(where + " clip", c["file"], c);
+                    if (c.is_object() && c.contains("file") && c["file"].is_object()) chain(c["file"], where + " clip", "fx", 0);   // the song's own audio, through its fx
+                }
             if (t.contains("fallback")) {
                 json &fb = t["fallback"];
                 if (fb.is_object()) sound(fb, where + " fallback");
@@ -356,8 +373,8 @@ std::vector<FileRef> fileRefs(json &job) {
             }
         }
     if (job.contains("buses") && job["buses"].is_array())
-        for (auto &b : job["buses"]) if (b.is_object()) chain(b, "bus '" + b.value("name", std::string("bus")) + "'");
-    if (job.contains("master") && job["master"].is_object()) chain(job["master"], "master");
+        for (auto &b : job["buses"]) if (b.is_object()) chain(b, "bus '" + b.value("name", std::string("bus")) + "'", "fx", 0);
+    if (job.contains("master") && job["master"].is_object()) chain(job["master"], "master", "fx", 0);
     return out;
 }
 

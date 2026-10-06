@@ -67,7 +67,8 @@ MAX_LOG = 256 * 1024 ** 2
 
 LIB_PREFIX = "lib:"
 GENERATOR_PREFIX = "*"
-LIBRARY_FILE_EXT = (".multisample", ".sfz", ".sf2", ".sf3")   # a sampler library value ending so is a file
+LIBRARY_FILE_EXT = (".multisample", ".sfz", ".sf2", ".sf3", ".exs", ".dspreset", ".dsbundle", ".dslibrary")   # a sampler library value ending so is a file
+IR_FILE_EXT = (".wav", ".aif", ".aiff", ".caf", ".flac", ".mp3", ".ogg", ".sdir")   # an effect "ir" ending so is a file
 BOM = b"\xef\xbb\xbf"
 
 # Patterns are matched with re.fullmatch (a bare "$" would accept a trailing newline).
@@ -1149,26 +1150,50 @@ def job_references(job):
         if isinstance(st, str):
             refs.append((base, st, "file", re.sub(r"#[0-9]+$", "", st)))   # "cart.syx#3": a program of the file
 
-    def fx(chain, base):
-        if isinstance(chain, list):
-            for i, e in enumerate(chain):
-                if isinstance(e, dict):
-                    state(e, "%s[%d]" % (base, i))
+    def patch(v, where):
+        """A GarageBand or Logic patch: a library name, or a folder in the song when it ends with .patch."""
+        if isinstance(v, str):
+            is_file = v.lower().endswith(".patch")
+            refs.append((where, v, "file" if is_file else "name", v if is_file else None))
+
+    def fx(chain, base, depth=0):
+        if not isinstance(chain, list) or depth > 8:
+            return
+        for i, e in enumerate(chain):
+            if not isinstance(e, dict):
+                continue
+            eb = "%s[%d]" % (base, i)
+            state(e, eb)
+            if e.get("type") == "patch":
+                patch(e.get("patch"), eb + ".patch")
+            ir = e.get("ir")
+            if isinstance(ir, str) and not ir.startswith(LIB_PREFIX):   # an installed room by name, else a file
+                is_file = "/" in ir or "\\" in ir or ir.lower().endswith(IR_FILE_EXT)
+                refs.append((eb + ".ir", ir, "file" if is_file else "name", ir if is_file else None))
+            fx(e.get("loopFx"), eb + ".loopFx", depth + 1)   # inside a delay's feedback loop
+            bands = e.get("bands") if isinstance(e.get("bands"), list) else []
+            for bi, band in enumerate(bands):   # a multiband's chain per band
+                if isinstance(band, dict):
+                    fx(band.get("fx"), "%s.bands[%d].fx" % (eb, bi), depth + 1)
 
     def sound(s, base):
         state(s, base)
         fx(s.get("fx"), base + ".fx")
+        if isinstance(s.get("preset"), str) and s["preset"].lower().endswith(".patch"):
+            patch(s["preset"], base + ".preset")
         sampler = s.get("sampler")
         if not isinstance(sampler, dict):
             return
         sb = base + ".sampler"
+        patch(sampler.get("patch"), sb + ".patch")
         if isinstance(sampler.get("sample"), str):
             file_or_lib(sb + ".sample", sampler["sample"])
-        for key in ("multisample", "sfz", "soundfont", "kit"):
+        for key in ("multisample", "sfz", "soundfont", "exs", "dspreset", "kit"):
             v = sampler.get(key)
             if isinstance(v, str):
-                is_file = "/" in v or (key != "kit" and v.lower().endswith(LIBRARY_FILE_EXT))
-                refs.append(("%s.%s" % (sb, key), v, "file" if is_file else "name", v if is_file else None))
+                path = v.split("#")[0] if key == "dspreset" else v   # "<bundle>#<preset>": one preset of the file
+                is_file = "/" in v or (key != "kit" and path.lower().endswith(LIBRARY_FILE_EXT))
+                refs.append(("%s.%s" % (sb, key), v, "file" if is_file else "name", path if is_file else None))
         kit = sampler.get("kit")
         named_kit = isinstance(kit, str)   # a library name or a folder in the song: bare map values are inside it
         for key in ("map", "kit"):   # key -> file (or {"file": ...}); "kit" as an object is a map of its own

@@ -1245,11 +1245,8 @@ int cmdRender(const Args &a) {
         // a package is untrusted: its job reads only files of the song and writes only into the output folder
         nlohmann::json pj;
         if (!parseJsonStrict(readText(path), pj, err)) return fail(a, "the song's job " + err);
-        std::string outside, why;
-        for (auto &[where, ref] : jobFileRefs(pj))
-            if (!checkSongPath(ref, why) || fs::is_symlink(fs::path(dir) / fs::u8path(ref))) outside += "\n  " + where + ": " + ref;
-        for (auto &[where, ref] : jobOutputRefs(pj))
-            if (!checkSongPath(ref, why)) outside += "\n  " + where + ": " + ref;
+        std::string outside;
+        for (auto &line : package::readsOutside(dir, pj)) outside += "\n  " + line;
         if (!outside.empty()) return fail(a, "not rendering this package: its job reads or writes outside the song" + outside);
     }
     if (const std::string ext = fs::path(path).extension().string(); ext == ".mid" || ext == ".midi") {   // import, then render

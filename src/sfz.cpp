@@ -27,7 +27,7 @@ bool readText(const fs::path &p, std::string &out) {
 
 // comments out, #include expanded (relative to the top file's folder), #define applied
 bool preprocess(const fs::path &file, const fs::path &root, std::map<std::string, std::string> &defines, std::string &out,
-                int depth, std::string &err) {
+                std::vector<std::string> &includes, int depth, std::string &err) {
     if (depth > 16) { err = "#include nested too deeply at " + file.string(); return false; }
     std::string src;
     if (!readText(file, src)) { err = "cannot read " + file.string(); return false; }
@@ -78,7 +78,8 @@ bool preprocess(const fs::path &file, const fs::path &root, std::map<std::string
                 if (a == std::string::npos || b == std::string::npos) continue;
                 std::string inc = inc0.substr(a + 1, b - a - 1);
                 std::replace(inc.begin(), inc.end(), '\\', '/');
-                if (!preprocess(root / inc, root, defines, out, depth + 1, err)) return false;
+                includes.push_back((root / inc).lexically_normal().string());
+                if (!preprocess(root / inc, root, defines, out, includes, depth + 1, err)) return false;
                 out += '\n';
                 continue;
             }
@@ -140,7 +141,7 @@ bool parseSfz(const std::string &path, SfzFile &out, std::string &err) {
     const fs::path file(path), root = file.parent_path();
     std::map<std::string, std::string> defines;
     std::string t;
-    if (!preprocess(file, root, defines, t, 0, err)) return false;
+    if (!preprocess(file, root, defines, t, out.includes, 0, err)) return false;
     out = SfzFile{};
     std::map<std::string, std::string> control, global, master, group, region;
     std::string section;   // current header

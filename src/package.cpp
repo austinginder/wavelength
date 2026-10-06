@@ -1,9 +1,12 @@
 #include "package.hpp"
 
 #include "catalog.hpp"
+#include "decent_sampler.hpp"
 #include "history.hpp"
 #include "job.hpp"
 #include "platform.hpp"
+#include "sampler.hpp"
+#include "sfz.hpp"
 #include "sha256.hpp"
 #include "zip.hpp"
 
@@ -198,6 +201,8 @@ void validateFolder(const fs::path &dir, json &problems) {
         for (auto &f : files.is_array() ? files : json::array()) listed |= str(f, "path") == path;
         if (!listed && !fs::is_directory(full, ec)) problem("warning", path, "used by the job (" + where + ") but not listed in the manifest's files (pack lists it)");
     }
+    for (auto &line : instrumentReadsOutside(song.dir.string(), job))
+        problem("error", song.jobFile(), line + " (a song's instruments play only its own files and installed libraries)");
     for (auto &[where, path] : jobOutputRefs(job))
         if (!checkSongPath(path, why)) problem("error", song.jobFile(), where + ": " + why + " (a render writes only inside its output folder)");
     // the log: revisions in order, their references, their objects
@@ -269,6 +274,72 @@ void validateFolder(const fs::path &dir, json &problems) {
 } // namespace
 
 bool isPackage(const std::string &path) { return ext(path) == ".wavelength"; }
+
+std::vector<std::string> instrumentReadsOutside(const std::string &songDir, const json &job) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    std::string why;
+    const fs::path dir = fs::u8path(songDir);
+    // inside a folder once symbolic links are followed, and inside the song or the installed sample libraries
+    auto under = [&](const fs::path &p, const fs::path &root) {
+        const fs::path r = fs::weakly_canonical(p, ec).lexically_relative(fs::weakly_canonical(root, ec));
+        return !r.empty() && *r.begin() != "..";
+    };
+    auto inSong = [&](const fs::path &p) { return under(p, dir); };
+    auto inLibrary = [&](const fs::path &p) {
+        for (auto &root : sampleRoots()) if (under(p, fs::u8path(root))) return true;
+        return false;
+    };
+    auto endsWith = [](const std::string &s, const std::string &tail) { return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0; };
+    for (auto &[where, ref] : jobFileRefs(job)) {
+        const fs::path full = dir / fs::u8path(ref);
+        if (!checkSongPath(ref, why) || fs::is_symlink(full, ec)) continue;   // the job's own path: readsOutside lists it
+        // the song's own instruments name files too: an SFZ's samples and includes, a DecentSampler preset's samples
+        // (a .dslibrary keeps them inside itself), an EXS instrument's samples (by name: an installed library's)
+        if (endsWith(where, "sampler.sfz")) {
+            SfzFile sfz;
+            std::string e;
+            if (!parseSfz(full.string(), sfz, e)) continue;   // the render says what's wrong with it
+            for (auto &inc : sfz.includes) if (!inSong(inc)) out.push_back(where + ": " + ref + " includes " + inc);
+            for (auto &r : sfz.regions) {
+                std::string s = r.get("sample");
+                std::replace(s.begin(), s.end(), '\\', '/');
+                if (!s.empty() && s[0] != '*' && !inSong(fs::u8path(sfz.dir) / fs::u8path(s))) out.push_back(where + ": " + ref + " plays " + s);
+            }
+        } else if (endsWith(where, "sampler.dspreset") && !fs::is_symlink(full, ec)) {
+            std::vector<std::string> presets;
+            if (fs::is_directory(full, ec)) {
+                for (auto it = fs::recursive_directory_iterator(full, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+                    if (ext(it->path().string()) == ".dspreset") presets.push_back(it->path().string());
+            } else presets.push_back(full.string());
+            for (auto &p : presets) {
+                DecentPreset d;
+                std::string e;
+                if (!readDecentPreset(p, d, e) || !d.zip.empty()) continue;
+                for (auto &r : d.sfz.regions)
+                    if (const std::string s = r.get("sample"); !s.empty() && s[0] != '*' && !inSong(fs::u8path(s))) out.push_back(where + ": " + ref + " plays " + s);
+            }
+        } else if (endsWith(where, "sampler.exs")) {
+            std::vector<std::string> files;
+            std::string e;
+            if (!exsSampleFiles(full.string(), files, e)) continue;
+            for (auto &f : files) if (!inSong(fs::u8path(f)) && !inLibrary(fs::u8path(f))) out.push_back(where + ": " + ref + " plays " + f);
+        }
+    }
+    return out;
+}
+
+std::vector<std::string> readsOutside(const std::string &songDir, const json &job) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    std::string why;
+    for (auto &[where, ref] : jobFileRefs(job))
+        if (!checkSongPath(ref, why) || fs::is_symlink(fs::u8path(songDir) / fs::u8path(ref), ec)) out.push_back(where + ": " + ref);
+    for (auto &line : instrumentReadsOutside(songDir, job)) out.push_back(line);
+    for (auto &[where, ref] : jobOutputRefs(job))
+        if (!checkSongPath(ref, why)) out.push_back(where + ": " + ref);
+    return out;
+}
 
 bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std::string &err) {
     if (!song.hasManifest()) { err = song.dir.filename().string() + " has no wavelength.json (wavelength migrate makes one)"; return false; }

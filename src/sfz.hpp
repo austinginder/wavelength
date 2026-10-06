@@ -24,6 +24,7 @@ struct SfzFile {
     std::vector<SfzRegion> regions;
     int noteOffset = 0;               // <control> note_offset + 12 * octave_offset, added to every key
     std::map<int, double> cc;         // <control> set_ccN: controller values at the start (others are 0)
+    std::vector<std::string> includes;   // the files #include read, in order
 };
 
 bool parseSfz(const std::string &path, SfzFile &out, std::string &err);

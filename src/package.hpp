@@ -26,6 +26,12 @@ json validate(const std::string &target);
 // A package unpacked once into the cache (by its hash), for render and serve; "" on error.
 std::string cached(const std::string &file, std::string &err);
 bool isPackage(const std::string &path);
+// What rendering a package's job would read or write outside the song: its paths (section 2), the files the
+// song's own SFZ, DecentSampler and EXS instruments play or include (installed sample libraries are fine), and
+// deliveries outside the output folder. One "where: path" line each; empty when the song may render.
+std::vector<std::string> readsOutside(const std::string &songDir, const json &job);
+// Only the files the song's own instruments play or include outside it (validate reports them).
+std::vector<std::string> instrumentReadsOutside(const std::string &songDir, const json &job);
 // `render --keep`: the render in `outDir` (its MP3 delivery, picture and report, revision `rev`) becomes
 // the song's render/ and the manifest's "render" (docs/song-format.md, section 8).
 bool keepRender(Song &song, const std::string &outDir, const json &report, int rev, std::string &err);

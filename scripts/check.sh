@@ -1451,6 +1451,32 @@ if ! "$w" render out/check/fixtures/bad-deliver.wavelength --out out/check/escap
 else
   echo "FAIL package safety or undo of an added file"; fail=1
 fi
+# a package's own instruments read only the song too: an SFZ in it whose sample lies outside is refused at render
+# (and by validate), the same SFZ playing its own sample renders; an IR named by absolute path fails both readers
+pk="$PWD/out/check/pkg-reads-$build"; rm -rf "$pk" && mkdir -p "$pk"
+python3 - "$pk" <<'PY'
+import json, os, shutil, sys
+root = sys.argv[1]
+for name, sample in (("good", "tone.wav"), ("escape", "../../outside.wav")):
+    d = os.path.join(root, name, "media"); os.makedirs(d)
+    shutil.copy("examples/ir/small-room.wav", os.path.join(d, "tone.wav"))
+    open(os.path.join(d, "inst.sfz"), "w").write("<region> sample=%s\n" % sample)
+    json.dump({"tempo": 120, "tracks": [{"name": "S", "plugin": "builtin:sampler", "sampler": {"sfz": "media/inst.sfz"},
+               "notes": [{"beat": 0, "dur": 1, "key": 60}]}]}, open(os.path.join(root, name, "job.json"), "w"))
+os.makedirs(os.path.join(root, "ir"))
+json.dump({"tempo": 120, "tracks": [{"name": "S", "plugin": "builtin:synth", "notes": [{"beat": 0, "dur": 1, "key": 60}],
+           "fx": [{"type": "convolve", "ir": "/etc/room.wav"}]}]}, open(os.path.join(root, "ir", "job.json"), "w"))
+PY
+for s in good escape ir; do (cd "$pk/$s" && "$w" save -m base >/dev/null 2>&1); done
+if (cd "$pk/good" && "$w" pack --out ../good.wavelength >/dev/null) && (cd "$pk/escape" && "$w" pack --out ../escape.wavelength >/dev/null) &&
+   "$w" render "$pk/good.wavelength" --out "$pk/out-good" --stems none >/dev/null 2>&1 &&
+   ! "$w" render "$pk/escape.wavelength" --out "$pk/out-escape" --stems none --json 2>/dev/null > "$pk/escape.json" &&
+   grep -q 'plays ../../outside.wav' "$pk/escape.json" && ! "$w" validate "$pk/escape" >/dev/null 2>&1 &&
+   ! "$w" validate "$pk/ir" >/dev/null 2>&1 && ! python3 scripts/wavelength_song.py validate "$pk/ir" >/dev/null 2>&1; then
+  echo "ok   package instruments: an SFZ sample outside the song is refused, its own sample plays; an IR by path is caught"
+else
+  echo "FAIL package instruments read outside the song"; fail=1
+fi
 # migrate: a pre-format folder (absolute paths inside it, a sample in scratch out/) gets a manifest,
 # relative paths (the scratch sample copied into media/), a revision, and still renders; both readers accept it
 up="$PWD/out/check/migrate"

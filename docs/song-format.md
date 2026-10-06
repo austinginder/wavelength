@@ -133,9 +133,15 @@ Whether a value is a file or a name is decided by its key alone:
 |---|---|
 | `state` (or `state.file`) | a file; a `#<n>` suffix (`cart.syx#3`) picks a program inside it |
 | sampler `sample`, clip `file`, kit `map` values | a file, unless it starts with `lib:` (a library file) or `*` (a built-in generator); a `map` value with no `/` is a name inside the kit's folder when the track has a `kit` (a library or a folder in the song) |
-| sampler `multisample`, `sfz`, `soundfont` | a library name, unless it contains `/` or ends with `.multisample`, `.sfz`, `.sf2` or `.sf3`, then a file |
+| sampler `multisample`, `sfz`, `soundfont`, `exs`, `dspreset` | a library name, unless it contains `/` or ends with `.multisample`, `.sfz`, `.sf2`, `.sf3`, `.exs`, `.dspreset`, `.dsbundle` or `.dslibrary`, then a file (a `#<preset>` suffix on a bundle or library picks one preset inside it) |
 | sampler `kit` | a library name, unless it contains `/`, then a folder in the song |
+| `preset`, sampler `patch`, a `patch` effect's `patch` | a name, unless it ends with `.patch`, then a folder in the song (a GarageBand or Logic channel strip) |
+| an effect's `ir` | a library name (an installed impulse response), unless it starts with `lib:`, contains `/` or ends with `.wav`, `.aif`, `.aiff`, `.caf`, `.flac`, `.mp3`, `.ogg` or `.sdir`, then a file |
 | `deliver[].file` | a file the render writes: a path under section 2, relative to the render's output folder |
+
+Effects are the entries of every `fx` list (tracks, fallbacks, buses, the master and a clip's rendered `file`) and of the chains inside effects: a delay's `loopFx` and a multiband's `bands[].fx`.
+
+The files a song's own instruments name follow the same rule: an SFZ's samples and `#include`s and a DecentSampler preset's samples are inside the song; an EXS instrument's samples are inside the song or, found by name, in an installed library.
 
 A renderer MUST check every path the job reads or writes against section 2 before opening it when it renders a song from a package, and MUST refuse to render a job that would read or write outside the song and its output folder.
 
