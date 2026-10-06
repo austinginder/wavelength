@@ -154,7 +154,7 @@ def send(index, code, level, target):
 
 
 INST, BUS, AUD, OUT, AUI = 0x29, 0x4d, 0x31, 0x51, 0x39   # channel numbers (AUI: a third-party Audio Unit instrument)
-AUTRACK, REGION7 = 0x110, 32
+AUTRACK, REGION7, REGION8 = 0x110, 32, 36
 LOOP, FILE, FILE2 = 0x10c, 0x200, 0x204           # the audio track's object, its files' ids
 AUTOROOT, AUTOLOOP, AUTOMASTER, AUTOSYNTH = 0x300, 0x304, 0x308, 0x30c   # the automation root folder, the Loop track's, the master's, the Synth's
 TRACK, ECHO, MASTER, REGION1, REGION2, REGION3, REGION4, REGION5, REGION6 = 0x100, 0x104, 0x108, 8, 12, 16, 20, 24, 28
@@ -200,7 +200,7 @@ body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), p
                                          placement(BAR1 + 3 * 3840, 3 * 960, REGION3, looped=True),
                                          placement(BAR1 + 5 * 3840, END, REGION4, transpose=2),
                                          placement(BAR1 + 9 * 3840, END, REGION5),
-                                         placement(BAR1 + 11 * 3840, END, REGION6),
+                                         placement(BAR1 + 11 * 3840, END, REGION6), placement(BAR1 + 13 * 3840, END, REGION8),
                                          audio_placement(BAR1 + 7 * 3840, 2000, LOOP, FILE),
                                          audio_placement(BAR1 + 9 * 3840, END, LOOP, FILE2, looped=False, params=bytes([0x20, 6, 0, 0, (-6) & 0xff, 2])),
                                          event(0x20, BAR1 - 3840, bytes([0, 0, 0, 0, 0, 0x04, 0, 0]),
@@ -216,9 +216,12 @@ body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0
 body += region(0x17, REGION3, 'Synth 3', events(note(BAR1, 64, 90, 480)), length=960)
 body += region(0x17, REGION4, 'Synth 4', events(note(BAR1, 57, 90, 480), note(BAR1 + 600, 59, 90, 480, offset=130)), trim=480, length=1920,
                quantize=-6)
-body += region(0x17, REGION5, 'Synth 5', events(note(BAR1 + 480, 62, 90, 240)), length=1920, quantize=-26)
+body += region(0x17, REGION5, 'Synth 5', events(note(BAR1 + 480, 62, 90, 240)), length=1920, quantize=-26)   # 1/8 Swing F: the off-beat 8th goes to 17/24 of the pair
 # 1/4 at Strength 50 %: played at 0.75 beat (stored at 0.875, 120 ticks back), its grid line 1.0, so it plays at 0.875
-body += region(0x17, REGION6, 'Synth 6', events(note(BAR1 + 840, 60, 90, 240, offset=-120)), length=1920, quantize=-10, strength=50)   # 1/8 Swing F: the off-beat 8th goes to 17/24 of the pair
+body += region(0x17, REGION6, 'Synth 6', events(note(BAR1 + 840, 60, 90, 240, offset=-120)), length=1920, quantize=-10, strength=50)
+# following the Groove Track (Time Quantize code 1): the note is stored where the master's swung 1/16 is (320 ticks)
+# and its offset goes back to where it was recorded (the straight 1/16 at 240); it plays at the stored place
+body += region(0x17, REGION8, 'Synth 8', events(note(BAR1 + 320, 60, 90, 240, offset=-80)), length=1920, quantize=1)
 body += channel(INST, 0x43, 0, ' Inst 1', 80, 80, bytes([0xd5]) + bytes(15))
 body += record(INST, 0, send(0, 0, 45, bus_uuid))
 # two auxes named "@ (=Context Name)" (Logic's placeholder: GarageBand shows the setting loaded on them), each with its

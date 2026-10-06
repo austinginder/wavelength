@@ -55,6 +55,12 @@ double faderDb(double v) { return v <= 0.01 ? -120.0 : 40.0 * std::log10(v / 90.
 // -30 9-Tuplet (426: a whole note divided, rounded down: the line is chosen on the exact division and placed on the
 // rounded one); -31 to -33 1/16 & 1/16 Triplet, 1/16 & 1/8 Triplet, 1/8 & 1/8 Triplet (both grids); -34 1/192. A note
 // exactly halfway goes back here; GarageBand went back on two such ties (1/3, 9-Tuplet) and on for two (5-, 7-Tuplet)
+// Time Quantize code 1: the region follows the Groove Track. GarageBand stores each note at the master track's
+// matching note (within half a 1/16) and keeps the recorded position in the note's offset, as a quantized note does;
+// the track marked as the groove master has its Envi +80 set and a "trackGrooveState" archive (GenM). A bounce (tgB)
+// played the follower's straight 1/16s on the master's swung ones (the off-beats 80 ticks late)
+constexpr int kGrooveFollower = 1;
+
 int64_t quantizeTick(int code, int64_t rel) {
     auto plain = [&](double exact, int64_t placed) {
         const int64_t k = (int64_t)std::ceil((double)rel / exact - 0.5 - 1e-9);
@@ -754,10 +760,12 @@ struct Project {
             // each note's played position as stored and the rest here; under a Strength below 100 % both carry a
             // fraction of a tick, /65536, at +2); the region's trim hides the content before it
             double tf = (double)(start + ((int64_t)e.pos() - origin) - s.trim);
+            const double stored = tf + e.rec.u16(2) / 65536.0;
             if (st == 0x90 && !e.ext.empty() && e.ext[0].u8(7) == 0x89)
                 tf += (int16_t)e.ext[0].u16(4) + (e.rec.u16(2) + e.ext[0].u16(2)) / 65536.0;
             int64_t t = std::llround(tf);
-            if (s.quantize) {   // the grid runs from the region's content start; Strength moves the note part of the way
+            if (s.quantize == kGrooveFollower) t = std::llround(stored);   // GarageBand saves the grooved place as the position
+            else if (s.quantize) {   // the grid runs from the region's content start; Strength moves the note part of the way
                 const int64_t base = start - s.trim, q = quantizeTick(s.quantize, t - base);
                 if (q >= 0) t = std::llround(tf + s.strength * ((double)(base + q) - tf));
             }
@@ -1014,7 +1022,7 @@ struct Converter {
             std::vector<Project::Note> n;
             std::vector<Project::Ctrl> c;
             P.placeRegion(p, p.start, bar1, bias, n, c);
-            if (p.seq->quantize && quantizeTick(p.seq->quantize, 0) < 0)
+            if (p.seq->quantize && p.seq->quantize != kGrooveFollower && quantizeTick(p.seq->quantize, 0) < 0)
                 warn.push_back(t.name + ": region \"" + p.seq->name + "\" has a Time Quantize (code " + std::to_string(p.seq->quantize) + ") not decoded, played as recorded");
             if (n.empty() && c.empty()) {
                 char b[64];

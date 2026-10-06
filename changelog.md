@@ -5,6 +5,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 ## [Unreleased]
 
 ### Added
+- `import song.band`: regions that follow GarageBand's Groove Track play on the groove master's timing. GarageBand stores each of a follower's notes where the master track's matching note is (its recorded place kept as an offset, as a quantized note's is), and the import plays them there, where it used to warn about an unknown Time Quantize (code 1) and play them as recorded. Checked against a bounce of straight 1/16s following a swung track: every off-beat 80 ticks late, as GarageBand played it.
 - Buses take `pan` (-1..1, after the fader) and `panLaw` as tracks do; `import song.band` writes a GarageBand aux's pan with its balance law, where it used to warn that the pan was left out.
 - Pedalboard's Dr. Octave plays its octave below as a `pitch` shift mixed under the direct signal at their saved levels (Woolly Octave), where the direct signal used to play alone.
 - `delay` gains tape `wow` (the delay time swept by a sine or triangle) and `flutter` (a random new offset at its rate, glided). GarageBand's Tape Delay plays its LFO and flutter as them (139 patches set one), measured on bounces of a 1 kHz sine: LFO Depth 100 sweeps +-5.7 ms in a triangle at any rate, Flutter Intensity 100 steps within about +-1 ms; the pitch swing of a bounce at 1 Hz and at 0.25 Hz matched within 0.2 Hz.

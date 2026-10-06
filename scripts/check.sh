@@ -510,7 +510,7 @@ m = j["master"]["automation"]["gain"]
 ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
 ok &= [(n["beat"], n["dur"], n["key"]) for n in t[0]["notes"]] == [(0, 2, 60), (2, 1, 64), (3, 1, 67), (8, 1, 69), (16, 0.5, 64), (17, 0.5, 64),
-                                                                 (18, 0.5, 64), (24.25, 0.5, 61), (40.7083, 0.25, 64), (48.875, 0.25, 62)] and t[0]["notes"][2]["vel"] == 0.5
+                                                                 (18, 0.5, 64), (24.25, 0.5, 61), (40.7083, 0.25, 64), (48.875, 0.25, 62), (56.3333, 0.25, 62)] and t[0]["notes"][2]["vel"] == 0.5
 ok &= j["buses"][0] == {"name": "Echo", "fx": [{"type": "delay", "time": 0.5, "feedback": 0.4, "mix": 1.0, "lowpass": 6000.0, "highpass": 100, "pingpong": False}]}
 # two auxes named by the Logic placeholder take the names of their settings, and the Synth sends reach each of them
 ok &= [b["name"] for b in j["buses"][1:]] == ["Ambience/0.1s Short Ambience", "Large Hall/3.9s Prince Hall One"]
@@ -535,7 +535,7 @@ ok &= [c["beat"] for c in a["tracks"][1]["clips"]] == [c["beat"] for c in b["tra
 ok &= not any("time signature" in w for w in b["import"]["warnings"])
 sys.exit(0 if ok else 1)'; then band_why="the song in 3/4 did not land on the same beats as in 4/4"; fi
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, pitch bend, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength, a Groove Track follower; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, pitch bend, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
 
 # panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
 # the default constant-power law takes it 7.66 dB down
