@@ -198,6 +198,7 @@ add_executable(wavelength
   src/bplist.cpp
   src/sfz.cpp
   src/sf2.cpp
+  src/parse_check.cpp
   src/encode.cpp
   src/audio_codecs.cpp
   src/image_codecs.cpp

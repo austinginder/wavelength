@@ -57,6 +57,7 @@
 #include "kit.hpp"
 #include "history.hpp"
 #include "package.hpp"
+#include "parse_check.hpp"
 #include "song.hpp"
 #include "song_cli.hpp"
 #include "mcp.hpp"
@@ -2096,6 +2097,7 @@ int run(int argc, char **argv) {
     if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
     if (cmd == "__play" && a.positional.size() > 2) return playWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live notes
     if (cmd == "__live" && a.positional.size() > 2) return liveWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live playing
+    if (cmd == "__parse") return parseCheck(std::vector<std::string>(a.positional.begin() + 1, a.positional.end()), OUT);   // internal: readers vs hostile files
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],
                                  std::vector<std::string>(a.positional.begin() + 4, a.positional.end()));

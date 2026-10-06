@@ -2,6 +2,7 @@
 
 #include "audio_file.hpp"
 #include "bitwig.hpp"
+#include "bytes.hpp"
 #include "catalog.hpp"
 #include "sampler.hpp"
 #include "vst2_abi.hpp"
@@ -66,13 +67,13 @@ bool vstpresetComponent(const std::vector<uint8_t> &in, std::vector<uint8_t> &ou
     auto le64 = [&](size_t at) { return (uint64_t)le32(at) | (uint64_t)le32(at + 4) << 32; };
     if (in.size() < 48 || std::memcmp(in.data(), "VST3", 4) != 0) return false;
     const uint64_t list = le64(40);
-    if (list + 8 > in.size() || std::memcmp(&in[list], "List", 4) != 0) return false;
+    if (!fits(list, 8, in.size()) || std::memcmp(&in[list], "List", 4) != 0) return false;
     const uint32_t n = le32(list + 4);
-    for (uint32_t k = 0; k < n && list + 8 + 20 * (k + 1) <= in.size(); ++k) {
+    for (uint32_t k = 0; k < n && fitsItems(list + 8, (uint64_t)k + 1, 20, in.size()); ++k) {
         const size_t e = list + 8 + 20 * k;
         if (std::memcmp(&in[e], "Comp", 4) != 0) continue;
         const uint64_t off = le64(e + 4), size = le64(e + 12);
-        if (off + size > in.size()) return false;
+        if (!fits(off, size, in.size())) return false;
         out.assign(in.begin() + (long)off, in.begin() + (long)(off + size));
         return true;
     }

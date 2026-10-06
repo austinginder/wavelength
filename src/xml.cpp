@@ -73,6 +73,7 @@ struct Parser {
     const std::string &s;
     size_t i = 0;
     std::string err;
+    int depth = 0;   // elements open: each one is a recursion, so a file can't nest its way past the stack
     bool skipMisc() {   // whitespace, text, comments, <?..?>, <!DOCTYPE ..>, CDATA
         for (;;) {
             while (i < s.size() && s[i] != '<') ++i;
@@ -85,6 +86,13 @@ struct Parser {
     }
     static bool nameChar(char c) { return !(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' || c == '>' || c == '=' || c == '"' || c == '\''); }
     std::unique_ptr<Node> element() {
+        if (depth >= 256) { err = "XML nested more than 256 elements deep"; return nullptr; }
+        ++depth;
+        auto node = elementBody();
+        --depth;
+        return node;
+    }
+    std::unique_ptr<Node> elementBody() {
         // at '<'
         ++i;
         auto node = std::make_unique<Node>();

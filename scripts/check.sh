@@ -1483,6 +1483,29 @@ if "$w" fallbacks out/check/fallbacks/job.json --suggest --write --no-measure >/
 else
   echo "FAIL fallbacks"; fail=1
 fi
+# hostile files: every reader refuses a file built to break its bounds checks (sizes that wrap around, lengths
+# past the buffer, nesting and shared references that multiply) without crashing or hanging; a plist whose
+# references explode is valid as a plist and must only finish fast
+hdir="out/check/hostile-$build"
+rm -rf "$hdir" && python3 scripts/make-hostile-files.py "$hdir" >/dev/null
+if hostile_why=$(python3 - "./$build/wavelength" "$hdir" <<'PY'
+import json, os, subprocess, sys
+exe, d = sys.argv[1], sys.argv[2]
+for name in sorted(os.listdir(d)):
+    try:
+        p = subprocess.run([exe, "__parse", name.split("--")[0], os.path.join(d, name)], capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        sys.exit(print(name + ": still reading after 20 s") or 1)
+    if p.returncode != 0:
+        sys.exit(print(f"{name}: exit {p.returncode}") or 1)
+    if json.loads(p.stdout.strip().splitlines()[-1])["ok"] and "explode" not in name:
+        sys.exit(print(name + ": read as if it were fine") or 1)
+PY
+); then
+  echo "ok   hostile files: plists, zips, Serum, ValueTree, SoundFont and XML readers refuse them without crashing"
+else
+  echo "FAIL hostile files: $hostile_why"; fail=1
+fi
 # help: the grouped list, one command's details by `help <command>` and by `--help`, plain in a pipe
 # (grep reads the whole output: `grep -q` stops at the first match, and pipefail counts the writer's SIGPIPE)
 if "./$build/wavelength" help | grep "^Make music" >/dev/null && "./$build/wavelength" help render | grep -- "--loop" >/dev/null &&

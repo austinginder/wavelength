@@ -1,5 +1,6 @@
 #include "preset_formats.hpp"
 
+#include "bytes.hpp"
 #include "xml.hpp"
 
 #include <nlohmann/json.hpp>
@@ -74,7 +75,7 @@ std::string md5hex(const std::vector<uint8_t> &msg) {
 bool readXfer(const std::vector<uint8_t> &d, json &header, json &payload, std::string &err) {
     if (!isXferJson(d) || d.size() < 17) { err = "not an Xfer (Serum 2) file"; return false; }
     const uint64_t n = le64(&d[9]);
-    if (17 + n + 8 > d.size()) { err = "truncated Xfer header"; return false; }
+    if (d.size() < 25 || n > d.size() - 25) { err = "truncated Xfer header"; return false; }
     size_t hn = (size_t)n;
     while (hn > 0 && d[17 + hn - 1] == 0) --hn;   // older files count a trailing NUL
     header = json::parse(d.begin() + 17, d.begin() + 17 + (long)hn, nullptr, false);
@@ -82,6 +83,7 @@ bool readXfer(const std::vector<uint8_t> &d, json &header, json &payload, std::s
     const size_t at = 17 + n;
     const uint32_t size = le32(&d[at]), version = le32(&d[at + 4]);
     if (version != 2 && version != 0) { err = "unsupported Xfer payload version " + std::to_string(version); return false; }
+    if (size > (256u << 20)) { err = "Xfer payload of " + std::to_string(size) + " bytes is larger than any preset"; return false; }
     std::vector<uint8_t> raw(size);
     if (version == 2) {   // zstd(CBOR)
         const size_t got = ZSTD_decompress(raw.data(), raw.size(), d.data() + at + 8, d.size() - at - 8);
@@ -158,6 +160,8 @@ bool readVar(Reader &r, std::string &out, std::string &err) {
     const uint8_t type = r.byte();
     const uint8_t *p = r.b.data() + r.i;
     const size_t len = end - r.i;
+    const size_t need = type == 1 ? 4 : type == 4 || type == 6 ? 8 : 0;
+    if (len < need) { err = "truncated value"; return false; }
     char buf[40];
     switch (type) {
     case 1: std::snprintf(buf, sizeof buf, "%d", (int32_t)le32(p)); out = buf; break;

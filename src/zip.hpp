@@ -1,6 +1,8 @@
 #pragma once
 // Minimal zip reader (stored or deflated entries, no zip64): Bitwig .multisample instruments and
 // DAWproject files are zips. ZipWriter writes deflated entries (DAWproject export).
+#include "bytes.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -43,6 +45,7 @@ public:
         if (!f_) { err = "cannot open " + path; return false; }
         f_.seekg(0, std::ios::end);
         const size_t size = (size_t)f_.tellg();
+        size_ = size;
         const size_t tail = std::min<size_t>(size, 65536 + 22);
         std::vector<uint8_t> buf(tail);
         f_.seekg((std::streamoff)(size - tail));
@@ -55,10 +58,12 @@ public:
         // a zip after other data (a Bitwig project's plugin states): offsets count from the zip's start
         const size_t eocdAt = size - tail + (size_t)eocd;
         base_ = eocdAt >= (size_t)cdSize + cdOffset ? eocdAt - cdSize - cdOffset : 0;
+        if (!fits(base_ + (uint64_t)cdOffset, cdSize, eocdAt)) { err = path + ": its zip directory lies outside the file"; return false; }
         std::vector<uint8_t> cd(cdSize);
         f_.seekg((std::streamoff)(base_ + cdOffset));
         f_.read(reinterpret_cast<char *>(cd.data()), cdSize);
-        for (size_t p = 0; p + 46 <= cd.size() && zipdetail::u32(&cd[p]) == 0x02014b50;) {
+        if (!f_) { err = path + ": the zip ends inside its directory"; return false; }
+        for (size_t p = 0; fits(p, 46, cd.size()) && zipdetail::u32(&cd[p]) == 0x02014b50;) {
             ZipEntry e;
             e.flags = zipdetail::u16(&cd[p + 8]);
             e.method = zipdetail::u16(&cd[p + 10]);
@@ -68,6 +73,7 @@ public:
             e.size = zipdetail::u32(&cd[p + 24]);
             const uint16_t nameLen = zipdetail::u16(&cd[p + 28]), extraLen = zipdetail::u16(&cd[p + 30]), commentLen = zipdetail::u16(&cd[p + 32]);
             e.localOffset = zipdetail::u32(&cd[p + 42]);
+            if (!fits(p + 46, (uint64_t)nameLen + extraLen + commentLen, cd.size())) { err = path + ": a zip directory entry runs past the directory"; return false; }
             e.name.assign(reinterpret_cast<const char *>(&cd[p + 46]), nameLen);
             entries_.push_back(e);
             p += 46 + nameLen + extraLen + commentLen;
@@ -79,7 +85,7 @@ public:
         for (auto &x : entries_) if (x.name == name) { e = &x; break; }
         if (!e) for (auto &x : entries_) if (zipdetail::lower(x.name) == zipdetail::lower(name)) { e = &x; break; }
         if (!e) { err = path_ + " has no entry '" + name + "'"; return false; }
-        uint8_t lh[30];
+        uint8_t lh[30] = {};
         f_.seekg((std::streamoff)(base_ + e->localOffset));
         f_.read(reinterpret_cast<char *>(lh), 30);
         if (zipdetail::u32(lh) != 0x04034b50) { err = "bad zip entry header for " + name; return false; }
@@ -87,7 +93,11 @@ public:
         std::string localName(zipdetail::u16(lh + 26), '\0');
         f_.read(localName.data(), (std::streamsize)localName.size());
         if (localName != e->name) { err = "zip entry '" + e->name + "' is named '" + localName + "' in its local header"; return false; }
-        f_.seekg((std::streamoff)(base_ + e->localOffset + 30 + zipdetail::u16(lh + 26) + zipdetail::u16(lh + 28)));
+        const uint64_t dataAt = base_ + (uint64_t)e->localOffset + 30 + zipdetail::u16(lh + 26) + zipdetail::u16(lh + 28);
+        if (!fits(dataAt, e->compSize, size_)) { err = name + ": the zip ends inside this entry"; return false; }
+        // deflate expands at most about 1032:1, so a larger size in the header is a lie (or a zip bomb)
+        if (e->method == 8 && e->size > (uint64_t)e->compSize * 1032 + 1024) { err = name + ": its zip header claims more data than it can hold"; return false; }
+        f_.seekg((std::streamoff)dataAt);
         std::vector<uint8_t> comp(e->compSize);
         f_.read(reinterpret_cast<char *>(comp.data()), e->compSize);
         if (!f_) { err = name + ": the zip ends inside this entry"; return false; }
@@ -103,7 +113,7 @@ public:
 private:
     std::string path_;
     std::ifstream f_;
-    size_t base_ = 0;
+    size_t base_ = 0, size_ = 0;
     std::vector<ZipEntry> entries_;
 };
 

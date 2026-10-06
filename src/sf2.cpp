@@ -1,4 +1,5 @@
 #include "sf2.hpp"
+#include "bytes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -102,7 +103,9 @@ bool SoundFont::open(const std::string &path, std::string &err) {
     uint8_t h[12];
     f.read(reinterpret_cast<char *>(h), 12);
     if (!f || std::memcmp(h, "RIFF", 4) || std::memcmp(h + 8, "sfbk", 4)) { err = path + " is not a SoundFont (sf2/sf3)"; return false; }
-    const uint64_t total = le32(h + 4) + 8;
+    f.seekg(0, std::ios::end);
+    const uint64_t fileSize = (uint64_t)f.tellg();
+    const uint64_t total = std::min<uint64_t>(le32(h + 4) + 8, fileSize);
     std::vector<uint8_t> pdta;
     for (uint64_t off = 12; off + 12 <= total;) {
         uint8_t c[12];
@@ -116,12 +119,15 @@ bool SoundFont::open(const std::string &path, std::string &err) {
                     uint8_t s[8];
                     f.seekg((std::streamoff)o);
                     f.read(reinterpret_cast<char *>(s), 8);
+                    if (!f) break;
                     const uint32_t m = le32(s + 4);
+                    if (!fits(o + 8, m, fileSize)) { err = path + ": a sample chunk runs past the end of the file"; return false; }
                     if (!std::memcmp(s, "smpl", 4)) { smplOffset_ = o + 8; smplSize_ = m; }
                     if (!std::memcmp(s, "sm24", 4)) { sm24Offset_ = o + 8; sm24Size_ = m; }
                     o += 8 + m + (m & 1);
                 }
             } else if (!std::memcmp(c + 8, "pdta", 4)) {
+                if (n < 4 || !fits(off + 12, n - 4, fileSize)) { err = path + ": its preset data runs past the end of the file"; return false; }
                 pdta.resize(n - 4);
                 f.read(reinterpret_cast<char *>(pdta.data()), (std::streamsize)pdta.size());
             }

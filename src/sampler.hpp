@@ -94,4 +94,8 @@ bool kitMap(const std::string &nameOrPath, const std::string &baseDir, std::vect
             std::vector<std::string> &unmapped, std::string &resolved, std::string &err, bool roundRobin = false,
             std::vector<std::string> *extraTakes = nullptr);
 
+// The sample files an .exs instrument's zones play, as the sampler resolves them (beside the instrument, its
+// stored folder, else by name in the installed libraries); no audio is loaded.
+bool exsSampleFiles(const std::string &path, std::vector<std::string> &files, std::string &err);
+
 } // namespace wl

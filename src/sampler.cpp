@@ -2197,4 +2197,17 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
     return true;
 }
 
+bool exsSampleFiles(const std::string &path, std::vector<std::string> &files, std::string &err) {
+    std::vector<Zone> zones;
+    int swLow = 0, swHigh = 0, swDefault = 0;
+    std::vector<std::string> articulations, warnings;
+    if (!exs::parse(path, zones, swLow, swHigh, swDefault, articulations, warnings, err)) return false;
+    std::set<std::string> seen;
+    for (auto &z : zones) {
+        const std::string file = z.file.substr(0, z.file.find("#frames="));   // a region of a consolidated file
+        if (!file.empty() && seen.insert(file).second) files.push_back(file);
+    }
+    return true;
+}
+
 } // namespace wl
