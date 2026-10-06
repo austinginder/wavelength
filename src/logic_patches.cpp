@@ -717,7 +717,16 @@ json stompFxRaw(const std::string &name, const std::map<int, double> &s, std::ve
             fx.push_back(f);
         }
     }
-    else if (name == "Dr. Octave") notes.push_back("Dr. Octave: its octaves below are not played (the direct signal plays)");
+    else if (name == "Dr. Octave") {   // #1 Direct, #2 Octave 1 (an octave down), #3 Octave 2 (two down), #4 Drive: levels in %
+        const double d = std::clamp(v(1, 100), 0.0, 100.0), o1 = std::clamp(v(2), 0.0, 100.0), o2 = std::clamp(v(3), 0.0, 100.0);
+        if (o1 + o2 > 0.5) {   // the octave below as a pitch shift (the pedal divides the note into a square: an approximation)
+            const double low = o1 > 0.5 ? o1 : o2;
+            fx.push_back({{"type", "pitch"}, {"semitones", o1 > 0.5 ? -12 : -24}, {"mix", r4(low / std::max(1.0, d + low))}});
+            if (std::fabs(d + low - 100) > 0.5) addFx(fx, gainOf(20 * std::log10(std::max(1.0, d + low) / 100)));
+            if (o1 > 0.5 && o2 > 0.5) notes.push_back("Dr. Octave: its second octave down is left out (the first plays)");
+            if (v(4) > 0.5) addSat(fx, v(4));
+        }
+    }
     else if (name == "Wham") notes.push_back("Wham: its pitch shift is not played (the direct signal plays)");
     else notes.push_back(name + ": not played");
     return fx;
