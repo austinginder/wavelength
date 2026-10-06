@@ -28,7 +28,7 @@ uint32_t le32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | 
 // instruments by the names channel strips give them; anything else in a slot is an effect
 const std::set<std::string> &synthNames() {
     static const std::set<std::string> s = {"Alchemy", "Retro Synth", "ES2", "ES1", "ES E", "ES M", "ES P", "EFM1", "Sculpture",
-                                            "Vintage B3", "Clav", "E-Piano", "Ultrabeat", "Church Orga", "Klopfgeist", "EVOC PS",
+                                            "Vintage B3", "Clav", "E-Piano", "Ultrabeat", "Klopfgeist", "EVOC PS",
                                             "Mellotron", "Studio Piano", "Studio Strin", "Studio Horns", "Drum Machin", "Quick Sampl"};
     return s;
 }
@@ -1282,7 +1282,8 @@ std::vector<PatchSend> readPatchSends(const std::string &patchDir) {
     return out;
 }
 
-bool isSamplerInstrument(const std::string &name) { return name == "Sampler" || name == "EXS24" || name == "Drum Kit"; }
+// Church Organ ("Church Orga") is a sampler too: it names its EXS instrument ("Full Organ.exs", in the Sound Library)
+bool isSamplerInstrument(const std::string &name) { return name == "Sampler" || name == "EXS24" || name == "Drum Kit" || name == "Church Orga"; }
 
 std::vector<std::string> logicPatchRoots() {
     std::vector<std::string> out;

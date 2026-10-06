@@ -1066,7 +1066,7 @@ struct Converter {
                 warn.push_back(name + ": plays its project-local instrument " + fs::u8path(exs).filename().u8string() + " (the channel's effects as fx)");
             } else {
                 const std::string why = desc.is_object() && desc.contains("why") ? desc["why"].get<std::string>() : "its channel strip can't be read";
-                const bool sampler = inst.name == "Sampler" || inst.name == "EXS24" || inst.name == "Drum Kit";
+                const bool sampler = inst.name == "Sampler" || inst.name == "EXS24" || inst.name == "Drum Kit" || inst.name == "Church Orga";
                 job["plugin"] = sampler ? "builtin:sampler" : "builtin:synth";
                 if (sampler) job["sampler"] = {{"patch", rel}}; else job["preset"] = rel;
                 const json standIn = {{"plugin", "builtin:synth"}, {"preset", fallbackPreset(inst.name, category, setting)}};
