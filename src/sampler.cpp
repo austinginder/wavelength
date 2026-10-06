@@ -2093,13 +2093,14 @@ bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<s
         for (auto *m : ph.notes) steps.push_back({m->start - n.start, m->key});
         const std::vector<const Note *> notes = ph.notes;
         const double phraseStart = n.start;
-        auto keyAt = [steps, notes, glide, phraseStart, bendAt](double t) {
+        const Envelope *trackBend = track.bendAutomation.empty() ? nullptr : &track.bendAutomation;   // automation.pitchbend, semitones
+        auto keyAt = [steps, notes, glide, phraseStart, bendAt, trackBend](double t) {
             size_t i = 0;
             while (i + 1 < steps.size() && steps[i + 1].first <= t) ++i;
             double k = steps[i].second;
             if (i > 0 && glide > 0 && t - steps[i].first < glide)
                 k = steps[i - 1].second + (steps[i].second - steps[i - 1].second) * (t - steps[i].first) / glide;
-            return k + bendAt(*notes[i], t - (notes[i]->start - phraseStart));
+            return k + bendAt(*notes[i], t - (notes[i]->start - phraseStart)) + (trackBend ? trackBend->at(phraseStart + t) : 0.0);
         };
         double tempoSemis = 0;
         if (loopBpm > 0) tempoSemis = 12 * std::log2(job.tempo.bpmAtBeat(job.tempo.secToBeat(n.start)) / loopBpm);

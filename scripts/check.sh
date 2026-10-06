@@ -491,6 +491,7 @@ ok &= "gain" not in t[1] and g[0] == [0, 0] and [4, -4.998] in g and g[-1] == [8
 ok &= t[0]["panLaw"] == "balance" and t[1]["panLaw"] == "balance"
 s = t[1]["sends"]["Echo"]
 ok &= s[0] == [0, -120] and s[-1] == [8, 0] and t[0]["automation"]["params"]["env"] == [[0, 0], [8, 4.25]]
+ok &= t[0]["automation"]["pitchbend"] == {"points": [[0, 0], [2.5, 1], [3.5, 0]], "curve": "step"}
 m = j["master"]["automation"]["gain"]
 ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01
@@ -517,7 +518,7 @@ ok &= [c["beat"] for c in a["tracks"][1]["clips"]] == [c["beat"] for c in b["tra
 ok &= not any("time signature" in w for w in b["import"]["warnings"])
 sys.exit(0 if ok else 1)'; then band_why="the song in 3/4 did not land on the same beats as in 4/4"; fi
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, pitch bend, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
 
 # panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
 # the default constant-power law takes it 7.66 dB down
@@ -758,6 +759,21 @@ sys.exit(0 if d["regions"] == 2 and d["keys"] == [0, 127] and [e["type"] for e i
   ds_why="samples --dspreset described the test preset wrong"
 fi
 if [ -n "$ds_why" ]; then echo "FAIL dspreset: $ds_why"; fail=1; else echo "ok   dspreset: key split, release, a knob binding at its saved value, reverb, --dspreset"; fi
+# automation.pitchbend on the sampler: the A3 sine held 2 s, bent up 2 semitones after 1 s, sounds B3 then
+cat > out/check/dspreset/bend.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0.5,
+ "tracks": [{"name": "Bend", "plugin": "builtin:sampler", "sampler": {"sample": "Samples/Sine A3.wav", "root": 57},
+             "automation": {"pitchbend": [[0, 0], [0.95, 0], [1, 2]]}, "notes": [{"beat": 0, "dur": 1.8, "key": 57, "vel": 1}]}]}
+JOB
+bend_why=""
+if ! "./$build/wavelength" render out/check/dspreset/bend.json --out out/check/dspreset/bend --json > /dev/null 2>&1; then
+  bend_why="the job did not render"
+else
+  a=$("./$build/wavelength" analyze out/check/dspreset/bend/stems/01-bend.wav --start 0.1 --end 0.8 --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
+  b=$("./$build/wavelength" analyze out/check/dspreset/bend/stems/01-bend.wav --start 1.15 --end 1.7 --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
+  [ "$a $b" = "A3 B3" ] || bend_why="it sounded $a then $b, not A3 then B3"
+fi
+if [ -n "$bend_why" ]; then echo "FAIL sampler pitchbend: $bend_why"; fail=1; else echo "ok   sampler pitchbend: automation.pitchbend bends the sampler's voices"; fi
 # gate as a noise gate: a 220 Hz tone at -6 dB for a second, then at -50 dB: with a -30 dB threshold the quiet second goes
 # silent and the loud one stays; phaser: a saw through it keeps its pitch, sounds, and turns stereo
 rm -rf out/check/gate && mkdir -p out/check/gate

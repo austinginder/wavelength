@@ -1333,16 +1333,28 @@ struct Converter {
             job["notes"] = out;
         }
         // controllers: the sustain pedal is in the note lengths; the rest is counted (and kept on audio tracks)
+        // pitch bend: semitones on GarageBand's usual +-2 range, a curve every instrument plays (plugins as MIDI); each
+        // value holds until the next, centred before the first
+        json bend = json::array();
+        for (auto &c : ctrl)
+            if (c.type == "pitchbend" && beat(c.tick) >= 0) {
+                if (bend.empty() && beat(c.tick) > 0) bend.push_back({0.0, 0.0});
+                bend.push_back({r4(beat(c.tick)), r4(2.0 * c.value / 8192.0)});
+            }
+        if (!bend.empty()) {
+            job["automation"]["pitchbend"] = {{"points", bend}, {"curve", "step"}};
+            warn.push_back(name + ": its pitch bend plays over +-2 semitones (GarageBand's usual range; a patch's own range isn't read)");
+        }
         std::map<std::string, int> other;
         for (auto &c : ctrl)
-            if (!(c.type == "cc" && c.cc == 64)) ++other[c.type == "cc" ? "CC" + std::to_string(c.cc) : c.type];
+            if (!(c.type == "cc" && c.cc == 64) && c.type != "pitchbend") ++other[c.type == "cc" ? "CC" + std::to_string(c.cc) : c.type];
         if (!other.empty()) {
             json cc = json::object();
             for (auto &c : ctrl)
                 if (c.type == "cc" && c.cc != 64 && beat(c.tick) >= 0) cc[std::to_string(c.cc)].push_back({r4(beat(c.tick)), c.value});
             const std::string plugin = job["plugin"].get<std::string>();
             if (!cc.empty() && plugin != "builtin:synth" && plugin != "builtin:sampler")
-                for (auto &[k, v] : cc.items()) job["automation"]["cc"][k] = {{"points", v}, {"shape", "step"}};
+                for (auto &[k, v] : cc.items()) job["automation"]["cc"][k] = {{"points", v}, {"curve", "step"}};
             std::string list;
             for (auto &[k, n] : other) list += (list.empty() ? "" : ", ") + k + " x" + std::to_string(n);
             warn.push_back(name + ": controller data not played by the built-in instruments: " + list);

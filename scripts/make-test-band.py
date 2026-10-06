@@ -207,7 +207,10 @@ body += seq(0x17, 4, 'Test Song', events(placement(BAR1 - 3840, END, REGION1), p
                                                ext=[ext(struct.pack('<I', AUTRACK), END), ext(struct.pack('<I', REGION7), mark=0x88)])),
             trak(0, 1, TRACK) + trak(1, 1, LOOP) + trak(2, 3, MASTER) + trak(3, 1, AUTRACK))
 body += seq(0x17, REGION7, 'AU Synth', events(note(BAR1, 62, 100, 960)))
-body += seq(0x17, REGION1, 'Synth', events(note(BAR1, 60, 100, 1920), note(BAR1 + 1920, 64, 80, 960), note(BAR1 + 2880, 67, 0, 960, hires=16385)))
+# pitch bend 0xe0: +11 the high 7 bits, +12 the low ones (8192 = centre): +1 semitone at beat 2.5, back at beat 3.5
+body += seq(0x17, REGION1, 'Synth', events(note(BAR1, 60, 100, 1920), note(BAR1 + 1920, 64, 80, 960),
+                                           event(0xe0, BAR1 + 2400, bytes([0, 0, 0, 96, 0, 0, 0, 0])), note(BAR1 + 2880, 67, 0, 960, hires=16385),
+                                           event(0xe0, BAR1 + 3360, bytes([0, 0, 0, 64, 0, 0, 0, 0]))))
 body += seq(0x17, REGION2, 'Synth 2', events(note(BAR1, 69, 90, 960), event(0xb0, BAR1 + 480, bytes([0, 0, 0, 64, 1, 0, 0, 0])),
                                              note(BAR1 + 3840, 72, 90, 960)))
 body += region(0x17, REGION3, 'Synth 3', events(note(BAR1, 64, 90, 480)), length=960)

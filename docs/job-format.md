@@ -122,7 +122,7 @@ The `synth` object:
 | `mono`, `legato`, `glide` | false, true, 0 | `mono`: one voice. A note that starts while another is held slides to it without a new attack (`legato`), gliding over `glide` seconds; back-to-back notes attack again. |
 | `level` | 0 | dB. |
 
-Per-note `bend` and `vibrato` play on builtin:synth tracks as on the sampler, and `automation.pitchbend` (semitones) bends every voice. MIDI CC and pressure automation do nothing here: automate parameters by name.
+Per-note `bend` and `vibrato` play on builtin:synth tracks as on the sampler, and `automation.pitchbend` (semitones) bends every voice (on builtin:sampler tracks too). MIDI CC and pressure automation do nothing here: automate parameters by name.
 
 **Additive oscillators.** `{"wave": "additive", ...}` plays a list of sine partials, alias-free at any pitch:
 
