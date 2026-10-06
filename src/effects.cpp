@@ -119,7 +119,7 @@ struct Filter : Effect {
 // --------------------------------------------------------------------------------- delay
 struct Delay : Effect {
     double timeBeats, timeMs, feedback, hp, lp;
-    bool pingpong;
+    bool pingpong, filterEchoes;   // filterEchoes: every echo passes the filters, the first included (Logic's Tape Delay)
     Envelope mix;
     std::vector<std::unique_ptr<Effect>> loop;   // "loopFx": effects inside the feedback loop
     Delay(const json &j, const Job &job, std::string &err) {
@@ -130,6 +130,7 @@ struct Delay : Effect {
         hp = j.value("highpass", 250.0);
         lp = j.value("lowpass", 5000.0);
         pingpong = j.value("pingpong", true);
+        filterEchoes = j.value("filterEchoes", false);
         mix = param(j, "mix", 0.25, job.tempo);
         if (j.contains("loopFx")) {
             if (!j["loopFx"].is_array()) { err = "delay: \"loopFx\" must be an array of effects"; return; }
@@ -143,7 +144,7 @@ struct Delay : Effect {
                 loop.push_back(std::move(fx));
             }
         }
-        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx"}, *this);
+        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx", "filterEchoes"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate;
@@ -156,8 +157,10 @@ struct Delay : Effect {
         hpl.set(Biquad::HighPass, hp, 0.7071, 0, sr); hpr = hpl;
         lpl.set(Biquad::LowPass, lp, 0.7071, 0, sr); lpr = lpl;
         for (size_t i = 0; i < a.frames(); ++i) {
-            const double tl = L.tap(d), tr = R.tap(d);
-            const double fbl = lpl.process(hpl.process(tl)) * feedback, fbr = lpr.process(hpr.process(tr)) * feedback;
+            double tl = L.tap(d), tr = R.tap(d);
+            const double ftl = lpl.process(hpl.process(tl)), ftr = lpr.process(hpr.process(tr));
+            const double fbl = ftl * feedback, fbr = ftr * feedback;
+            if (filterEchoes) tl = ftl, tr = ftr;
             const double inL = a.left[i], inR = a.right[i];
             if (pingpong) { L.push((inL + inR) * 0.5 + fbr); R.push(fbl); }
             else { L.push(inL + fbl); R.push(inR + fbr); }
@@ -190,6 +193,13 @@ struct Delay : Effect {
         if (pingpong)
             for (size_t i = 0; i < n; ++i) { gen.left[i] = (a.left[i] + a.right[i]) * 0.5f; gen.right[i] = 0; }
         delayed(gen);
+        if (filterEchoes)   // the first echo through the filters too
+            for (auto *ch : {&gen.left, &gen.right}) {
+                Biquad h, l;
+                h.set(Biquad::HighPass, hp, 0.7071, 0, sr);
+                l.set(Biquad::LowPass, lp, 0.7071, 0, sr);
+                for (auto &v : *ch) v = (float)l.process(h.process(v));
+            }
         wet = gen;
         const double inPeak = std::max(peak(gen), 1e-9);
         const int maxGen = 256;

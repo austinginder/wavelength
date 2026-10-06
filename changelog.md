@@ -65,6 +65,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - `serve`: clicking a track name in the song player no longer solos it; soloing lives in the editor (the S button or a right-click).
 
 ### Fixed
+- GarageBand's Echo (the Tape Delay on its Echo aux) and Tape Delay in patches play at their level and tone: measured on a one-note bounce through the Echo, each repeat stays in the middle (it bounced between left and right), the first one passes the delay's filters too (new delay key `"filterEchoes"`), and Dry and Wet sit on a sine taper (Wet 30 % plays 6.9 dB down, not 10.5). The first three repeats now match the bounce within 0.5 dB. Pedalboard's delay pedals and Delay Designer's tap stay in the middle too.
 - A GarageBand project in 3/4 put its regions three bars late, so their notes fell outside them and the tracks were left out: bar 1 is tick 38400 in any meter, not ten bars of the first one.
 - `import song.band` found no automation in projects GarageBand 10.4 saves (it names the sequence that holds it differently) and didn't say so.
 - `"key": "song"` on an Apple Loop no longer says it moves loops the way GarageBand does. It keeps the loop in the song's scale (to the relative key when one is minor and the other major); GarageBand goes tonic to tonic, as imported projects now do.

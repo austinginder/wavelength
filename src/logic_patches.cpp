@@ -527,8 +527,8 @@ json stompFxRaw(const std::string &name, const std::map<int, double> &s, std::ve
         if (v(nSync) >= 0.5) notes.push_back(name + ": its tempo-synced rate plays at 120 BPM");
         return hzAt120(v(nSync) >= 0.5, v(nRate, 1));
     };
-    auto delayOf = [&](bool sync, double t) {
-        json d = {{"type", "delay"}};
+    auto delayOf = [&](bool sync, double t) {   // a pedal's delay: one line, its echoes in the middle
+        json d = {{"type", "delay"}, {"pingpong", false}};
         if (sync) d["time"] = r4(4 * t); else d["ms"] = r2(std::max(1.0, t));
         return d;
     };
@@ -907,13 +907,17 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (v(12)) fx.push_back({{"type", "limiter"}, {"ceiling", r2(v(11))}});
             if (v(9) != 0) notes.push_back("Compressor: its circuit type's character is not modelled");
         } else if (p.name == "Tape Delay") {
-            // #3 feedback %, #4 high cut, #5 low cut (in the loop), #6 sync, #7 note (1/x of a whole note), #19 dry %, #20 wet %,
-            // #22 time ms (unsynced; the legacy 23-value layout has coarse #1 + fine #2 instead)
+            // #3 feedback %, #4 high cut, #5 low cut (12 dB/oct, on every echo: the first one too), #6 sync, #7 note (1/x
+            // of a whole note), #19 dry %, #20 wet %, #22 time ms (unsynced; the legacy 23-value layout has coarse #1 + fine
+            // #2 instead). Dry and Wet on a sine taper: a one-note bounce through GarageBand's Echo (wet 30 %) put the first
+            // echo 7.4 dB under the note with its filters once, feedback 0.59 (0.61 saved), corners within 20 % of the saved
             const bool legacy = p.params.size() < 25;
-            const double dry = (legacy ? 100 : v(19, 100)) / 100, wet = (legacy ? v(0, 30) : v(20)) / 100;
+            const double kHalfPi = 1.5707963267948966;
+            const double dry = std::sin(kHalfPi * std::clamp((legacy ? 100 : v(19, 100)) / 100, 0.0, 1.0));
+            const double wet = std::sin(kHalfPi * std::clamp((legacy ? v(0, 30) : v(20)) / 100, 0.0, 1.0));
             if (wet <= 0) { notes.push_back("Tape Delay: Wet is 0 as saved (GarageBand's Delay knob raises it), left out"); continue; }
             json d = {{"type", "delay"}, {"feedback", r4(std::min(v(3) / 100, 0.97))}, {"highpass", r2(v(5, 20))}, {"lowpass", r2(v(4, 20000))},
-                      {"mix", r4(wet / (dry + wet))}};
+                      {"mix", r4(wet / (dry + wet))}, {"filterEchoes", true}, {"pingpong", false}};   // its echoes stay in the middle (the bounce)
             if (v(6) && v(7) > 0) d["time"] = r4(4 / v(7));
             else d["ms"] = r2(std::max(1.0, legacy ? v(1) + v(2) : v(22, 200)));
             fx.push_back(d);
@@ -1020,7 +1024,7 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             const Tap *t = fbOn && idx < taps.size() ? &taps[idx] : nullptr;
             for (auto &x : taps) if (!t && !x.mute) t = &x;
             if (!t || wet <= 0) { notes.push_back("Delay Designer: no tap or Wet off as saved, left out"); continue; }
-            json d = {{"type", "delay"}};
+            json d = {{"type", "delay"}, {"pingpong", false}};   // one tap, in the middle
             if (val(0) != 0 && t->steps > 0 && val(1) > 0) d["time"] = r4(t->steps * val(1) * 4);
             else d["ms"] = r2(std::max(1.0, t->ms));
             d["feedback"] = fbOn ? r4(std::min(dbLin(val(5, -100)), 0.97)) : 0.0;
