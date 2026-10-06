@@ -28,10 +28,20 @@ namespace {
 double r(double v, double unit = 1000) { return std::round(v * unit) / unit; }
 std::string fmt(double v) { char b[32]; std::snprintf(b, sizeof b, "%g", r(v, 100)); return b; }
 
-// the scales that await reference renders (guesses): normalized cutoff -> 20 Hz .. 20 kHz exponentially, the
-// filter envelope's full depth = the whole range, the LFO's = half of it, sync 1 = 4 octaves up, FM 1 = index 8
-double cutoffHz(double x) { return std::clamp(20.0 * std::pow(1000.0, std::clamp(x, 0.0, 1.0)), 20.0, 20000.0); }
-const double kOctaves = std::log2(1000.0), kEnvOct = kOctaves, kLfoCutOct = kOctaves / 2, kSyncSemis = 48, kFmIndex = 8;
+// the scales, measured on a GarageBand bounce of eight Analog patches (C3, C4 and C5 at velocity 100): normalized cutoff
+// -> 24 Hz .. 24 kHz exponentially (a quarter octave over 20 Hz .. 20 kHz; less velocity darkening would fit as well,
+// one velocity can't tell them apart), the filter envelope's full depth 8.5 octaves, and decay and release times the
+// time to fall 20 dB (a tenth of the way), where builtin:synth's reach 99%: they play kEnvTime as long (attacks as
+// given). Still guesses: the LFO's cutoff depth (half the cutoff range), sync 1 = 4 octaves up, FM 1 = index 8
+double cutoffHz(double x) { return std::clamp(24.0 * std::pow(1000.0, std::clamp(x, 0.0, 1.0)), 20.0, 20000.0); }
+const double kOctaves = std::log2(1000.0), kEnvOct = 8.5, kLfoCutOct = kOctaves / 2, kSyncSemis = 48, kFmIndex = 8, kEnvTime = 2;
+// an oscillator's start phase: Retro Synth restarts its oscillators at each note with their fundamentals in phase
+// (a saw's half a cycle on, a triangle's a quarter), so unison voices start together and beat apart
+json phased(json o) {
+    const std::string w = o.value("wave", "saw");
+    o["phase"] = w == "saw" ? 0.5 : w == "triangle" ? 0.25 : 0.0;
+    return o;
+}
 double fmRatio(double harmonic, double inharmonic) { return std::round(1 + 15 * harmonic) + 0.5 * inharmonic; }
 
 // a tempo-synced rate (a note length in whole notes) as "num/den"
@@ -196,7 +206,7 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vec
         json car = {{"wave", "sine"}, {"level", r(1 - mix)}, {"fm", {{"ratio", r(ratio)}, {"index", r(idx)}}}};
         if (sm > 0.01 && tgt < 0.75) {   // filter envelope -> FM amount: the FM index envelope
             const double peak = idx + sm * kFmIndex;
-            car["fm"] = {{"ratio", r(ratio)}, {"index", r(peak)}, {"decay", r(std::max(0.001, V(703) / 1000), 10000)},
+            car["fm"] = {{"ratio", r(ratio)}, {"index", r(peak)}, {"decay", r(std::max(0.001, V(703) / 1000 * kEnvTime), 10000)},
                          {"sustain", r(peak > 0 ? (idx + sm * kFmIndex * V(704)) / peak : 0)}};
         } else if (std::fabs(sm) > 0.01) notes.push_back("FM: modulation of the FM amount or harmonic isn't played");
         oscs.push_back(tuned(car));
@@ -225,16 +235,21 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vec
         if ((int)std::lround(V(102)) == 2 && V(103) > 0) velOct += V(103) * 4;
         if (velOct > 0.01) filt["velocity"] = r(std::min(4.0, velOct));
     }
+    for (auto &o : oscs) o = phased(o);
     synth["osc"] = oscs;
     synth["filter"] = filt;
-    synth["amp"] = {{"attack", r(V(802) / 1000, 100000)}, {"decay", r(V(803) / 1000, 10000)}, {"sustain", r(V(804), 10000)},
-                    {"release", r(V(805) / 1000, 10000)}, {"velocity", r(V(806))}};
-    synth["filterEnv"] = {{"attack", r(V(702) / 1000, 100000)}, {"decay", r(V(703) / 1000, 10000)}, {"sustain", r(V(704), 10000)}, {"release", r(V(705) / 1000, 10000)}};
-    // voices: 0 mono, 1 legato, n voices; Double / unison counts with the voice detune (cents: a guess) and spread
+    synth["amp"] = {{"attack", r(V(802) / 1000, 100000)}, {"decay", r(V(803) / 1000 * kEnvTime, 10000)}, {"sustain", r(V(804), 10000)},
+                    {"release", r(V(805) / 1000 * kEnvTime, 10000)}, {"velocity", r(V(806))}};
+    synth["filterEnv"] = {{"attack", r(V(702) / 1000, 100000)}, {"decay", r(V(703) / 1000 * kEnvTime, 10000)}, {"sustain", r(V(704), 10000)},
+                          {"release", r(V(705) / 1000 * kEnvTime, 10000)}};
+    // voices: 0 mono, 1 legato, n voices; Double / unison counts with the voice detune and spread. The voices start in
+    // phase and add up (count voices play 10 log10(count) dB over one: builtin:synth keeps the level of one), detuned
+    // 40 x^1.5 cents from lowest to highest (0.42: 11 cents, 0.12: 1.7, from two bounced patches' beats)
     const int nv = (int)std::lround(V(1)), un = (int)std::lround(V(2));
     if (nv <= 1) { synth["mono"] = true; synth["legato"] = nv == 1; }
-    const int count = un <= 0 ? 1 : un == 1 ? 2 : un;
-    if (count > 1) synth["unison"] = {{"voices", std::min(count, 8)}, {"detune", r(std::min(100.0, V(12) * 100), 100)}, {"spread", r(V(11))}};
+    const int count = std::min(8, un <= 0 ? 1 : un == 1 ? 2 : un);
+    if (count > 1)
+        synth["unison"] = {{"voices", count}, {"detune", r(std::min(100.0, 40 * std::pow(std::max(0.0, V(12)), 1.5)), 100)}, {"spread", r(V(11))}};
     // glide (0) or autobend (1) at #203-207
     if (V(203) >= 0.5) {
         if (V(204) < 0.5) { if (V(207) > 1) synth["glide"] = r(V(207) / 1000, 10000); }
@@ -258,7 +273,7 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vec
         lfos.push_back({{"rate", rate(653, 654)}, {"depth", r(V(202) * vg, 10000)}, {"shape", lfoShape(V(652))}, {"to", "pitch"}});
     if (V(606) > 0.01 || V(656) > 0.01) notes.push_back("LFO and vibrato depths under the mod wheel play at rest (wheel down)");
     if (!lfos.empty()) { if (lfos.size() > 4) lfos.erase(lfos.begin() + 4, lfos.end()); synth["lfo"] = lfos; }
-    synth["level"] = r(V(5), 100);
+    synth["level"] = r(V(5) + 10 * std::log10((double)count), 100);
     out.synth = synth;
     out.transpose = (int)std::lround(V(3));
     // effects: Retro Synth's chorus or flanger (a short chorus), and a band-reject / peak filter type as an eq band

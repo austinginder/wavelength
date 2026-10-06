@@ -445,7 +445,7 @@ g = t[1]["automation"]["gain"]
 ok &= "gain" not in t[1] and g[0] == [0, 0] and [4, -4.998] in g and g[-1] == [8, -12.041] and t[1]["automation"]["pan"] == [[0, 0], [16, -1]]
 ok &= t[0]["panLaw"] == "balance" and t[1]["panLaw"] == "balance"
 s = t[1]["sends"]["Echo"]
-ok &= s[0] == [0, -120] and s[-1] == [8, 0] and t[0]["automation"]["params"]["env"] == [[0, 0], [8, 4.983]]
+ok &= s[0] == [0, -120] and s[-1] == [8, 0] and t[0]["automation"]["params"]["env"] == [[0, 0], [8, 4.25]]
 m = j["master"]["automation"]["gain"]
 ok &= m[0] == [0, 0] and m[-1] == [8, -120] and "gain" not in j["master"]
 ok &= abs(t[0]["gain"] + 2.046) < 0.01 and t[0]["pan"] == 0.25 and abs(t[0]["sends"]["Echo"] + 12.041) < 0.01

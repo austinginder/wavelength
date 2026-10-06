@@ -231,6 +231,7 @@ struct Osc {
     std::shared_ptr<const AdditiveSet> add;   // Additive: its partials
     double lowcut = 0, highcut = 0;           // Noise: its band in Hz (0 = open), 12 dB/oct each
     double keyDb = 0, keyCenter = 60;         // keytrack: dB per octave away from keyCenter, never above level
+    double phase = -1;                        // start phase (cycles), every unison copy alike; -1: each copy its own
 };
 
 struct SynthLfo {
@@ -419,7 +420,7 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         else if (wave == "additive") x.wave = Osc::Additive;
         else throw std::runtime_error("synth: " + w + "wave '" + wave + "' must be saw, square (or pulse), triangle, sine, noise or additive");
         checkKeys(o, {"wave", "level", "octave", "semi", "cents", "pw", "decay", "fm", "filter", "sync", "partials", "harmonics", "partialWave", "shiftHz",
-                      "lowcut", "highcut", "keytrack", "keycenter"}, w, warnings);
+                      "lowcut", "highcut", "keytrack", "keycenter", "phase"}, w, warnings);
         for (const char *k : {"partials", "harmonics", "partialWave", "shiftHz"})
             if (x.wave != Osc::Additive && o.contains(k)) warnings.push_back("synth: " + w + k + " only applies to \"wave\": \"additive\"; ignored");
         x.level = std::max(0.0, num(o, "level", 1, w));
@@ -433,6 +434,7 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         }
         x.filtered = o.value("filter", true);
         x.sync = o.value("sync", false);
+        if (o.contains("phase")) { const double ph = num(o, "phase", 0, w); x.phase = ph - std::floor(ph); }
         if (o.contains("lowcut") || o.contains("highcut")) {
             if (x.wave != Osc::Noise) warnings.push_back("synth: " + w + "lowcut and highcut only apply to \"wave\": \"noise\"; ignored");
             else {
@@ -653,7 +655,7 @@ struct Voice {
                     pan = side * (0.3 + 0.7 * std::fabs(dist) / c);
                 }
                 x.pan = pan;
-                x.phase = U > 1 ? (hash32(seed * 131 + (uint32_t)(o * 17 + (size_t)u)) & 0xffffff) / 16777216.0 : 0.0;
+                x.phase = P->osc[o].phase >= 0 ? P->osc[o].phase : U > 1 ? (hash32(seed * 131 + (uint32_t)(o * 17 + (size_t)u)) & 0xffffff) / 16777216.0 : 0.0;
                 x.fmPhase = 0;
                 if (P->osc[o].lowcut > 0) x.noiseHp.set(dsp::Biquad::HighPass, P->osc[o].lowcut, 0.7071, 0, sr);
                 if (P->osc[o].highcut > 0) x.noiseLp.set(dsp::Biquad::LowPass, P->osc[o].highcut, 0.7071, 0, sr);
@@ -748,9 +750,10 @@ thread_local bool tLevelProbe = false;   // rendering a level probe: no level fi
 // GarageBand's factory patches are roughly level-matched, but a re-creation can land far from them while its filter
 // and resonance scales are guesses (a self-oscillating resonance, a filter closed until modulation that isn't
 // mapped). A patch whose probe (C3 held, then a C minor chord, effects included) measures outside -33..-17 LUFS,
-// 8 dB either side of the re-creations' typical -25, is moved to the nearer edge (by at most +24 dB). The dB to
-// add after its effects; cached per patch.
-double garageBandLevelFix(const std::string &name) {
+// 8 dB either side of the re-creations' typical -25, is moved to the nearer edge (by at most +24 dB). Retro Synth's
+// scales are measured (a bounce of eight of its patches spread over 12 dB, as GarageBand plays them): only a probe more
+// than 12 dB from its patches' typical -20.5 LUFS moves. The dB to add after its effects; cached per patch.
+double garageBandLevelFix(const std::string &name, bool retro) {
     static std::mutex m;
     static std::map<std::string, double> cache;
     {
@@ -774,7 +777,8 @@ double garageBandLevelFix(const std::string &name) {
     const bool ok = renderSynth(job, t, a, w, e);
     tLevelProbe = false;
     const double lufs = ok ? integratedLufs(a, job.sampleRate) : 0;
-    if (ok && std::isfinite(lufs) && lufs > -120) fix = lufs > -17 ? -17 - lufs : lufs < -33 ? std::min(24.0, -33 - lufs) : 0;
+    const double lo = retro ? -32.5 : -33, hi = retro ? -8.5 : -17;
+    if (ok && std::isfinite(lufs) && lufs > -120) fix = lufs > hi ? hi - lufs : lufs < lo ? std::min(24.0, lo - lufs) : 0;
     fix = std::round(fix * 10) / 10;
     std::lock_guard<std::mutex> lock(m);
     cache[name] = fix;
@@ -809,7 +813,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             found = "Init";
             patchTranspose = gb.transpose;
             patchFx = gb.fx;
-            if (!tLevelProbe) levelFix = garageBandLevelFix(gbKey);
+            if (!tLevelProbe) levelFix = garageBandLevelFix(gbKey, gb.instrument == "Retro Synth");
             char fixText[96] = "";
             if (levelFix != 0) std::snprintf(fixText, sizeof fixText, "; its level moved %+.1f dB toward its peers' (scales not yet calibrated)", levelFix);
             warnings.push_back("preset '" + gb.name + "' is GarageBand's " + garageBandSynthKind(gb) + " patch, re-created on builtin:synth: an approximation" + fixText);
