@@ -378,9 +378,9 @@ t = json.load(sys.stdin)["tracks"][0]
 sys.exit(0 if any("through its Arpeggiator (1/16 up over 2 octaves)" in w for w in t["warnings"]) else 1)'; then
     exs_why="Alchemy's arpeggiator did not play the Test Alchemy Arp patch's notes"
   fi
-  # Vintage Electric Piano, Vintage Clav and Sculpture patches play on builtin:synth by name: Test EP and Test Clav
-  # sound C4, Test Sculpture (transposed +12) C5; Test Sculpture Side (object 2 External) is refused with the reason,
-  # there and in samples --patch
+  # Vintage Electric Piano, Vintage Clav and Sculpture patches play on builtin:synth by name: Test EP sounds C4, Test
+  # Clav C3 (Vintage Clav sounds an octave below the key, as GarageBand plays it), Test Sculpture (transposed +12) C5;
+  # Test Sculpture Side (object 2 External) is refused with the reason, there and in samples --patch
   if [ -z "$exs_why" ]; then
     cat > out/check/exs/keys.json <<'JOB'
 {"tempo": 60, "leadIn": 0, "tail": 0, "stems": "16",
@@ -391,7 +391,7 @@ JOB
     if ! "./$build/wavelength" render out/check/exs/keys.json --out out/check/exs/keys --json > /dev/null 2>&1; then
       exs_why="the Vintage Electric Piano, Vintage Clav and Sculpture patches did not render on builtin:synth"
     else
-      for t in 01-ep:C4 02-clav:C4 03-sculpture:C5; do
+      for t in 01-ep:C4 02-clav:C3 03-sculpture:C5; do
         got=$("./$build/wavelength" analyze "out/check/exs/keys/stems/${t%%:*}.wav" --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')
         [ "$got" = "${t##*:}" ] || exs_why="${exs_why:+$exs_why; }the ${t%%:*} patch played $got, not ${t##*:}"
       done

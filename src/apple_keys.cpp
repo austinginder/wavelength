@@ -115,6 +115,33 @@ const char *clavModel(int model) {
                                 "Woodtone or Plectratone?", "Dulcitone or Belltone?", "Plectratone (harp-like)"};
     return model >= 0 && model < 14 ? w[model] : "unknown";
 }
+// Measured on GarageBand's Seventies, Muted and Chilled Clav (classic, dulcimer and harp models) at C3 and C4 (t16):
+// the string sounds an octave below the written key (its partials sit at whole multiples of half the note's
+// frequency, on every model and both keys), and its spectrum is the comb of the pickups. A pickup at fraction x of the
+// string hears partial n as sin(pi n x); the positions (0..100 % of the string) move from their Low to their High value
+// across the keys, at t = (key - 36) / 76 of the way (fitted: Seventies Clav's nulls at 655 Hz and its peak near
+// 1.3 kHz on both keys). Pickup Mode 0 is the lower pickup (Muted Clav), 2 lower minus upper (out of phase: Seventies
+// Clav); 1 upper and 3 lower plus upper by elimination.
+double clavKeyPos(int key) { return std::clamp((key - 36.0) / 76, 0.0, 1.0); }
+double pickupResp(int mode, int n, double xl, double xu) {
+    const double a = std::sin(M_PI * n * xl), b = std::sin(M_PI * n * xu);
+    return mode == 0 ? a : mode == 1 ? b : mode == 2 ? a - b : a + b;
+}
+// the string's partials lo..hi (of the string an octave below the key) as the pickups hear them at `key`: n^-tilt times
+// the comb, scaled so all 128 hold one sine's power
+json clavPartials(int mode, double l0, double l1, double u0, double u1, int key, double tilt, int lo = 1, int hi = 128) {
+    const double t = clavKeyPos(key), xl = (l0 + (l1 - l0) * t) / 100, xu = (u0 + (u1 - u0) * t) / 100;
+    std::vector<double> a, sq;
+    for (int n = 1; n <= 128; ++n) {
+        a.push_back(std::pow(n, -tilt) * std::fabs(pickupResp(mode, n, xl, xu)));
+        sq.push_back(a.back() * a.back());
+    }
+    const double p = std::sqrt(fsum(sq));
+    json out = json::array();
+    for (int n = std::max(1, lo); n <= std::min(128, hi); ++n)
+        if (p > 0 && a[(size_t)n - 1] / p >= 0.001) out.push_back({r(a[(size_t)n - 1] / p, 10000), n});
+    return out;
+}
 
 // ---- Sculpture
 // the 22 morphable values, at #443 + 27 k for morph point k (0 the centre, 1..4 the corners A..D)
@@ -169,7 +196,10 @@ const Route kRoutes[] = {{"LFO1", 140, 141, 143}, {"LFO1", 145, 146, 148}, {"LFO
                          {"NoteOnRnd1", 209, 210, 211}, {"NoteOnRnd2", 212, 213, 214}, {"Env1", 221, 222, 224}, {"Env1", 226, 227, 229},
                          {"Env2", 271, 272, 274}, {"Env2", 276, 277, 279}, {"Velo1", 123, 124, 125}, {"Velo2", 127, 128, 129},
                          {"CtrlA", 415, 416, 417}, {"CtrlA", 419, 420, 421}, {"CtrlB", 423, 424, 425}, {"CtrlB", 427, 428, 429}};
-const double kEnvCutOct = 5;   // guess: an envelope or LFO amount of 1 on Filter Cutoff = 5 octaves
+// an envelope amount of 1 on Filter Cutoff moves it over its whole range, 10 octaves on scale A1 (measured: Vintage
+// Funk's Env 2, +0.73 from level 1 down to -0.34, opens the filter at the attack and closes it below the fundamental by
+// 0.25 s, when its level falls 25 dB); an LFO amount of 1 swings it 2.5 octaves (a guess)
+const double kEnvCutOct = 10, kLfoCutOct = 2.5;
 
 // guess: seconds for a free string to fall ~40 dB: Media Loss 0 ~9 s, 0.5 ~1.1 s, 1 0.14 s; Inner Loss shortens it by
 // up to half (its losses also dull the tone: the filter envelope)
@@ -206,6 +236,31 @@ json envAdsr(const CtrlEnv &e, double &peak) {
     if (sp <= pi || e.finish) return adsr(a, std::max(0.005, end - a), std::clamp(e.pts[4][1] / peak, 0.0, 1.0), 0.1);
     const double rel = sp < 4 ? std::max(0.01, end - e.pts[sp][0]) : 0.3;
     return adsr(a, std::max(0.005, e.pts[sp][0] - a), std::clamp(e.pts[sp][1] / peak, 0.0, 1.0), rel);
+}
+// a point envelope over its whole range, for a route that swings both ways: its lowest and highest levels, and an ADSR
+// from the lowest (0) to the highest (1): attack to the highest point, then decay toward the sustain point; when it
+// dips to its lowest point first, the decay follows that fall and holds the mean of the levels from there through the
+// sustain point (null: a flat envelope). Its points join in straight lines, the ADSR's decay falls exponentially
+// (99 % of the way in its time): a decay three times the segment's passes the segment's midpoint about when it does
+json envRange(const CtrlEnv &e, double &lo, double &hi) {
+    size_t pi = 0, li = 0;
+    for (size_t i = 1; i < e.pts.size(); ++i) {
+        if (e.pts[i][1] > e.pts[pi][1]) pi = i;
+        if (e.pts[i][1] < e.pts[li][1]) li = i;
+    }
+    lo = e.pts[li][1], hi = e.pts[pi][1];
+    if (hi - lo < 1e-6) return nullptr;
+    auto norm = [&](double v) { return std::clamp((v - lo) / (hi - lo), 0.0, 1.0); };
+    const size_t sp = (size_t)std::clamp(e.sus, 0, 4);
+    const double a = e.pts[pi][0], end = e.pts[4][0];
+    if (sp <= pi || e.finish) return adsr(a, std::max(0.005, 3 * (end - a)), norm(e.pts[4][1]), 0.1);
+    const double rel = sp < 4 ? std::max(0.01, end - e.pts[sp][0]) : 0.3;
+    if (li > pi && li < sp) {
+        std::vector<double> held;
+        for (size_t i = li; i <= sp; ++i) held.push_back(e.pts[i][1]);
+        return adsr(a, std::max(0.005, 3 * (e.pts[li][0] - a)), norm(fsum(held) / (double)held.size()), rel);
+    }
+    return adsr(a, std::max(0.005, 3 * (e.pts[sp][0] - a)), norm(e.pts[sp][1]), rel);
 }
 } // namespace
 
@@ -319,52 +374,73 @@ GarageBandSynth vintageClavPatch(const std::vector<float> &params) {
     const std::string fam = clavFamily(model) ? clavFamily(model) : "classic";
     out.engine = fam;
     const double damper = std::clamp(V(7), 0.0, 1.0);
-    // the pickups: the pulse width plays the harmonic comb of a pickup at fraction x of the string (min(x, 1 - x));
-    // Pickup Mode 0..3 (= AB + 2 CD) read as Lower, Upper, Lower-Upper (out of phase), Lower+Upper (order a guess)
+    // the string as the pickups hear it (see clavPartials): its partials an octave below the key, falling n^-tilt
+    // (Brilliance sharpens them: a guess), through the comb of the pickups; when the pickups move across the keyboard,
+    // the comb at C3 and at C5, crossfaded by key (6 dB an octave each way)
     const int mode = ri(V(28));
-    const double lower = (V(33) + V(34)) / 200.0, upper = (V(35) + V(36)) / 200.0;
-    const double pw = std::clamp(mode == 0 ? std::min(lower, 1 - lower) : mode == 1 ? std::min(upper, 1 - upper)
-                                                                         : (std::min(lower, 1 - lower) + std::min(upper, 1 - upper)) / 2, 0.06, 0.5);
+    const double tilt = std::clamp(0.5 - 0.5 * V(14), 0.0, 1.2);
+    // String Damping: the higher partials die faster, partial n losing an extra g (n^1.2 - 1) dB/s at C3, 1.8 times
+    // more an octave up, g = 9.4 x 100^Damping on the harp model (Chilled Clav at 0.54: partials 2..5 fall 3 to 8 times
+    // faster than its first), 0.4 x 100^Damping on the others (Seventies Clav at 0: a few dB/s more up at 1-2 kHz); with
+    // a loss that counts, the partials play in groups (1, 2-3, 4-7, 8-128), each fading 40 dB over 40 / loss seconds
+    // (at C4, its middle partial)
+    const double g = (fam == "harp" ? 9.4 : 0.4) * std::pow(100.0, std::clamp(V(21), -1.0, 1.0));
+    auto extra = [&](double n) { return g * (std::pow(n, 1.2) - 1) * 1.8; };
+    static const int groups[4][2] = {{1, 1}, {2, 3}, {4, 7}, {8, 128}};
+    const bool split = extra(2) >= 10;
     json oscs = json::array();
-    double baseCut = 0, envOct = 0, fdec = 0;
-    if (fam == "classic" || fam == "funk" || fam == "mellow") {
-        oscs.push_back({{"wave", "square"}, {"pw", r(pw)}});
-        oscs.push_back({{"wave", "saw"}, {"level", fam != "mellow" ? 0.45 : 0.2}});
-        baseCut = fam != "mellow" ? 2600 : 1500, envOct = fam != "mellow" ? 3.0 : 2.0, fdec = fam != "mellow" ? 0.35 : 0.3;
-    } else if (fam == "harpsichord") {
-        oscs.push_back({{"wave", "saw"}});
-        oscs.push_back({{"wave", "square"}, {"pw", r(pw)}, {"level", 0.5}, {"octave", 1}});
-        baseCut = 4500, envOct = 1.5, fdec = 0.6;
-    } else if (fam == "sitar") {
-        oscs.push_back({{"wave", "saw"}});
-        oscs.push_back({{"wave", "square"}, {"pw", 0.12}, {"level", 0.4}});
-        baseCut = 3500, envOct = 2.0, fdec = 0.8;
-    } else if (fam == "wood") {
-        oscs.push_back({{"wave", "triangle"}});
-        oscs.push_back({{"wave", "sine"}, {"fm", {{"ratio", 3.5}, {"index", 1.5}, {"decay", 0.12}}}, {"level", 0.4}});
-        baseCut = 2000, envOct = 2.5, fdec = 0.12;
-    } else if (fam == "dulcimer") {
-        oscs.push_back({{"wave", "square"}, {"pw", r(pw)}, {"level", 0.6}});
-        oscs.push_back({{"wave", "sine"}, {"fm", {{"ratio", 2.0}, {"index", 1.2}, {"decay", 0.4}, {"sustain", 0.1}}}});
-        baseCut = 3000, envOct = 2.0, fdec = 0.3;
-    } else {   // harp
-        oscs.push_back({{"wave", "triangle"}});
-        oscs.push_back({{"wave", "square"}, {"pw", r(pw)}, {"level", 0.3}});
-        baseCut = 2200, envOct = 1.5, fdec = 0.25;
+    const json low = clavPartials(mode, V(33), V(34), V(35), V(36), 48, tilt), high = clavPartials(mode, V(33), V(34), V(35), V(36), 72, tilt);
+    if (low.empty() || high.empty()) {
+        oscs.push_back({{"wave", "saw"}, {"octave", -1}, {"level", 0.05}});
+        notes.push_back("the pickups cancel each other (a hole in the keyboard, as Apple's guide warns): a faint saw stands in");
+    } else {
+        for (int k = 0; k < (low == high ? 1 : 2); ++k)
+            for (int gi = 0; gi < (split ? 4 : 1); ++gi) {
+                const int lo = split ? groups[gi][0] : 1, hi = split ? groups[gi][1] : 128;
+                const json part = clavPartials(mode, V(33), V(34), V(35), V(36), k ? 72 : 48, tilt, lo, hi);
+                if (part.empty()) continue;
+                json o = {{"wave", "additive"}, {"partials", part}, {"octave", -1}};
+                if (low != high) o["keytrack"] = k ? 6 : -6, o["keycenter"] = k ? 72 : 48;
+                if (split && lo > 1) o["decay"] = r(std::clamp(40 / extra(std::sqrt((double)lo * hi)), 0.02, 20.0));
+                oscs.push_back(o);
+            }
+        if (split) notes.push_back("String Damping " + num(V(21), 2) + ": the higher partials fade faster (partials 2-3 over " + num(40 / extra(std::sqrt(6.0)), 2) +
+                                   " s, 8-128 over " + num(40 / extra(32.0), 2) + " s at C4)");
     }
-    // Brilliance and Shape brighten the strike, String Damping mellows it, Damper mutes it (scales a guess)
-    const double cut = baseCut * std::pow(2.0, 1.2 * V(14)) * std::pow(2.0, -1.0 * V(21)) * std::pow(2.0, -2.0 * damper);
-    json filt = {{"type", "lowpass"}, {"slope", fam == "classic" || fam == "funk" ? 24 : 12}, {"cutoff", r(std::clamp(cut, 200.0, 16000.0), 10)}, {"keytrack", 0.6},
-                 {"env", r(envOct * (1 + 0.3 * V(13)), 100)}, {"velocity", r(std::clamp(1.2 + 0.6 * V(13), 0.2, 3.0), 100)}};
+    // a model's colour beyond the comb: wood's inharmonic overtones and sitar's buzz (guesses, no reference yet)
+    if (fam == "wood") oscs.push_back({{"wave", "sine"}, {"octave", -1}, {"fm", {{"ratio", 3.5}, {"index", 1.5}, {"decay", 0.12}}}, {"level", 0.4}});
+    if (fam == "sitar") oscs.push_back({{"wave", "square"}, {"octave", -1}, {"pw", 0.12}, {"level", 0.4}});
+    // the tone as a fixed low-pass (the bounce's spectra stand still in frequency between C3 and C4 and don't darken
+    // over the note), with the Medium switch on (Apple's guide: Medium and Soft act as low-pass filters): classic fitted
+    // on Seventies Clav, 24 dB at 1170 Hz x 2^(1.2 Brilliance), dulcimer on Muted Clav, 12 dB at 1350 Hz, harp on
+    // Chilled Clav's dull pluck, 12 dB at 310 Hz; the other families keep their former cutoffs relative to classic
+    // (guesses); an octave higher with Medium off and String Damping mellowing it (guesses)
+    static const std::pair<const char *, double> cuts[8] = {{"classic", 1170}, {"funk", 1170}, {"mellow", 675}, {"harpsichord", 2025},
+                                                            {"sitar", 1575}, {"wood", 900}, {"dulcimer", 1350}, {"harp", 310}};
+    double baseCut = 1170;
+    for (auto &[f, c] : cuts) if (fam == f) baseCut = c;
+    const double cut = baseCut * std::pow(2.0, 1.2 * V(14)) * std::pow(2.0, -0.5 * V(21)) * (V(40) >= 0.5 ? 1.0 : 2.0);
+    json filt = {{"type", "lowpass"}, {"slope", fam == "classic" || fam == "funk" ? 24 : 12}, {"cutoff", r(std::clamp(cut, 150.0, 16000.0), 10)},
+                 {"velocity", r(std::clamp(0.6 + 0.3 * V(13), 0.2, 1.5), 100)}};
     if (fam == "funk") filt["resonance"] = 0.25;
-    const json fenv = adsr(0, std::clamp(fdec * std::pow(2.0, -1.2 * V(21)) * (1 - 0.6 * damper), 0.03, 2.0), 0, 0.1);
-    // String Decay -1..1 scales the ring (about 2.5 s), Damper shortens it; the string stops when the key comes up
-    double dec = std::clamp(2.5 * std::pow(2.0, 2.0 * V(22)) * (1 - 0.85 * damper), 0.08, 20.0);
-    if (fam == "harp" || fam == "dulcimer" || fam == "sitar") dec *= 1.8;
+    // the decay in dB/s: the free string 8.7 dB/s at C3 (Seventies Clav's 7 through its compressors), String Decay +-1
+    // four times slower or faster (a guess), little faster up the keys; the Damper adds its own loss, saturating
+    // (1 - (1 - Damper)^4) and 1.8 times faster an octave up: 95 dB/s at C3 (Muted Clav at 0.83 and Chilled Clav at 0.48
+    // fall alike, 95 and 170 dB/s at C3 and C4); the amp's decay at C4 and its key tracking from the two
+    auto rate = [&](int key) {
+        const double oct = (key - 48) / 12.0;
+        double s = 8.7 * std::pow(4.0, -std::clamp(V(22), -1.0, 1.0)) * std::pow(2.0, 0.14 * oct);
+        if (fam == "harp" || fam == "dulcimer" || fam == "sitar") s /= 1.8;
+        return s + 95 * (1 - std::pow(1 - damper, 4)) * std::pow(1.8, oct);
+    };
+    const double dec = std::clamp(40 / rate(60), 0.05, 20.0), akt = std::clamp(std::log2(rate(60) / rate(48)), -2.0, 2.0);
     const double rel = std::clamp(0.06 * std::pow(2.0, 3.0 * V(25)), 0.02, 4.0);
-    json synth = {{"filter", filt}, {"filterEnv", fenv}, {"amp", adsr(0.001, dec, 0, rel, 0.75)}};
+    json amp = adsr(0.001, dec, 0, rel, 0.75);
+    if (std::fabs(akt) >= 0.01) amp["keytrack"] = r(akt, 100);
+    json synth = {{"filter", filt}, {"amp", amp}};
     if (V(23) > 0.3 && fam != "wood" && fam != "dulcimer") {   // String Stiffness: an inharmonic partial (a guess)
-        oscs.push_back({{"wave", "sine"}, {"level", r(0.3 * V(23), 100)}, {"fm", {{"ratio", r(1 + 2.5 * V(23), 100)}, {"index", 1.0}, {"decay", 0.2}}}, {"decay", 0.6}});
+        oscs.push_back({{"wave", "sine"}, {"octave", -1}, {"level", r(0.3 * V(23), 100)},
+                        {"fm", {{"ratio", r(1 + 2.5 * V(23), 100)}, {"index", 1.0}, {"decay", 0.2}}}, {"decay", 0.6}});
         notes.push_back("String Stiffness " + num(V(23), 2) + " as an inharmonic FM partial (a guess)");
     }
     if (V(20) > 0.05) {
@@ -374,42 +450,47 @@ GarageBandSynth vintageClavPatch(const std::vector<float> &params) {
     if (std::fabs(V(2)) >= 0.5) for (auto &o : oscs) o["cents"] = r(V(2), 10);
     synth["osc"] = oscs;
     if (ri(V(1)) <= 1) synth["mono"] = true;
-    // a level per family (see the header), moved by 10 % of the Clav's own Level
-    static const std::pair<const char *, double> levels[8] = {{"classic", -2.8}, {"dulcimer", -6.1}, {"funk", -4.1}, {"harp", -5.4},
-                                                                {"harpsichord", -2.9}, {"mellow", -2.6}, {"sitar", 2.9}, {"wood", -4.9}};
+    // a level per family, moved by 10 % of the Clav's own Level: classic, dulcimer and harp set against GarageBand's
+    // Seventies, Muted and Chilled Clav (t16; the harp's level sits where the level probe's window holds it), the
+    // families no bounce has measured at classic's (their voice is classic's comb)
+    static const std::pair<const char *, double> levels[8] = {{"classic", -3.8}, {"dulcimer", -0.3}, {"funk", -3.8}, {"harp", -5.4},
+                                                                {"harpsichord", -3.8}, {"mellow", -3.8}, {"sitar", -3.8}, {"wood", -3.8}};
     double base = 0;
     for (auto &[f, l] : levels) if (fam == f) base = l;
     synth["level"] = r(std::clamp(base + 0.1 * V(9), -40.0, 12.0), 100);
     out.synth = synth;
     notes.insert(notes.begin(), "model " + std::to_string(model) + " = " + clavModel(model) + ": a " + fam + " voice (the family per model a guess)");
     notes.insert(notes.begin(), closeness(fam == "classic" || fam == "funk" || fam == "mellow"));
-    notes.push_back("pickups (mode " + std::to_string(mode) + ", lower " + num(100 * lower, 0) + " %, upper " + num(100 * upper, 0) + " %) as pulse width " + num(pw, 2) +
-                    " (the comb of a pickup at that string fraction)");
-    notes.push_back("String Decay " + num(V(22), 2) + ", Damper " + num(damper, 2) + " -> amp decay " + num(dec, 2) + " s; String Release " + num(V(25), 2) + " -> " +
-                    num(rel, 2) + " s (scales a guess)");
+    static const char *modes[4] = {"lower", "upper", "lower - upper", "lower + upper"};
+    notes.push_back("the string an octave below the key, through the pickups' comb (mode " + std::to_string(mode) + ", " + modes[std::clamp(mode, 0, 3)] +
+                    "; lower " + inum(V(33)) + ".." + inum(V(34)) + " %, upper " + inum(V(35)) + ".." + inum(V(36)) + " %)" +
+                    (low != high ? ", held at C3 and C5 and crossfaded between" : ""));
+    notes.push_back("String Decay " + num(V(22), 2) + ", Damper " + num(damper, 2) + " -> " + num(40 / rate(48), 2) + " s to fall 40 dB at C3, " + num(dec, 2) +
+                    " s at C4; String Release " + num(V(25), 2) + " -> " + num(rel, 2) + " s (the Release scale a guess)");
     if (V(15) > -0.95) notes.push_back("the release click (intensity " + num(V(15), 2) + ") isn't played");
     if (V(26) > -0.95) notes.push_back("Pitch Fall " + num(V(26), 2) + " at key-up isn't played");
     if (V(3) > 0.05 || V(5) > 0.05) notes.push_back("Warmth and stretch tuning aren't played");
     if (V(31) > 0.05 || V(32) > 0.05) notes.push_back("the pickup and key stereo spreads aren't played");
-    // the tone switches as EQ: #init has all four on, so "all on" must be a full sound. Read (a guess) as the D6's
-    // switched capacitors: each bass cut alone a high-pass (Brilliant 500 Hz, Treble 250 Hz, Medium 120 Hz), engaged
-    // together their capacitors add, so the cut is 1 / sum(1 / f) (all three: 70 Hz); Soft a gentle treble shelf
+    // the tone switches as EQ, read (a guess) as the D6's switched capacitors: each bass cut alone a high-pass
+    // (Brilliant 500 Hz, Treble 250 Hz, Medium 120 Hz), engaged together their capacitors add, so the cut is
+    // 1 / sum(1 / f) (all three: 70 Hz; #init has all four on, so "all on" must be a full sound). Soft is a 12 dB
+    // low-pass at 1 kHz (a guess: Wah-Wah Clav, Soft on, keeps only what is above 700 Hz in its Channel EQ, so Soft
+    // can't be much darker) that takes over from the bass cuts (Chilled Clav, Brilliant and Soft on, keeps its lowest
+    // partials)
     json bands = json::array();
+    const bool soft = V(41) >= 0.5;
     std::vector<double> caps;
     for (auto [i, f] : {std::pair<size_t, double>{38, 500.0}, {39, 250.0}, {40, 120.0}}) if (V(i) >= 0.5) caps.push_back(1.0 / f);
-    if (!caps.empty()) {
+    if (!caps.empty() && !soft) {
         const double hp = 1.0 / fsum(caps);
         if (hp > 60) bands.push_back({{"type", "highpass"}, {"freq", r(hp, 10)}, {"q", 0.6}});
     }
-    if (V(41) >= 0.5) bands.push_back({{"type", "highshelf"}, {"freq", 2500}, {"gain", -6}});
-    if (mode == 2) {
-        bands.push_back({{"type", "lowshelf"}, {"freq", 300}, {"gain", -6}});
-        notes.push_back("out-of-phase pickups (mode 2, if the order guess holds) thinned with a -6 dB low shelf");
-    }
+    if (soft) bands.push_back({{"type", "lowpass"}, {"freq", 1000}, {"q", 0.7071}});
     if (!bands.empty()) {
         out.fx.push_back({{"type", "eq"}, {"bands", bands}});
         notes.push_back(std::string("Brilliant/Treble/Medium/Soft (") + (V(38) >= 0.5 ? "1" : "0") + (V(39) >= 0.5 ? "1" : "0") + (V(40) >= 0.5 ? "1" : "0") +
-                        (V(41) >= 0.5 ? "1" : "0") + ") as a high-pass at 1 / sum(1 / f) of the engaged bass cuts and a treble shelf (a guess)");
+                        (soft ? "1" : "0") + (soft ? ") as Soft's 1 kHz low-pass, which takes over from the bass cuts (guesses)"
+                                                   : ") as a high-pass at 1 / sum(1 / f) of the engaged bass cuts (a guess)"));
     }
     // the effects section (Fx Bypass 1: all off), in a fixed order: wah, compressor, distortion, modulation (a guess)
     if (V(55) < 0.5) {
@@ -417,8 +498,10 @@ GarageBandSynth vintageClavPatch(const std::vector<float> &params) {
             const int wm = ri(V(61));   // 0 Classic, 1 Retro, 2 Modern, 3 Opto 1, 4 Opto 2, 5 Resonant LP, 6 Resonant HP, 7 Peak
             const double range = std::clamp(V(45), 0.1, 2.0), lo = 350.0, hi = 350.0 * std::pow(2.0, 1.5 + 1.5 * range);
             if (wm >= 0 && wm <= 5 && V(48) > 0.5) {
+                // the pedal wahs keep half the dry signal (a peak more than a band-pass: Apple's guide gives Classic Wah "a
+                // slight peak characteristic", and Muted Clav's Opto Wah 1 matches better so)
                 out.fx.push_back({{"type", "autowah"}, {"min", r(lo, 10)}, {"max", r(std::min(hi, 6000.0), 10)}, {"resonance", wm != 5 ? 3 : 4},
-                                  {"sensitivity", r(std::clamp(V(48) / 2, 0.0, 12.0), 10)}, {"mode", wm == 5 ? "lowpass" : "bandpass"}, {"mix", 1}});
+                                  {"sensitivity", r(std::clamp(V(48) / 2, 0.0, 12.0), 10)}, {"mode", wm == 5 ? "lowpass" : "bandpass"}, {"mix", wm == 5 ? 1.0 : 0.5}});
                 notes.push_back("wah mode " + std::to_string(wm) + " with Env Depth " + num(V(48), 1) + " as an auto-wah " + num(lo, 0) + ".." +
                                 num(std::min(hi, 6000.0), 0) + " Hz (sensitivity scale a guess)");
             } else {
@@ -533,14 +616,20 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
     // ---- the voice: oscillators by exciter class and material
     const double timbre = std::clamp(exc->timbre, -1.0, 1.0);
     const double pw = std::clamp((std::min(M[kPickA], 1 - M[kPickA]) + std::min(M[kPickB], 1 - M[kPickB])) / 2, 0.05, 0.5);
-    json oscs = json::array(), filt, fenv;
+    json oscs = json::array(), filt, fenv, comb;   // comb: the noise class's string, a second filter after filt
     const std::string material = S > 0.55 && IL < 0.45 ? "bell/glass" : S > 0.55 ? "wood" : IL > 0.55 ? "nylon/gut" : "metal string";
     if (cls == "plucked" || cls == "struck") {
-        if (S > 0.55) {   // stiff: inharmonic partials (bells, bars, glass)
-            const double ratio = IL < 0.45 ? r(1.4 + 2.6 * S, 100) : 4.0;
-            oscs.push_back({{"wave", "sine"}, {"fm", {{"ratio", ratio}, {"index", r(std::clamp(2.6 * (1 - IL) + 0.6, 0.4, 4.0), 100)},
-                                                      {"decay", r(std::clamp(0.35 * T, 0.05, 4.0))}, {"sustain", 0.08}}}});
-            oscs.push_back({{"wave", "sine"}, {"semi", IL < 0.45 ? 17.6 : 24}, {"level", r(0.25 * (1 - 0.6 * IL), 100)}, {"decay", r(std::clamp(0.5 * T, 0.05, 6.0))}});
+        if (S > 0.55) {
+            // stiff: a stiff string's partials, n sqrt((1 + B n^2) / (1 + B)) times the first, B = 2.5 x 10^(-7 (1 - S))
+            // (fitted: Delicate Bells' glass at Stiffness 1 rings at 1, 3.6-3.75 and 7.1-7.8 times its pitch, Vintage
+            // Funk's string at 0.38 is harmonic), the upper ones about 14 dB under the first and fading twice as fast
+            // (Inner Loss weakens them: a guess)
+            const double B = 2.5 * std::pow(10.0, -7 * (1 - std::clamp(S, 0.0, 1.0)));
+            json part = json::array();
+            for (int n = 2; n <= 6; ++n)
+                part.push_back({r(0.2 * std::pow(2.0 / n, 0.3) * (1 - 0.6 * IL), 1000), r(n * std::sqrt((1 + B * n * n) / (1 + B)), 1000)});
+            oscs.push_back({{"wave", "sine"}});
+            oscs.push_back({{"wave", "additive"}, {"partials", part}, {"decay", r(std::clamp(2 * T, 0.05, 12.0))}});
             filt = {{"type", "off"}};
         } else {
             if (cls == "struck") {
@@ -563,11 +652,16 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
         oscs.push_back({{"wave", "sine"}, {"octave", 1}, {"level", 0.3}});
         oscs.push_back({{"wave", "noise"}, {"level", r(std::clamp(0.08 + 0.12 * exc->var, 0.03, 0.25), 100)}});
         filt = {{"type", "lowpass"}, {"slope", 12}, {"cutoff", r(std::clamp(2200 * std::pow(2.0, 1.2 * timbre), 300.0, 10000.0), 10)}, {"keytrack", 0.8}, {"velocity", 0.6}};
-    } else {   // noise into a string: pitched breath, a resonant band-pass that follows the note and a quiet sine for pitch
+    } else {
+        // noise into a string: noise through a comb tuned to the note (the string's resonances, its feedback the string's
+        // decay per cycle at C4, its loop damped at 0.5: the best fit on all three) under the string's brightness as a
+        // 24 dB low-pass (the plucked classes' brightness; fitted on Airways, String Movements and Wave Space, whose
+        // bounces are harmonic noise falling steeply above it)
         oscs.push_back({{"wave", "noise"}});
-        oscs.push_back({{"wave", "sine"}, {"level", 0.35}, {"filter", false}});
-        filt = {{"type", "bandpass"}, {"slope", 12}, {"cutoff", r(261.6 * (1 + 2 * std::clamp(timbre + 1, 0.0, 2.0) / 2), 10)}, {"keytrack", 1}, {"resonance", 0.8}};
-        notes.push_back("the noise-excited string as note-tracking resonant noise and a sine: a rough stand-in for a breathy resonance");
+        filt = {{"type", "lowpass"}, {"slope", 24}, {"cutoff", r(std::clamp(900 * std::pow(2.0, 2.2 * (1 - IL)) * std::pow(2.0, timbre), 120.0, 12000.0), 10)}};
+        comb = {{"type", "comb"}, {"cutoff", 261.6}, {"keytrack", 1}, {"resonance", r(std::clamp(std::pow(10.0, -2 / (261.6 * T)), 0.9, 0.99), 1000)},
+                {"damp", 0.5}};
+        notes.push_back("the noise-excited string as noise through a comb tuned to the note under a low-pass: a stand-in for its breathy resonance");
     }
     // Resolution: few harmonics -> a low-pass at Resolution x the fundamental (at C3)
     const double res = V(35);
@@ -651,7 +745,7 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
             const json rate = V(b + 1) > 0 ? rateOf(V(b + 1), V(b + 7) >= 0.5, notes, src) : json(0.5);
             if (std::fabs(amt) < 0.01) { notes.push_back(src + " -> " + tname + " at 0 (only via a controller) isn't played"); continue; }
             bool added = true;
-            if (tgt == 35) lfos.push_back({{"rate", rate}, {"depth", r(amt * kEnvCutOct * 0.5, 100)}, {"to", "cutoff"}});
+            if (tgt == 35) lfos.push_back({{"rate", rate}, {"depth", r(amt * kLfoCutOct, 100)}, {"to", "cutoff"}});
             else if (tgt == 5 && continuous) lfos.push_back({{"rate", rate}, {"depth", r(std::min(1.0, std::fabs(amt) * 0.6), 100)}, {"to", "amp"}});
             else {
                 added = false;
@@ -667,12 +761,16 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
             const CtrlEnv env = ctrlEnv(V, src == "Env1" ? 220 : 270);
             if (!env.run) continue;
             if (tgt == 35 && std::fabs(amt) > 0.01) {
-                double peak = 0;
-                const json shape = envAdsr(env, peak);
+                double lo = 0, hi = 0;
+                const json shape = envRange(env, lo, hi);
                 if (!shape.is_null() && filt["type"] != "off") {
+                    // the cutoff where the envelope sits lowest, and the octaves up to where it sits highest (or down,
+                    // for a negative amount)
                     filterEnv = shape;
-                    filt["env"] = r(std::clamp(peak * amt * kEnvCutOct, -8.0, 8.0), 100);
-                    notes.push_back(src + " -> cutoff (" + num(amt, 2, true) + ") as the filter envelope, " + num(filt["env"].get<double>(), 1, true) + " octaves (scale a guess)");
+                    filt["cutoff"] = r(std::clamp(filt["cutoff"].get<double>() * std::pow(2.0, kEnvCutOct * amt * lo), 20.0, 20000.0), 10);
+                    filt["env"] = r(std::clamp(kEnvCutOct * amt * (hi - lo), -8.0, 8.0), 100);
+                    notes.push_back(src + " -> cutoff (" + num(amt, 2, true) + ", levels " + num(lo, 2) + ".." + num(hi, 2) + ") as the filter envelope, " +
+                                    num(filt["env"].get<double>(), 1, true) + " octaves from " + inum(filt["cutoff"].get<double>()) + " Hz");
                 }
             } else if (tgt == 5 && continuous && std::fabs(amt) > 0.01) {
                 double peak = 0;
@@ -717,8 +815,10 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
         synth["unison"] = {{"voices", 2}, {"detune", r(4 + 20 * V(5), 10)}, {"spread", 0.5}};
         notes.push_back("Warmth " + num(V(5), 2) + " as a two-voice unison");
     }
-    // a level per class (see the header), moved by 10 % of Sculpture's own Level
-    const double base = cls == "blown" ? -3.6 : cls == "bowed" ? -3.5 : cls == "noise" ? 3.3 : cls == "plucked" ? -8.5 : -4.0;
+    // a level per class, moved by 10 % of Sculpture's own Level: noise, plucked and struck set against GarageBand's
+    // Airways, String Movements and Wave Space, Vintage Funk and Delicate Bells (t16), bowed and blown as before (see
+    // the header)
+    const double base = cls == "blown" ? -3.6 : cls == "bowed" ? -3.5 : cls == "noise" ? 14.8 : cls == "plucked" ? 0.0 : -6.1;
     synth["level"] = r(std::clamp(base + 0.1 * V(8), -40.0, 12.0), 100);
     // ---- after the voices: the waveshaper, Body EQ, pickup movement as a chorus, the delay
     if (V(100) >= 0.5) {
@@ -734,13 +834,14 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
                 std::make_tuple("highshelf", 4000.0, V(397))};
             for (auto &[type, freq, g] : eq)
                 if (std::fabs(g) > 0.03) {
-                    json b = {{"type", type}, {"freq", r(freq, 10)}, {"gain", r(12 * g, 10)}};
+                    json b = {{"type", type}, {"freq", r(freq, 10)}, {"gain", r(3 * g, 10)}};
                     if (std::string(type) == "peak") b["q"] = 0.8;
                     bands.push_back(b);
                 }
             if (!bands.empty()) {
                 fx.push_back({{"type", "eq"}, {"bands", bands}});
-                notes.push_back("Body EQ (Basic EQ): Low, Mid and High +-1 read as +-12 dB (a guess), Mid Freq 100 Hz..10 kHz");
+                notes.push_back("Body EQ (Basic EQ): Low, Mid and High +-1 read as +-3 dB (GarageBand's bounces match best with little of it), "
+                                "Mid Freq 100 Hz..10 kHz");
             }
         } else notes.push_back("Body EQ model " + inum(V(394)) + " (an instrument body response, intensity " + num(V(395), 2) + ") isn't played");
     }
@@ -788,7 +889,7 @@ GarageBandSynth sculpturePatch(const std::vector<float> &params, std::string &wh
         return out;
     }
     synth["osc"] = oscs;
-    synth["filter"] = filt;
+    synth["filter"] = comb.is_null() ? filt : json::array({filt, comb});
     synth["amp"] = amp;
     if (!filterEnv.is_null()) synth["filterEnv"] = filterEnv;
     out.synth = synth;
