@@ -1,11 +1,11 @@
 ---
 name: wavelength
-description: Compose, arrange, mix and master original music with Wavelength, the headless music engine for AI agents. It plays notes through the CLAP, VST3 and VST2 instruments and sample libraries installed on this computer (macOS, Linux or Windows), or through its built-in synth, and returns a mastered mix plus measurements. Installs or builds the engine when it is missing. Use when the user asks to make a song, track, theme, score, soundtrack, jingle or beat, or to render music with their plugins.
+description: Compose, arrange, mix and master original music with Wavelength, the headless music engine for AI agents. It plays notes through the CLAP, VST3 and VST2 instruments, Audio Units and sample libraries installed on this computer (macOS, Linux or Windows), or through its built-in synth, and returns a mastered mix plus measurements. Installs or builds the engine when it is missing. Use when the user asks to make a song, track, theme, score, soundtrack, jingle or beat, or to render music with their plugins.
 ---
 
 # Wavelength
 
-Wavelength renders music offline through the CLAP, VST3 and VST2 instruments and sample libraries installed on this machine (Vital, Serum 2, Surge XT, Dexed, BBC Symphony Orchestra, ...), or through its built-in synth when there are none. You write a JSON job (notes, sounds, effects, mix); it returns stems, a mix and a report with loudness per track and section. You cannot hear the result, so you measure it, and you ask the human to listen.
+Wavelength renders music offline through the CLAP, VST3 and VST2 instruments, Audio Units and sample libraries installed on this machine (Vital, Serum 2, Surge XT, Dexed, BBC Symphony Orchestra, ...), or through its built-in synth when there are none. You write a JSON job (notes, sounds, effects, mix); it returns stems, a mix and a report with loudness per track and section. You cannot hear the result, so you measure it, and you ask the human to listen.
 
 ## 1. Get the engine
 
@@ -28,7 +28,7 @@ Settle, from the request (ask only if it is genuinely unclear):
 
 Write the plan into the song folder's generator as comments; it doubles as documentation.
 
-If the human hands you material, start from it: `"$WAVELENGTH" import score.mxl` (MusicXML from MuseScore, Sibelius, Dorico; repeats played out, dynamics as velocities), `import part.mid`, or `import song.dawproject` (a DAW's tracks, plugins and mixer), or a Bitwig project as it is (`import ~/Documents/Bitwig\ Studio/Projects/<name>/<name>.bwproject`, no export needed) each write a `job.json` that renders at once. Without Bitwig's sound content, run `"$WAVELENGTH" samples --install-soundfont` once so imported parts get General MIDI sounds.
+If the human hands you material, start from it: `"$WAVELENGTH" import score.mxl` (MusicXML from MuseScore, Sibelius, Dorico; repeats played out, dynamics as velocities), `import part.mid`, or `import song.dawproject` (a DAW's tracks, plugins and mixer), or a Bitwig project as it is (`import ~/Documents/Bitwig\ Studio/Projects/<name>/<name>.bwproject`, no export needed), or a GarageBand project (`import ~/Music/GarageBand/<name>.band`; limited support: Apple's synths are approximations) each write a `job.json` that renders at once. Without Bitwig's sound content, run `"$WAVELENGTH" samples --install-soundfont` once so imported parts get General MIDI sounds.
 
 ## 3. Choose sounds from what is installed
 
