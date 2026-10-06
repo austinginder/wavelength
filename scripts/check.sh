@@ -857,6 +857,34 @@ PY
 )
 fi
 if [ -n "$tune_why" ]; then echo "FAIL tune: $tune_why"; fail=1; else echo "ok   tune: pitch correction to the nearest note, a scale, a tolerance"; fi
+# bus pan: a tone routed to a bus panned hard left on the balance law comes out on the left only (width 1); panned half
+# right at constant power, the right side is 7.7 dB over the left (width (1.307 - 0.541) / (1.307 + 0.541) = 0.41)
+mkdir -p out/check/buspan
+for p in "-1 balance" "0.5 constant-power"; do
+  set -- $p
+  cat > "out/check/buspan/$2.json" <<JOB
+{"tempo": 120, "leadIn": 0, "tail": 0.2, "tracks": [{"name": "Tone", "plugin": "builtin:synth", "output": "Bus",
+  "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}}, "notes": [{"beat": 0, "dur": 2, "key": 69, "vel": 1}]}],
+ "buses": [{"name": "Bus", "pan": $1, "panLaw": "$2"}]}
+JOB
+done
+buspan_why=""
+for law in balance constant-power; do
+  if ! "./$build/wavelength" render "out/check/buspan/$law.json" --out "out/check/buspan/$law" --json > /dev/null 2>&1; then buspan_why="the $law job did not render"; fi
+done
+if [ -z "$buspan_why" ]; then
+  buspan_why=$(python3 - "./$build/wavelength" <<'PY'
+import json, subprocess, sys
+w = {}
+for law in ("balance", "constant-power"):
+    d = json.loads(subprocess.run([sys.argv[1], "analyze", "out/check/buspan/%s/mix.wav" % law, "--start", "0.2", "--end", "0.8", "--json"], capture_output=True, text=True).stdout)
+    w[law] = d["stereo"]["width"]
+if abs(w["balance"] - 1) > 0.03: print("the hard-left bus is not on the left only (width %.2f)" % w["balance"])
+elif abs(w["constant-power"] - 0.41) > 0.03: print("the half-right bus has width %.2f, not 0.41" % w["constant-power"])
+PY
+)
+fi
+if [ -n "$buspan_why" ]; then echo "FAIL bus pan: $buspan_why"; fail=1; else echo "ok   bus pan: a bus pans after its fader, balance or constant power"; fi
 # delay wow: a triangle sweep of the delay time is a square-wave pitch swing (4 x depth x rate of the tone either way), so a
 # 988 Hz sine through it comes out as two lines 22.5 Hz either side at 5.7 ms and 1 Hz (GarageBand's Tape Delay at depth 100)
 mkdir -p out/check/wow

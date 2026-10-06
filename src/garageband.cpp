@@ -1133,10 +1133,9 @@ struct Converter {
         const json fx = channelFx(ch, "bus " + label, rel);
         if (!fx.empty()) b["fx"] = fx;
         if (std::fabs(ch.gainDb()) > 0.005) b["gain"] = r3(ch.gainDb());
-        if (std::fabs(ch.panUnit()) > 0.001) {
-            char t[32];
-            std::snprintf(t, sizeof t, "%.0f", ch.pan - 64);
-            warn.push_back("bus " + label + ": its pan (" + t + ") is not written");
+        if (std::fabs(ch.panUnit()) > 0.001) {   // an aux pans as a stereo track does: GarageBand's balance law
+            b["pan"] = r4(ch.panUnit());
+            b["panLaw"] = "balance";
         }
         busOf[ch.r] = buses.size();
         buses.push_back(b);

@@ -1027,9 +1027,14 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
         br.lufs = integratedLufs(buses[b], job.sampleRate);
         const auto &env = job.buses[b].gainAutomation;
         float g = (float)dsp::dbToLin(job.buses[b].gainDb);
+        // its pan after the fader, on the track's laws: constant power, or a balance (the far side falls as (1 - |pan|)^2)
+        const double pan = job.buses[b].pan;
+        float pl = 1, pr = 1;
+        if (job.buses[b].balancePan) { pl = (float)(pan > 0 ? (1 - pan) * (1 - pan) : 1.0); pr = (float)(pan < 0 ? (1 + pan) * (1 + pan) : 1.0); }
+        else if (pan != 0) { const double angle = (pan + 1.0) * dsp::kPi / 4.0; pl = (float)(std::cos(angle) * M_SQRT2); pr = (float)(std::sin(angle) * M_SQRT2); }
         for (size_t f = 0; f < frames; ++f) {
             if (!env.empty() && f % 32 == 0) g = (float)dsp::dbToLin(job.buses[b].gainDb + env.at(f / sr));
-            buses[b].left[f] *= g; buses[b].right[f] *= g;
+            buses[b].left[f] *= g * pl; buses[b].right[f] *= g * pr;
             dest->left[f] += buses[b].left[f]; dest->right[f] += buses[b].right[f];
         }
         for (size_t m = 0; m < job.markers.size(); ++m) {

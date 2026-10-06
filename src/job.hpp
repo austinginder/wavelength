@@ -63,6 +63,8 @@ struct Track {
 struct Bus {
     std::string name;
     double gainDb = 0;
+    double pan = 0;                 // -1..1 after its fader; balancePan: GarageBand's and Logic's law (see Track)
+    bool balancePan = false;
     nlohmann::json fx = nlohmann::json::array();
     std::string output;             // another bus to feed ("" = master)
     bool stem = false;              // "stem": true writes the bus (after its fx, before its fader) to stems/bus-<name>.wav

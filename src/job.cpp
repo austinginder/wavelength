@@ -693,6 +693,13 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
             Bus bus;
             bus.name = b.at("name").get<std::string>();
             bus.gainDb = b.value("gain", 0.0);
+            bus.pan = std::clamp(b.value("pan", 0.0), -1.0, 1.0);
+            if (b.contains("panLaw")) {
+                const std::string law = b["panLaw"].is_string() ? b["panLaw"].get<std::string>() : "";
+                if (law != "balance" && law != "constant-power")
+                    throw std::runtime_error("bus '" + bus.name + "': \"panLaw\" is \"constant-power\" (the default) or \"balance\"");
+                bus.balancePan = law == "balance";
+            }
             if (b.contains("fx")) bus.fx = b["fx"];
             bus.output = b.value("output", "");
             bus.stem = b.value("stem", false);
