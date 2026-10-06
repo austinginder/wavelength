@@ -935,10 +935,15 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
                       {"mix", r4(wet / (dry + wet))}, {"filterEchoes", true}, {"pingpong", false}};   // its echoes stay in the middle (the bounce)
             if (v(6) && v(7) > 0) d["time"] = r4(4 / v(7));
             else d["ms"] = r2(std::max(1.0, legacy ? v(1) + v(2) : v(22, 200)));
+            if (std::fabs(v(8)) > 0.5 && !legacy) notes.push_back("Tape Delay: its groove (swung repeats) is not played");
+            // #12 LFO Rate (Hz) and #13 LFO Depth sweep the delay time in a triangle, +-5.7 ms at 100 whatever the rate; #10
+            // Flutter Rate and #11 Intensity step it to a new random offset at that rate (up to about +-1 ms at 100),
+            // glided over ~12 ms (bounces of a 1 kHz sine through a 200 ms Tape Delay at 0.25 and 1 Hz, 50 and 100)
+            if (!legacy && v(13) > 0.5 && v(12) > 0) d["wow"] = {{"rate", r4(v(12))}, {"depth", r4(5.7 * std::min(100.0, v(13)) / 100)}, {"shape", "triangle"}};
+            if (!legacy && v(11) > 0.5 && v(10) > 0) d["flutter"] = {{"rate", r4(v(10))}, {"depth", r4(std::min(100.0, v(11)) / 100)}};
+            if (legacy && (v(11) || v(13))) notes.push_back("Tape Delay: wow and flutter of the older layout are not played");
             fx.push_back(d);
             if (std::fabs(dry + wet - 1) > 1e-3) fx.push_back({{"type", "gain"}, {"db", r2(20 * std::log10(dry + wet))}});
-            if (std::fabs(v(8)) > 0.5 && !legacy) notes.push_back("Tape Delay: its groove (swung repeats) is not played");
-            if (v(11) || v(13)) notes.push_back("Tape Delay: wow and flutter are not played");
         } else if (p.name == "Overdrive") {   // #0 drive (dB of tanh drive: a guess), #1 tone (a low-pass after it: a guess), #2 output dB
             if (v(0) > 0) add({{"type", "saturate"}, {"drive", r2(v(0))}});
             else notes.push_back("Overdrive: Drive 0 as saved (a Smart Control knob raises it)");

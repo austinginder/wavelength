@@ -150,8 +150,11 @@ rs[1], rs[3], rs[7], rs[8], rs[11], rs[26], rs[28] = 0.5, 1, 3, 0.3, 0.6, 0.5, 1
 os.makedirs(os.path.join(out, 'Audio', 'Test Ring.patch'), exist_ok=True)
 # and a Spreader after it: #0 Intensity 50, #1 Speed 1 (0.5 Hz), #3 Mix 100 %
 spd = [50.0, 1.0, 0.0, 100.0]
+# and a Tape Delay: #22 200 ms, #20 wet 100 %, #19 dry 0, #12/#13 LFO 1 Hz at 50 (wow), #10/#11 flutter 2 Hz at 30
+td = [0.0] * 25
+td[4], td[5], td[12], td[13], td[10], td[11], td[19], td[20], td[22] = 20000, 20, 1, 50, 2, 30, 0, 100, 200
 strip(os.path.join(out, 'Audio', 'Test Ring.patch', '#Root.cst'), [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Ringshifter', b'GAME', settings(252, rs)),
-                                                                   record(5, 'Spreader', b'GAME', settings(258, spd))])
+                                                                   record(5, 'Spreader', b'GAME', settings(258, spd)), record(6, 'Tape Delay', b'GAME', settings(147, td))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):

@@ -474,9 +474,11 @@ elif ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelengt
 import json, sys
 fx = json.load(sys.stdin)["patch"]["effects"]
 sys.exit(0 if fx == [{"type": "ringmod", "mode": "dual", "freq": 15.8114, "mix": 0.6, "feedback": 0.3, "delayMs": 120, "delayLevel": 0.5},
-                     {"type": "chorus", "rate": 0.5, "depth": 6.0288, "delay": 0, "spread": 0.5, "mix": 1}] else 1)'; then
-  fxpatch_why="Ringshifter or Spreader didn't map as saved"; fi
-if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Pitch Correction, Vocal Transformer, Pitch Shifter, Ringshifter and Spreader map"; fi
+                     {"type": "chorus", "rate": 0.5, "depth": 6.0288, "delay": 0, "spread": 0.5, "mix": 1},
+                     {"type": "delay", "feedback": 0, "highpass": 20, "lowpass": 20000, "mix": 1, "filterEchoes": True, "pingpong": False, "ms": 200,
+                      "wow": {"rate": 1, "depth": 2.85, "shape": "triangle"}, "flutter": {"rate": 2, "depth": 0.3}}] else 1)'; then
+  fxpatch_why="Ringshifter, Spreader or Tape Delay's wow and flutter didn't map as saved"; fi
+if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Pitch Correction, Vocal Transformer, Pitch Shifter, Ringshifter, Spreader and Tape Delay wow map"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
 # imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,
@@ -852,6 +854,24 @@ PY
 )
 fi
 if [ -n "$tune_why" ]; then echo "FAIL tune: $tune_why"; fail=1; else echo "ok   tune: pitch correction to the nearest note, a scale, a tolerance"; fi
+# delay wow: a triangle sweep of the delay time is a square-wave pitch swing (4 x depth x rate of the tone either way), so a
+# 988 Hz sine through it comes out as two lines 22.5 Hz either side at 5.7 ms and 1 Hz (GarageBand's Tape Delay at depth 100)
+mkdir -p out/check/wow
+cat > out/check/wow/w.json <<'JOB'
+{"tempo": 60, "leadIn": 0, "tail": 0.5, "tracks": [{"name": "Wow", "plugin": "builtin:synth",
+  "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}, "amp": {"attack": 0.01, "decay": 0, "sustain": 1, "release": 0.05}},
+  "fx": [{"type": "delay", "ms": 200, "feedback": 0, "mix": 1, "highpass": 20, "lowpass": 20000, "pingpong": false, "wow": {"rate": 1, "depth": 5.7, "shape": "triangle"}}],
+  "notes": [{"beat": 0.25, "dur": 3.5, "key": 83.21, "vel": 1}]}]}
+JOB
+wow_why=""
+if ! "./$build/wavelength" render out/check/wow/w.json --out out/check/wow/out --json > /dev/null 2>&1; then wow_why="the job did not render"
+elif ! "./$build/wavelength" analyze out/check/wow/out/stems/01-wow.wav --start 1 --end 3.4 --peaks --top 2 --json 2>/dev/null | python3 -c '
+import json, sys
+p = sorted(x["hz"] for x in json.load(sys.stdin)["spectrum"]["peaks"]["peaks"][:2])
+sys.exit(0 if len(p) == 2 and abs(p[0] - (987.8 - 22.5)) < 3 and abs(p[1] - (987.8 + 22.5)) < 3 else 1)'; then
+  wow_why="the triangle wow did not split the sine into lines about 22.5 Hz either side"
+fi
+if [ -n "$wow_why" ]; then echo "FAIL delay wow: $wow_why"; fail=1; else echo "ok   delay wow: a triangle sweep of the delay time swings the pitch between two values"; fi
 # ringmod: a 988 Hz sine ring-modulated at 100 Hz gives 888 and 1088 Hz; shifted +100 Hz only 1088 (the other sideband
 # 40 dB down); dual mode shifts the left side up and the right side down
 mkdir -p out/check/ringmod

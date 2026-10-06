@@ -132,6 +132,9 @@ struct Delay : Effect {
     struct Tap { double beats = 0, ms = 0, gain = 1, pan = 0, hp = 0, lp = 0; };
     std::vector<Tap> taps;
     int feedbackTap = 0;
+    // tape wow (a periodic sweep of the delay time) and flutter (a random step to a new time at its rate, glided)
+    double wowRate = 0, wowDepthMs = 0, flutterRate = 0, flutterDepthMs = 0;
+    bool wowTriangle = false;
     double secondsOf(double beats, double ms, const Job &job) const { return ms > 0 ? ms / 1000.0 : beats * 60.0 / job.tempo.bpmAtBeat(0); }
     Delay(const json &j, const Job &job, std::string &err) {
         label = "delay";
@@ -186,6 +189,25 @@ struct Delay : Effect {
             if (j.contains("time") || j.contains("ms") || j.contains("pingpong"))
                 warnings.push_back("delay: with \"taps\", each tap has its own time and pan; \"time\", \"ms\" and \"pingpong\" are ignored");
         } else if (j.contains("feedbackTap")) warnings.push_back("delay: \"feedbackTap\" only applies with \"taps\"; ignored");
+        for (const char *k : {"wow", "flutter"}) {
+            if (!j.contains(k)) continue;
+            const json &m = j[k];
+            if (!m.is_object() || !m.contains("rate") || !m.contains("depth") || !m["rate"].is_number() || !m["depth"].is_number()) {
+                err = std::string("delay: \"") + k + "\" is {\"rate\": Hz, \"depth\": ms}"; return;
+            }
+            for (auto &[mk, mv] : m.items())
+                if (mk != "rate" && mk != "depth" && !(std::string(k) == "wow" && mk == "shape")) warnings.push_back(std::string("delay: unknown key '") + k + "." + mk + "' ignored");
+            const double rate = std::clamp(m["rate"].get<double>(), 0.01, 50.0), depth = std::clamp(m["depth"].get<double>(), 0.0, 50.0);
+            if (std::string(k) == "wow") {
+                wowRate = rate; wowDepthMs = depth;
+                const std::string shape = m.value("shape", "sine");
+                if (shape != "sine" && shape != "triangle") { err = "delay: wow.shape is \"sine\" or \"triangle\""; return; }
+                wowTriangle = shape == "triangle";
+            } else { flutterRate = rate; flutterDepthMs = depth; }
+        }
+        if ((wowDepthMs > 0 || flutterDepthMs > 0) && (!taps.empty() || j.contains("loopFx"))) {
+            err = "delay: \"wow\" and \"flutter\" don't combine with \"taps\" or \"loopFx\" yet"; return;
+        }
         if ((sides || !taps.empty()) && j.contains("loopFx")) { err = "delay: \"loopFx\" doesn't combine with \"right\", \"crossfeed\" or \"taps\" yet"; return; }
         if (sides && pingpong && j.contains("pingpong")) warnings.push_back("delay: \"pingpong\" is ignored with \"right\" or \"crossfeed\" (set the crossfeed instead)");
         if (sides) pingpong = false;
@@ -201,7 +223,8 @@ struct Delay : Effect {
                 loop.push_back(std::move(fx));
             }
         }
-        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx", "filterEchoes", "right", "crossfeed", "taps", "feedbackTap"}, *this);
+        checkKeys(j, {"time", "ms", "feedback", "highpass", "lowpass", "pingpong", "mix", "loopFx", "filterEchoes", "right", "crossfeed", "taps", "feedbackTap",
+                      "wow", "flutter"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate;
@@ -210,13 +233,35 @@ struct Delay : Effect {
         if (!loop.empty()) return processLoop(a, c, d, err);
         const double dR = sides ? std::max(1.0, secondsOf(timeBeatsR, timeMsR, c.job) * sr) : d;
         const double fbGainR = sides ? feedbackR : feedback;
+        // wow and flutter move both sides' delay time together (one tape): a sine or triangle sweep of +-wow depth,
+        // and a new random offset within +-flutter depth at each flutter tick, glided over about 12 ms
+        const double mod = (wowDepthMs + flutterDepthMs) * 0.001 * sr;
         dsp::DelayLine L, R;
-        L.resize((size_t)d + 4); R.resize((size_t)dR + 4);
+        L.resize((size_t)(d + mod) + 4); R.resize((size_t)(dR + mod) + 4);
         Biquad hpl, hpr, lpl, lpr;
         hpl.set(Biquad::HighPass, hp, 0.7071, 0, sr); hpr = hpl;
         lpl.set(Biquad::LowPass, lp, 0.7071, 0, sr); lpr = lpl;
+        uint32_t seed = 0x9e3779b9u;
+        double flutterTarget = 0, flutterNow = 0, flutterPhase = 1;
+        const double glide = 1 - std::exp(-1 / (0.012 * sr));
         for (size_t i = 0; i < a.frames(); ++i) {
-            double tl = L.tap(d), tr = R.tap(dR);
+            double off = 0;
+            if (wowDepthMs > 0) {
+                const double ph = std::fmod(i * wowRate / sr, 1.0);
+                off += wowDepthMs * (wowTriangle ? 1 - 4 * std::fabs(ph - 0.5) : std::sin(2 * dsp::kPi * ph));
+            }
+            if (flutterDepthMs > 0) {
+                flutterPhase += flutterRate / sr;
+                if (flutterPhase >= 1) {
+                    flutterPhase -= 1;
+                    seed = seed * 1664525u + 1013904223u;
+                    flutterTarget = flutterDepthMs * ((seed >> 8) * (2.0 / 16777216.0) - 1);
+                }
+                flutterNow += (flutterTarget - flutterNow) * glide;
+                off += flutterNow;
+            }
+            const double offS = off * 0.001 * sr;   // around the set time (the line keeps room for the swing)
+            double tl = L.tap(std::max(1.0, d + offS)), tr = R.tap(std::max(1.0, dR + offS));
             const double ftl = lpl.process(hpl.process(tl)), ftr = lpr.process(hpr.process(tr));
             const double fbl = ftl * feedback, fbr = ftr * fbGainR;
             if (filterEchoes) tl = ftl, tr = ftr;
