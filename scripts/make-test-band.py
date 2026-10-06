@@ -168,6 +168,12 @@ body += seq(3, 0, 'Tempo', events(event(0x60, BAR1, ext=[ext(struct.pack('<I', 1
                                   event(0x60, BAR1 + 12 * 3840, ext=[ext(struct.pack('<I', 90 * 10000), mark=0x88)])))   # 90 BPM from bar 13
 body += seq(1, 0, 'Signature', events(event(0x30, 0, bytes([0, 0, 0, 2, METER, 0, 0, 0]), [ext(mark=0x88)])))   # +11 log2 4, +12 the beats
 body += seq(0x16, 0, 'Locators', events(event(0x10, BAR1 + 2 * 3840 - 1, ext=[ext(u12=BAR1)])))             # cycle bars 1-2
+# arrangement markers: TxSq objects hold the names (between the offsets at +0x10 and +0x14); the class 5 sequence has
+# an event 0x12 at each start, extension +0 the name's object, +12 the length
+txsq = lambda oid, name: chunk('TxSq', 0, oid, bytes(0x10) + struct.pack('<II', 0x18, 0x18 + len(name) + 1) + name.encode() + b'\0')
+body += txsq(4, 'Intro') + txsq(8, 'Verse')
+body += seq(5, 0, 'Untitled', events(event(0x12, BAR1, ext=[ext(struct.pack('<I', 4), u12=8 * 960, mark=0x88)]),
+                                     event(0x12, BAR1 + 8 * 960, ext=[ext(struct.pack('<I', 8), u12=8 * 960, mark=0x88)])))
 body += envi(TRACK, 'Synth', INST) + envi(ECHO, 'Echo', BUS) + envi(MASTER, 'Master', OUT)
 trak = lambda row, kind, obj: chunk('Trak', 0x17, 4, struct.pack('<HHHHI', kind, 0, 0, 0, obj) + bytes(46), sub=row)
 # a region's placement: main +13 bit 0x10 looped; extension 1: the track object and the length (a looped one's whole

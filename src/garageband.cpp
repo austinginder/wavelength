@@ -417,6 +417,7 @@ struct Project {
     std::map<std::pair<uint16_t, uint32_t>, size_t> seqAt;
     std::map<uint32_t, AudioFile> files;
     std::map<std::pair<uint32_t, uint32_t>, AudioRegion> regions;   // (file, index)
+    std::map<uint32_t, std::string> texts;   // TxSq objects: an arrangement marker's name between the offsets at +0x10 and +0x14
     const Sequence *arrange = nullptr;
 
     const Channel *channel(int64_t r) const { auto it = r < 0 ? channelAt.end() : channelAt.find((uint32_t)r); return it == channelAt.end() ? nullptr : &channels[it->second]; }
@@ -507,6 +508,10 @@ struct Project {
                 if (it != seqAt.end() && !seqs[it->second].evsq) seqs[it->second].evsq = &c;
             } else if (c.is("AuFl")) files[c.oid] = audioFileOf(c);
             else if (c.is("AuRg")) regions[{c.oid, c.ref}] = audioRegionOf(c);
+            else if (c.is("TxSq") && c.pl.n >= 0x18) {
+                const size_t a = c.pl.u32(0x10), b = std::min<size_t>(c.pl.u32(0x14), c.pl.n);
+                if (a < b) texts[c.oid] = text(c.pl.p + a, (size_t)(std::find(c.pl.p + a, c.pl.p + b, 0) - (c.pl.p + a)));
+            }
         }
         // the arrangement: the class 0x17 sequence that lists the tracks, the Master Track among them (id 4)
         for (auto &s : seqs) {
@@ -521,6 +526,19 @@ struct Project {
     }
 
     // ---- song-wide settings ----
+    // (tick, name): the arrangement markers (class 5, id 0), event 0x12 at the marker's start; its extension +0 the
+    // TxSq object with its name, +12 its length in ticks
+    std::vector<std::pair<int64_t, std::string>> markers() const {
+        std::vector<std::pair<int64_t, std::string>> out;
+        if (const Sequence *s = seq(5, 0))
+            for (auto &e : s->events())
+                if (e.type() == 0x12 && !e.ext.empty()) {
+                    auto it = texts.find(e.ext[0].u32(0));
+                    out.push_back({e.pos(), it == texts.end() ? std::string() : it->second});
+                }
+        std::stable_sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+        return out;
+    }
     // (tick, bpm): the tempo list (class 3, id 0; id 4 holds an unused 120 BPM), event 0x60: extension +0 = BPM x 10000
     std::vector<std::pair<int64_t, double>> tempos() const {
         std::vector<std::pair<int64_t, double>> out;
@@ -1309,6 +1327,11 @@ struct Converter {
         if (!P.key().empty()) {
             const json key = {{"bar", 1}, {"key", P.key()}};
             job["keys"] = json::array({key});
+        }
+        if (const auto marks = P.markers(); !marks.empty()) {   // the arrangement track: the report's sections
+            json m = json::array();
+            for (auto &[t, name] : marks) m.push_back({{"beat", r4(std::max(0.0, beat(t)))}, {"name", name.empty() ? "Section " + std::to_string(m.size() + 1) : name}});
+            job["markers"] = m;
         }
         job["tail"] = 3.0;
         const json rate = P.meta.contains("SampleRate") && P.meta["SampleRate"].is_number() ? P.meta["SampleRate"] : json(nullptr);
