@@ -65,6 +65,12 @@ std::vector<std::string> logicPatchRoots();
 const std::vector<LogicPatch> &logicPatches();
 // A patch by name (any case), else nullptr.
 const LogicPatch *logicPatchNamed(const std::string &name);
+// GarageBand's and Logic's effect patches: the channel strips in the Audio, Aux and Output folders beside the
+// instrument patches (no instrument; guitar, vocal and bass chains, sends' effects, master chains). Cached.
+struct EffectPatch { std::string name, path, category; };   // category: "Audio/Electric Guitar and Bass/01 Clean Guitar"
+const std::vector<EffectPatch> &logicEffectPatches();
+// An effect patch by name (any case), or by the end of its category path ("Output/Pop"), else nullptr.
+const EffectPatch *logicEffectPatchNamed(const std::string &name);
 // A patch folder's channels (root channel first) with their instruments; sampler channels read whole.
 bool readPatchChannels(const std::string &patchDir, std::vector<PatchChannel> &out, std::string &err);
 

@@ -305,8 +305,14 @@ std::vector<FileRef> fileRefs(json &job) {
     };
     auto chain = [&](json &o, const std::string &where) {
         if (!o.contains("fx") || !o["fx"].is_array()) return;
-        for (size_t i = 0; i < o["fx"].size(); ++i)
-            if (o["fx"][i].is_object()) state(o["fx"][i], where + " fx " + std::to_string(i + 1));
+        for (size_t i = 0; i < o["fx"].size(); ++i) {
+            json &e = o["fx"][i];
+            if (!e.is_object()) continue;
+            state(e, where + " fx " + std::to_string(i + 1));
+            // a GarageBand or Logic patch's effect chain by its folder (by name, it's the library's)
+            if (e.contains("type") && e["type"] == "patch" && e.contains("patch") && e["patch"].is_string() && hasExt(e["patch"].get<std::string>(), {".patch"}))
+                add(where + " fx " + std::to_string(i + 1) + " patch", e["patch"], e);
+        }
     };
     auto sound = [&](json &o, const std::string &where) {
         state(o, where);

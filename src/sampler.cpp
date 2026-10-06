@@ -1438,14 +1438,60 @@ std::string impulseForRoom(const std::string &room) {
     return "";
 }
 
+bool patchEffectChain(const std::string &query, const std::string &baseDir, json &chain, std::vector<std::string> &notes, std::string &name, std::string &err) {
+    std::string dir = resolveIn(query, baseDir);
+    if (dir.empty() || !fs::is_directory(dir)) {
+        const EffectPatch *fx = logicEffectPatchNamed(query);
+        const LogicPatch *inst = fx ? nullptr : logicPatchNamed(query);
+        if (!fx && !inst) {
+            std::string near;
+            const std::string q = lower(query);
+            for (auto &p : logicEffectPatches())
+                if (lower(p.name).find(q) != std::string::npos && near.size() < 160) near += (near.empty() ? "" : ", ") + p.name;
+            err = "no GarageBand or Logic patch named '" + query + "'" + (near.empty() ? std::string(" (wavelength samples --search fxpatch lists the effect patches)")
+                                                                        : " (did you mean: " + near + "?)");
+            return false;
+        }
+        dir = fx ? fx->path : inst->path;
+    }
+    std::vector<PatchChannel> chans;
+    if (!readPatchChannels(dir, chans, err)) return false;
+    name = fs::path(dir).stem().u8string();
+    chain = patchChainEffects(chans, notes);
+    for (auto &s : readPatchSends(dir)) {
+        char b[160];
+        std::snprintf(b, sizeof b, "its send to the '%s' aux (%.1f dB) isn't played: give the track a bus with that room for it", s.aux.c_str(), s.db);
+        notes.push_back(b);
+    }
+    if (std::any_of(chans.begin(), chans.end(), [](const PatchChannel &c) { return !c.instrument.empty(); }))
+        notes.push_back("an instrument patch: only the effects after its instrument play");
+    return true;
+}
+
+const std::vector<SampleLibraryEntry> &effectPatchLibrary() {
+    static std::vector<SampleLibraryEntry> lib;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        for (auto &p : logicEffectPatches()) {
+            std::vector<PatchChannel> chans;
+            std::string e;
+            size_t n = 0;
+            if (readPatchChannels(p.path, chans, e)) for (auto &c : chans) n += c.effects.size();
+            lib.push_back({"fxpatch", p.name, p.path, p.category, n});
+        }
+    });
+    return lib;
+}
+
 json describePatch(const std::string &query, const std::string &baseDir, std::string &err) {
     std::string dir = resolveIn(query, baseDir);
     if (dir.empty() || !fs::is_directory(dir)) {
         std::string e2;
         if (!findEntry("patch", query, dir, e2)) {
             const LogicPatch *named = logicPatchNamed(query);
-            if (!named) { err = e2; return nullptr; }
-            dir = named->path;
+            const EffectPatch *fxNamed = named ? nullptr : logicEffectPatchNamed(query);
+            if (!named && !fxNamed) { err = e2; return nullptr; }
+            dir = named ? named->path : fxNamed->path;
         }
     }
     std::vector<PatchChannel> chans;
@@ -1492,8 +1538,11 @@ json describePatch(const std::string &query, const std::string &baseDir, std::st
         out["effects"] = gs.fx;
     }
     out["plays"] = installed > 0 || !kit.empty() || resynth;
+    const bool chainOnly = std::all_of(chans.begin(), chans.end(), [](const PatchChannel &c) { return c.instrument.empty(); });
+    if (chainOnly) out["effectChain"] = true;   // an Audio, Aux or Output patch: effects only, for an fx list
     if (!out["plays"].get<bool>())
-        out["why"] = synth && !installed ? (!why.empty() ? why : "its instrument runs only inside GarageBand and Logic")
+        out["why"] = chainOnly ? "it is an effect chain with no instrument"
+                   : synth && !installed ? (!why.empty() ? why : "its instrument runs only inside GarageBand and Logic")
                                          : "its samples aren't installed (GarageBand: Sound Library > Download All Available Sounds)";
     std::vector<std::string> notes;
     if (alchemy && alchemy->kind == AlchemyPatch::Sampler) {   // the sampler settings and effects its translation gives

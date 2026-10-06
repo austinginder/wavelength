@@ -1245,6 +1245,48 @@ const std::vector<LogicPatch> &logicPatches() {
     return patches;
 }
 
+const std::vector<EffectPatch> &logicEffectPatches() {
+    static std::vector<EffectPatch> patches;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::set<std::string> roots;
+        for (auto &r : logicPatchRoots()) {
+            const fs::path base = fs::path(r).parent_path();
+            for (const char *kind : {"Audio", "Aux", "Output"}) {
+                const fs::path root = base / kind;
+                std::error_code ec;
+                if (!fs::is_directory(root, ec) || !roots.insert(root.string()).second) continue;
+                for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                    if (ec) break;
+                    if (!it->is_directory(ec) || lower(it->path().extension().string()) != ".patch") continue;
+                    it.disable_recursion_pending();
+                    EffectPatch p;
+                    p.name = it->path().stem().u8string();
+                    p.path = it->path().string();
+                    p.category = (fs::path(kind) / it->path().parent_path().lexically_relative(root)).lexically_normal().generic_u8string();
+                    if (!p.category.empty() && p.category.back() == '/') p.category.pop_back();
+                    if (p.category.size() > 2 && p.category.compare(p.category.size() - 2, 2, "/.") == 0) p.category.resize(p.category.size() - 2);
+                    patches.push_back(p);
+                }
+            }
+        }
+    });
+    return patches;
+}
+
+const EffectPatch *logicEffectPatchNamed(const std::string &name) {
+    std::string q = lower(name);
+    if (q.size() > 6 && q.compare(q.size() - 6, 6, ".patch") == 0) q.resize(q.size() - 6);
+    for (auto &p : logicEffectPatches()) if (lower(p.name) == q) return &p;
+    for (auto &p : logicEffectPatches()) {   // "Output/Pop", "Clean Guitar/Echo Studio"
+        const std::string full = lower(p.category + "/" + p.name);
+        if (q.find('/') != std::string::npos && full.size() >= q.size() && full.compare(full.size() - q.size(), q.size(), q) == 0 &&
+            (full.size() == q.size() || full[full.size() - q.size() - 1] == '/'))
+            return &p;
+    }
+    return nullptr;
+}
+
 const LogicPatch *logicPatchNamed(const std::string &name) {
     std::string q = lower(name);
     if (q.size() > 6 && q.compare(q.size() - 6, 6, ".patch") == 0) q.resize(q.size() - 6);

@@ -576,6 +576,11 @@ int cmdSamples(const Args &a) {
             for (auto &e : d["midiFx"]) what += (what.empty() ? "" : ", then ") + midiFxSummary(e, true);
             std::fprintf(OUT, "  midi effects: %s\n    played as \"midiFx\": %s\n", what.c_str(), d["midiFx"].dump().c_str());
         } else if (d.contains("arp")) std::fprintf(OUT, "  arpeggiator: %s\n    played as \"arp\": %s\n", arpSummary(d["arp"]).c_str(), d["arp"].dump().c_str());
+        if (d.value("effectChain", false)) {
+            std::fprintf(OUT, "\nAn effect chain: use it as {\"type\": \"patch\", \"patch\": \"%s\"} in a track's, bus's or the master's fx%s.\n",
+                         d["name"].get<std::string>().c_str(), d["sends"].empty() ? "" : " (its sends need buses of their own)");
+            return 0;
+        }
         if (!d["plays"].get<bool>()) { std::fprintf(OUT, "\nDoesn't play here: %s.\n", d["why"].get<std::string>().c_str()); return 0; }
         if (d.contains("synth")) {   // a synth patch, re-created on builtin:synth
             for (auto &n : d["synth"]["notes"]) std::fprintf(OUT, "  ~ %s\n", n.get<std::string>().c_str());
@@ -630,6 +635,7 @@ int cmdSamples(const Args &a) {
     std::vector<SampleLibraryEntry> lib = sampleLibrary();
     lib.insert(lib.end(), patchLibrary().begin(), patchLibrary().end());
     lib.insert(lib.end(), impulseLibrary().begin(), impulseLibrary().end());
+    lib.insert(lib.end(), effectPatchLibrary().begin(), effectPatchLibrary().end());
     std::stable_sort(lib.begin(), lib.end(), [](const SampleLibraryEntry &x, const SampleLibraryEntry &y) { return x.kind < y.kind; });
     for (const auto &e : lib) {
         std::string hay = e.kind + " " + e.category + " " + e.name;
@@ -639,16 +645,18 @@ int cmdSamples(const Args &a) {
         if (a.has("--json")) list.push_back({{"kind", e.kind}, {"name", e.name}, {"category", e.category}, {"count", e.count}, {"path", e.path}});
         else if (term::out().on) {
             const term::Style &st = term::out();
-            const std::string unit = e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" || e.kind == "dspreset" ? "samples" : e.kind == "ir" ? "ms" : "zones";
+            const std::string unit = e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" || e.kind == "dspreset" ? "samples" : e.kind == "ir" ? "ms" : e.kind == "fxpatch" ? "effects" : "zones";
             std::fprintf(OUT, "%s %s %s %s\n", st.cyan(col(e.kind, 12)).c_str(), st.dim(col(e.category, 22)).c_str(), st.bold(col(e.name, 44)).c_str(),
                          st.dim(std::to_string(e.count) + " " + unit).c_str());
         }
         else std::fprintf(OUT, "%-12s %-22.22s %-44.44s %4zu %s\n", e.kind.c_str(), e.category.c_str(), e.name.c_str(), e.count,
-                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" || e.kind == "dspreset" ? "samples" : e.kind == "ir" ? "ms" : "zones");
+                          e.kind == "kit" || e.kind == "loops" ? "files" : e.kind == "sfz" ? "regions" : e.kind == "soundfont" ? "presets" : e.kind == "patch" || e.kind == "dspreset" ? "samples" : e.kind == "ir" ? "ms" : e.kind == "fxpatch" ? "effects" : "zones");
     }
     if (a.has("--json")) emit(json{{"ok", true}, {"roots", sampleRoots()}, {"samples", list}}.dump(2, ' ', false, json::error_handler_t::replace));
     else std::fprintf(OUT, "\n%zu of %zu libraries. Use as \"plugin\": \"builtin:sampler\" with \"sampler\": {\"<kind>\": \"<name>\"} (multisample, sfz, dspreset, exs, patch, kit), or {\"soundfont\": \"<name>\", \"program\": N}; an ir in a {\"type\": \"convolve\", \"ir\": \"<name>\"} effect.\n",
                       shown, lib.size());
+    if (!a.has("--json") && std::any_of(lib.begin(), lib.end(), [](const SampleLibraryEntry &e) { return e.kind == "fxpatch"; }))
+        std::fprintf(OUT, "An fxpatch is an effect chain: {\"type\": \"patch\", \"patch\": \"<name>\"} in a track's, bus's or the master's fx.\n");
     return 0;
 }
 

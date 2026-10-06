@@ -1403,6 +1403,44 @@ struct Repeat : Effect {
 // Splits the signal into 2-4 bands with Linkwitz-Riley (4th order) crossovers, runs each band
 // through its own effect chain, and sums them. Lower bands pass through the all-pass of every
 // crossover above them, so an untouched multiband sums back flat (same magnitude, all-pass phase).
+// A GarageBand or Logic patch's effect chain (an Audio, Aux or Output patch by name, or any patch folder), played as
+// the built-in effects its plug-ins become, in the strip's order
+struct PatchChain : Effect {
+    std::vector<std::unique_ptr<Effect>> fx;
+    PatchChain(const json &j, const Job &job, std::string &err) {
+        label = "patch";
+        if (!j.contains("patch") || !j["patch"].is_string()) {
+            err = "patch: give \"patch\": a GarageBand or Logic patch by name (\"Echo Studio\") or its .patch folder";
+            return;
+        }
+        json chain;
+        std::vector<std::string> notes;
+        std::string name;
+        if (!patchEffectChain(j["patch"].get<std::string>(), job.baseDir, chain, notes, name, err)) return;
+        label = "patch '" + name + "'";
+        for (auto &n : notes)
+            if (std::find(warnings.begin(), warnings.end(), label + ": " + n) == warnings.end()) warnings.push_back(label + ": " + n);
+        for (size_t i = 0; i < chain.size(); ++i) {
+            auto e = makeEffect(chain[i], job, label + " fx[" + std::to_string(i) + "]", err);
+            if (!e) return;
+            for (auto &w : e->warnings) warnings.push_back(label + ": " + w);
+            e->warnings.clear();
+            fx.push_back(std::move(e));
+        }
+        if (fx.empty()) warnings.push_back(label + ": none of its effects play here, so it passes the sound through");
+        checkKeys(j, {"patch"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &err) override {
+        for (auto &e : fx) {
+            if (!e->process(a, c, err)) { err = label + " " + e->label + ": " + err; return false; }
+            for (auto &w : e->warnings)
+                if (std::find(warnings.begin(), warnings.end(), label + ": " + w) == warnings.end()) warnings.push_back(label + ": " + w);
+            e->warnings.clear();
+        }
+        return true;
+    }
+};
+
 struct Multiband : Effect {
     struct Band { double gain = 0; bool solo = false, mute = false; std::vector<std::unique_ptr<Effect>> fx; };
     std::vector<double> xover;
@@ -1580,7 +1618,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "convolve", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband"};
+            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband", "patch"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -1614,6 +1652,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
             else if (t == "repeat") fx = std::make_unique<Repeat>(j, job);
             else if (t == "multiband") fx = std::make_unique<Multiband>(j, job, err);
+            else if (t == "patch") fx = std::make_unique<PatchChain>(j, job, err);
             else {
                 std::string list;
                 for (auto &n : builtinEffectTypes()) list += (list.empty() ? "" : ", ") + n;

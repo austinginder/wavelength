@@ -423,6 +423,40 @@ sys.exit(0 if len(o) == 1 and o[0]["wave"] == "additive" and len(o[0]["partials"
 fi
 unset WAVELENGTH_LOGIC_PATCHES
 if [ -n "$exs_why" ]; then echo "FAIL exs: $exs_why"; fail=1; else echo "ok   exs: instrument envelope and level, a patch's stored instrument and its Channel EQ, synth patches refused or re-created (Alchemy too, with its arpeggiator and on additive synthesis; Vintage Electric Piano, Vintage Clav and Sculpture), --patch"; fi
+# an effect patch (Audio folder, no instrument) by name in a track's fx: its Channel EQ's 200 Hz low cut and -3 dB
+cat > out/check/exs/chain.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "master": {"gain": 0}, "tracks": [
+ {"name": "Dry", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}}, "notes": [{"beat": 0, "dur": 2, "key": "C2"}, {"beat": 4, "dur": 2, "key": "C5"}]},
+ {"name": "Wet", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"}}, "notes": [{"beat": 0, "dur": 2, "key": "C2"}, {"beat": 4, "dur": 2, "key": "C5"}],
+  "fx": [{"type": "patch", "patch": "Test Chain"}]}]}
+JOB
+fxpatch_why=""
+if ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelength" render out/check/exs/chain.json --out "out/check/exs/chain-$build" --json > out/check/exs/chain-report.json 2>/dev/null; then
+  fxpatch_why="the job did not render: $(head -c 300 out/check/exs/chain-report.json)"
+elif ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelength" samples --search fxpatch 2>/dev/null | grep -q "Test Chain"; then
+  fxpatch_why="samples --search fxpatch did not list Test Chain"
+elif ! python3 - "out/check/exs/chain-$build" <<'PY'
+import math, struct, sys
+def mono(p):
+    b = open(p, 'rb').read(); i = 12; fmt = None
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack('<I', b[i + 4:i + 8])[0]
+        if cid == b'fmt ': fmt = struct.unpack('<HHIIHH', b[i + 8:i + 24])
+        if cid == b'data':
+            ch, sr, bits = fmt[1], fmt[2], fmt[5]
+            v = struct.unpack('<%d%s' % (n // (bits // 8), 'f' if bits == 32 else 'd'), b[i + 8:i + 8 + n])
+            return v[0::ch], sr
+        i += 8 + n + (n & 1)
+def db(x, sr, t0, t1):
+    s = x[int(t0 * sr):int(t1 * sr)]
+    return 20 * math.log10(math.sqrt(sum(v * v for v in s) / len(s)) + 1e-12)
+d, sr = mono(sys.argv[1] + '/stems/01-dry.wav'); w, _ = mono(sys.argv[1] + '/stems/02-wet.wav')
+lo, hi = db(w, sr, 0.3, 0.9) - db(d, sr, 0.3, 0.9), db(w, sr, 2.3, 2.9) - db(d, sr, 2.3, 2.9)
+print('C2 %+.1f dB, C5 %+.1f dB through the patch' % (lo, hi), file=sys.stderr)
+sys.exit(0 if abs(hi + 3.1) < 0.3 and abs(lo + 22.5) < 1 else 1)
+PY
+then fxpatch_why="its EQ didn't play as saved (see above)"; fi
+if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
 # imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,

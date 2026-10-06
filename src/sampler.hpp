@@ -38,7 +38,7 @@ namespace wl {
 bool renderSampler(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 
 struct SampleLibraryEntry {
-    std::string kind;       // "multisample", "sfz", "dspreset", "soundfont", "exs", "patch", "kit", "loops" or "ir"
+    std::string kind;       // "multisample", "sfz", "dspreset", "soundfont", "exs", "patch", "kit", "loops", "ir" or "fxpatch"
     std::string name, path, category;
     size_t count = 0;       // zones (multisample), regions (sfz), samples (dspreset), presets (soundfont), installed samples (patch) or sample files (kit)
 };
@@ -56,6 +56,12 @@ const std::vector<SampleLibraryEntry> &impulseLibrary();
 // and how many are installed, its effects), whether it plays here (or why not), and its sends with the impulse
 // response of each aux's room when one is installed. null with err when there is no such patch.
 nlohmann::json describePatch(const std::string &query, const std::string &baseDir, std::string &err);
+// A GarageBand or Logic patch's effect chain as built-in effects (an Audio, Aux or Output patch by name, any patch by
+// name or folder path; an instrument patch gives the effects after its instrument), with notes on what doesn't play.
+bool patchEffectChain(const std::string &query, const std::string &baseDir, nlohmann::json &chain, std::vector<std::string> &notes,
+                      std::string &name, std::string &err);
+// GarageBand's and Logic's effect patches as library entries (kind "fxpatch", count = plug-ins in the chain).
+const std::vector<SampleLibraryEntry> &effectPatchLibrary();
 // An impulse response by path (relative to baseDir), lib: name or library name; "" with err when none.
 std::string findImpulseResponse(const std::string &query, const std::string &baseDir, std::string &err);
 // A sample file by path (absolute, relative to baseDir, or relative to a sample root); "" if missing.

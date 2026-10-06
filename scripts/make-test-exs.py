@@ -116,6 +116,9 @@ ceq[32] = -3
 strip(os.path.join(out, 'patches', 'Test Patch.patch', '#Root.cst'),
       [record(0, '', b'\0\0\0\0', bytes(8)), record(3, 'Sampler', b'MELC', bytes(120) + exs), record(4, 'Channel EQ', b'GAME', settings(236, ceq))])
 strip(os.path.join(out, 'patches', 'Test Synth.patch', '#Root.cst'), [record(3, 'Alchemy', b'GAME', bytes(200))])
+# an effect patch (no instrument), in the Audio folder beside the instrument patches: the same Channel EQ
+os.makedirs(os.path.join(out, 'Audio', 'Test Chain.patch'), exist_ok=True)
+strip(os.path.join(out, 'Audio', 'Test Chain.patch', '#Root.cst'), [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Channel EQ', b'GAME', settings(236, ceq))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):
