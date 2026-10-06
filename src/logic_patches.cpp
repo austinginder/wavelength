@@ -43,10 +43,12 @@ bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
     const uint8_t magic[4] = {'U', 'C', 'u', 'A'};
     const auto first = std::search(d.begin(), d.begin() + (long)std::min<size_t>(d.size(), 4096), magic, magic + 4);
     for (size_t pos = (size_t)(first - d.begin()); pos + 36 <= d.size() && !std::memcmp(&d[pos], "UCuA", 4);) {
-        const uint32_t n = le32(&d[pos + 0x1c]);
+        uint32_t n = le32(&d[pos + 0x1c]);
+        const bool cut = n > d.size() - (pos + 36);   // a payload that runs past the file: what is there, then stop
+        if (cut) n = (uint32_t)(d.size() - (pos + 36));
         Record r{pos + 36, n, "", "", false, false, 0};
         const uint8_t *pl = &d[pos + 36];
-        if (n >= 140 && pos + 36 + 140 <= d.size() && (!std::memcmp(pl + 132, "MELC", 4) || !std::memcmp(pl + 132, "GAME", 4))) {
+        if (n >= 140 && (!std::memcmp(pl + 132, "MELC", 4) || !std::memcmp(pl + 132, "GAME", 4))) {
             for (size_t k = 0; k < 12 && pl[120 + k]; ++k) r.name += (char)pl[120 + k];
             for (size_t k = 14; k < 120 && pl[k] >= 32 && pl[k] < 127; ++k) r.preset += (char)pl[k];
             r.bypassed = pl[112] != 0;
@@ -54,6 +56,7 @@ bool records(const std::vector<uint8_t> &d, std::vector<Record> &out) {
             r.midiFx = n >= 152 && (le32(pl + 148) & 0x02000000);   // the plug-in's flags: MIDI effect (Arpeggiator, ...)
         }
         out.push_back(r);
+        if (cut) break;
         pos += 36 + (size_t)n;
     }
     return !out.empty();

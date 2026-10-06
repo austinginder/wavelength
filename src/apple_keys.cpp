@@ -23,10 +23,10 @@ double r(double v, double unit = 1000) {
     const double lost = std::fma(v, unit, -x);   // what the product rounded away
     return (lost < 0 ? lo : lost > 0 ? lo + 1 : std::fmod(lo, 2) == 0 ? lo : lo + 1) / unit;
 }
-int ri(double v) { return (int)std::nearbyint(v); }   // a stored switch or count (halves to even, as the decoder)
+int ri(double v) { return std::isfinite(v) ? (int)std::nearbyint(std::clamp(v, -1e9, 1e9)) : 0; }   // a stored switch or count (halves to even, as the decoder; a file's NaN or huge value can't overflow the cast)
 std::string num(double v, int digits, bool sign = false) { char b[48]; std::snprintf(b, sizeof b, sign ? "%+.*f" : "%.*f", digits, v); return b; }
 std::string gnum(double v) { char b[48]; std::snprintf(b, sizeof b, "%g", v); return b; }
-std::string inum(double v) { return std::to_string((long long)v); }   // a value printed whole (cut toward zero)
+std::string inum(double v) { return std::to_string(std::isfinite(v) ? (long long)std::clamp(v, -1e15, 1e15) : 0LL); }   // a value printed whole (cut toward zero)
 // a sum as the decoder's: Neumaier's compensated summation (Python's sum() of floats)
 template <class C> double fsum(const C &xs) {
     double s = 0, c = 0;

@@ -98,7 +98,14 @@ def main():
     files["xml--nested-100k.xml"] = b"<a>" * 100000
     files["musicxml--nested-100k.musicxml"] = b"<score-partwise>" + b"<a>" * 100000
 
+    # a channel strip record that claims 152 bytes (so its flags word at +148 is read) where the file holds 140: the
+    # strip reads, cut to the bytes that are there
+    payload = bytearray(140)
+    payload[132:136] = b"MELC"
+    files["patch--cst-record-past-end-readable.patch/#Root.cst"] = b"UCuA" + bytes(24) + struct.pack("<I", 152) + bytes(4) + bytes(payload)
+
     for name, data in files.items():
+        os.makedirs(os.path.dirname(os.path.join(out, name)), exist_ok=True)
         with open(os.path.join(out, name), "wb") as f:
             f.write(data)
     print(len(files), "files in", out)

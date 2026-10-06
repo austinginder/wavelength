@@ -1511,7 +1511,7 @@ else
 fi
 # hostile files: every reader refuses a file built to break its bounds checks (sizes that wrap around, lengths
 # past the buffer, nesting and shared references that multiply) without crashing or hanging; a plist whose
-# references explode is valid as a plist and must only finish fast
+# references explode is valid as a plist and a channel strip cut short still reads: those must only finish safely
 hdir="out/check/hostile-$build"
 rm -rf "$hdir" && python3 scripts/make-hostile-files.py "$hdir" >/dev/null
 if hostile_why=$(python3 - "./$build/wavelength" "$hdir" <<'PY'
@@ -1524,11 +1524,11 @@ for name in sorted(os.listdir(d)):
         sys.exit(print(name + ": still reading after 20 s") or 1)
     if p.returncode != 0:
         sys.exit(print(f"{name}: exit {p.returncode}") or 1)
-    if json.loads(p.stdout.strip().splitlines()[-1])["ok"] and "explode" not in name:
+    if json.loads(p.stdout.strip().splitlines()[-1])["ok"] and "explode" not in name and "readable" not in name:
         sys.exit(print(name + ": read as if it were fine") or 1)
 PY
 ); then
-  echo "ok   hostile files: plists, zips, Serum, ValueTree, SoundFont and XML readers refuse them without crashing"
+  echo "ok   hostile files: plist, zip, Serum, ValueTree, SoundFont, XML and channel strip readers survive them"
 else
   echo "FAIL hostile files: $hostile_why"; fail=1
 fi
