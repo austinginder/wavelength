@@ -34,6 +34,9 @@ Analysis analyzeAudio(const Audio &a, int sampleRate, double start = 0, double e
 nlohmann::json analysisToJson(const Analysis &x, bool withOnsets = true);
 // The median fundamental of the voiced frames of `a` (as Analysis::pitchHz), 0 when nothing is voiced.
 double medianPitchHz(const Audio &a, int sampleRate);
+// The fundamental (Hz) every hopSec seconds from the start, each frame centred there; 0 = unvoiced or quiet (YIN on a
+// copy decimated to 11-24 kHz, fundamentals fmin to fmax).
+std::vector<double> pitchTrack(const Audio &a, int sampleRate, double hopSec, double fmin = 70, double fmax = 1000);
 
 // The strongest spectral peaks of [start, end) (end <= 0: to the end), from a power-averaged 16k-point
 // spectrum (2.9 Hz bins at 48 kHz; shorter windows use shorter frames): where a comb, resonator or

@@ -135,9 +135,14 @@ vt = [0.0] * 10
 vt[0:3] = [7, -6, 60]
 ps = [0.0] * 12
 ps[0:2] = [24, 12]
+# and Pitch Correction first: C minor pentatonic (#4-#15 Use C..B), Response 20 ms (#30), Tolerance 10 (#37), Detune 5 (#26)
+pc = [0.0] * 61
+for n in (0, 3, 5, 7, 10): pc[4 + n] = 1
+pc[26], pc[30], pc[37], pc[43] = 5, 20, 10, 1
 os.makedirs(os.path.join(out, 'Audio', 'Test Voice.patch'), exist_ok=True)
 strip(os.path.join(out, 'Audio', 'Test Voice.patch', '#Root.cst'),
-      [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'VocalTrf', b'GAME', settings(249, vt)), record(5, 'PShft', b'GAME', settings(159, ps))])
+      [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'PitchCor', b'GAME', settings(235, pc)), record(5, 'VocalTrf', b'GAME', settings(249, vt)),
+       record(6, 'PShft', b'GAME', settings(159, ps))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):

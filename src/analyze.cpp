@@ -283,6 +283,43 @@ double medianPitchHz(const Audio &a, int sampleRate) {
     return peak > 0 ? medianF0(mono, sampleRate, peak, confidence) : 0;
 }
 
+std::vector<double> pitchTrack(const Audio &a, int sampleRate, double hopSec, double fmin, double fmax) {
+    const size_t n = a.frames();
+    std::vector<double> out;
+    if (!n || sampleRate <= 0) return out;
+    // YIN on a copy decimated to 11-24 kHz: a fundamental up to fmax needs no more, and the lags shrink with it
+    const int q = std::max(1, sampleRate / 12000);
+    const double sr = (double)sampleRate / q;
+    dsp::Biquad l1, l2;
+    l1.set(dsp::Biquad::LowPass, sr * 0.38, 0.5412, 0, sampleRate);
+    l2.set(dsp::Biquad::LowPass, sr * 0.38, 1.3066, 0, sampleRate);
+    std::vector<float> d;
+    d.reserve(n / (size_t)q + 1);
+    for (size_t i = 0; i < n; ++i) {
+        const double v = l2.process(l1.process(0.5 * ((double)a.left[i] + a.right[i])));
+        if (i % (size_t)q == 0) d.push_back((float)v);
+    }
+    const size_t N = std::max<size_t>(64, (size_t)std::ceil(2.5 * sr / std::max(20.0, fmin)));   // two periods of fmin and some
+    const size_t hop = std::max<size_t>(1, (size_t)std::llround(hopSec * sr));
+    // frames under -40 dB of the loudest stay unvoiced (breaths, room, reverb tails)
+    double loudest = 0;
+    std::vector<double> rms;
+    for (size_t c = 0; c * hop < d.size(); ++c) {
+        const size_t at = c * hop >= N / 2 ? c * hop - N / 2 : 0, e = std::min(d.size(), at + N);
+        double s = 0;
+        for (size_t i = at; i < e; ++i) s += (double)d[i] * d[i];
+        rms.push_back(e > at ? std::sqrt(s / (double)(e - at)) : 0);
+        loudest = std::max(loudest, rms.back());
+    }
+    out.assign(rms.size(), 0.0);
+    for (size_t c = 0; c < rms.size(); ++c) {
+        const size_t at = c * hop >= N / 2 ? c * hop - N / 2 : 0;
+        if (at + N > d.size() || rms[c] < loudest * 0.01) continue;
+        out[c] = yin(&d[at], N, sr, fmin, fmax);
+    }
+    return out;
+}
+
 std::vector<SpectralPeak> spectralPeaks(const Audio &a, int sampleRate, double start, double end, size_t count, double &binHz) {
     const double sr = sampleRate;
     const size_t s0 = std::min(a.frames(), (size_t)std::max(0.0, start * sr));

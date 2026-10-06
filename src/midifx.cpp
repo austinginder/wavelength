@@ -122,29 +122,7 @@ bool parseTranspose(const json &e, TransposeFx &t, std::string &err) {
     if (!knownKeys(e, {"type", "semitones", "scale"}, w, err)) return false;
     if (e.contains("semitones") && !integer(e["semitones"], -48, 48, t.semitones)) { err = w + ": semitones is -48 to 48"; return false; }
     if (!e.contains("scale")) return true;
-    const json &s = e["scale"];
-    if (s.is_string()) {   // a key: "A minor", "D dorian", "C minor pentatonic"
-        std::string name = s.get<std::string>(), low = name;
-        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        const bool penta = low.size() > 10 && low.compare(low.size() - 10, 10, "pentatonic") == 0;
-        if (penta) name.resize(name.size() - 10);
-        int tonic = 0, mode = 0;
-        bool minor = false;
-        if (!parseKeyName(name, tonic, minor, err, &mode)) { err = w + ": scale: " + err + " (or a list of notes, [\"C\", \"Eb\", \"G\"])"; return false; }
-        static const std::vector<int> modes[6] = {{0, 2, 4, 5, 7, 9, 11}, {0, 2, 3, 5, 7, 8, 10}, {0, 2, 3, 5, 7, 9, 10},
-                                                  {0, 1, 3, 5, 7, 8, 10}, {0, 2, 4, 6, 7, 9, 11}, {0, 2, 4, 5, 7, 9, 10}};
-        if (penta && mode > 1) { err = w + ": a pentatonic scale is major or minor"; return false; }
-        const std::vector<int> steps = penta ? (mode == 1 ? std::vector<int>{0, 3, 5, 7, 10} : std::vector<int>{0, 2, 4, 7, 9}) : modes[mode];
-        for (int x : steps) t.scale.insert((tonic + x) % 12);
-        return true;
-    }
-    if (!s.is_array() || s.empty()) { err = w + ": scale is a key (\"A minor\", \"C minor pentatonic\") or a list of notes, [0, 3, 7] or [\"C\", \"Eb\", \"G\"]"; return false; }
-    for (auto &x : s) {
-        int pc = 0;
-        if (!pitchClass(x, pc)) { err = w + ": a scale's notes are 0-11 (C = 0) or names without an octave (\"Eb\")"; return false; }
-        t.scale.insert(pc);
-    }
-    if (t.scale.size() == 12) t.scale.clear();
+    if (!parseScale(e["scale"], t.scale, err)) { err = w + ": " + err; return false; }
     return true;
 }
 
@@ -334,6 +312,33 @@ bool resolveOne(const json &e, json &out, std::vector<std::string> &notes, std::
     return type == "chord" ? parseChord(out, c, err) : type == "transpose" ? parseTranspose(out, t, err) : parseRepeat(out, r, err);
 }
 } // namespace
+
+bool parseScale(const json &s, std::set<int> &scale, std::string &err) {
+    scale.clear();
+    if (s.is_string()) {   // a key: "A minor", "D dorian", "C minor pentatonic"
+        std::string name = s.get<std::string>(), low = name;
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        const bool penta = low.size() > 10 && low.compare(low.size() - 10, 10, "pentatonic") == 0;
+        if (penta) name.resize(name.size() - 10);
+        int tonic = 0, mode = 0;
+        bool minor = false;
+        if (!parseKeyName(name, tonic, minor, err, &mode)) { err = "scale: " + err + " (or a list of notes, [\"C\", \"Eb\", \"G\"])"; return false; }
+        static const std::vector<int> modes[6] = {{0, 2, 4, 5, 7, 9, 11}, {0, 2, 3, 5, 7, 8, 10}, {0, 2, 3, 5, 7, 9, 10},
+                                                  {0, 1, 3, 5, 7, 8, 10}, {0, 2, 4, 6, 7, 9, 11}, {0, 2, 4, 5, 7, 9, 10}};
+        if (penta && mode > 1) { err = "a pentatonic scale is major or minor"; return false; }
+        const std::vector<int> steps = penta ? (mode == 1 ? std::vector<int>{0, 3, 5, 7, 10} : std::vector<int>{0, 2, 4, 7, 9}) : modes[mode];
+        for (int x : steps) scale.insert((tonic + x) % 12);
+        return true;
+    }
+    if (!s.is_array() || s.empty()) { err = "scale is a key (\"A minor\", \"C minor pentatonic\") or a list of notes, [0, 3, 7] or [\"C\", \"Eb\", \"G\"]"; return false; }
+    for (auto &x : s) {
+        int pc = 0;
+        if (!pitchClass(x, pc)) { err = "a scale's notes are 0-11 (C = 0) or names without an octave (\"Eb\")"; return false; }
+        scale.insert(pc);
+    }
+    if (scale.size() == 12) scale.clear();
+    return true;
+}
 
 bool resolveMidiFx(const json &fx, json &out, std::vector<std::string> &notes, std::string &err) {
     if (!fx.is_array()) {

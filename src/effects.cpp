@@ -5,6 +5,7 @@
 #include "dsp.hpp"
 #include "engine.hpp"
 #include "loudness.hpp"
+#include "midifx.hpp"
 #include "sampler.hpp"
 #include "audio_file.hpp"
 
@@ -1325,10 +1326,48 @@ struct Vibrato : Effect {
     }
 };
 
-// pitch: moves the pitch and keeps the time (a phase vocoder, signalsmith-stretch). "semitones" and "cents" set the
-// shift; the formants move with the pitch (Logic's Pitch Shifter) unless "keepFormants" holds them (Logic's Vocal
-// Transformer, where a voice keeps its timbre), and "formant" moves them on their own, in semitones. Latency is
-// compensated: the output lines up with the input.
+// The pitch moved by semis(t) semitones and the time kept (signalsmith-stretch, a phase vocoder), read every 256 samples
+// unless `still`; the formants held where they were (keep) and moved by `formant` semitones; crossfaded with the input by
+// mix. The output lines up with the input.
+void shiftPitch(Audio &a, double sr, const std::function<double(double)> &semis, bool still, double formant, bool keep, const Envelope &mix) {
+    const size_t n = a.frames();
+    signalsmith::stretch::SignalsmithStretch<float> st;
+    st.presetDefault(2, (float)sr);
+    st.setFormantSemitones((float)formant, keep);
+    if (keep || std::fabs(formant) > 1e-6) {   // the formant envelope is smoothed over the voice's harmonics: tell it where they sit
+        const double f0 = medianPitchHz(a, (int)sr);
+        if (f0 > 0) st.setFormantBase((float)(f0 / sr));
+    }
+    st.setTransposeSemitones((float)semis(0));
+    // as signalsmith's exact(): seek the first stretch of input so the output starts aligned with it, then feed
+    // the rest that far ahead (zeros past the end) while the output is read in step with the timeline
+    const int seek = st.outputSeekLength(1.0f);
+    std::vector<std::vector<float>> in(2), out(2, std::vector<float>(n, 0.f));
+    in[0].assign(a.left.begin(), a.left.end());
+    in[1].assign(a.right.begin(), a.right.end());
+    for (auto &ch : in) ch.resize(n + seek, 0.f);
+    struct At {
+        std::vector<std::vector<float>> &v;
+        size_t at;
+        float *operator[](int ch) { return v[ch].data() + at; }
+    };
+    st.outputSeek(At{in, 0}, seek);
+    const size_t block = still ? 65536 : 256;
+    for (size_t pos = 0; pos < n; pos += block) {
+        const int b = (int)std::min(block, n - pos);
+        if (!still) st.setTransposeSemitones((float)semis(pos / sr));
+        st.process(At{in, seek + pos}, b, At{out, pos}, b);
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+        a.left[i] = blend(a.left[i], out[0][i], m);
+        a.right[i] = blend(a.right[i], out[1][i], m);
+    }
+}
+
+// pitch: moves the pitch and keeps the time. "semitones" and "cents" set the shift; the formants move with the pitch
+// (Logic's Pitch Shifter) unless "keepFormants" holds them (Logic's Vocal Transformer, where a voice keeps its timbre),
+// and "formant" moves them on their own, in semitones.
 struct Pitch : Effect {
     Envelope semis, cents, mix;
     double formant = 0;
@@ -1343,44 +1382,73 @@ struct Pitch : Effect {
         checkKeys(j, {"semitones", "cents", "formant", "keepFormants", "mix"}, *this);
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
-        const double sr = c.job.sampleRate;
-        const size_t n = a.frames();
         auto shift = [&](double t) { return std::clamp(semis.at(t) + cents.at(t) / 100, -48.0, 48.0); };
         const bool still = semis.constant() && cents.constant();
-        if (!n || (still && std::fabs(shift(0)) < 1e-6 && std::fabs(formant) < 1e-6)) return true;   // nothing moves
+        if (!a.frames() || (still && std::fabs(shift(0)) < 1e-6 && std::fabs(formant) < 1e-6)) return true;   // nothing moves
         if (mix.constant() && mix.at(0) <= 0) return true;
-        signalsmith::stretch::SignalsmithStretch<float> st;
-        st.presetDefault(2, (float)sr);
-        st.setFormantSemitones((float)formant, keep);
-        if (keep || std::fabs(formant) > 1e-6) {   // the formant envelope is smoothed over the voice's harmonics: tell it where they sit
-            const double f0 = medianPitchHz(a, (int)sr);
-            if (f0 > 0) st.setFormantBase((float)(f0 / sr));
+        shiftPitch(a, c.job.sampleRate, shift, still, formant, keep, mix);
+        return true;
+    }
+};
+
+// tune: pitch correction (Logic's and GarageBand's Pitch Correction). The input's fundamental is tracked every 5 ms and
+// pulled to the nearest note of "scale" (a key, a list of notes, or every note), unless it sits within "tolerance" cents
+// of it; "response" ms is how long the pull takes (0: at once, the robotic step; a few hundred: only long notes settle).
+// "detune" cents moves the result; formants stay put; "mix" crossfades. Monophonic: a chord confuses the tracker.
+struct Tune : Effect {
+    std::set<int> scale;
+    double response = 50, tolerance = 10, detune = 0, ref = 440, fmin = 70, fmax = 1000;
+    Envelope mix;
+    Tune(const json &j, const Job &job, std::string &err) {
+        label = "tune";
+        if (j.contains("scale") && !parseScale(j["scale"], scale, err)) { err = "tune: " + err; return; }
+        response = std::clamp(j.value("response", 50.0), 0.0, 5000.0);
+        tolerance = std::clamp(j.value("tolerance", 10.0), 0.0, 100.0);
+        detune = std::clamp(j.value("detune", 0.0), -100.0, 100.0);
+        ref = std::clamp(j.value("reference", 440.0), 400.0, 480.0);
+        if (j.contains("range")) {
+            const json &r = j["range"];
+            if (!r.is_array() || r.size() != 2 || !r[0].is_number() || !r[1].is_number() || r[0].get<double>() < 30 || r[1].get<double>() <= r[0].get<double>() * 1.5) {
+                err = "tune: range is [lowest, highest] fundamental in Hz, the lowest 30 or more"; return;
+            }
+            fmin = r[0].get<double>(); fmax = std::min(4000.0, r[1].get<double>());
         }
-        st.setTransposeSemitones((float)shift(0));
-        // as signalsmith's exact(): seek the first stretch of input so the output starts aligned with it, then feed
-        // the rest that far ahead (zeros past the end) while the output is read in step with the timeline
-        const int seek = st.outputSeekLength(1.0f);
-        std::vector<std::vector<float>> in(2), out(2, std::vector<float>(n, 0.f));
-        in[0].assign(a.left.begin(), a.left.end());
-        in[1].assign(a.right.begin(), a.right.end());
-        for (auto &ch : in) ch.resize(n + seek, 0.f);
-        struct At {
-            std::vector<std::vector<float>> &v;
-            size_t at;
-            float *operator[](int ch) { return v[ch].data() + at; }
+        mix = param(j, "mix", 1, job.tempo);
+        checkKeys(j, {"scale", "response", "tolerance", "detune", "reference", "range", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate, hop = 0.005;
+        if (!a.frames() || (mix.constant() && mix.at(0) <= 0)) return true;
+        const std::vector<double> f0 = pitchTrack(a, (int)sr, hop, fmin, fmax);
+        // the correction in cents per hop: toward the nearest allowed note, eased by the response time
+        std::vector<double> corr(f0.size(), 0.0);
+        const double ease = response <= 0 ? 1 : 1 - std::exp(-hop * 1000 / response);
+        double want = 0, y = 0;
+        size_t voiced = 0;
+        for (size_t k = 0; k < f0.size(); ++k) {
+            if (f0[k] > 0) {
+                ++voiced;
+                const double m = 69 + 12 * std::log2(f0[k] / ref);
+                int target = (int)std::lround(m);
+                if (!scale.empty()) {   // the nearest allowed key (ties go down)
+                    double best = 1e9;
+                    for (int key = (int)std::floor(m) - 7; key <= (int)std::ceil(m) + 7; ++key)
+                        if (scale.count((key % 12 + 12) % 12) && std::fabs(m - key) < best - 1e-9) { best = std::fabs(m - key); target = key; }
+                }
+                const double off = (target - m) * 100;
+                want = std::fabs(off) <= tolerance ? 0 : off;
+            }   // unvoiced: the last pull holds
+            y += (want - y) * ease;
+            corr[k] = y + detune;
+        }
+        if (!voiced) { warnings.push_back("tune: no pitch found in the input (between " + std::to_string((int)fmin) + " and " + std::to_string((int)fmax) + " Hz), nothing corrected"); return true; }
+        auto semis = [&](double t) {
+            const double x = t / hop;
+            const size_t k = std::min(corr.size() - 1, (size_t)x);
+            const double fr = std::min(1.0, x - (double)k);
+            return (k + 1 < corr.size() ? corr[k] * (1 - fr) + corr[k + 1] * fr : corr[k]) / 100;
         };
-        st.outputSeek(At{in, 0}, seek);
-        const size_t block = still ? 65536 : 256;   // a moving shift is read every 256 samples
-        for (size_t pos = 0; pos < n; pos += block) {
-            const int b = (int)std::min(block, n - pos);
-            if (!still) st.setTransposeSemitones((float)shift(pos / sr));
-            st.process(At{in, seek + pos}, b, At{out, pos}, b);
-        }
-        for (size_t i = 0; i < n; ++i) {
-            const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
-            a.left[i] = blend(a.left[i], out[0][i], m);
-            a.right[i] = blend(a.right[i], out[1][i], m);
-        }
+        shiftPitch(a, sr, semis, false, 0, true, mix);
         return true;
     }
 };
@@ -1781,7 +1849,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "convolve", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "pitch", "ringmod", "tapestop", "repeat", "multiband", "patch"};
+            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "pitch", "tune", "ringmod", "tapestop", "repeat", "multiband", "patch"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -1813,6 +1881,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
             else if (t == "vibrato") fx = std::make_unique<Vibrato>(j, job);
             else if (t == "pitch") fx = std::make_unique<Pitch>(j, job);
+            else if (t == "tune") fx = std::make_unique<Tune>(j, job, err);
             else if (t == "ringmod") fx = std::make_unique<Ringmod>(j, job, err);
             else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
             else if (t == "repeat") fx = std::make_unique<Repeat>(j, job);

@@ -1277,6 +1277,20 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             const double mix = std::clamp(v(0, 50), 0.0, 100.0) / 100;
             f["mix"] = r4(mix);
             if (mix > 0.005) add(f);
+        } else if (p.name == "PitchCor") {   // Pitch Correction: #4-#15 Use C..B, #30 Response, #37 Tolerance, #26 Detune, #3 Ref Pitch, #43 Global Tuning, #36 Bypass All
+            if (v(36) >= 0.5) { notes.push_back("Pitch Correction: Bypass All is on in the patch, left out"); continue; }
+            json f = {{"type", "tune"}, {"response", r2(std::max(0.0, v(30, 50)))}, {"tolerance", r2(std::clamp(v(37, 10), 0.0, 100.0))}};
+            json scale = json::array();
+            for (int pc = 0; pc < 12; ++pc)
+                if (v(4 + (size_t)pc) >= 0.5) scale.push_back(pc);
+            if (!scale.empty() && scale.size() < 12) f["scale"] = scale;
+            if (std::fabs(v(26)) > 0.5) f["detune"] = r2(v(26));
+            if (v(43, 1) < 0.5 && v(3) >= 400 && v(3) <= 480 && std::fabs(v(3) - 440) > 0.05) f["reference"] = r2(v(3));
+            if (std::lround(v(56)) == 1) f["range"] = {40, 600};   // Pitch Range: Low
+            add(f);
+            bool skips = false;
+            for (size_t k = 44; k <= 55; ++k) skips = skips || v(k) >= 0.5;
+            if (skips) notes.push_back("Pitch Correction: its per-note bypass is left out (those notes are corrected too)");
         } else {
             notes.push_back(p.name + ": GarageBand's own effect, not played");
         }

@@ -467,9 +467,10 @@ sys.exit(0 if ok else 1)'; then fxpatch_why="Echo or Multipressor didn't map as 
 elif ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelength" samples --patch "Test Voice" --json 2>/dev/null | python3 -c '
 import json, sys
 fx = json.load(sys.stdin)["patch"]["effects"]
-sys.exit(0 if fx == [{"type": "pitch", "semitones": 7, "keepFormants": True, "formant": -6, "mix": 0.6}, {"type": "pitch", "semitones": 12, "mix": 0.24}] else 1)'; then
-  fxpatch_why="Vocal Transformer or Pitch Shifter didn't map as saved"; fi
-if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Vocal Transformer and Pitch Shifter map"; fi
+sys.exit(0 if fx == [{"type": "tune", "response": 20, "tolerance": 10, "scale": [0, 3, 5, 7, 10], "detune": 5},
+                     {"type": "pitch", "semitones": 7, "keepFormants": True, "formant": -6, "mix": 0.6}, {"type": "pitch", "semitones": 12, "mix": 0.24}] else 1)'; then
+  fxpatch_why="Pitch Correction, Vocal Transformer or Pitch Shifter didn't map as saved"; fi
+if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Pitch Correction, Vocal Transformer and Pitch Shifter map"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
 # imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,
@@ -817,6 +818,34 @@ PY
 )
 fi
 if [ -n "$pitch_why" ]; then echo "FAIL pitch: $pitch_why"; fail=1; else echo "ok   pitch: semitones, keepFormants, formant, an automated shift, lined up with the input"; fi
+# tune: a vowel-like saw on A3 sung 40 cents flat lands on A3 with response 0, stays flat inside a 50-cent tolerance;
+# C#4 30 cents sharp goes to D4 in C major
+mkdir -p out/check/tune
+python3 - <<'PY'
+import json
+syn = lambda c: {"osc": [{"wave": "saw", "cents": c}], "filter": {"type": "lowpass", "cutoff": 2500}, "amp": {"attack": 0.01, "decay": 0, "sustain": 1, "release": 0.05}}
+vowel = {"type": "eq", "bands": [{"type": "peak", "freq": 700, "gain": 10, "q": 2.5}, {"type": "peak", "freq": 1200, "gain": 8, "q": 3}]}
+tr = lambda n, key, c, fx: {"name": n, "plugin": "builtin:synth", "synth": syn(c), "fx": [vowel] + fx, "notes": [{"beat": 0.25, "dur": 2.5, "key": key, "vel": 1}]}
+json.dump({"tempo": 60, "leadIn": 0, "tail": 0.5, "tracks": [tr("Snap", 57, -40, [{"type": "tune", "response": 0}]), tr("Loose", 57, -40, [{"type": "tune", "tolerance": 50}]),
+           tr("Scale", 61, 30, [{"type": "tune", "scale": "C major", "response": 0}])]}, open("out/check/tune/tune.json", "w"))
+PY
+tune_why=""
+if ! "./$build/wavelength" render out/check/tune/tune.json --out out/check/tune/out --json > /dev/null 2>&1; then
+  tune_why="the job did not render"
+else
+  tune_why=$(python3 - "./$build/wavelength" <<'PY'
+import json, subprocess, sys
+def p(f):
+    d = json.loads(subprocess.run([sys.argv[1], "analyze", "out/check/tune/out/stems/" + f, "--start", "0.8", "--end", "2.4", "--json"], capture_output=True, text=True).stdout)
+    return d["pitch"]["note"], d["pitch"]["cents"]
+snap, loose, scale = p("01-snap.wav"), p("02-loose.wav"), p("03-scale.wav")
+if snap[0] != "A3" or abs(snap[1]) > 5: print("the flat A3 came out", snap)
+elif loose[0] != "A3" or abs(loose[1] + 40) > 5: print("inside the tolerance it came out", loose, "not 40 cents flat")
+elif scale[0] != "D4" or abs(scale[1]) > 5: print("C#4 in C major came out", scale)
+PY
+)
+fi
+if [ -n "$tune_why" ]; then echo "FAIL tune: $tune_why"; fail=1; else echo "ok   tune: pitch correction to the nearest note, a scale, a tolerance"; fi
 # ringmod: a 988 Hz sine ring-modulated at 100 Hz gives 888 and 1088 Hz; shifted +100 Hz only 1088 (the other sideband
 # 40 dB down); dual mode shifts the left side up and the right side down
 mkdir -p out/check/ringmod

@@ -15,10 +15,15 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
 namespace wl {
+
+// A scale as its pitch classes (C = 0): a key ("A minor", "D dorian", "C minor pentatonic") or a list of notes ([0, 3, 7] or
+// ["C", "Eb", "G"]); all twelve (chromatic) leaves it empty.
+bool parseScale(const nlohmann::json &s, std::set<int> &scale, std::string &err);
 
 // beats from `beat` to `seconds` later on the song's tempo map (for a repeat's "ms"); unset = 120 BPM
 using SecondsToBeats = std::function<double(double beat, double seconds)>;
