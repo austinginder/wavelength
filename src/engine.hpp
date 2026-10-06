@@ -19,6 +19,7 @@ struct PluginSetup {
     std::vector<std::pair<std::string, Envelope>> automation; // name → curve
     bool verbose = false;
     double warmup = -1;
+    int realtime = -1;   // 1 on, 0 off, -1 = on for plugins known to need it
 };
 
 struct OpenedPlugin {

@@ -240,6 +240,22 @@ sys.exit(0 if d.get("ok") and d["tracks"][0].get("lufs", -120) > -60 else 1)'; t
   else
     echo "FAIL au: Apple's Audio Units did not render"; fail=1
   fi
+  # track realtime: only the window around the notes (2 s note + 0.5 s before + 1.5 s after) runs at
+  # wall-clock speed, not the whole 17 s; the same track without it renders far faster
+  cat > out/check/au/realtime.json <<'JOB'
+{"sampleRate": 48000, "tempo": 120, "tail": 1, "stems": "none",
+ "tracks": [{"name": "Paced", "plugin": "au:DLSMusicDevice", "realtime": true, "notes": [{"beat": 28, "dur": 4, "key": "A4", "vel": 0.8}]},
+            {"name": "Free", "plugin": "au:DLSMusicDevice", "notes": [{"beat": 28, "dur": 4, "key": "A4", "vel": 0.8}]}]}
+JOB
+  if "./$build/wavelength" render out/check/au/realtime.json --out out/check/au/realtime --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+t = {x["name"]: x for x in d["tracks"]}
+sys.exit(0 if d.get("ok") and 3.8 <= t["Paced"]["renderSeconds"] < 10 and t["Free"]["renderSeconds"] < 2 and t["Paced"]["lufs"] > -60 else 1)'; then
+    echo "ok   realtime: paced around the notes only"
+  else
+    echo "FAIL realtime: pacing window wrong (see out/check/au/realtime)"; fail=1
+  fi
 fi
 # Apple Loops: a tagged CAF (scripts/make-test-apple-loop.py: 4 beats at 120 BPM in C major, notes inside) found
 # by name follows the song's tempo (3 repeats at 90 BPM = 8 s) and moves into the song's key (C -> D: the sine

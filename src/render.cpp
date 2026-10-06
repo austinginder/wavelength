@@ -167,6 +167,7 @@ bool renderInstrument(const Job &job, const Track &track, Audio &audio, TrackRes
     setup.automation = track.paramAutomation;
     setup.verbose = verbose;
     setup.warmup = track.warmup;
+    setup.realtime = track.realtime;
     setup.preset = track.preset;
     OpenedPlugin p;
     if (!openPlugin(setup, track.name, p, err)) return false;

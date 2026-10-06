@@ -362,12 +362,14 @@ bool Vst2Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     const int64_t lat = std::clamp<int64_t>(fx->initialDelay, 0, (int64_t)(10 * sr));
     latencySamples = (uint32_t)lat;
     std::atomic<bool> done{false};
+    Pacer pacer(realtime && !liveOutput, events, sr);   // track "realtime"
     std::thread worker([&] {
         const int64_t warm = (int64_t)(0.1 * sr), end = total + lat;
         size_t next = 0;
         std::vector<float> lastAuto(autos.size(), NAN);
         for (int64_t pos = -warm; pos < end;) {
             const int32_t n = (int32_t)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
+            pacer.wait(pos);
             // parameters at audio start (some plugins apply a state in their first blocks) and automation
             if (pos >= 0 && pos < block) for (const auto &v : initial) fx->setParameter(fx, (int32_t)v.id, (float)std::clamp(v.value, 0.0, 1.0));
             if (pos >= 0)

@@ -91,9 +91,11 @@ bool openPlugin(const PluginSetup &setup, const std::string &context, OpenedPlug
     if (!out.plugin) { err = context + ": " + err; return false; }
     out.plugin->verbose = setup.verbose;
     out.plugin->warmup = setup.warmup;
+    std::string n;
+    for (unsigned char c : info.name) if (std::isalnum(c)) n += (char)std::tolower(c);
+    // plugins known to start their voices from a main-thread timer: silent unless paced to the clock
+    out.plugin->realtime = setup.realtime >= 0 ? setup.realtime == 1 : n == "roboto";
     if (setup.warmup < 0) {   // plugins known to load patches or samples asynchronously after activation
-        std::string n;
-        for (unsigned char c : info.name) if (std::isalnum(c)) n += (char)std::tolower(c);
         if (n == "voltagemodular") out.plugin->warmup = 5;
         else if (n == "bbcsymphonyorchestra") out.plugin->warmup = 6;
         else if (n == "analoglabv") out.plugin->warmup = 15;   // sampled engines stream after activation

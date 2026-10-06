@@ -106,6 +106,7 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     const int64_t total = (int64_t)out.frames();
     std::atomic<bool> done{false};
     std::string audioErr;
+    Pacer pacer(realtime && !liveOutput, events, sr);   // track "realtime"
     std::thread worker([&] {
         inst.audioThread = std::this_thread::get_id();
         const clap_plugin_t *pl = inst.plugin();
@@ -127,6 +128,7 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         std::vector<const TimedEvent *> blockEvents;
         for (int64_t pos = -warm; pos < end && audioErr.empty();) {
             const uint32_t n = (uint32_t)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
+            pacer.wait(pos);
             notes.clear(); midis.clear(); params.clear(); exprs.clear();
             params.reserve(initial.size() * 2 + autos.size());
             Events in;

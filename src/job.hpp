@@ -34,6 +34,7 @@ struct Track {
     std::vector<Note> notes;
     double gainDb = 0, pan = 0;
     double warmup = -1;                                          // seconds; < 0 = job warmup
+    int realtime = -1;                                           // "realtime": 1 on, 0 off, -1 = known plugins only
     bool mute = false;
     double firstSoundBeat = 1e18;   // earliest note or clip (beats); late automation before it is inaudible
     bool harmony = true;            // "harmony": false = unpitched material: lint leaves it out of chords and voices

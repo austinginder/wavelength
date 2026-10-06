@@ -1636,6 +1636,7 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
     setup.stateFormat = track.stateFormat;
     setup.params = track.params;
     setup.warmup = track.warmup;
+    setup.realtime = track.realtime;
     setup.preset = track.preset;
     OpenedPlugin p;
     if (!openPlugin(setup, track.name, p, err)) { say({{"error", err}}); return 1; }
@@ -1716,6 +1717,7 @@ int playWorker(const std::string &jobPath, const std::string &trackName, std::FI
         setup.stateFormat = track.stateFormat;
         setup.params = track.params;
         setup.warmup = track.warmup;
+        setup.realtime = track.realtime;
         setup.preset = track.preset;
         if (!openPlugin(setup, track.name, p, err)) { say({{"error", err}}); return 1; }
         // one silent render with the full warmup (sampled instruments stream after activation), then short ones

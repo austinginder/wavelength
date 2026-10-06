@@ -474,6 +474,7 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
     // delay compensation: render `lat` more samples and write every output sample `lat` earlier
     const int64_t lat = std::min<int64_t>(im.processor->getLatencySamples(), (int64_t)(10 * sr));
     latencySamples = (uint32_t)lat;
+    Pacer pacer(realtime && !liveOutput, events, sr);   // track "realtime"
     std::thread worker([&] {
         im.processor->setProcessing(true);
         const bool live = (bool)liveOutput;   // playing live: until liveOutput says stop
@@ -484,6 +485,7 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         bool firstBlock = true;
         for (int64_t pos = -warm; pos < end;) {
             const int32 n = (int32)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
+            pacer.wait(pos);
             data.numSamples = n;
             eventList.clear();
             outEvents.clear();

@@ -691,12 +691,14 @@ bool AuPlugin::render(const Job &job, const std::vector<TimedEvent> &events, con
     Buffers bufs(renderCh, block);
     std::atomic<bool> done{false};
     std::string renderErr;
+    Pacer pacer(realtime && !liveOutput, events, sr);   // track "realtime"
     std::thread worker([&] {
         const int64_t warm = (int64_t)(0.1 * sr), end = total + lat;
         size_t next = 0;
         std::vector<float> lastAuto(autos.size(), NAN);
         for (int64_t pos = -warm; pos < end;) {
             const UInt32 n = (UInt32)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
+            pacer.wait(pos);
             im.pos = pos;
             const double sec = std::max<int64_t>(0, pos) / sr;
             im.beat = job.tempo.secToBeat(sec);

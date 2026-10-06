@@ -6,6 +6,7 @@
 #include "state_file.hpp"
 #include "wav.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -105,6 +106,7 @@ public:
 
     bool verbose = false;
     double warmup = -1;    // seconds to settle after activation; < 0 = the job's "warmup"
+    bool realtime = false; // render at wall-clock speed around the notes (see Pacer)
 
     // Live playing (serve's playground, CLAP and VST3): with liveOutput set, render() runs until it returns
     // false instead of filling `out`. Before each block, liveEvents(pos, frames, events) adds the notes that
@@ -117,5 +119,22 @@ public:
 
 // Creates the right implementation for a resolved plugin.
 std::unique_ptr<Plugin> createPlugin(const PluginInfo &info, std::string &err);
+
+// Track "realtime": some plugins start and feed their voices from a timer on the main thread
+// (discoDSP Roboto sings a phrase only after its timer has seen the key). Rendered faster than real
+// time they stay silent, so a render worker calls wait(pos) before each block: inside a window around
+// held notes (0.5 s before the first note-on to 1.5 s after the last note-off) the block waits for the
+// wall clock; elsewhere the render runs at full speed. Does nothing when `on` is false.
+class Pacer {
+public:
+    Pacer(bool on, const std::vector<TimedEvent> &events, double sampleRate);
+    void wait(int64_t pos);
+private:
+    std::vector<std::pair<int64_t, int64_t>> windows_;   // frames, sorted, merged
+    double sr_;
+    size_t current_ = SIZE_MAX;                           // the window the clock is anchored in
+    int64_t anchorPos_ = 0;
+    std::chrono::steady_clock::time_point anchorTime_;
+};
 
 } // namespace wl

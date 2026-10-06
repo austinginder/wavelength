@@ -77,6 +77,7 @@ A job is one JSON object. Unknown fields are ignored.
 | `stem` | true | Write this track's stem file (when the job writes stems); `false` skips it. |
 | `mute` | false | Render the stem but leave it out of the mix. |
 | `warmup` | job `warmup` | Seconds this plugin gets after activation, e.g. 5 for orchestral libraries that stream samples. |
+| `realtime` | false (true for discoDSP Roboto) | Render this plugin at wall-clock speed while its notes play (from 0.5 s before a note-on to 1.5 s after the last held note ends) and at full speed elsewhere. For plugins that start or feed their voices from a timer on their main thread, which stay silent when rendered faster than real time. The track's render then takes at least as long as its notes. |
 | `notes` | `[]` | See below. |
 | `fx` | `[]` | Effect chain (built-in, CLAP, VST3 or VST2), see `effects.md`. Every effect also takes `bypass`, `match` (level match), `matchMs` and `intended` (no distortion warnings). |
 | `sends` | `{}` | Bus name → send level in dB (post-fader), an automation curve of dB (`[[beat, dB], ...]` or a curve object), or throws: `{"base": -40, "throws": [[beat, length in beats, dB], ...], "ramp": 5}` sits at `base` and opens to each throw's level for its length (switch curve, 5 ms ramps; overlapping throws take the louder). |

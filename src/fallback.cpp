@@ -16,7 +16,7 @@ using json = nlohmann::json;
 
 // what makes a track's sound: replaced as a whole by a fallback (keys the fallback doesn't give are dropped,
 // so a synth never gets a library's articulations or a plugin's parameter names)
-const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "drum", "warmup", "bendRange",
+const char *kSoundKeys[] = {"plugin", "preset", "state", "params", "synth", "sampler", "shepard", "drum", "warmup", "realtime", "bendRange",
                             "articulations", "range", "velocityTo"};
 
 // true when this computer can play `sound` (a track or a fallback entry); `why` says what is missing
