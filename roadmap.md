@@ -100,4 +100,4 @@ Songs, packages and projects come from other people, so every reader has to surv
 | Bounds-checked readers for every binary format (plists, ZIP, Serum, SoundFont, VST presets) and a depth limit on XML | 0.6.0 | a crafted file fails with an error, never reads past its buffer; `scripts/make-hostile-files.py` keeps one file per fixed case |
 | A package's own instruments (SFZ, DecentSampler, EXS) read only the song | 0.6.0 | |
 | Fuzzing the readers | 0.6.0 | `scripts/fuzz.py` over 14 formats under AddressSanitizer and UBSan; a continuous run is later |
-| The regression checks in the Linux Docker image | next | today `check.sh` runs on the Mac and releases run a smaller test on each platform |
+| The regression checks in the Linux Docker image | 0.6.0 | `scripts/check-linux.sh`: no plugins or libraries, so the examples play their fallbacks; Windows still runs only the release test |

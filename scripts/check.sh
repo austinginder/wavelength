@@ -21,8 +21,12 @@ trap 'rm -f out/check.lock/pid; rmdir out/check.lock 2>/dev/null || true' EXIT
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release > /dev/null
 cmake --build "$build" -j "${JOBS:-8}" 2>&1 | grep -E "error:|warning:" && { echo "build has errors or warnings"; exit 1; } || true
 fail=0
+# Bitwig's sound content (its loops and drum machines): the clips tour and the checks built on it need it; every
+# other example plays its built-in fallbacks on a computer without the plugins and libraries it names
+bitwig=$("./$build/wavelength" samples --search "Legend 909" --json 2>/dev/null | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin).get("samples") else "")' || true)
 for job in examples/*.json; do
   name=$(basename "$job" .json)
+  if [ "$name" = clips-tour ] && [ -z "$bitwig" ]; then echo "skip clips-tour: needs Bitwig's sound content"; continue; fi
   out="out/check/$name"
   if ! report=$("./$build/wavelength" render "$job" --out "$out/$build" --json 2>/dev/null); then
     echo "FAIL $name: $(echo "$report" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error"))' 2>/dev/null)"; fail=1; continue
@@ -140,7 +144,9 @@ else
   echo "FAIL stage: $stage_why"; fail=1
 fi
 # render --from/--to: a window of the clips tour (a clip starts before it) renders, and its file is the window's length
-if ! "./$build/wavelength" render examples/clips-tour.json --from 3 --to 5 --stems none --out out/check/window/$build --json 2>/dev/null | python3 -c '
+if [ -z "$bitwig" ]; then
+  echo "skip window render and analyze from another directory: they render the clips tour (Bitwig's sound content)"
+elif ! "./$build/wavelength" render examples/clips-tour.json --from 3 --to 5 --stems none --out out/check/window/$build --json 2>/dev/null | python3 -c '
 import json, sys, wave
 r = json.load(sys.stdin)
 ok = r.get("ok") and r.get("window") and abs(r["window"]["fromBar"] - 3) < 1e-6 and r["window"]["seconds"] > 0
@@ -150,8 +156,10 @@ else
   echo "ok   window render: clips-tour bars 3-4"
 fi
 # analyze finds a render's stems when the render ran elsewhere (the report names them relative to where it ran)
-(cd examples && "../$build/wavelength" render clips-tour.json --from 3 --to 5 --stems 16 --out "../out/check/window-rel/$build" --json >/dev/null 2>&1)
-if "./$build/wavelength" analyze "out/check/window-rel/$build" --json 2>/dev/null | python3 -c '
+if [ -z "$bitwig" ]; then
+  :
+elif (cd examples && "../$build/wavelength" render clips-tour.json --from 3 --to 5 --stems 16 --out "../out/check/window-rel/$build" --json >/dev/null 2>&1) &&
+   "./$build/wavelength" analyze "out/check/window-rel/$build" --json 2>/dev/null | python3 -c '
 import json, sys
 sys.exit(0 if len(json.load(sys.stdin)["stems"]) == 3 else 1)'; then
   echo "ok   analyze: a render folder's stems found from another directory"
@@ -202,7 +210,13 @@ fi
 # plugins, notes and faders, and each track renders as it did
 dp="out/check/dawproject/$build"
 mkdir -p "$dp"
-if ! "./$build/wavelength" export examples/hello.json --out "$dp/hello.dawproject" --json > /dev/null 2>&1 ||
+hello_plugins=$("./$build/wavelength" plugins --json 2>/dev/null | python3 -c '
+import json, sys
+ids = {p["id"] for p in json.load(sys.stdin)["plugins"]}
+print("yes" if all(t["plugin"] in ids for t in json.load(open("examples/hello.json"))["tracks"]) else "")' || true)
+if [ -z "$hello_plugins" ]; then
+  echo "skip dawproject: hello's four CLAP synths aren't installed"
+elif ! "./$build/wavelength" export examples/hello.json --out "$dp/hello.dawproject" --json > /dev/null 2>&1 ||
    ! "./$build/wavelength" import "$dp/hello.dawproject" --out "$dp/in" --bitwig none --json > /dev/null 2>&1 ||
    ! python3 -c '
 import json, sys
