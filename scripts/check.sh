@@ -483,6 +483,7 @@ ok = j["tempo"] == [{"beat": 0, "bpm": 100}, {"beat": 48, "bpm": 90}] and j["tim
 ok &= len(t) == 3 and t[0]["name"] == "Synth" and t[0]["plugin"] == "builtin:synth" and t[0]["preset"] == "patches/Synth.patch"
 ok &= t[2]["name"] == "AU Synth" and t[2]["plugin"] == "aumu:Synt:Test" and t[2]["state"] == "patches/AU Synth.aupreset" and t[2]["fallback"][0]["plugin"] == "builtin:synth"
 ok &= "<string>Test State</string>" in open("out/check/band/imp/patches/AU Synth.aupreset").read()
+ok &= t[2]["fx"][-1] == {"plugin": "aufx:Efct:Test", "optional": True, "state": "patches/AU Synth fx 1.aupreset"}
 ok &= t[1]["name"] == "Loop" and [{k: v for k, v in c.items() if k != "file"} for c in t[1]["clips"]] == [
     {"beat": 32, "start": 0.1, "length": 0.5, "repeat": 2}, {"beat": 33.6667, "start": 0.1, "length": 0.25}, {"beat": 40, "pitch": -1, "gain": -6, "reverse": True}]
 g = t[1]["automation"]["gain"]
@@ -516,7 +517,7 @@ ok &= [c["beat"] for c in a["tracks"][1]["clips"]] == [c["beat"] for c in b["tra
 ok &= not any("time signature" in w for w in b["import"]["warnings"])
 sys.exit(0 if ok else 1)'; then band_why="the song in 3/4 did not land on the same beats as in 4/4"; fi
 fi
-if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, an Audio Unit instrument with its state; the same song in 3/4) and renders its track's own channel strip"; fi
+if [ -n "$band_why" ]; then echo "FAIL garageband: $band_why"; fail=1; else echo "ok   garageband: a .band imports (tempo, key, fader, pan, send, Echo bus, regions: trims, loops, transpose, quantize, swing and strength; an audio region's trim and loop; an Apple Loop in the song's key, transposed, gained, reversed; volume, pan and send automation, a Smart Control on Retro Synth's filter envelope, the master's fade, arrangement markers, the transposition track, an Audio Unit instrument and effect with their states; the same song in 3/4) and renders its track's own channel strip"; fi
 
 # panLaw "balance" (GarageBand's pan on a stereo track): half left keeps the left and takes the right 12.04 dB down;
 # the default constant-power law takes it 7.66 dB down

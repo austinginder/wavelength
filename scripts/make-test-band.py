@@ -306,5 +306,9 @@ au[120:130] = b'Test Synth'
 au[132:136], au[136:140], au[140:144] = b'Test'[::-1], b'aumu'[::-1], b'Synt'[::-1]
 body += channel(AUI, 0x43, 1, ' Inst 2', 90, 64, bytes([0xd5, 0x39]) + bytes(14))
 body += record(AUI, 1, bytes(au) + struct.pack('<I', len(class_info)) + class_info)
+fx = bytearray(160)                                # and an Audio Unit effect after it
+fx[120:131] = b'Test Effect'
+fx[132:136], fx[136:140], fx[140:144] = b'Test'[::-1], b'aufx'[::-1], b'Efct'[::-1]
+body += record(AUI, 2, bytes(fx) + struct.pack('<I', len(class_info)) + class_info)
 with open(os.path.join(alt, 'ProjectData'), 'wb') as f:
     f.write(b'#G\xc0\xab' + struct.pack('<HHIII', 0x09d0, 3, 4, 0x00080001, len(body)) + struct.pack('<I', 0) + body)

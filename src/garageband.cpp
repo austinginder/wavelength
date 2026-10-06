@@ -921,6 +921,30 @@ struct Converter {
 
     // GarageBand's Echo: parameters #16 Time (an index: 1/2., 1/2, 1/2T, 1/4., ... 1/16T), #17 Repeat %, #18 Color,
     // #19 Dry %, #20 Wet %, as a tempo-synced delay (its Color as a low-pass: a guess)
+    // a strip's third-party Audio Unit effects, in insert order, as plugin effects with the state GarageBand saved
+    // (written beside the track's patch folder as .aupreset files); they play after the strip's own effects
+    json auEffects(const Channel &ch, const std::string &label) {
+        std::vector<std::pair<int, AudioUnitRef>> found;
+        for (const Chunk *c : ch.records)
+            if (AudioUnitRef au; audioUnitOf(*c, au) && au.type == "aufx") found.push_back({c->pl.u16(6), au});
+        std::stable_sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+        json fx = json::array();
+        for (size_t k = 0; k < found.size(); ++k) {
+            const AudioUnitRef &au = found[k].second;
+            json e = {{"plugin", au.type + ":" + au.subtype + ":" + au.manufacturer}, {"optional", true}};
+            if (!au.classInfo.empty()) {
+                const std::string file = "patches/" + safeName(label) + " fx " + std::to_string(k + 1) + ".aupreset";
+                std::error_code ec;
+                fs::create_directories(fs::u8path(outDir) / "patches", ec);
+                std::ofstream(fs::u8path(outDir) / fs::u8path(file), std::ios::binary) << au.classInfo;
+                e["state"] = file;
+            }
+            fx.push_back(e);
+            warn.push_back(label + ": plays the Audio Unit effect " + au.name + " (" + au.manufacturer + ") with its saved state, after the strip's own effects (left out where it isn't installed)");
+        }
+        return fx;
+    }
+
     // the effects of a channel without an instrument (an audio track, an aux, the master) as Wavelength fx
     json channelFx(const Channel &ch, const std::string &label, const std::string &rel) {
         const json desc = describe(rel);
@@ -935,6 +959,7 @@ struct Converter {
             if (!names.empty()) notes.push_back("effects not translated (its channel strip can't be read): " + names);
         }
         for (auto &n : notes) warn.push_back(label + ": " + n);
+        for (auto &e : auEffects(ch, label)) fx.push_back(e);
         return fx;
     }
 
@@ -1156,6 +1181,10 @@ struct Converter {
             if (t.kind == "drummer")
                 warn.push_back(name + ": Drummer track: the performance stored in its region plays as notes (Drummer's own regeneration, fills and "
                                "follow settings are not re-created)");
+            for (auto &e : auEffects(ch, name)) {   // after the instrument and its patch's own effects
+                if (!job.contains("fx")) job["fx"] = json::array();
+                job["fx"].push_back(e);
+            }
         } else if (t.kind == "audio") {
             job["plugin"] = "builtin:audio";
             const json fx = channelFx(ch, name, rel);
@@ -1171,6 +1200,7 @@ struct Converter {
             }
             const auto [setting, category] = ch.setting();
             job["fallback"] = json::array({{{"plugin", "builtin:synth"}, {"preset", fallbackPreset(au.name, category, setting)}}});
+            if (const json fx = channelFx(ch, name, rel); !fx.empty()) job["fx"] = fx;
             warn.push_back(name + ": plays the Audio Unit " + au.name + " (" + au.manufacturer + ") with the state GarageBand saved" +
                            (au.classInfo.empty() ? " (none saved: its default sound)" : "") + "; a built-in stand-in is the fallback where it isn't installed");
         } else {

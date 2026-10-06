@@ -911,6 +911,7 @@ struct PluginFx : Effect {
     bool mixAutomated = false;
     std::string key;   // "sidechain": a track's audio into the plugin's sidechain input
     bool hostMixAutomated = false;
+    bool optional = false;   // "optional": a plugin that isn't installed (or won't load) is left out with a warning
     PluginFx(const json &j, const Job &job, std::string &err) {
         setup = pluginEffectSetup(j, job);
         label = setup.spec;
@@ -918,12 +919,21 @@ struct PluginFx : Effect {
         mix = param(j, "mix", 1, job.tempo);
         mixAutomated = (j.contains("automate") && j["automate"].contains("mix")) || (j.contains("lfo") && j["lfo"].contains("mix"));
         key = j.value("sidechain", "");
+        if (j.contains("optional")) {
+            if (j["optional"].is_boolean()) optional = j["optional"].get<bool>();
+            else warnings.push_back(setup.spec + ": \"optional\" must be true or false; ignored");
+        }
         (void)err;
     }
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         setup.verbose = c.verbose;
         OpenedPlugin p;
         if (!openPlugin(setup, "effect " + setup.spec, p, err)) {
+            if (optional) {   // left out: the sound passes through
+                warnings.push_back(setup.spec + " is optional and can't play here, left out: " + err);
+                err.clear();
+                return true;
+            }
             for (auto &[k, _] : setup.automation)
                 if (k != "mix" && k.size() == 3 && std::tolower((unsigned char)k[0]) == 'm' && std::tolower((unsigned char)k[1]) == 'i' &&
                     std::tolower((unsigned char)k[2]) == 'x' && err.find("no parameter '" + k + "'") != std::string::npos)
