@@ -1658,19 +1658,39 @@ struct Converter {
             job["automation"]["pitchbend"] = {{"points", bend}, {"curve", "step"}};
             warn.push_back(name + ": its pitch bend plays over +-2 semitones (GarageBand's usual range; a patch's own range isn't read)");
         }
+        // other controllers: a plug-in instrument gets them all; the built-in synth plays the mod wheel (CC 1) and channel
+        // pressure where the re-created patch routes them (LFO depths, as GarageBand's synths do: Retro Synth's wheel
+        // shares, ES2's routes via the wheel or aftertouch, ES1's LFO Int. Full); the sampler plays none
         std::map<std::string, int> other;
-        for (auto &c : ctrl)
-            if (!(c.type == "cc" && c.cc == 64) && c.type != "pitchbend") ++other[c.type == "cc" ? "CC" + std::to_string(c.cc) : c.type];
+        json cc = json::object(), pressure = json::array();
+        for (auto &c : ctrl) {
+            if ((c.type == "cc" && c.cc == 64) || c.type == "pitchbend") continue;
+            ++other[c.type == "cc" ? "CC" + std::to_string(c.cc) : c.type];
+            if (beat(c.tick) < 0) continue;
+            if (c.type == "cc") cc[std::to_string(c.cc)].push_back({r4(beat(c.tick)), c.value});
+            else if (c.type == "pressure") pressure.push_back({r4(beat(c.tick)), c.value});
+        }
         if (!other.empty()) {
-            json cc = json::object();
-            for (auto &c : ctrl)
-                if (c.type == "cc" && c.cc != 64 && beat(c.tick) >= 0) cc[std::to_string(c.cc)].push_back({r4(beat(c.tick)), c.value});
             const std::string plugin = job["plugin"].get<std::string>();
-            if (!cc.empty() && plugin != "builtin:synth" && plugin != "builtin:sampler")
-                for (auto &[k, v] : cc.items()) job["automation"]["cc"][k] = {{"points", v}, {"curve", "step"}};
-            std::string list;
-            for (auto &[k, n] : other) list += (list.empty() ? "" : ", ") + k + " x" + std::to_string(n);
-            warn.push_back(name + ": controller data not played by the built-in instruments: " + list);
+            bool wheel = false, touch = false;   // what the re-created patch's LFOs follow
+            if (plugin == "builtin:synth") {
+                const json desc = describe(rel);
+                if (desc.is_object() && desc.contains("synth") && desc["synth"].contains("patch") && desc["synth"]["patch"].contains("lfo")) {
+                    const json &l = desc["synth"]["patch"]["lfo"];
+                    for (auto &x : l.is_array() ? l : json::array({l})) { wheel |= x.contains("wheel"); touch |= x.contains("pressure"); }
+                }
+            }
+            const bool builtin = plugin == "builtin:synth" || plugin == "builtin:sampler";
+            for (auto &[k, v] : cc.items())
+                if (!builtin || (wheel && k == "1")) job["automation"]["cc"][k] = {{"points", v}, {"curve", "step"}};
+            if (!pressure.empty() && (!builtin || touch)) job["automation"]["pressure"] = {{"points", pressure}, {"curve", "step"}};
+            std::string list, played;
+            for (auto &[k, n] : other) {
+                const bool plays = !builtin || (wheel && k == "CC1") || (touch && k == "pressure");
+                (plays ? played : list) += std::string(((plays ? played : list).empty() ? "" : ", ")) + k + " x" + std::to_string(n);
+            }
+            if (builtin && !played.empty()) warn.push_back(name + ": " + played + " played on the re-created instrument's LFO depths (the mod wheel and pressure routes)");
+            if (builtin && !list.empty()) warn.push_back(name + ": controller data not played by the built-in instruments: " + list);
         }
         if (!clips.empty()) job["clips"] = makeClips(clips, name);
         return job;

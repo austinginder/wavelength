@@ -240,6 +240,9 @@ struct SynthLfo {
     enum Dest { Pitch, Cutoff, Amp, Pw, Pan } to = Pitch;
     size_t filter = 0;            // Cutoff: which of the filters
     double delay = 0, fade = 0;   // seconds after the note starts
+    // the depth with the mod wheel (CC 1) all the way up and with full channel pressure: the track's controller curves
+    // move the depth from "depth" toward them (NaN: not moved)
+    double wheel = NAN, pressure = NAN;
 };
 
 // One filter of the voice's chain (the first one's cutoff, resonance, key tracking, envelope and velocity amounts
@@ -585,7 +588,7 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
         for (const auto &l : list) {
             if (!l.is_object() || !l.contains("rate") || !l.contains("depth"))
                 throw std::runtime_error("synth: an LFO is {\"rate\": 5 or \"1/8\", \"depth\": 0.2, \"to\": \"pitch\"}");
-            checkKeys(l, {"rate", "depth", "shape", "phase", "to", "filter", "delay", "fade", "beats"}, "lfo.", warnings);
+            checkKeys(l, {"rate", "depth", "shape", "phase", "to", "filter", "delay", "fade", "beats", "wheel", "pressure"}, "lfo.", warnings);
             SynthLfo s;
             s.lfo = Lfo::parse(l, job.tempo);
             const std::string to = l.value("to", "pitch");
@@ -597,6 +600,8 @@ Patch parsePatch(const json &j, const Job &job, std::vector<std::string> &warnin
             else throw std::runtime_error("synth: lfo.to '" + to + "' must be pitch (semitones), cutoff (octaves), amp (0-1), pw or pan");
             s.delay = std::max(0.0, num(l, "delay", 0, "lfo."));
             s.fade = std::max(0.0, num(l, "fade", 0, "lfo."));
+            if (l.contains("wheel")) s.wheel = num(l, "wheel", 0, "lfo.");
+            if (l.contains("pressure")) s.pressure = num(l, "pressure", 0, "lfo.");
             if (l.contains("filter")) {
                 const double k = num(l, "filter", 0, "lfo.");
                 if (s.to != SynthLfo::Cutoff) warnings.push_back("synth: lfo.filter only applies to \"to\": \"cutoff\"; ignored");
@@ -1088,8 +1093,19 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
     }
     if (P.osc.empty() && P.p[P_NOISE] <= 0 && P.p[P_SUB] <= 0 && !automated[P_NOISE] && !automated[P_SUB])
         warnings.push_back("synth: the patch has no oscillators, sub or noise: it makes no sound");
-    if (!track.ccAutomation.empty() || !track.pressureAutomation.empty())
-        warnings.push_back("builtin:synth ignores MIDI CC and pressure automation; automate its parameters by name (automation.params)");
+    // the mod wheel and channel pressure move the LFO depths that name them; other controllers aren't played
+    const Envelope *wheelEnv = nullptr, *pressureEnv = track.pressureAutomation.empty() ? nullptr : &track.pressureAutomation;
+    std::string ignored;
+    bool wheelUsed = false, pressureUsed = false;
+    for (const auto &l : P.lfos) { wheelUsed |= !std::isnan(l.wheel); pressureUsed |= !std::isnan(l.pressure); }
+    for (const auto &[num, env] : track.ccAutomation) {
+        if (num == 1 && wheelUsed) wheelEnv = &env;
+        else ignored += (ignored.empty() ? "" : ", ") + std::string("CC ") + std::to_string(num);
+    }
+    if (pressureEnv && !pressureUsed) { ignored += (ignored.empty() ? "" : ", ") + std::string("pressure"); pressureEnv = nullptr; }
+    if (!ignored.empty())
+        warnings.push_back("builtin:synth: " + ignored + " not played (the mod wheel and pressure move LFO depths that name them, \"wheel\" and \"pressure\"; "
+                           "automate other parameters by name, automation.params)");
     auto param = [&](int i, double t) {
         return automated[(size_t)i] ? std::clamp(autos[(size_t)i].at(t), kParams[(size_t)i].min, kParams[(size_t)i].max) : P.p[i];
     };
@@ -1141,8 +1157,13 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
                 lfoPitch = lfoCut = lfoAmp = lfoPw = lfoPan = 0;
                 std::fill(lfoMore.begin(), lfoMore.end(), 0.0);
                 const double since = t - v.noteStart;
+                const double wheelNow = wheelEnv ? std::clamp(wheelEnv->at(t) / 127.0, 0.0, 1.0) : 0.0;
+                const double pressureNow = pressureEnv ? std::clamp(pressureEnv->at(t) / 127.0, 0.0, 1.0) : 0.0;
                 for (const auto &l : P.lfos) {
-                    double dep = l.lfo.depthAt(t) * lfoMul;
+                    double dep = l.lfo.depthAt(t);
+                    if (!std::isnan(l.wheel)) dep += (l.wheel - l.lfo.depth) * wheelNow;
+                    if (!std::isnan(l.pressure)) dep += (l.pressure - l.lfo.depth) * pressureNow;
+                    dep *= lfoMul;
                     if (since < l.delay) dep = 0;
                     else if (l.fade > 0 && since < l.delay + l.fade) dep *= (since - l.delay) / l.fade;
                     const double wv = l.lfo.wave(t), w = wv * dep;

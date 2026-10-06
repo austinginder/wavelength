@@ -255,23 +255,29 @@ GarageBandSynth retroSynthPatch(const std::vector<float> &params, const std::vec
         if (V(204) < 0.5) { if (V(207) > 1) synth["glide"] = r(V(207) / 1000, 10000); }
         else if (std::fabs(V(206)) >= 0.01 && V(207) > 0) synth["pitchEnv"] = {{"amount", r(V(206))}, {"decay", r(std::max(0.001, V(207) / 3000), 100000)}};
     }
-    // LFO -> cutoff (or pulse width), vibrato -> pitch; the mod wheel's share ("via amount") is left at rest
+    // LFO -> cutoff (or pulse width), vibrato -> pitch; #606 and #656 are the mod wheel's share of each depth ("via
+    // amount"): the rest plays with the wheel down, the whole depth with it up (an LFO's "wheel" depth)
     json lfos = json::array();
     auto rate = [&](size_t syncId, size_t rateId) -> json { return V(syncId) >= 0.5 ? json(noteRate(V(rateId))) : json(r(V(rateId), 10000)); };
-    const double lg = std::max(0.0, 1 - V(606)), vg = std::max(0.0, 1 - V(656));
+    const double lw = std::clamp(V(606), 0.0, 1.0), vw = std::clamp(V(656), 0.0, 1.0);
+    auto lfo = [&](json l, double full, double share, double digits) {
+        l["depth"] = r(full * (1 - share), digits);
+        if (share > 0.01) l["wheel"] = r(full, digits);
+        lfos.push_back(l);
+    };
     if (V(406) > 0.001 && filt.value("type", "off") != "off") {
-        const double d = V(406) * kLfoCutOct * lg;
-        if (d > 0.01) lfos.push_back({{"rate", rate(603, 604)}, {"depth", r(d)}, {"shape", lfoShape(V(602))}, {"to", "cutoff"}});
+        const double d = V(406) * kLfoCutOct;
+        if (d * std::max(1 - lw, lw) > 0.01) lfo({{"rate", rate(603, 604)}, {"shape", lfoShape(V(602))}, {"to", "cutoff"}}, d, lw, 1000);
     }
     if (V(208) < -0.01 && (eng == "Analog" || eng == "Sync")) {
         bool pulse = false;
         for (auto &o : oscs) pulse |= o.value("wave", "") == "square";
-        const double d = -V(208) * 0.45 * lg;
-        if (pulse && d > 0.005) lfos.push_back({{"rate", rate(603, 604)}, {"depth", r(d)}, {"shape", lfoShape(V(602))}, {"to", "pw"}});
+        const double d = -V(208) * 0.45;
+        if (pulse && d > 0.005) lfo({{"rate", rate(603, 604)}, {"shape", lfoShape(V(602))}, {"to", "pw"}}, d, lw, 1000);
     } else if (V(208) > 0.01 && eng != "FM" && !(eng == "Table" && V(319) >= 0.5)) notes.push_back("the filter envelope's modulation of the oscillator shape isn't played");
-    if (V(202) > 0.001 && V(202) * vg > 0.005)
-        lfos.push_back({{"rate", rate(653, 654)}, {"depth", r(V(202) * vg, 10000)}, {"shape", lfoShape(V(652))}, {"to", "pitch"}});
-    if (V(606) > 0.01 || V(656) > 0.01) notes.push_back("LFO and vibrato depths under the mod wheel play at rest (wheel down)");
+    if (V(202) > 0.005)
+        lfo({{"rate", rate(653, 654)}, {"shape", lfoShape(V(652))}, {"to", "pitch"}}, V(202), vw, 10000);
+    if (lw > 0.01 || vw > 0.01) notes.push_back("the mod wheel brings in its share of the LFO and vibrato depths (" + std::to_string((int)std::lround(100 * lw)) + " % and " + std::to_string((int)std::lround(100 * vw)) + " %)");
     if (!lfos.empty()) { if (lfos.size() > 4) lfos.erase(lfos.begin() + 4, lfos.end()); synth["lfo"] = lfos; }
     synth["level"] = r(V(5) + 10 * std::log10((double)count), 100);
     out.synth = synth;

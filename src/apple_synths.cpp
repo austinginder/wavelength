@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <string>
 
 using nlohmann::json;
@@ -283,7 +284,11 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
             (tgt == 21 ? blend : fl[tgt == 15 ? 0 : 1].res) += at * amt;
             continue;
         }
-        if ((src == 0 || src == 1) && (via == 0 || via == 2)) {
+        if ((src == 0 || src == 1) && via >= 0 && via <= 4 && via != 1) {
+            // an LFO route via the mod wheel (3) or aftertouch (4): its intensity at rest, and at the controller's top as
+            // the LFO's "wheel" or "pressure" depth
+            const char *viaKey = via == 3 ? "wheel" : via == 4 ? "pressure" : nullptr;
+            auto setDepth = [&](json &l, const std::function<double(double)> &f) { l["depth"] = r(f(amt)); if (viaKey) l[viaKey] = r(f(inVia)); };
             static const char *shapes[7] = {"triangle", "saw", "ramp", "square", "square", "random", "random"};
             const double rate = V(src == 0 ? 89 : 91);
             const int w = ri(V(src == 0 ? 90 : 92));
@@ -295,20 +300,24 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
             for (auto &o : oscs) pulse |= o.contains("pw");
             if (isCut(tgt)) {   // one LFO per filter it moves (resolved to the chain's filters below)
                 for (int k = 0; k < 2; ++k)
-                    if (cutW(tgt, k) != 0) { json l = lfo; l["depth"] = r(amt * cutW(tgt, k) * kCutOct); l["to"] = "cutoff"; l["es2Filter"] = k; lfos.push_back(l); fl[k].lfo = true; }
+                    if (cutW(tgt, k) != 0) {
+                        json l = lfo;
+                        setDepth(l, [&](double a) { return a * cutW(tgt, k) * kCutOct; });
+                        l["to"] = "cutoff"; l["es2Filter"] = k; lfos.push_back(l); fl[k].lfo = true;
+                    }
                 continue;
             }
             if (tgt >= 0 && tgt <= 3) {
-                lfo["depth"] = r(es2Cents(amt) / 100);
+                setDepth(lfo, [&](double a) { return es2Cents(a) / 100; });
                 lfo["to"] = "pitch";
                 if (tgt) notes.push_back(slot + route + " (one oscillator) plays on all of them");
-            } else if (tgt >= 5 && tgt <= 8 && pulse) { lfo["depth"] = r(std::fabs(amt) * 0.4); lfo["to"] = "pw"; }
-            else if (tgt == 22 || tgt == 23) { lfo["depth"] = r(std::min(1.0, std::fabs(amt))); lfo["to"] = tgt == 23 ? "amp" : "pan"; }
+            } else if (tgt >= 5 && tgt <= 8 && pulse) { setDepth(lfo, [](double a) { return std::fabs(a) * 0.4; }); lfo["to"] = "pw"; }
+            else if (tgt == 22 || tgt == 23) { setDepth(lfo, [](double a) { return std::min(1.0, std::fabs(a)); }); lfo["to"] = tgt == 23 ? "amp" : "pan"; }
             else { notes.push_back(slot + route + " not mapped"); continue; }
             lfos.push_back(lfo);
         } else if (src == 2 && tgt >= 0 && tgt <= 3 && (via == 0 || via == 2))   // ENV1 -> pitch: the pitch envelope
             synth["pitchEnv"] = {{"amount", r(es2Cents(amt) / 100, 100)}, {"decay", r(std::max(0.001, V(94) / 1000 / 4.6), 10000)}};
-        else if (via == 3 || via == 4) {}   // mod wheel or aftertouch at rest
+        else if (via == 3 || via == 4) {}   // other routes via the mod wheel or aftertouch: at rest
         else if ((src == 5 || src == 6) && std::fabs(at * amt) < 0.02) {}   // pad centred
         else notes.push_back(slot + route + " (" + num(amt, 2, true) + ") not mapped");
     }
@@ -377,7 +386,11 @@ GarageBandSynth es2Patch(const std::vector<float> &params) {
     }
     synth["filter"] = chain.size() == 1 ? chain[0] : chain;
     if (!lfos.empty()) {
-        if (lfos.size() > 4) { notes.push_back("more than four LFO routes: the first four kept"); lfos.erase(lfos.begin() + 4, lfos.end()); }
+        if (lfos.size() > 4) {   // the ones that play with the wheel and touch at rest first
+            std::stable_partition(lfos.begin(), lfos.end(), [](const json &l) { return std::fabs(l.value("depth", 0.0)) > 1e-9; });
+            notes.push_back("more than four LFO routes: four kept");
+            lfos.erase(lfos.begin() + 4, lfos.end());
+        }
         synth["lfo"] = lfos;
     }
     synth["amp"] = {{"attack", r(std::max(0.001, lerp(V(105), V(110), kVel) / 1000), 10000)}, {"decay", r(std::max(0.005, V(106) / 1000 * kEs2Time))},
@@ -487,10 +500,11 @@ GarageBandSynth es1Patch(const std::vector<float> &params) {
     }
     if (!fenv.is_null()) synth["filterEnv"] = fenv;
     synth["filter"] = filt;
-    // LFO with the wheel at rest: 0 pitch (100% = a semitone), 1 PW, 3 cutoff (100% = 3 octaves), 5 volume (guesses)
-    const double li = V(27) / 100;
+    // LFO: #27 Int. 0 its depth with the mod wheel down, #28 Int. Full with it up (its "wheel" depth); destination 0
+    // pitch (100% = a semitone), 1 PW, 3 cutoff (100% = 3 octaves), 5 volume (guesses)
+    const double li = V(27) / 100, lf = params.size() > 28 ? V(28) / 100 : li;
     const int ld = ri(V(25));
-    if (std::fabs(li) > 0.005) {
+    if (std::fabs(li) > 0.005 || std::fabs(lf) > 0.005) {
         static const char *shapes[6] = {"triangle", "ramp", "saw", "square", "random", "random"};   // 6 = external: none
         const double rate = V(34);
         const int lw = ri(V(26));
@@ -498,10 +512,11 @@ GarageBandSynth es1Patch(const std::vector<float> &params) {
         if (rate <= 0) notes.push_back("LFO tempo-sync index " + gnum(rate) + " unmapped; \"1/8\" used");
         if (lw >= 0 && lw < 6) lfo["shape"] = shapes[lw];
         bool ok = true;
-        if (ld == 0) { lfo["depth"] = r(li); lfo["to"] = "pitch"; notes.push_back("LFO pitch depth: 100% read as a semitone (a guess)"); }
-        else if (ld == 1) { lfo["depth"] = r(li * 0.4); lfo["to"] = "pw"; }
-        else if (ld == 3) { lfo["depth"] = r(li * 3); lfo["to"] = "cutoff"; notes.push_back("LFO cutoff depth: 100% read as 3 octaves (a guess)"); }
-        else if (ld == 5) { lfo["depth"] = r(std::min(1.0, li)); lfo["to"] = "amp"; }
+        auto setDepth = [&](const std::function<double(double)> &f) { lfo["depth"] = r(f(li)); if (std::fabs(lf - li) > 0.005) lfo["wheel"] = r(f(lf)); };
+        if (ld == 0) { setDepth([](double a) { return a; }); lfo["to"] = "pitch"; notes.push_back("LFO pitch depth: 100% read as a semitone (a guess)"); }
+        else if (ld == 1) { setDepth([](double a) { return a * 0.4; }); lfo["to"] = "pw"; }
+        else if (ld == 3) { setDepth([](double a) { return a * 3; }); lfo["to"] = "cutoff"; notes.push_back("LFO cutoff depth: 100% read as 3 octaves (a guess)"); }
+        else if (ld == 5) { setDepth([](double a) { return std::min(1.0, std::fabs(a)); }); lfo["to"] = "amp"; }
         else { ok = false; notes.push_back("LFO destination " + std::to_string(ld) + " (mix or resonance) not supported"); }
         if (ok) synth["lfo"] = lfo;
     }

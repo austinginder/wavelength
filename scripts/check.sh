@@ -617,6 +617,54 @@ sys.exit(0 if ok else 1)
 PY
 then keytrack_why="the levels or decays were off (see above)"; fi
 if [ -n "$keytrack_why" ]; then echo "FAIL synth keytrack: $keytrack_why"; fail=1; else echo "ok   synth keytrack: oscillator level across the keys, amp decay by key"; fi
+# builtin:synth mod wheel and pressure: an LFO's "wheel" depth (a semitone of vibrato) comes in when CC 1 goes up at
+# beat 4, a "pressure" depth (tremolo to silence) when channel pressure does; before that they stand still
+rm -rf out/check/wheel && mkdir -p out/check/wheel
+cat > out/check/wheel/job.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "master": {"gain": 0}, "tracks": [
+ {"name": "Wheel", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"},
+  "lfo": {"rate": 5, "depth": 0, "wheel": 1, "to": "pitch"}},
+  "automation": {"cc": {"1": {"points": [[0, 0], [4, 127]], "curve": "step"}}}, "notes": [{"beat": 0, "dur": 8, "key": "C4"}]},
+ {"name": "Touch", "plugin": "builtin:synth", "synth": {"osc": [{"wave": "sine"}], "filter": {"type": "off"},
+  "lfo": {"rate": 4, "depth": 0, "pressure": 1, "to": "amp"}},
+  "automation": {"pressure": {"points": [[0, 0], [4, 127]], "curve": "step"}}, "notes": [{"beat": 0, "dur": 8, "key": "C4"}]}]}
+JOB
+wheel_why=""
+if ! "./$build/wavelength" render out/check/wheel/job.json --out "out/check/wheel/$build" --json > out/check/wheel/report.json 2> out/check/wheel/err.txt; then
+  wheel_why="the job did not render"
+elif grep -q "not played" out/check/wheel/err.txt; then
+  wheel_why="a controller was reported unplayed: $(grep -m1 "not played" out/check/wheel/err.txt)"
+elif ! python3 - "out/check/wheel/$build" <<'PY'
+import math, struct, sys
+def mono(p):
+    b = open(p, 'rb').read(); i = 12; fmt = None
+    while i < len(b):
+        cid, n = b[i:i + 4], struct.unpack('<I', b[i + 4:i + 8])[0]
+        if cid == b'fmt ': fmt = struct.unpack('<HHIIHH', b[i + 8:i + 24])
+        if cid == b'data':
+            ch, sr, bits = fmt[1], fmt[2], fmt[5]
+            v = struct.unpack('<%d%s' % (n // (bits // 8), 'f' if bits == 32 else 'd'), b[i + 8:i + 8 + n])
+            return [v[k] for k in range(0, len(v), ch)], sr
+        i += 8 + n + (n & 1)
+def cents(x, sr, t0, t1):   # the pitch's spread from C4 over upward zero crossings
+    s = x[int(t0 * sr):int(t1 * sr)]; ups = []
+    for k in range(1, len(s)):
+        if s[k - 1] < 0 <= s[k]: ups.append(k - 1 + s[k - 1] / (s[k - 1] - s[k]))
+    c = [1200 * math.log2(sr / (b - a) / 261.6256) for a, b in zip(ups, ups[1:])]
+    return min(c), max(c)
+def swing(x, sr, t0, t1):   # dB between the loudest and quietest 20 ms
+    v = [math.sqrt(sum(q * q for q in x[k:k + int(0.02 * sr)]) / int(0.02 * sr)) for k in range(int(t0 * sr), int(t1 * sr), int(0.02 * sr))]
+    return 20 * math.log10(max(v) / max(min(v), 1e-9))
+d = sys.argv[1] + '/stems/'
+w, sr = mono(d + '01-wheel.wav'); t, sr2 = mono(d + '02-touch.wav')
+lo0, hi0 = cents(w, sr, 0.2, 1.9); lo1, hi1 = cents(w, sr, 2.1, 3.8)
+s0, s1 = swing(t, sr2, 0.2, 1.9), swing(t, sr2, 2.1, 3.8)
+ok = max(abs(lo0), abs(hi0)) < 2 and 85 < hi1 < 105 and -105 < lo1 < -85 and s0 < 0.5 and s1 > 20
+print('wheel down %+.1f..%+.1f c, up %+.0f..%+.0f c; pressure 0 %.1f dB swing, full %.1f dB' % (lo0, hi0, lo1, hi1, s0, s1), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+then wheel_why="the vibrato or tremolo was off (see above)"; fi
+if [ -n "$wheel_why" ]; then echo "FAIL synth mod wheel: $wheel_why"; fail=1; else echo "ok   synth mod wheel: an LFO's wheel depth comes in with CC 1, its pressure depth with channel pressure"; fi
 
 # delay sides and taps: a blip through "right" echoes left at 100 ms and right at 250 ms; through two taps, left at
 # 100 ms, right at 300 ms 6 dB down, and the right tap feeds back at half level (left again at 400 ms)
