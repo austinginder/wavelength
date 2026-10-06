@@ -130,6 +130,14 @@ mp[18], mp[19] = -20, 4
 os.makedirs(os.path.join(out, 'Audio', 'Test Echo.patch'), exist_ok=True)
 strip(os.path.join(out, 'Audio', 'Test Echo.patch', '#Root.cst'),
       [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'Echo', b'GAME', settings(147, echo)), record(5, 'Multipr', b'GAME', settings(194, mp))])
+# Vocal Transformer (#0 Pitch +7, #1 Formant -6, #2 Mix 60 %) then Pitch Shifter (#0 Mix 24 %, #1 +12 semitones)
+vt = [0.0] * 10
+vt[0:3] = [7, -6, 60]
+ps = [0.0] * 12
+ps[0:2] = [24, 12]
+os.makedirs(os.path.join(out, 'Audio', 'Test Voice.patch'), exist_ok=True)
+strip(os.path.join(out, 'Audio', 'Test Voice.patch', '#Root.cst'),
+      [record(0, '', b'\0\0\0\0', bytes(8)), record(4, 'VocalTrf', b'GAME', settings(249, vt)), record(5, 'PShft', b'GAME', settings(159, ps))])
 strip(os.path.join(out, 'patches', 'Test Beat GB.patch', '#Root.cst'), [record(3, 'Ultrabeat', b'GAME', bytes(200), 'Machine Kit.pst')])
 
 def alchemy_text(arp, additive=False):

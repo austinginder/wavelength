@@ -463,8 +463,13 @@ d = [e for e in fx if e["type"] == "delay"]
 m = [e for e in fx if e["type"] == "multiband"]
 ok = len(d) == 1 and d[0]["time"] == 0.5 and d[0]["feedback"] == 0.5 and len(m) == 1 and m[0]["crossovers"] == [500, 4000]
 ok = ok and len(m[0]["bands"]) == 3 and m[0]["bands"][1]["fx"][0]["threshold"] == -20 and m[0]["bands"][1]["fx"][0]["ratio"] == 4 and "fx" not in m[0]["bands"][0]
-sys.exit(0 if ok else 1)'; then fxpatch_why="Echo or Multipressor didn't map as saved"; fi
-if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo and Multipressor map"; fi
+sys.exit(0 if ok else 1)'; then fxpatch_why="Echo or Multipressor didn't map as saved"
+elif ! WAVELENGTH_LOGIC_PATCHES="$PWD/out/check/exs/patches" "./$build/wavelength" samples --patch "Test Voice" --json 2>/dev/null | python3 -c '
+import json, sys
+fx = json.load(sys.stdin)["patch"]["effects"]
+sys.exit(0 if fx == [{"type": "pitch", "semitones": 7, "keepFormants": True, "formant": -6, "mix": 0.6}, {"type": "pitch", "semitones": 12, "mix": 0.24}] else 1)'; then
+  fxpatch_why="Vocal Transformer or Pitch Shifter didn't map as saved"; fi
+if [ -n "$fxpatch_why" ]; then echo "FAIL fx patch: $fxpatch_why"; fail=1; else echo "ok   fx patch: an effect patch by name plays its chain, samples lists it; Echo, Multipressor, Vocal Transformer and Pitch Shifter map"; fi
 # GarageBand projects: a generated .band (scripts/make-test-band.py: a binary MetaData.plist, an XML
 # ProjectInformation.plist, a ProjectData with a Retro Synth-like track that sends to an Echo bus, two MIDI regions)
 # imports with its tempo, key, fader, pan, send, the bus's Echo, its regions' notes (bar 3's trimmed to a bar) and cycle,
@@ -774,6 +779,44 @@ else
   [ "$a $b" = "A3 B3" ] || bend_why="it sounded $a then $b, not A3 then B3"
 fi
 if [ -n "$bend_why" ]; then echo "FAIL sampler pitchbend: $bend_why"; fail=1; else echo "ok   sampler pitchbend: automation.pitchbend bends the sampler's voices"; fi
+# pitch: a vowel-like saw (A2 through two formant peaks) an octave up sounds A3; with keepFormants its brightness stays
+# near the dry one, without them it doubles; a "formant" shift alone keeps A2 and brightens it; an automated shift moves
+# A2 to D3 at beat 2; the output stays lined up with the input
+mkdir -p out/check/pitchfx
+python3 - <<'PY'
+import json
+syn = {"osc": [{"wave": "saw"}], "filter": {"type": "off"}, "amp": {"attack": 0.005, "decay": 0, "sustain": 1, "release": 0.05}}
+vowel = {"type": "eq", "bands": [{"type": "peak", "freq": 700, "gain": 14, "q": 2.5}, {"type": "peak", "freq": 1200, "gain": 12, "q": 3},
+                                 {"type": "highshelf", "freq": 2000, "gain": -12}]}
+tr = lambda n, fx: {"name": n, "plugin": "builtin:synth", "synth": syn, "fx": [vowel] + fx, "notes": [{"beat": 0.5, "dur": 3, "key": 45, "vel": 1}]}
+json.dump({"tempo": 60, "leadIn": 0, "tail": 0.5, "tracks": [tr("Dry", []), tr("Oct", [{"type": "pitch", "semitones": 12}]),
+           tr("Keep", [{"type": "pitch", "semitones": 12, "keepFormants": True}]), tr("Formant", [{"type": "pitch", "formant": 7, "keepFormants": True}]),
+           tr("Move", [{"type": "pitch", "semitones": 0, "automate": {"semitones": [[0, 0], [2, 0, "step"], [2, 5]]}}])]},
+          open("out/check/pitchfx/pitch.json", "w"))
+PY
+pitch_why=""
+if ! "./$build/wavelength" render out/check/pitchfx/pitch.json --out out/check/pitchfx/out --json > /dev/null 2>&1; then
+  pitch_why="the job did not render"
+else
+  pitch_why=$(python3 - "./$build/wavelength" <<'PY'
+import json, subprocess, sys
+def an(f, a, b):
+    out = subprocess.run([sys.argv[1], "analyze", "out/check/pitchfx/out/stems/%s.wav" % f, "--start", str(a), "--end", str(b), "--json"], capture_output=True, text=True).stdout
+    return json.loads(out)
+r = [an("01-dry", 1, 3), an("02-oct", 1, 3), an("03-keep", 1, 3), an("04-formant", 1, 3), an("05-move", 0.8, 1.9), an("05-move", 2.2, 3.3),
+     an("01-dry", 0, 4), an("02-oct", 0, 4)]
+notes = [x["pitch"]["note"] for x in r[:6]]
+c = [x["spectrum"]["centroidHz"] for x in r[:4]]
+t = [x["onsets"][0] if x["onsets"] else -1 for x in r[6:]]
+if notes != ["A2", "A3", "A3", "A2", "A2", "D3"]: print("it sounded", notes)
+elif not 1.6 < c[1] / c[0] < 2.4: print("an octave up without keepFormants moved the brightness %.2fx, not about 2x" % (c[1] / c[0]))
+elif not 0.8 < c[2] / c[0] < 1.4: print("keepFormants moved the brightness %.2fx" % (c[2] / c[0]))
+elif not c[3] / c[0] > 1.25: print("a formant shift of +7 left the brightness at %.2fx" % (c[3] / c[0]))
+elif abs(t[1] - t[0]) > 0.015: print("the shifted note starts %.3f s off the dry one" % (t[1] - t[0]))
+PY
+)
+fi
+if [ -n "$pitch_why" ]; then echo "FAIL pitch: $pitch_why"; fail=1; else echo "ok   pitch: semitones, keepFormants, formant, an automated shift, lined up with the input"; fi
 # gate as a noise gate: a 220 Hz tone at -6 dB for a second, then at -50 dB: with a -30 dB threshold the quiet second goes
 # silent and the loud one stays; phaser: a saw through it keeps its pitch, sounds, and turns stereo
 rm -rf out/check/gate && mkdir -p out/check/gate

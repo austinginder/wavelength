@@ -1,5 +1,6 @@
 #include "effects.hpp"
 
+#include "analyze.hpp"
 #include "automation.hpp"
 #include "dsp.hpp"
 #include "engine.hpp"
@@ -8,6 +9,7 @@
 #include "audio_file.hpp"
 
 #include <signalsmith-linear/fft.h>
+#include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1323,6 +1325,66 @@ struct Vibrato : Effect {
     }
 };
 
+// pitch: moves the pitch and keeps the time (a phase vocoder, signalsmith-stretch). "semitones" and "cents" set the
+// shift; the formants move with the pitch (Logic's Pitch Shifter) unless "keepFormants" holds them (Logic's Vocal
+// Transformer, where a voice keeps its timbre), and "formant" moves them on their own, in semitones. Latency is
+// compensated: the output lines up with the input.
+struct Pitch : Effect {
+    Envelope semis, cents, mix;
+    double formant = 0;
+    bool keep = false;
+    Pitch(const json &j, const Job &job) {
+        label = "pitch";
+        semis = param(j, "semitones", 0, job.tempo);
+        cents = param(j, "cents", 0, job.tempo);
+        mix = param(j, "mix", 1, job.tempo);
+        formant = std::clamp(j.value("formant", 0.0), -24.0, 24.0);
+        keep = j.value("keepFormants", false);
+        checkKeys(j, {"semitones", "cents", "formant", "keepFormants", "mix"}, *this);
+    }
+    bool process(Audio &a, const FxContext &c, std::string &) override {
+        const double sr = c.job.sampleRate;
+        const size_t n = a.frames();
+        auto shift = [&](double t) { return std::clamp(semis.at(t) + cents.at(t) / 100, -48.0, 48.0); };
+        const bool still = semis.constant() && cents.constant();
+        if (!n || (still && std::fabs(shift(0)) < 1e-6 && std::fabs(formant) < 1e-6)) return true;   // nothing moves
+        if (mix.constant() && mix.at(0) <= 0) return true;
+        signalsmith::stretch::SignalsmithStretch<float> st;
+        st.presetDefault(2, (float)sr);
+        st.setFormantSemitones((float)formant, keep);
+        if (keep || std::fabs(formant) > 1e-6) {   // the formant envelope is smoothed over the voice's harmonics: tell it where they sit
+            const double f0 = medianPitchHz(a, (int)sr);
+            if (f0 > 0) st.setFormantBase((float)(f0 / sr));
+        }
+        st.setTransposeSemitones((float)shift(0));
+        // as signalsmith's exact(): seek the first stretch of input so the output starts aligned with it, then feed
+        // the rest that far ahead (zeros past the end) while the output is read in step with the timeline
+        const int seek = st.outputSeekLength(1.0f);
+        std::vector<std::vector<float>> in(2), out(2, std::vector<float>(n, 0.f));
+        in[0].assign(a.left.begin(), a.left.end());
+        in[1].assign(a.right.begin(), a.right.end());
+        for (auto &ch : in) ch.resize(n + seek, 0.f);
+        struct At {
+            std::vector<std::vector<float>> &v;
+            size_t at;
+            float *operator[](int ch) { return v[ch].data() + at; }
+        };
+        st.outputSeek(At{in, 0}, seek);
+        const size_t block = still ? 65536 : 256;   // a moving shift is read every 256 samples
+        for (size_t pos = 0; pos < n; pos += block) {
+            const int b = (int)std::min(block, n - pos);
+            if (!still) st.setTransposeSemitones((float)shift(pos / sr));
+            st.process(At{in, seek + pos}, b, At{out, pos}, b);
+        }
+        for (size_t i = 0; i < n; ++i) {
+            const double m = mix.constant() ? mix.at(0) : mix.at(i / sr);
+            a.left[i] = blend(a.left[i], out[0][i], m);
+            a.right[i] = blend(a.right[i], out[1][i], m);
+        }
+        return true;
+    }
+};
+
 // tape stop / varispeed: plays the incoming audio at "speed" (1 = normal, 0 = stopped), pitch
 // and time together. Whenever speed is back at 1 the output is in sync with the input again.
 struct TapeStop : Effect {
@@ -1628,7 +1690,7 @@ double truePeakDb(const Audio &a) {
 
 std::vector<std::string> builtinEffectTypes() {
     return {"gain", "eq", "filter", "delay", "reverb", "convolve", "compressor", "limiter", "saturate", "clip", "chorus", "width", "duck",
-            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "tapestop", "repeat", "multiband", "patch"};
+            "tremolo", "pan", "gate", "phaser", "rotary", "autowah", "bitcrush", "vibrato", "pitch", "tapestop", "repeat", "multiband", "patch"};
 }
 
 std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::string &context, std::string &err) {
@@ -1659,6 +1721,7 @@ std::unique_ptr<Effect> makeEffect(const json &j, const Job &job, const std::str
             else if (t == "autowah") fx = std::make_unique<AutoWah>(j, job, err);
             else if (t == "bitcrush") fx = std::make_unique<Bitcrush>(j, job);
             else if (t == "vibrato") fx = std::make_unique<Vibrato>(j, job);
+            else if (t == "pitch") fx = std::make_unique<Pitch>(j, job);
             else if (t == "tapestop") fx = std::make_unique<TapeStop>(j, job);
             else if (t == "repeat") fx = std::make_unique<Repeat>(j, job);
             else if (t == "multiband") fx = std::make_unique<Multiband>(j, job, err);

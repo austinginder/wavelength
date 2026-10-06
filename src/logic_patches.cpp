@@ -1263,6 +1263,20 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
                      {"feedback", r4(std::clamp(v(3) / 100, -0.95, 0.95))}, {"mix", r4(0.5 * std::min(1.0, v(15) / 100))}});
                 notes.push_back("Microphaser: its Intensity plays as the phaser's mix (a guess)");
             } else notes.push_back("Microphaser: Intensity 0 as saved (a Smart Control knob raises it), left out");
+        } else if (p.name == "VocalTrf") {   // Vocal Transformer: #0 Pitch, #9 Fine, #1 Formant, #2 Mix %, #3 Robotize
+            json f = {{"type", "pitch"}, {"semitones", r4(v(0))}, {"keepFormants", true}};
+            if (std::fabs(v(9)) > 0.05) f["cents"] = r2(v(9));
+            if (std::fabs(v(1)) > 0.05) f["formant"] = r2(v(1));
+            const double mix = std::clamp(v(2, 100), 0.0, 100.0) / 100;
+            if (mix < 0.995) f["mix"] = r4(mix);
+            if (mix > 0.005) add(f);
+            if (v(3) >= 0.5) notes.push_back("Vocal Transformer: Robotize (the melody squeezed toward its Pitch Base) isn't played: the voice keeps its own melody");
+        } else if (p.name == "PShft") {   // Pitch Shifter: #1 Semitones, #2 Cents, #0 Mix %; its timing settings aren't played
+            json f = {{"type", "pitch"}, {"semitones", r4(v(1))}};
+            if (std::fabs(v(2)) > 0.05) f["cents"] = r2(v(2));
+            const double mix = std::clamp(v(0, 50), 0.0, 100.0) / 100;
+            f["mix"] = r4(mix);
+            if (mix > 0.005) add(f);
         } else {
             notes.push_back(p.name + ": GarageBand's own effect, not played");
         }

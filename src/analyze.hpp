@@ -32,6 +32,8 @@ struct Analysis {
 // Analyze [start, end) seconds of `a` (end <= 0: to the end).
 Analysis analyzeAudio(const Audio &a, int sampleRate, double start = 0, double end = 0);
 nlohmann::json analysisToJson(const Analysis &x, bool withOnsets = true);
+// The median fundamental of the voiced frames of `a` (as Analysis::pitchHz), 0 when nothing is voiced.
+double medianPitchHz(const Audio &a, int sampleRate);
 
 // The strongest spectral peaks of [start, end) (end <= 0: to the end), from a power-averaged 16k-point
 // spectrum (2.9 Hz bins at 48 kHz; shorter windows use shorter frames): where a comb, resonator or

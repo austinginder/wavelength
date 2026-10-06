@@ -90,6 +90,28 @@ double correctSubharmonic(const float *x, size_t n, double sr, double f0, double
     return f0;
 }
 
+// pitch: YIN over active 4096-sample frames (fundamentals 30 Hz - 4 kHz), the median of the voiced ones; peak: the
+// loudest 5 ms RMS (frames under a tenth of it are skipped); confidence = voiced share of the active frames
+double medianF0(const std::vector<float> &mono, double sr, double peak, double &confidence) {
+    const size_t n = mono.size();
+    std::vector<double> f0s;
+    size_t voicedTried = 0;
+    const size_t P = n >= 4096 ? 4096 : 2048;   // a short window (one slap-bass note) still gets a reading, down to ~50 Hz
+    const size_t stride = std::max<size_t>(P / 2, (n / 60 / (P / 2)) * (P / 2));   // at most ~60 frames: YIN is costly
+    for (size_t p = 0; p + P <= n; p += stride) {
+        double e = 0;
+        for (size_t i = 0; i < P; ++i) e += (double)mono[p + i] * mono[p + i];
+        if (std::sqrt(e / P) < peak * 0.1) continue;
+        ++voicedTried;
+        std::vector<double> cmnd;
+        const double f = yin(&mono[p], P, sr, P == 4096 ? 30 : 50, 4000, &cmnd);
+        if (f > 0) f0s.push_back(correctSubharmonic(&mono[p], P, sr, f, 4000, cmnd));
+        if (voicedTried >= 400) break;
+    }
+    confidence = f0s.empty() ? 0 : (double)f0s.size() / (double)voicedTried;
+    return f0s.empty() ? 0 : median(f0s);
+}
+
 } // namespace
 
 std::string keyName(int key) {
@@ -235,29 +257,30 @@ Analysis analyzeAudio(const Audio &in, int sampleRate, double start, double end)
         if (r.onsets.size() > 2000) r.onsets.resize(2000);
     }
 
-    // pitch: YIN over active 4096-sample frames (fundamentals 30 Hz - 4 kHz)
-    std::vector<double> f0s;
-    size_t voicedTried = 0;
-    const size_t P = n >= 4096 ? 4096 : 2048;   // a short window (one slap-bass note) still gets a reading, down to ~50 Hz
-    const size_t stride = std::max<size_t>(P / 2, (n / 60 / (P / 2)) * (P / 2));   // at most ~60 frames: YIN is costly
-    for (size_t p = 0; p + P <= n; p += stride) {
-        double e = 0;
-        for (size_t i = 0; i < P; ++i) e += (double)mono[p + i] * mono[p + i];
-        if (std::sqrt(e / P) < peak * 0.1) continue;
-        ++voicedTried;
-        std::vector<double> cmnd;
-        const double f = yin(&mono[p], P, sr, P == 4096 ? 30 : 50, 4000, &cmnd);
-        if (f > 0) f0s.push_back(correctSubharmonic(&mono[p], P, sr, f, 4000, cmnd));
-        if (voicedTried >= 400) break;
-    }
-    if (!f0s.empty()) {
-        r.pitchHz = median(f0s);
-        r.pitchConfidence = (double)f0s.size() / (double)voicedTried;
+    r.pitchHz = medianF0(mono, sr, peak, r.pitchConfidence);
+    if (r.pitchHz > 0) {
         const double k = 69 + 12 * std::log2(r.pitchHz / 440.0);
         r.pitchKey = (int)std::lround(k);
         r.pitchCents = (k - r.pitchKey) * 100;
     }
     return r;
+}
+
+double medianPitchHz(const Audio &a, int sampleRate) {
+    const size_t n = a.frames();
+    if (!n) return 0;
+    std::vector<float> mono(n);
+    for (size_t i = 0; i < n; ++i) mono[i] = 0.5f * (a.left[i] + a.right[i]);
+    const size_t hop = std::max<size_t>(1, (size_t)(0.005 * sampleRate));
+    double peak = 0;
+    for (size_t i = 0; i < n; i += hop) {
+        double s = 0;
+        const size_t e = std::min(n, i + hop);
+        for (size_t k = i; k < e; ++k) s += (double)mono[k] * mono[k];
+        peak = std::max(peak, std::sqrt(s / (double)(e - i)));
+    }
+    double confidence = 0;
+    return peak > 0 ? medianF0(mono, sampleRate, peak, confidence) : 0;
 }
 
 std::vector<SpectralPeak> spectralPeaks(const Audio &a, int sampleRate, double start, double end, size_t count, double &binHz) {
