@@ -1228,6 +1228,34 @@ json patchEffects(const std::vector<PatchPlugin> &chain, std::vector<std::string
             if (v(21) > 0.5) add({{"type", "saturate"}, {"drive", r2(std::min(12.0, v(21)))}, {"match", true}});
             if (std::fabs(v(22)) > 0.05) add({{"type", "gain"}, {"db", r2(v(22))}});
             notes.push_back("Tube EQ: its boosts and cuts as shelves and peaks, the dB per step guessed");
+        } else if (p.name == "AutoFilter") {   // #2 cutoff %, #3 resonance %, #5 mode (0-3 low-pass 6/12/18/24 dB, 4 high-pass, 5
+                                               // band-pass), #6 x #7/100 LFO Hz, #24 sync with #25 its note value (an octave a
+                                               // step: -23 a bar, -25 four bars, from the presets' names), #10 wave, #12 LFO to
+                                               // cutoff %, #20 envelope to cutoff %, #0/#1 input/output distortion %, #27 dry %,
+                                               // #22 main out dB; the percent scales are guesses
+            const int mode = (int)std::lround(v(5, 3));
+            if (v(0) > 0.5) add({{"type", "saturate"}, {"drive", r2(24 * std::min(1.0, v(0) / 100))}, {"match", true}});
+            json f = {{"type", "filter"}, {"mode", mode == 4 ? "highpass" : mode == 5 ? "bandpass" : "lowpass"},
+                      {"cutoff", r2(20 * std::pow(1000.0, std::clamp(v(2, 50), 0.0, 100.0) / 100))},
+                      {"resonance", r4(0.707 + 8 * std::clamp(v(3), 0.0, 100.0) / 100)}};
+            if (v(12) > 0.5) {
+                json l = {{"depth", r4(5 * std::min(1.0, v(12) / 100))}};
+                const int wave = (int)std::lround(v(10, 2));
+                l["shape"] = wave == 0 ? "ramp" : wave == 1 ? "square" : wave == 3 ? "saw" : wave == 4 ? "random" : "triangle";
+                if (v(24, 1) >= 0.5) {
+                    const double beats = 4 * std::pow(2.0, -23 - std::lround(v(25, -20)));
+                    l["rate"] = beats >= 4 ? std::to_string((int)std::lround(beats / 4)) + "/1" : "1/" + std::to_string((int)std::lround(4 / beats));
+                } else l["rate"] = r4(std::max(0.01, v(6, 0.95) * v(7, 100) / 100));
+                f["lfo"] = {{"cutoff", l}};
+                notes.push_back("AutoFilter: its LFO's shape, depth and synced note values are read as guesses");
+            }
+            const double dry = std::clamp(v(27), 0.0, 100.0) / 100;
+            if (dry > 0.005) f["mix"] = r4(1 / (1 + dry));
+            add(f);
+            if (v(1) > 0.5) add({{"type", "saturate"}, {"drive", r2(24 * std::min(1.0, v(1) / 100))}, {"match", true}});
+            if (std::fabs(v(22)) > 0.05) add({{"type", "gain"}, {"db", r2(v(22))}});
+            if (std::fabs(v(20)) > 0.5) notes.push_back("AutoFilter: its envelope (started by the input's level) isn't played");
+            if (mode == 0 || mode == 2 || mode == 3) notes.push_back("AutoFilter: its " + std::to_string(mode * 6 + 6) + " dB slope plays as 12 dB");
         } else if (p.name == "Microphaser") {   // #0 rate Hz, #3 feedback %, #4/#5 sweep floor/ceiling Hz, #6 stages (Phaser's layout), #15 intensity %
             if (v(15) > 0.5) {
                 add({{"type", "phaser"}, {"rate", r4(std::max(0.02, v(0, 0.5)))}, {"floor", r2(std::max(20.0, v(4, 200)))},
