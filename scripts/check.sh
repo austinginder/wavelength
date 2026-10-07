@@ -143,6 +143,30 @@ if [ -z "$stage_why" ]; then
 else
   echo "FAIL stage: $stage_why"; fail=1
 fi
+# groove humanize: velocity jitter around full velocity (1.0, or 127 written MIDI-style) stays a small jitter; a note
+# pushed past 1 is not read again as a MIDI value (half the hits of a full-velocity kick played at 1/127 before)
+mkdir -p out/check/humanize
+python3 -c '
+import json
+notes = lambda v: [{"beat": b, "dur": 0.25, "key": 36, "vel": v} for b in range(32)]
+job = {"sampleRate": 48000, "tempo": 120, "tail": 0.5, "leadIn": 0, "stems": "none",
+       "tracks": [{"name": "Unit", "plugin": "builtin:drums", "notes": notes(1.0)}, {"name": "Midi", "plugin": "builtin:drums", "notes": notes(127)}]}
+json.dump(job, open("out/check/humanize/plain.json", "w"))
+json.dump(dict(job, groove={"humanize": {"vel": 0.1, "seed": 3}}), open("out/check/humanize/human.json", "w"))'
+hum_why=""
+for j in plain human; do
+  "./$build/wavelength" render "out/check/humanize/$j.json" --out "out/check/humanize/$build-$j" --json > "out/check/humanize/$j.out" 2>/dev/null || hum_why="the $j job did not render"
+done
+[ -z "$hum_why" ] && hum_why=$(python3 -c '
+import json
+rms = lambda j: {t["name"]: t["levels"]["rmsDb"] for t in json.load(open("out/check/humanize/" + j + ".out"))["tracks"]}
+p, h = rms("plain"), rms("human")
+print("" if all(abs(p[n] - h[n]) < 1.0 for n in p) else "RMS plain " + str(p) + ", humanized " + str(h))')
+if [ -z "$hum_why" ]; then
+  echo "ok   groove humanize: full-velocity notes keep their level under velocity jitter"
+else
+  echo "FAIL groove humanize: $hum_why"; fail=1
+fi
 # render --from/--to: a window of the clips tour (a clip starts before it) renders, and its file is the window's length
 if [ -z "$bitwig" ]; then
   echo "skip window render and analyze from another directory: they render the clips tour (Bitwig's sound content)"

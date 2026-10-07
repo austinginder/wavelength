@@ -672,8 +672,9 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                     bendWarned = true;
                     tr.warnings.push_back("per-note \"bend\" and \"vibrato\" only play on builtin:sampler and builtin:synth tracks; use automation.pitchbend for plugins");
                 }
-                if (hVel > 0) v = (v > 1.0 ? v / 127.0 : v) * (1 + gauss(rng) * hVel);
-                note.velocity = std::clamp(v > 1.0 ? v / 127.0 : v, 0.0, 1.0);
+                if (v > 1.0) v /= 127.0;                     // MIDI-style velocities
+                if (hVel > 0) v *= 1 + gauss(rng) * hVel;    // after normalizing: a full-velocity note jittered past 1 is not MIDI
+                note.velocity = std::clamp(v, 0.0, 1.0);
                 note.channel = n.value("channel", 0);
                 if (note.key < 0 || note.key > 127) throw std::runtime_error("note key out of range 0-127 in track '" + tr.name + "'");
                 int art = -1;
