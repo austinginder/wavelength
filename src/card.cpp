@@ -72,6 +72,7 @@ struct Measure {
     int runOnsets = 0;
     std::vector<double> pitchCents;        // every 20 ms of the held note, cents from `soundsKey` (nan = unvoiced)
     int soundsKey = -1;
+    double cents = 0;                      // median of pitchCents: how far the held C4 sits off `soundsKey`
     std::vector<std::string> flags;
     json js;
 };
@@ -145,14 +146,25 @@ void measure(Measure &m) {
         if (m.soundsKey < 0 || w.pitchHz <= 0 || w.pitchConfidence < 0.5) { m.pitchCents.push_back(NAN); continue; }
         m.pitchCents.push_back(1200 * std::log2(w.pitchHz / (440 * std::pow(2.0, (m.soundsKey - 69) / 12.0))));
     }
+    {   // the held note's offset from its sounding key: voiced frames near it (octave errors left out)
+        std::vector<double> v;
+        for (double c : m.pitchCents) if (!std::isnan(c) && std::fabs(c) < 60) v.push_back(c);
+        if (v.size() > 10) { std::sort(v.begin(), v.end()); m.cents = v[v.size() / 2]; }
+    }
 
     // flags: what an agent should know before using the patch
     auto &f = m.flags;
     if (m.whole.silent || m.held.lufs < -70) f.push_back("silent on a held C4");
-    if (m.soundsKey >= 0 && m.soundsKey != 60) {
+    // out of tune: 15 cents or more off a semitone (a fine-tune setting, or a plugin that keeps 44.1 kHz tuning
+    // at another sample rate: Nekobi sounds 147 cents sharp at 48 kHz); transpose moves whole semitones only
+    const bool offTune = m.soundsKey >= 0 && std::fabs(m.cents) >= 15;
+    if (m.soundsKey >= 0 && (m.soundsKey != 60 || offTune)) {
         const int d = m.soundsKey - 60;
-        f.push_back("C4 sounds " + keyName(m.soundsKey) + (d % 12 == 0 ? " (octave " + std::string(d > 0 ? "+" : "") + std::to_string(d / 12) + ": transpose " + std::to_string(-d) + ")"
-                                                                       : " (" + std::string(d > 0 ? "+" : "") + std::to_string(d) + " st)"));
+        std::string s = "C4 sounds " + keyName(m.soundsKey) + (offTune ? fmt(" %+.0f cents", m.cents) : "");
+        if (offTune) s += " (" + fmt("%+.2f", d + m.cents / 100) + " st: out of tune; retune the patch, transpose moves whole semitones)";
+        else if (d % 12 == 0) s += " (octave " + std::string(d > 0 ? "+" : "") + std::to_string(d / 12) + ": transpose " + std::to_string(-d) + ")";
+        else s += " (" + std::string(d > 0 ? "+" : "") + std::to_string(d) + " st)";
+        f.push_back(s);
     } else if (m.soundsKey < 0 && m.held.lufs > -70) f.push_back("no clear pitch (noise, drum or detuned)");
     if (m.attackMs >= 250) f.push_back("slow attack " + fmt("%.0f", m.attackMs) + " ms");
     if (m.tailOpen) f.push_back("long tail: still sounding " + fmt("%.1f", m.tailMs / 1000) + " s after note-off (release, delay or reverb in the patch)");
@@ -184,6 +196,7 @@ void measure(Measure &m) {
         keys.push_back({{"key", keyName(k.key)}, {"lufs", std::round(k.lufs * 10) / 10}, {"sounds", k.sounds >= 0 ? json(keyName(k.sounds)) : json(nullptr)}});
     auto r1 = [](double v) { return std::round(v * 10) / 10; };
     m.js = {{"sounds", m.soundsKey >= 0 ? json(keyName(m.soundsKey)) : json(nullptr)},
+            {"cents", m.soundsKey >= 0 ? json(std::round(m.cents)) : json(nullptr)},
             {"transpose", m.soundsKey >= 0 && (m.soundsKey - 60) % 12 == 0 ? json(60 - m.soundsKey) : json(nullptr)},
             {"held", analysisToJson(m.held, false)}, {"heldLevelDb", r1(m.heldLevelDb)}, {"attackMs", std::round(m.attackMs)}, {"tailMs", std::round(m.tailMs)}, {"tailOpen", m.tailOpen},
             {"noiseBeforeDb", r1(m.noiseBeforeDb)}, {"keys", keys}, {"chordLufs", r1(m.chordLufs)},
@@ -278,7 +291,7 @@ void drawCard(Canvas &cv, const Font &font, const Measure &m, const CardItem &it
         return;
     }
     {
-        std::string s = (m.soundsKey >= 0 ? "C4 sounds " + keyName(m.soundsKey) : std::string("no clear pitch")) + "   " + fmt("%.1f LUFS", m.held.lufs) +
+        std::string s = (m.soundsKey >= 0 ? "C4 sounds " + keyName(m.soundsKey) + (std::fabs(m.cents) >= 15 ? fmt(" %+.0f c", m.cents) : "") : std::string("no clear pitch")) + "   " + fmt("%.1f LUFS", m.held.lufs) +
                         "   attack " + fmt("%.0f ms", m.attackMs) + "   tail " + (m.tailOpen ? fmt("%.1f s+", m.tailMs / 1000) : fmt("%.2f s", m.tailMs / 1000)) + "   width " + fmt("%.2f", m.held.width) +
                         "   brightness " + fmt("%.0f Hz", m.held.centroidHz);
         font.draw(cv, 16 * S, 80 * S, s, 14 * S, kText);
@@ -403,7 +416,7 @@ void drawCompact(Canvas &cv, const Font &font, const Measure &m, const CardItem 
         font.draw(cv, x + 12 * S, y + 70 * S, ascii(font.fit("failed: " + m.error, 13 * S, w - 24 * S)), 13 * S, kRed);
         return;
     }
-    const std::string s = (m.soundsKey >= 0 ? "C4 > " + keyName(m.soundsKey) : std::string("no pitch")) + "  " + fmt("%.1f LUFS", m.held.lufs) + "  att " +
+    const std::string s = (m.soundsKey >= 0 ? "C4 > " + keyName(m.soundsKey) + (std::fabs(m.cents) >= 15 ? fmt(" %+.0fc", m.cents) : "") : std::string("no pitch")) + "  " + fmt("%.1f LUFS", m.held.lufs) + "  att " +
                           fmt("%.0f ms", m.attackMs) + "  tail " + fmt(m.tailOpen ? "%.1f s+" : "%.1f s", m.tailMs / 1000) + "  wid " + fmt("%.2f", m.held.width) + "  " +
                           fmt("%.0f Hz", m.held.centroidHz);
     font.draw(cv, x + 12 * S, y + 58 * S, ascii(font.fit(s, 12 * S, w - 24 * S)), 12 * S, kText);
