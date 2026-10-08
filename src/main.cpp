@@ -2096,7 +2096,7 @@ int run(int argc, char **argv) {
     if (isSongCommand(cmd)) return runSongCommand(argc, argv, OUT);   // save, history, undo... (song_cli.cpp)
     if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
     if (cmd == "__play" && a.positional.size() > 2) return playWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live notes
-    if (cmd == "__live" && a.positional.size() > 2) return liveWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live playing
+    if (cmd == "__live" && a.positional.size() > 2) return liveWorker(a.positional[1], a.positional[2], a.positional.size() > 3 ? a.positional[3] : "", OUT);   // internal: serve's live playing
     if (cmd == "__knobs" && a.positional.size() > 2) return knobsWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's Sounds page
     if (cmd == "__parse") return parseCheck(std::vector<std::string>(a.positional.begin() + 1, a.positional.end()), OUT);   // internal: readers vs hostile files
     if (cmd == "__track" && a.positional.size() > 3)

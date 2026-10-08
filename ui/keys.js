@@ -10,7 +10,8 @@
  *   current() the sound to play, or null: {id, label, song, track} or {id, label, plugin, preset}; a new id
  *             loads the sound again (the Sounds page's id changes with the instrument and preset, not the knobs)
  *   settings  {octave, vel, len, chord} (kept by the page), save() after they change
- * Returns {ensure(), close(), releaseAll(), param(id, value), status(msg, err), stats()}.
+ * Returns {ensure(), close(), releaseAll(), param(id, value), status(msg, err), stats()}; ensure() resolves with the
+ * live session ({id, ...}) when the sound plays live, else null.
  * WLKeys.instruments() loads the installed instruments grouped by name, best format first.
  *
  * Uses the page's globals: postHeaders, postJson.
@@ -273,7 +274,7 @@
 
 		return {
 			ensure, close, releaseAll, param, status,
-			stats: () => live ? { live: !!live.node, frames: live.frames || 0, peak: live.peak || 0, state: live.ctx?.state } : null,
+			stats: () => live ? { id: live.id, live: !!live.node, frames: live.frames || 0, peak: live.peak || 0, state: live.ctx?.state } : null,
 		};
 	}
 

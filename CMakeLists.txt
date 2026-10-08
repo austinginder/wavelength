@@ -157,6 +157,7 @@ add_executable(wavelength
   src/docs.cpp
   src/fallback.cpp
   src/sounds.cpp
+  src/editor_window.cpp
   src/kit.cpp
   src/self_upgrade.cpp
   src/help.cpp
@@ -240,7 +241,9 @@ if(APPLE AND WAVELENGTH_SIGN_IDENTITY)
     COMMENT "Signing wavelength (${WAVELENGTH_SIGN_IDENTITY})" VERBATIM)
 endif()
 if(APPLE)
-  target_link_libraries(wavelength PRIVATE "-framework CoreFoundation" "-framework CoreGraphics" "-framework AudioToolbox" "-framework CoreAudio")
+  target_sources(wavelength PRIVATE src/editor_window_mac.mm)   # plugin windows (serve's Sounds page)
+  set_source_files_properties(src/editor_window_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+  target_link_libraries(wavelength PRIVATE "-framework CoreFoundation" "-framework CoreGraphics" "-framework AudioToolbox" "-framework CoreAudio" "-framework Cocoa")
 elseif(WIN32)
   # UTF-8 as the process code page (file names), and a self-contained .exe
   target_sources(wavelength PRIVATE src/wavelength.rc)

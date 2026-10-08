@@ -42,7 +42,7 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | A notarized macOS binary | later | needs a Developer ID certificate |
 | Audio Unit hosting | released 0.5.0 | macOS: instruments, effects and MIDI-controlled effects, factory presets, `.aupreset` state; Intel-only units open out of process |
 | A compatibility sweep of every installed plugin (`compat`) | released 0.5.0 | crashes, hangs, silence, licence windows and presets that change nothing, per plugin |
-| Preset capture (`wavelength capture <plugin>`): open a plugin's own window and save each preset loaded there as a named state | idea | for presets that only load through the plugin's window. Kontakt library instruments need a state saved by a host: an `.nki` or a saved `.nkm` multi can't become one without decrypting it, and Komplete Kontrol restores the Kontakt state it embeds, not the preset path it records. Stepping through presets in Komplete Kontrol's window would capture a whole library, saved for Komplete Kontrol and for Kontakt. Needs plugin editor hosting, VST3 on macOS first |
+| Preset capture (`wavelength capture <plugin>`): open a plugin's own window and save each preset loaded there as a named state | idea | for presets that only load through the plugin's window. Kontakt library instruments need a state saved by a host: an `.nki` or a saved `.nkm` multi can't become one without decrypting it, and Komplete Kontrol restores the Kontakt state it embeds, not the preset path it records. Stepping through presets in Komplete Kontrol's window would capture a whole library, saved for Komplete Kontrol and for Kontakt. Plugin windows are hosted since 0.6.0 (the Sounds page, CLAP and VST3 on macOS) |
 | SoundFont and SFZ LFOs (vibrato, tremolo) and pitch envelopes | later | |
 
 ## 3. Agents find it
@@ -83,6 +83,7 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | Adaptive music for games: layers and stingers exported for Godot and Unity | later | |
 | Vocals: generated vocal stems brought in as clips | later | the biggest gap against Suno |
 | DAWproject import: plugin effect automation, launcher clips, more Bitwig devices; Bitwig project audio clips and Bitwig 6 automation clips | later | |
+| Sounds tuned by a person, the song written by an agent | 0.6.0 | `serve`'s Sounds page: instruments, presets and knobs (or the plugin's own window) set by ear while playing, kept in `sounds.json` over whatever writes the job; a brief and a prompt hand the folder to an agent |
 | Live playback through the speakers | released 0.5.0 | in `serve`: the editor loops bars live while the mixer changes, and the Playground plays instruments live from the keyboard |
 
 ## 6. Measuring progress

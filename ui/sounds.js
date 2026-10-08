@@ -114,6 +114,7 @@
 
 	async function pick(name) {
 		S.sel = name; S.tracks[S.slug] = name; keep();
+		clearInterval(S.winPoll); S.win = null;
 		keys?.releaseAll();
 		render();
 		await loadKnobs();
@@ -243,13 +244,13 @@
 	}
 
 	/* ---------- turning them ---------- */
-	function set(id, v, { redraw = true } = {}) {
+	function set(id, v, { redraw = true, send = true } = {}) {
 		const p = S.byId.get(id);
 		v = Math.min(Math.max(v, Math.min(p.min, p.max)), Math.max(p.min, p.max));
 		if (p.stepped) v = Math.round(v);
 		if (v === S.vals.get(id)) return;
 		S.vals.set(id, v);
-		keys.param(id, v);   // heard at once when it plays live
+		if (send) keys.param(id, v);   // heard at once when it plays live (not back to the window it came from)
 		pendingText.set(id, v);
 		if (!textTimer) textTimer = setTimeout(askText, 50);
 		if (redraw) redrawKnob(id);
@@ -377,6 +378,7 @@
 			<h2><span class="sd-name">${esc(t.name)}</span>
 				<button class="sd-pick" data-act="inst" title="Choose the instrument">${esc(plainName(t.plugin))}</button>
 				<span class="sd-preset"><button data-act="prev" title="The preset before">‹</button><button class="sd-pick" data-act="preset" title="Choose a preset">${esc(t.preset || 'Default sound')}</button><button data-act="next" title="The preset after">›</button></span>
+				${live ? `<button class="ed-open" data-act="window" title="Open ${esc(plainName(t.plugin))}'s own window: what you change there comes back here">${S.win ? 'Close window' : 'Plugin window'}</button>` : ''}
 				<button class="ed-open" data-act="menu" title="Reset or remove">More</button></h2>
 			<div class="sd-bar">
 				<input type="text" class="sd-note" data-act="note" value="${esc(t.note || '')}" placeholder="What this part is for (the agent reads it): rolling offbeat bass, the hook in the drops…" maxlength="2000">
@@ -410,6 +412,40 @@
 		if (a === 'preset') { const s = await chooseSound({ title: `Preset for ${t.name}`, plugin: t.plugin, preset: t.preset, presetOnly: true }); if (s) setSound(s); }
 		if (a === 'prev' || a === 'next') stepPreset(a === 'next' ? 1 : -1);
 		if (a === 'menu') trackMenu(e, t.name);
+		if (a === 'window') pluginWindow(!S.win);
+	}
+	// the plugin's own window, opened by its live worker on this computer; what changes there comes back as knobs
+	async function pluginWindow(open) {
+		const L = await keys.ensure();
+		if (!L) return status('This instrument has no window here.', true);
+		try { await postJson('api/live/editor', { id: L.id, open }); } catch (e) { return status(e.message, true); }
+		clearInterval(S.winPoll);
+		S.win = open ? { id: L.id, seq: 0, opened: false } : null;
+		renderInst();
+		if (!open) return;
+		const W = S.win, K = S.K;
+		S.winPoll = setInterval(async () => {
+			let st;
+			try { st = await fetch('api/live/edits?id=' + encodeURIComponent(W.id)).then(r => r.ok ? r.json() : null); } catch { st = null; }
+			if (S.win !== W || S.K !== K) return clearInterval(S.winPoll);
+			if (!st || st.error) return endWindow(W, st?.error);
+			if (st.seq !== W.seq) {
+				W.seq = st.seq;
+				for (const [k, v] of Object.entries(st.values || {})) {
+					const id = +k;
+					if (S.byId.has(id) && Math.abs(v - S.vals.get(id)) > 1e-9) set(id, v, { send: false });
+				}
+			}
+			if (st.open) { if (!W.opened) { W.opened = true; status('The plugin\'s window is open: what you change there comes back here and saves.'); } }
+			else if (W.opened || st.error) endWindow(W, st.error);
+		}, 300);
+	}
+	function endWindow(W, error) {
+		clearInterval(S.winPoll);
+		if (S.win !== W) return;
+		S.win = null;
+		renderInst();
+		if (error) status(error, true);
 	}
 	async function stepPreset(d) {
 		const t = row(S.sel);
@@ -425,6 +461,7 @@
 		await save();
 		try { await change({ op: 'set', track: t.name, sound: { plugin: s.plugin, ...(s.preset ? { preset: s.preset } : {}) } }); }
 		catch (e) { return status(e.message, true); }
+		clearInterval(S.winPoll); S.win = null;   // a new sound: its live session (and window) starts again
 		await reload();
 		await loadKnobs();
 		keys.ensure();
@@ -564,7 +601,7 @@ ${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''}${brief ? `\nB
 			const want = slug || S.slug || state.slug || '';
 			if (want !== S.slug || !S.data) open(want); else { render(); keys.ensure(); }
 		},
-		hide() { if (built) { save(); keys.releaseAll(); keys.close(); } },
+		hide() { if (built) { save(); clearInterval(S.winPoll); S.win = null; keys.releaseAll(); keys.close(); } },
 		songsChanged() { if (built && !root.hidden) render(); },
 		stats: () => keys?.stats() ?? null,
 	};

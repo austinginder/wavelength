@@ -62,6 +62,11 @@ public:
     void pump(double ms);
     void serviceCallbacks();
 
+    // the plugin's own window (gui extension), and what the plugin asked of it from any thread
+    const clap_plugin_gui_t *gui() const { return gui_; }
+    std::atomic<uint32_t> guiWantW{0}, guiWantH{0};
+    std::atomic<bool> guiResizeWanted{false}, guiClosed{false};
+
     // host-side state
     std::thread::id mainThread, audioThread;
     std::atomic<bool> callbackRequested{false}, restartRequested{false};
@@ -81,6 +86,7 @@ private:
     const clap_plugin_note_ports_t *notePorts_ = nullptr;
     const clap_plugin_render_t *render_ = nullptr;
     const clap_plugin_preset_load_t *presetLoad_ = nullptr;
+    const clap_plugin_gui_t *gui_ = nullptr;
     bool active_ = false;
 
     void queryExtensions();

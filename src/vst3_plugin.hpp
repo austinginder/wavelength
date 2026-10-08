@@ -39,6 +39,11 @@ public:
                 const std::vector<AutoParam> &autos, const Audio *input, Audio &out, std::vector<std::string> &warnings,
                 std::string &err) override;
     void pump(double ms) override;
+    bool openEditor(const std::string &title, std::string &err) override;
+    void closeEditor() override;
+    bool editorOpen() const override;
+    bool serviceEditor() override;
+    void takeEdits(std::vector<std::pair<ParamId, double>> &out) override;
 
     struct Impl;
 

@@ -274,13 +274,90 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         pl->stop_processing(pl);
         done = true;
     });
-    while (!done) inst.pump(2);
+    while (!done) {
+        inst.pump(2);
+        if (liveMain) liveMain();
+    }
     worker.join();
     inst.deactivate();
     for (auto &line : inst.log)
         if (line.rfind("error", 0) == 0 || line.rfind("fatal", 0) == 0 || line.rfind("warning", 0) == 0) warnings.push_back("plugin " + line);
     if (!audioErr.empty()) { err = audioErr; return false; }
     return true;
+}
+
+// ---- the plugin's own window ----------------------------------------------------------------
+bool ClapPlugin::openEditor(const std::string &title, std::string &err) {
+    if (window_) return true;
+    const clap_plugin_t *pl = inst_->plugin();
+    const clap_plugin_gui_t *gui = inst_->gui();
+#if defined(__APPLE__)
+    const char *api = CLAP_WINDOW_API_COCOA;
+#elif defined(_WIN32)
+    const char *api = CLAP_WINDOW_API_WIN32;
+#else
+    const char *api = CLAP_WINDOW_API_X11;
+#endif
+    if (!gui || !gui->is_api_supported(pl, api, false)) { err = name_ + " has no window of its own here"; return false; }
+    if (!gui->create(pl, api, false)) { err = name_ + " could not make its window"; return false; }
+    uint32_t w = 0, h = 0;
+    if (!gui->get_size(pl, &w, &h)) { w = 800; h = 500; }
+    window_ = editorwin::open(title, (int)w, (int)h, gui->can_resize(pl), err);
+    if (!window_) { gui->destroy(pl); return false; }
+    clap_window_t cw{};
+    cw.api = api;
+    cw.ptr = editorwin::view(window_);
+    if (!gui->set_parent(pl, &cw)) {
+        gui->destroy(pl);
+        editorwin::close(window_);
+        window_ = nullptr;
+        err = name_ + " would not open its window inside Wavelength's";
+        return false;
+    }
+    gui->show(pl);
+    inst_->guiClosed = false;
+    seen_.clear();
+    for (const auto &p : inst_->params()) seen_[p.id] = p.value;
+    return true;
+}
+
+void ClapPlugin::closeEditor() {
+    if (!window_) return;
+    const clap_plugin_t *pl = inst_->plugin();
+    if (const clap_plugin_gui_t *gui = inst_->gui()) {
+        gui->hide(pl);
+        gui->destroy(pl);
+    }
+    editorwin::close(window_);
+    window_ = nullptr;
+}
+
+bool ClapPlugin::serviceEditor() {
+    if (!window_) return false;
+    editorwin::pump();
+    if (editorwin::closedByUser(window_) || inst_->guiClosed.exchange(false)) { closeEditor(); return false; }
+    const clap_plugin_t *pl = inst_->plugin();
+    const clap_plugin_gui_t *gui = inst_->gui();
+    if (inst_->guiResizeWanted.exchange(false)) editorwin::resize(window_, (int)inst_->guiWantW, (int)inst_->guiWantH);
+    int w, h;
+    if (editorwin::resized(window_, w, h)) {   // the person dragged the window: the plugin may round the size
+        uint32_t aw = (uint32_t)w, ah = (uint32_t)h;
+        if (gui->adjust_size(pl, &aw, &ah) && gui->set_size(pl, aw, ah) && ((int)aw != w || (int)ah != h)) editorwin::resize(window_, (int)aw, (int)ah);
+    }
+    return true;
+}
+
+// what moved since the last look: the plugin's window changes its parameters itself, so their values are compared
+void ClapPlugin::takeEdits(std::vector<std::pair<ParamId, double>> &out) {
+    const clap_plugin_t *pl = inst_->plugin();
+    const auto *params = static_cast<const clap_plugin_params_t *>(pl->get_extension(pl, CLAP_EXT_PARAMS));
+    if (!params) return;
+    for (auto &[id, last] : seen_) {
+        double v;
+        if (!params->get_value(pl, id, &v) || v == last) continue;
+        last = v;
+        out.push_back({id, v});
+    }
 }
 
 } // namespace wl

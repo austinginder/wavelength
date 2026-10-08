@@ -323,6 +323,7 @@ private:
         std::mutex io;           // stdin writes
         std::atomic<bool> streaming{false};
         json info;
+        fs::path status;         // the plugin window's state, written by the worker
     };
     std::mutex liveMu_;
     std::map<std::string, std::shared_ptr<LiveSession>> lives_;
@@ -1217,7 +1218,11 @@ json Server::liveStart(const json &in) {
         }
     }
     auto ls = std::make_shared<LiveSession>();
-    if (!platform::spawn({platform::selfExecutable(), "__live", jobFile.string(), track}, ls->proc, true, true, true)) return {{"error", "could not start the instrument"}};
+    std::error_code ec;
+    fs::create_directories(platform::cacheDir() / "live", ec);
+    ls->status = platform::cacheDir() / "live" / (fnv(id) + ".json");
+    fs::remove(ls->status, ec);
+    if (!platform::spawn({platform::selfExecutable(), "__live", jobFile.string(), track, ls->status.string()}, ls->proc, true, true, true)) return {{"error", "could not start the instrument"}};
     std::string hello;
     if (!platform::readLine(ls->proc, hello, 90000)) { platform::kill(ls->proc); return {{"error", "the instrument did not load in 90 s"}}; }
     try { ls->info = json::parse(hello); } catch (...) { platform::kill(ls->proc); return {{"error", "the instrument answered: " + hello.substr(0, 200)}}; }
@@ -1244,6 +1249,8 @@ void Server::liveStop(const std::string &id) {
     platform::writeInput(ls->proc, "{\"stop\":true}\n");
     platform::terminate(ls->proc);   // the stream's reader reaps it
     if (!ls->streaming) platform::kill(ls->proc);
+    std::error_code ec;
+    fs::remove(ls->status, ec);
 }
 
 json Server::play(const fs::path &jobFile, const std::string &track, const std::string &key, const json &in, std::string &wav) {
@@ -1869,6 +1876,35 @@ int Server::run() {
         if (!platform::writeInput(ls->proc, lines)) return sendJson(res, {{"error", "the instrument stopped"}}, 410);
         sendJson(res, {{"ok", true}});
     });
+    // the plugin's own window: POST /api/live/editor {id, open}; GET /api/live/edits?id= is whether it's open and
+    // the values changed in it ({"open", "error", "seq", "values": {id: plain}})
+    http_.Post("/api/live/editor", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        std::shared_ptr<LiveSession> ls;
+        {
+            std::lock_guard<std::mutex> lock(liveMu_);
+            auto it = lives_.find(in.value("id", std::string()));
+            if (it != lives_.end()) ls = it->second;
+        }
+        if (!ls) return sendJson(res, {{"error", "no such live session"}}, 404);
+        std::lock_guard<std::mutex> lock(ls->io);
+        if (!platform::writeInput(ls->proc, in.value("open", true) ? "{\"editor\":true}\n" : "{\"editor\":false}\n"))
+            return sendJson(res, {{"error", "the instrument stopped"}}, 410);
+        sendJson(res, {{"ok", true}});
+    });
+    http_.Get("/api/live/edits", [&](const httplib::Request &req, httplib::Response &res) {
+        std::shared_ptr<LiveSession> ls;
+        {
+            std::lock_guard<std::mutex> lock(liveMu_);
+            auto it = lives_.find(req.get_param_value("id"));
+            if (it != lives_.end()) ls = it->second;
+        }
+        if (!ls) return sendJson(res, {{"error", "no such live session"}}, 404);
+        json st;
+        if (!readJson(ls->status, st)) st = {{"open", false}, {"seq", 0}, {"values", json::object()}};
+        sendJson(res, st);
+    });
     http_.Post("/api/live/stop", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
@@ -2006,8 +2042,9 @@ int serve(const ServeOptions &o) {
 // `wavelength __live <job.json> <track>` (internal, started by serve): the track's instrument playing
 // continuously. After a JSON hello line, stdout is 16-bit stereo PCM paced to the clock (a little ahead);
 // stdin lines turn notes on and off: {"on": 60, "vel": 0.8}, {"off": 60}, {"allOff": true}, {"stop": true};
-// {"param": id, "value": plain} turns a knob.
-int liveWorker(const std::string &jobPath, const std::string &trackName, std::FILE *out) {
+// {"param": id, "value": plain} turns a knob; {"editor": true/false} opens or closes the plugin's own window, and
+// `statusPath` (when given) keeps {"open", "error", "seq", "values": {id: plain}}: the values changed in it.
+int liveWorker(const std::string &jobPath, const std::string &trackName, const std::string &statusPath, std::FILE *out) {
     auto say = [&](const json &j) { std::fprintf(out, "%s\n", j.dump(-1, ' ', false, json::error_handler_t::replace).c_str()); std::fflush(out); };
     json j;
     if (!readJson(jobPath, j)) { say({{"error", "cannot read " + jobPath}}); return 1; }
@@ -2044,6 +2081,7 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
     std::mutex qm;
     std::vector<TimedEvent> queue;
     std::atomic<bool> stop{false};
+    std::atomic<int> editorWant{0};   // 1 open the plugin's window, -1 close it
     std::thread reader([&] {
         char buf[4096];
         while (!stop && std::fgets(buf, sizeof buf, stdin)) {
@@ -2051,6 +2089,7 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
             try { e = json::parse(buf); } catch (...) { continue; }
             std::lock_guard<std::mutex> lock(qm);
             if (e.value("stop", false)) { stop = true; break; }
+            if (e.contains("editor")) { editorWant = e.value("editor", false) ? 1 : -1; continue; }
             if (e.value("allOff", false)) {
                 for (int k = 0; k < 128; ++k) queue.push_back({0, false, k, 0, 0.0});
             } else if (e.contains("on")) queue.push_back({0, true, e.value("on", 60), 0, e.value("vel", 0.8)});
@@ -2095,8 +2134,53 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
         std::this_thread::sleep_until(std::chrono::time_point_cast<Clock::duration>(due));
         return !stop.load();
     };
+    // the plugin's own window, on this (the main) thread: opened and closed on request, kept going, and what it
+    // changes written for serve every 100 ms
+    json editState = {{"open", false}, {"seq", 0}, {"values", json::object()}};
+    auto writeStatus = [&] {
+        if (statusPath.empty()) return;
+        editState["seq"] = editState["seq"].get<int>() + 1;
+        std::string werr;
+        platform::writeFileAtomic(statusPath, editState.dump(), werr);
+    };
+    auto takeEdits = [&] {
+        std::vector<std::pair<ParamId, double>> edits;
+        p.plugin->takeEdits(edits);
+        for (auto &[id, v] : edits) editState["values"][std::to_string(id)] = v;
+        return !edits.empty();
+    };
+    const std::string title = track.name + " - " + p.name + (p.preset.empty() ? "" : " - " + p.preset);
+    auto lastLook = Clock::now();
+    p.plugin->liveMain = [&] {
+        const int want = editorWant.exchange(0);
+        if (want == 1 && !p.plugin->editorOpen()) {
+            std::string e;
+            editState["values"] = json::object();
+            if (p.plugin->openEditor(title, e)) { editState["open"] = true; editState.erase("error"); }
+            else editState["error"] = e;
+            writeStatus();
+        } else if (want == -1 && p.plugin->editorOpen()) {
+            takeEdits();
+            p.plugin->closeEditor();
+            editState["open"] = false;
+            writeStatus();
+        }
+        if (!p.plugin->editorOpen()) return;
+        if (!p.plugin->serviceEditor()) {   // the person closed it
+            takeEdits();
+            editState["open"] = false;
+            writeStatus();
+            return;
+        }
+        if (Clock::now() - lastLook > std::chrono::milliseconds(100)) {
+            lastLook = Clock::now();
+            if (takeEdits()) writeStatus();
+        }
+    };
     Audio none;
-    if (!runPlugin(live, p, {}, nullptr, none, err)) { std::fprintf(stderr, "live: %s\n", err.c_str()); return 1; }
+    const bool ok = runPlugin(live, p, {}, nullptr, none, err);
+    p.plugin->closeEditor();
+    if (!ok) { std::fprintf(stderr, "live: %s\n", err.c_str()); return 1; }
     return 0;
 }
 

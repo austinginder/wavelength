@@ -1,9 +1,11 @@
 #pragma once
 // CLAP implementation of the Plugin interface (wraps Instance, the CLAP host side).
 #include "bundle.hpp"
+#include "editor_window.hpp"
 #include "instance.hpp"
 #include "plugin.hpp"
 
+#include <map>
 #include <memory>
 
 namespace wl {
@@ -33,9 +35,18 @@ public:
                 std::string &err) override;
     void pump(double ms) override { inst_->verbose = verbose; inst_->pump(ms); }
 
+    bool openEditor(const std::string &title, std::string &err) override;
+    void closeEditor() override;
+    bool editorOpen() const override { return window_ != nullptr; }
+    bool serviceEditor() override;
+    void takeEdits(std::vector<std::pair<ParamId, double>> &out) override;
+    ~ClapPlugin() override { closeEditor(); }
+
 private:
     std::unique_ptr<Instance> inst_;
     std::string id_, name_, bundle_;
+    editorwin::Window *window_ = nullptr;
+    std::map<ParamId, double> seen_;   // values when the editor opened or last reported (takeEdits)
 };
 
 } // namespace wl

@@ -25,7 +25,8 @@ int playWorker(const std::string &jobPath, const std::string &track, std::FILE *
 // `wavelength __live <job.json> <track>` (internal, started by serve): the track's instrument playing
 // continuously (CLAP and VST3). A JSON hello line, then 16-bit stereo PCM paced to the clock on `out`;
 // stdin lines {"on": 60, "vel": 0.8}, {"off": 60}, {"allOff": true}, {"stop": true}, {"param": id, "value": plain}.
-int liveWorker(const std::string &jobPath, const std::string &track, std::FILE *out);
+// {"editor": true/false} opens or closes the plugin's own window; `statusPath`, when not empty, keeps what it changed.
+int liveWorker(const std::string &jobPath, const std::string &track, const std::string &statusPath, std::FILE *out);
 // `wavelength __knobs <job.json> <track>` (internal, started by serve): the track's instrument loaded (preset and
 // state, without its "params") for the Sounds page's knobs. A JSON hello line lists its parameters with the
 // preset's values; then each stdin line asks one thing and gets one line back:

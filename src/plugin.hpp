@@ -117,6 +117,22 @@ public:
     std::function<void(int64_t, uint32_t, std::vector<TimedEvent> &)> liveEvents;
     std::function<bool(const float *, const float *, uint32_t)> liveOutput;
     virtual bool canPlayLive() const { return false; }
+    // Called about every 2 ms on the main thread while render() plays live (the live worker's own main-thread work).
+    std::function<void()> liveMain;
+
+    // The plugin's own window (serve's Sounds page), opened while it plays live: CLAP and VST3, on macOS for now.
+    // Main thread only (the live worker calls these from liveMain).
+    virtual bool openEditor(const std::string &title, std::string &err) {
+        (void)title; err = std::string(format()) + " plugin windows are not supported"; return false;
+    }
+    virtual void closeEditor() {}
+    virtual bool editorOpen() const { return false; }
+    // Keep an open window going (its events, a size the plugin asked for or the person dragged to); false once the
+    // person closed it, which closes the editor too.
+    virtual bool serviceEditor() { return false; }
+    // Parameter values that changed since the editor opened or the last call (the plugin's window, or a preset
+    // loaded there): id -> plain value. Main thread.
+    virtual void takeEdits(std::vector<std::pair<ParamId, double>> &out) { (void)out; }
 };
 
 // Creates the right implementation for a resolved plugin.

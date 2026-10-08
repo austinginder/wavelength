@@ -53,6 +53,21 @@ const clap_host_preset_load_t kPresetLoad = {
     [](const clap_host_t *, uint32_t, const char *, const char *) {},
 };
 
+// the plugin's window: the host keeps the window's size in step with what it asks; the window itself is the
+// live worker's (ClapPlugin::openEditor)
+const clap_host_gui_t kGui = {
+    [](const clap_host_t *) {},
+    [](const clap_host_t *h, uint32_t w, uint32_t hh) {
+        self(h)->guiWantW = w;
+        self(h)->guiWantH = hh;
+        self(h)->guiResizeWanted = true;
+        return true;
+    },
+    [](const clap_host_t *) { return true; },
+    [](const clap_host_t *) { return true; },
+    [](const clap_host_t *h, bool) { self(h)->guiClosed = true; },
+};
+
 const clap_host_audio_ports_t kAudioPorts = {
     [](const clap_host_t *, uint32_t) { return false; },
     [](const clap_host_t *, uint32_t) {},
@@ -124,6 +139,7 @@ void Instance::queryExtensions() {
     latency_ = static_cast<const clap_plugin_latency_t *>(ext(CLAP_EXT_LATENCY));
     notePorts_ = static_cast<const clap_plugin_note_ports_t *>(ext(CLAP_EXT_NOTE_PORTS));
     render_ = static_cast<const clap_plugin_render_t *>(ext(CLAP_EXT_RENDER));
+    gui_ = static_cast<const clap_plugin_gui_t *>(ext(CLAP_EXT_GUI));
     presetLoad_ = static_cast<const clap_plugin_preset_load_t *>(ext(CLAP_EXT_PRESET_LOAD));
     if (!presetLoad_) presetLoad_ = static_cast<const clap_plugin_preset_load_t *>(ext(CLAP_EXT_PRESET_LOAD_COMPAT));
 }
@@ -137,6 +153,7 @@ const void *Instance::hostGetExtension(const clap_host_t *, const char *id) {
     if (!std::strcmp(id, CLAP_EXT_TAIL)) return &kTail;
     if (!std::strcmp(id, CLAP_EXT_NOTE_PORTS)) return &kNotePorts;
     if (!std::strcmp(id, CLAP_EXT_AUDIO_PORTS)) return &kAudioPorts;
+    if (!std::strcmp(id, CLAP_EXT_GUI)) return &kGui;
     if (!std::strcmp(id, CLAP_EXT_PRESET_LOAD) || !std::strcmp(id, CLAP_EXT_PRESET_LOAD_COMPAT)) return &kPresetLoad;
     return nullptr;
 }

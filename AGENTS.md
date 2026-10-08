@@ -193,7 +193,7 @@ A song is a folder: `wavelength.json` (title, authors, licence, the job and its 
 
 `wavelength serve ~/songs --open` (a folder of song folders) starts a local web UI on http://127.0.0.1:7400: each song's arrangement with its sections, a chord lane from the harmony check, loudness per section and track, the stems, and quick previews. The human selects bars, tracks or notes and hears them rendered through the song's sends, buses and master in seconds (`render --from --to --tracks --level-from`, run by the server in child processes and cached under `out/preview/`). They leave comments pinned to what they selected; those go to the song's `review.json`:
 
-Its **Sounds** page starts a song the other way round: the human makes a project (a song folder), adds an instrument per part, picks a preset and turns the plugin's knobs (its own parameters, grouped as the plugin groups them) while playing it from the keyboard, then writes a brief and copies a prompt that hands the folder to you. What they set is in `sounds.json` and `brief.md`; see "Choosing sounds".
+Its **Sounds** page starts a song the other way round: the human makes a project (a song folder), adds an instrument per part, picks a preset and turns the plugin's knobs (its own parameters, grouped as the plugin groups them, or in the plugin's own window) while playing it from the keyboard, then writes a brief and copies a prompt that hands the folder to you. What they set is in `sounds.json` and `brief.md`; see "Choosing sounds".
 
 ```json
 {"comments": [{"id": "c260925190412a3f", "created": "2026-09-25T19:04:12-04:00",

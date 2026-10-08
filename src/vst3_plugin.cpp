@@ -1,5 +1,6 @@
 #include "vst3_plugin.hpp"
 
+#include "editor_window.hpp"
 #include "platform.hpp"
 
 #include "public.sdk/source/common/memorystream.h"
@@ -11,6 +12,7 @@
 #include "public.sdk/source/vst/hosting/processdata.h"
 #include "public.sdk/source/vst/utility/stringconvert.h"
 #include "public.sdk/source/vst/vstpresetfile.h"
+#include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
@@ -27,6 +29,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 
@@ -112,6 +115,43 @@ bool scanVst3Bundle(const std::string &path, std::vector<PluginInfo> &out, std::
     return true;
 }
 
+// ---- the plugin's own window ----------------------------------------------------------------
+// A value turned in the plugin's window changes its controller, which tells the host (performEdit); the host
+// passes it on to the processor, as a DAW does. Queued here, taken by the audio thread each block.
+class EditHandler : public IComponentHandler {
+public:
+    EditHandler() { FUNKNOWN_CTOR }
+    virtual ~EditHandler() { FUNKNOWN_DTOR }
+    tresult PLUGIN_API beginEdit(ParamID) override { return kResultOk; }
+    tresult PLUGIN_API performEdit(ParamID id, Vst::ParamValue v) override {
+        std::lock_guard<std::mutex> lock(mu);
+        queue.push_back({id, v});
+        return kResultOk;
+    }
+    tresult PLUGIN_API endEdit(ParamID) override { return kResultOk; }
+    tresult PLUGIN_API restartComponent(int32) override { return kResultOk; }
+    std::mutex mu;
+    std::vector<std::pair<ParamID, Vst::ParamValue>> queue;   // normalized
+    DECLARE_FUNKNOWN_METHODS
+};
+IMPLEMENT_FUNKNOWN_METHODS(EditHandler, IComponentHandler, IComponentHandler::iid)
+
+// the view asks for another size: the window follows
+class EditorFrame : public IPlugFrame {
+public:
+    EditorFrame() { FUNKNOWN_CTOR }
+    virtual ~EditorFrame() { FUNKNOWN_DTOR }
+    tresult PLUGIN_API resizeView(IPlugView *view, ViewRect *r) override {
+        if (!view || !r) return kInvalidArgument;
+        editorwin::resize(window, r->getWidth(), r->getHeight());
+        view->onSize(r);
+        return kResultTrue;
+    }
+    editorwin::Window *window = nullptr;
+    DECLARE_FUNKNOWN_METHODS
+};
+IMPLEMENT_FUNKNOWN_METHODS(EditorFrame, IPlugFrame, IPlugFrame::iid)
+
 // ---- instance ----------------------------------------------------------------------------
 struct Vst3Plugin::Impl {
     VST3::Hosting::Module::Ptr module;
@@ -121,6 +161,15 @@ struct Vst3Plugin::Impl {
     IPtr<IEditController> controller;
     FUnknownPtr<IAudioProcessor> processor{nullptr};
     std::vector<std::pair<ParamID, Vst::ParamValue>> pending;   // normalized values for the first block
+    // the plugin's window (openEditor), and values seen since it opened (takeEdits)
+    EditHandler *handler = nullptr;
+    EditorFrame *frame = nullptr;
+    IPlugView *view = nullptr;
+    editorwin::Window *window = nullptr;
+    std::map<ParamID, double> seen;
+    // knobs turned live reach the processor in a block; the controller (and so the window) follows on the main thread
+    std::mutex ctlMu;
+    std::vector<std::pair<ParamID, Vst::ParamValue>> ctlQueue;
 
     Vst::ParamValue toNorm(ParamID id, double plain) const {
         return controller ? controller->plainParamToNormalized(id, plain) : plain;
@@ -130,6 +179,11 @@ struct Vst3Plugin::Impl {
 Vst3Plugin::Vst3Plugin() : impl_(new Impl()) {}
 Vst3Plugin::~Vst3Plugin() {
     if (!impl_) return;
+    closeEditor();
+    if (impl_->handler) {
+        if (impl_->controller) impl_->controller->setComponentHandler(nullptr);
+        impl_->handler->release();
+    }
     impl_->processor = nullptr;
     impl_->controller = nullptr;
     impl_->component = nullptr;
@@ -504,7 +558,13 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 for (size_t a = 0; a < autos.size(); ++a)
                     if (b < autoNorm[a].size() && autoNorm[a][b] != lastAuto[a]) { addParam(autos[a].id, autoNorm[a][b]); lastAuto[a] = autoNorm[a][b]; }
                 auto addEvent = [&](const TimedEvent &e) {
-                    if (e.kind == TimedEvent::Param) { addParam(e.param, im.toNorm(e.param, e.value)); return; }   // a knob turned while playing live
+                    if (e.kind == TimedEvent::Param) {   // a knob turned while playing live
+                        const Vst::ParamValue norm = im.toNorm(e.param, e.value);
+                        addParam(e.param, norm);
+                        std::lock_guard<std::mutex> lock(im.ctlMu);
+                        im.ctlQueue.push_back({e.param, norm});
+                        return;
+                    }
                     if (e.kind != TimedEvent::Note) {
                         const int ctl = e.kind == TimedEvent::CC ? e.number : e.kind == TimedEvent::PitchBend ? Vst::kPitchBend : Vst::kAfterTouch;
                         auto it = ctlMap.find({e.channel, ctl});
@@ -532,6 +592,11 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                     }
                     eventList.addEvent(ev);
                 };
+                if (im.handler) {   // values turned in the plugin's window
+                    std::lock_guard<std::mutex> lock(im.handler->mu);
+                    for (auto &[id, v] : im.handler->queue) addParam(id, v);
+                    im.handler->queue.clear();
+                }
                 while (next < events.size() && events[next].frame < pos + n) addEvent(events[next++]);
                 liveNow.clear();
                 if (liveEvents) liveEvents(pos, (uint32_t)n, liveNow);
@@ -587,12 +652,109 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
         im.processor->setProcessing(false);
         done = true;
     });
-    while (!done) pumpFor(2);
+    while (!done) {
+        pumpFor(2);
+        std::vector<std::pair<ParamID, Vst::ParamValue>> ctl;
+        {
+            std::lock_guard<std::mutex> lock(im.ctlMu);
+            ctl.swap(im.ctlQueue);
+        }
+        for (auto &[id, v] : ctl) if (im.controller) im.controller->setParamNormalized(id, v);
+        if (liveMain) liveMain();
+    }
     worker.join();
     im.component->setActive(false);
     if (failures) warnings.push_back(name_ + ": process() reported an error in " + std::to_string(failures) + " block(s)");
     if (!audioErr.empty()) { err = audioErr; return false; }
     return true;
+}
+
+// ---- the plugin's own window ----------------------------------------------------------------
+bool Vst3Plugin::openEditor(const std::string &title, std::string &err) {
+    auto &im = *impl_;
+    if (im.window) return true;
+    if (!im.controller) { err = name_ + " has no edit controller, so no window"; return false; }
+#if defined(__APPLE__)
+    const FIDString type = kPlatformTypeNSView;
+#elif defined(_WIN32)
+    const FIDString type = kPlatformTypeHWND;
+#else
+    const FIDString type = kPlatformTypeX11EmbedWindowID;
+#endif
+    if (!im.handler) {   // from now on the plugin's edits reach the processor through the host
+        im.handler = new EditHandler();
+        im.controller->setComponentHandler(im.handler);
+    }
+    IPlugView *v = im.controller->createView(ViewType::kEditor);
+    if (!v) { err = name_ + " has no window of its own"; return false; }
+    if (v->isPlatformTypeSupported(type) != kResultTrue) { v->release(); err = name_ + " has no window of its own here"; return false; }
+    ViewRect r;
+    if (v->getSize(&r) != kResultOk || r.getWidth() <= 0 || r.getHeight() <= 0) r = ViewRect(0, 0, 800, 500);
+    im.window = editorwin::open(title, r.getWidth(), r.getHeight(), v->canResize() == kResultTrue, err);
+    if (!im.window) { v->release(); return false; }
+    im.frame = new EditorFrame();
+    im.frame->window = im.window;
+    v->setFrame(im.frame);
+    if (v->attached(editorwin::view(im.window), type) != kResultOk) {
+        v->setFrame(nullptr);
+        v->release();
+        im.frame->release();
+        im.frame = nullptr;
+        editorwin::close(im.window);
+        im.window = nullptr;
+        err = name_ + " would not open its window inside Wavelength's";
+        return false;
+    }
+    im.view = v;
+    im.seen.clear();
+    const int32 n = im.controller->getParameterCount();
+    for (int32 i = 0; i < n; ++i) {
+        ParameterInfo pi{};
+        if (im.controller->getParameterInfo(i, pi) == kResultOk) im.seen[pi.id] = im.controller->normalizedParamToPlain(pi.id, im.controller->getParamNormalized(pi.id));
+    }
+    return true;
+}
+
+void Vst3Plugin::closeEditor() {
+    auto &im = *impl_;
+    if (!im.window) return;
+    if (im.view) {
+        im.view->removed();
+        im.view->setFrame(nullptr);
+        im.view->release();
+        im.view = nullptr;
+    }
+    if (im.frame) { im.frame->release(); im.frame = nullptr; }
+    editorwin::close(im.window);
+    im.window = nullptr;
+}
+
+bool Vst3Plugin::editorOpen() const { return impl_->window != nullptr; }
+
+bool Vst3Plugin::serviceEditor() {
+    auto &im = *impl_;
+    if (!im.window) return false;
+    editorwin::pump();
+    if (editorwin::closedByUser(im.window)) { closeEditor(); return false; }
+    int w, h;
+    if (im.view && editorwin::resized(im.window, w, h)) {   // the person dragged the window: the plugin may round the size
+        ViewRect r(0, 0, w, h);
+        im.view->checkSizeConstraint(&r);
+        im.view->onSize(&r);
+        if (r.getWidth() != w || r.getHeight() != h) editorwin::resize(im.window, r.getWidth(), r.getHeight());
+    }
+    return true;
+}
+
+void Vst3Plugin::takeEdits(std::vector<std::pair<ParamId, double>> &out) {
+    auto &im = *impl_;
+    if (!im.controller) return;
+    for (auto &[id, last] : im.seen) {
+        const double v = im.controller->normalizedParamToPlain(id, im.controller->getParamNormalized(id));
+        if (v == last) continue;
+        last = v;
+        out.push_back({id, v});
+    }
 }
 
 } // namespace wl
