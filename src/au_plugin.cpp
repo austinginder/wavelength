@@ -729,7 +729,7 @@ bool AuPlugin::render(const Job &job, const std::vector<TimedEvent> &events, con
                     else if (e.kind == TimedEvent::PitchBend) {
                         const int v = std::clamp((int)std::lround((e.value + 1) * 8192), 0, 16383);
                         MusicDeviceMIDIEvent(u, 0xE0 | ch, (UInt32)(v & 0x7f), (UInt32)(v >> 7), off);
-                    } else MusicDeviceMIDIEvent(u, 0xD0 | ch, (UInt32)std::clamp((int)std::lround(e.value * 127), 0, 127), 0, off);
+                    } else if (e.kind == TimedEvent::Pressure) MusicDeviceMIDIEvent(u, 0xD0 | ch, (UInt32)std::clamp((int)std::lround(e.value * 127), 0, 127), 0, off);
                 }
             bufs.reset(n);
             AudioTimeStamp ts{};

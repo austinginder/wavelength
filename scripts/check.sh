@@ -1371,6 +1371,36 @@ sys.exit(0 if ok else 1)' "./$build/wavelength" "out/check/edits/$build"; then
 else
   echo "FAIL note edits: edits.json"; fail=1
 fi
+# sounds: sounds.json gives a track the instrument set on the Sounds page (over the job's, before its fallback); a sound
+# this computer lacks leaves the job's, a sound for a missing track warns; __knobs reads the patch the overlay set
+mkdir -p out/check/sounds
+cat > out/check/sounds/job.json <<'JOB'
+{"tempo": 120, "leadIn": 0, "tail": 0.5, "stems": "none",
+ "tracks": [{"name": "Lead", "plugin": "builtin:synth", "preset": "Init", "notes": [{"beat": 0, "dur": 1, "key": "A3", "vel": 0.8}]},
+            {"name": "Bass", "plugin": "No Such Synth", "fallback": {"plugin": "builtin:synth", "preset": "PD Warm"}, "notes": [{"beat": 0, "dur": 1, "key": "A2", "vel": 0.8}]},
+            {"name": "Pad", "plugin": "builtin:synth", "preset": "PD Warm", "notes": [{"beat": 0, "dur": 1, "key": "C4", "vel": 0.8}]}]}
+JOB
+cat > out/check/sounds/sounds.json <<'JOB'
+{"format": "wavelength.sounds", "formatVersion": "1.0", "tracks": [
+  {"track": "Lead", "plugin": "builtin:synth", "preset": "BA Acid", "params": {"cutoff": "800 Hz"}},
+  {"track": "Bass", "plugin": "builtin:synth", "preset": "BA Acid"},
+  {"track": "Pad", "plugin": "No Such Synth", "preset": "Big"},
+  {"track": "Gone", "plugin": "builtin:synth", "preset": "BA Acid"}]}
+JOB
+if "./$build/wavelength" render out/check/sounds/job.json --out "out/check/sounds/$build" --json 2>/dev/null | python3 -c '
+import json, subprocess, sys
+r = json.load(sys.stdin)
+w = {t["name"]: t.get("warnings", []) for t in r["tracks"]}
+k = subprocess.run([sys.argv[1], "__knobs", "out/check/sounds/job.json", "Lead"], input="{\"resolve\": {\"cutoff\": \"800 Hz\"}}\n", capture_output=True, text=True).stdout.splitlines()
+hello, got = json.loads(k[0]), json.loads(k[1])
+ok = (r["ok"] and not r.get("fallbacks") and any("sounds.json" in x for x in w["Pad"]) and not w["Lead"] and not w["Bass"]
+      and any("Gone" in x for x in r.get("warnings", [])) and hello["preset"] == "BA Acid"
+      and got["values"][0]["value"] == 800 and [p["value"] for p in hello["params"] if p["name"] == "cutoff"] == [320])
+sys.exit(0 if ok else 1)' "./$build/wavelength"; then
+  echo "ok   sounds: sounds.json sets instruments over the job and its fallbacks; misses warn; knobs read the patch"
+else
+  echo "FAIL sounds: sounds.json"; fail=1
+fi
 # render --loop: every file exactly the loop's length (8 bars at 124 BPM) with a smpl loop over all of it
 if "./$build/wavelength" render examples/synth-tour.json --from 9 --to 17 --loop --stems 16 --out "out/check/loop/$build" --json > /dev/null 2>&1 &&
    python3 - "out/check/loop/$build" <<'PY'

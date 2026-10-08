@@ -37,10 +37,12 @@ struct TimedEvent {
     bool on;
     int key, channel;
     double velocity;
-    enum Kind { Note, CC, PitchBend, Pressure } kind = Note;
+    enum Kind { Note, CC, PitchBend, Pressure, Param } kind = Note;
     int number = 0;       // CC number
-    double value = 0;     // CC / pressure 0..1, pitch bend -1..1
+    double value = 0;     // CC / pressure 0..1, pitch bend -1..1, Param: the plain value
     double range = 2;     // pitch bend range in semitones (for note-expression tuning)
+    ParamId param = 0;    // Param (live playing only, CLAP and VST3): which parameter
+    void *cookie = nullptr;
 };
 
 struct AutoParam {

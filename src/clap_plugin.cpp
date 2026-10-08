@@ -130,7 +130,9 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
             const uint32_t n = (uint32_t)std::min<int64_t>(block, pos < 0 ? -pos : end - pos);
             pacer.wait(pos);
             notes.clear(); midis.clear(); params.clear(); exprs.clear();
-            params.reserve(initial.size() * 2 + autos.size());
+            liveNow.clear();
+            if (pos >= 0 && liveEvents) liveEvents(pos, n, liveNow);   // read first: knob turns join the parameter events
+            params.reserve(initial.size() * 2 + autos.size() + liveNow.size());
             Events in;
             if (first) {   // parameter values again through process(): some plugins only commit them here
                 for (const auto &v : initial) params.push_back(paramEvent(v.id, v.cookie, v.value, 0));
@@ -146,6 +148,8 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                     const double v = autos[a].env.at(t);
                     if (!(std::fabs(v - lastAuto[a]) < 1e-9)) { params.push_back(paramEvent(autos[a].id, autos[a].cookie, v, 0)); lastAuto[a] = v; }
                 }
+                for (const auto &e : liveNow)
+                    if (e.kind == TimedEvent::Param) params.push_back(paramEvent(e.param, e.cookie, e.value, 0));
             }
             for (auto &e : params) in.ptrs.push_back(&e.header);
             if (pos >= 0) {
@@ -153,9 +157,8 @@ bool ClapPlugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 while (next < events.size() && events[next].frame < pos + n) ++next;
                 blockEvents.clear();
                 for (size_t i = firstEv; i < next; ++i) blockEvents.push_back(&events[i]);
-                liveNow.clear();
-                if (liveEvents) liveEvents(pos, n, liveNow);
-                for (const auto &e : liveNow) blockEvents.push_back(&e);
+                for (const auto &e : liveNow)
+                    if (e.kind != TimedEvent::Param) blockEvents.push_back(&e);
                 // reserved up front: in.ptrs points into these vectors
                 notes.reserve(blockEvents.size()); midis.reserve(blockEvents.size()); exprs.reserve(blockEvents.size());
                 for (const TimedEvent *ep : blockEvents) {

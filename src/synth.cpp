@@ -930,6 +930,7 @@ std::vector<SynthPatchInfo> synthPatches() {
 
 const std::vector<SynthParamInfo> &synthParams() { return kParams; }
 
+
 bool isSynthExpParam(const std::string &name) {
     const int i = paramIndex(name);
     return i >= 0 && kParams[(size_t)i].exp;
@@ -942,6 +943,8 @@ namespace fs = std::filesystem;
 namespace {
 std::string lowerAscii(std::string s) { for (auto &c : s) c = (char)std::tolower((unsigned char)c); return s; }
 thread_local bool tLevelProbe = false;   // rendering a level probe: no level fix inside it
+// synthParamValues: renderSynth stops once the patch's parameters are known, before and after the track's "params"
+thread_local std::pair<std::vector<double>, std::vector<double>> *tParamProbe = nullptr;
 
 // GarageBand's factory patches are roughly level-matched, but a re-creation can land far from them while its filter
 // and resonance scales are guesses (a self-oscillating resonance, a filter closed until modulation that isn't
@@ -981,6 +984,19 @@ double garageBandLevelFix(const std::string &name, bool retro) {
     return fix;
 }
 } // namespace
+
+bool synthParamValues(const Job &job, const Track &track, std::vector<double> &patch, std::vector<double> &current, std::string &err) {
+    std::pair<std::vector<double>, std::vector<double>> probe;
+    tParamProbe = &probe;
+    Audio none;
+    std::vector<std::string> warnings;
+    const bool ok = renderSynth(job, track, none, warnings, err);
+    tParamProbe = nullptr;
+    if (ok && probe.second.size() != kParams.size()) { err = "track '" + track.name + "': the patch did not load"; return false; }
+    patch = probe.first;
+    current = probe.second;
+    return ok;
+}
 
 bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err) {
     const double sr = job.sampleRate;
@@ -1062,6 +1078,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             warnings.push_back("synth: osc[" + std::to_string(o) + "]: " + std::to_string(a->parts.size()) + " inharmonic partials x " + std::to_string(P.unison) +
                                " unison voices: the loudest " + std::to_string(keep) + " play");
         }
+        if (tParamProbe) tParamProbe->first.assign(P.p, P.p + P_COUNT);
         // "params": overrides by name
         for (const auto &ps : track.params) {
             const int i = paramIndex(ps.key);
@@ -1074,6 +1091,7 @@ bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std
             P.p[i] = std::clamp(v, kParams[(size_t)i].min, kParams[(size_t)i].max);
             if (i == P_PW) pwParam = true;
         }
+        if (tParamProbe) { tParamProbe->second.assign(P.p, P.p + P_COUNT); return true; }
         for (const auto &[name, env] : track.paramAutomation) {
             const int i = paramIndex(name);
             if (i < 0) { err = "track '" + track.name + "': automation of unknown builtin:synth parameter '" + name + "' (it has: " + paramNames() + ")"; return false; }

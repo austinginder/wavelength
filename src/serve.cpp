@@ -7,6 +7,8 @@
 #include "platform.hpp"
 #include "review.hpp"
 #include "song.hpp"
+#include "sounds.hpp"
+#include "synth.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -326,6 +328,18 @@ private:
     std::map<std::string, std::shared_ptr<LiveSession>> lives_;
     json liveStart(const json &in);
     void liveStop(const std::string &id);
+    // the Sounds page's knobs: a __knobs worker per sound (plugin, preset, state) lists its parameters and
+    // answers display text as they move; at most four, stopped after 10 idle minutes (reapPlayers)
+    std::mutex knobsMu_;
+    std::map<std::string, std::shared_ptr<PlayWorker>> knobs_;
+    json knobsAsk(const std::string &key, const fs::path *jobFile, const json &request);
+    json knobsOpen(const json &in);
+    // sounds.json: the instruments the Sounds page sets, applied on top of the job (sounds.hpp)
+    json sounds(const std::string &slug);
+    json soundsChange(const std::string &slug, const json &in);
+    bool trackSound(const std::string &slug, const std::string &track, json &sound, json &params, std::string &err);
+    json createSong(const std::string &title);
+    void listSource(const std::string &slug, const std::string &path, const std::string &mediaType);
     // the instrument lists the playground shows: `plugins --json` and `presets <plugin> --json`, run in child
     // processes (a plugin never loads in this one) and kept for 10 minutes
     std::mutex listMu_;
@@ -445,7 +459,7 @@ json Server::song(const std::string &slug) {
     json edits = json::array(), unmatchedEdits = json::array();
     if (hasJob) {
         std::vector<std::pair<std::string, std::string>> misses;
-        job = applyNoteEdits(job, (dir / jobPath).parent_path().string(), &misses);
+        job = applySounds(applyNoteEdits(job, (dir / jobPath).parent_path().string(), &misses), (dir / jobPath).parent_path().string());
         for (auto &[t, why] : misses) unmatchedEdits.push_back({{"track", t}, {"why", why}});
         json ef;
         if (readJson(dir / "edits.json", ef) && ef.contains("edits") && ef["edits"].is_array()) edits = ef["edits"];
@@ -504,7 +518,8 @@ json Server::startPreview(const std::string &slug, std::vector<std::string> trac
     if (jobPath.empty()) return {{"error", "the song has no job.json yet"}};
     std::sort(tracks.begin(), tracks.end());
     std::string sig = slug + "|" + std::to_string(files.at(jobPath).mtime) + "|" + (reportPath.empty() ? "" : std::to_string(files.at(reportPath).mtime)) + "|" +
-                      std::to_string(from) + "|" + std::to_string(to) + "|" + (files.count("edits.json") ? std::to_string(files.at("edits.json").mtime) : "");
+                      std::to_string(from) + "|" + std::to_string(to) + "|" + (files.count("edits.json") ? std::to_string(files.at("edits.json").mtime) : "") + "|" +
+                      (files.count("sounds.json") ? std::to_string(files.at("sounds.json").mtime) : "");
     for (auto &t : tracks) sig += "|" + t;
     const std::string id = fnv(sig);
     std::lock_guard<std::mutex> lock(mu_);
@@ -802,6 +817,17 @@ json Server::listing(const std::vector<std::string> &args, const std::string &ke
 
 // Stop play workers idle for `idleSec` (a loaded instrument can hold a lot of memory).
 void Server::reapPlayers(double idleSec) {
+    {
+        std::lock_guard<std::mutex> lock(knobsMu_);
+        const double now = nowSec();
+        for (auto it = knobs_.begin(); it != knobs_.end();) {
+            if (now - it->second->lastUsed > idleSec && it->second->use.try_lock()) {
+                platform::kill(it->second->proc);
+                it->second->use.unlock();
+                it = knobs_.erase(it);
+            } else ++it;
+        }
+    }
     std::lock_guard<std::mutex> lock(playMu_);
     const double now = nowSec();
     for (auto it = players_.begin(); it != players_.end();) {
@@ -821,7 +847,8 @@ json Server::playSong(const std::string &slug, const json &in, std::string &wav)
     const std::string jobPath = pick(files, "job.json", "job.json"), track = in.value("track", std::string());
     if (jobPath.empty()) return {{"error", "the song has no job.json yet"}};
     if (track.empty()) return {{"error", "which track?"}};
-    return play(dir / jobPath, track, slug + "|" + track + "|" + std::to_string(files.at(jobPath).mtime), in, wav);
+    const std::string sounds = files.count("sounds.json") ? std::to_string(files.at("sounds.json").mtime) : "";   // a sound set since: load it again
+    return play(dir / jobPath, track, slug + "|" + track + "|" + std::to_string(files.at(jobPath).mtime) + "|" + sounds, in, wav);
 }
 
 // The playground: any installed instrument and preset, as a one-track job of its own
@@ -840,6 +867,327 @@ fs::path Server::playgroundJob(const std::string &plugin, const std::string &pre
     const json job = {{"tempo", 120}, {"tracks", json::array({track})}};
     std::ofstream(dir / "job.json") << job.dump(1);
     return dir / "job.json";
+}
+
+// ---- the Sounds page: knobs, sounds.json, new projects ----
+
+// A knobs worker by key (spawned from `jobFile` when there is none), its hello for a null request, else its answer.
+json Server::knobsAsk(const std::string &key, const fs::path *jobFile, const json &request) {
+    std::shared_ptr<PlayWorker> w;
+    bool fresh = false;
+    {
+        std::lock_guard<std::mutex> lock(knobsMu_);
+        const double now = nowSec();
+        auto it = knobs_.find(key);
+        if (it != knobs_.end()) w = it->second;
+        else {
+            if (!jobFile) return {{"error", "gone"}};
+            while (knobs_.size() >= 4) {   // four instruments' knobs at most: drop the least recently used idle one
+                auto lru = knobs_.end();
+                for (auto j = knobs_.begin(); j != knobs_.end(); ++j)
+                    if (lru == knobs_.end() || j->second->lastUsed < lru->second->lastUsed) lru = j;
+                if (!lru->second->use.try_lock()) break;
+                platform::kill(lru->second->proc);
+                lru->second->use.unlock();
+                knobs_.erase(lru);
+            }
+            w = std::make_shared<PlayWorker>();
+            knobs_[key] = w;
+            fresh = true;
+        }
+        w->lastUsed = now;
+    }
+    std::lock_guard<std::mutex> use(w->use);
+    auto fail = [&](const std::string &e) {
+        platform::kill(w->proc);
+        std::lock_guard<std::mutex> lock(knobsMu_);
+        auto it = knobs_.find(key);
+        if (it != knobs_.end() && it->second == w) knobs_.erase(it);
+        return json{{"error", e}};
+    };
+    if (fresh || !w->proc.handle) {
+        if (!jobFile) return fail("gone");
+        if (!platform::spawn({platform::selfExecutable(), "__knobs", jobFile->string(), "Knobs"}, w->proc, true, true, true))
+            return fail("could not start the instrument");
+        std::string hello;
+        if (!platform::readLine(w->proc, hello, 90000)) return fail("the instrument did not load in 90 s");
+        try { w->info = json::parse(hello); } catch (...) { return fail("the instrument answered: " + hello.substr(0, 200)); }
+        if (w->info.contains("error")) return fail(w->info["error"].get<std::string>());
+    }
+    if (request.is_null()) return w->info;
+    std::string reply;
+    if (!platform::writeInput(w->proc, request.dump() + "\n") || !platform::readLine(w->proc, reply, 20000)) return fail("the instrument stopped");
+    try { return json::parse(reply); } catch (...) { return fail("the instrument answered: " + reply.substr(0, 200)); }
+}
+
+// A track's sound as it plays (the job with sounds.json applied), or its sounds.json entry when the job has no such
+// track: `sound` gets its instrument keys (a state file's path made absolute), `params` its "params".
+bool Server::trackSound(const std::string &slug, const std::string &track, json &sound, json &params, std::string &err) {
+    const fs::path dir = songDir(slug);
+    const FileMap files = scanSong(dir);
+    const std::string jobPath = pick(files, "job.json", "job.json");
+    const fs::path base = jobPath.empty() ? dir : (dir / jobPath).parent_path();
+    json job, t;
+    if (!jobPath.empty() && readJson(dir / jobPath, job)) {
+        job = applySounds(job, base.string());
+        for (auto &x : job.value("tracks", json::array()))
+            if (x.is_object() && x.value("name", std::string()) == track) t = x;
+    }
+    json sf;
+    if (t.is_null() && readJson(base / "sounds.json", sf))
+        for (auto &e : sf.value("tracks", json::array()))
+            if (e.is_object() && e.value("track", std::string()) == track) t = e;
+    if (t.is_null()) { err = "no track named " + track; return false; }
+    sound = json::object();
+    for (const char *k : {"plugin", "preset", "state", "synth", "sampler", "warmup", "realtime"})
+        if (t.contains(k)) sound[k] = t[k];
+    params = t.contains("params") && t["params"].is_object() ? t["params"] : json::object();
+    auto absolute = [&](json &v) {
+        if (!v.is_string()) return;
+        const fs::path p = fs::u8path(v.get<std::string>());
+        if (p.is_relative() && v.get<std::string>().rfind("lib:", 0) != 0) v = (base / p).lexically_normal().u8string();
+    };
+    if (sound.contains("state")) {
+        if (sound["state"].is_string()) absolute(sound["state"]);
+        else if (sound["state"].is_object() && sound["state"].contains("file")) absolute(sound["state"]["file"]);
+    }
+    if (!sound.contains("plugin") || !sound["plugin"].is_string()) { err = "track '" + track + "' has no instrument"; return false; }
+    return true;
+}
+
+// POST /api/knobs {song, track} or {plugin, preset}: the instrument's parameters, the preset's values, and the
+// track's own params read as values ("current")
+json Server::knobsOpen(const json &in) {
+    json sound, params = json::object();
+    std::string err;
+    if (in.contains("song")) {
+        const std::string slug = in.value("song", std::string());
+        if (!songExists(slug)) return {{"error", "unknown song"}};
+        if (!trackSound(slug, in.value("track", std::string()), sound, params, err)) return {{"error", err}};
+    } else {
+        if (in.value("plugin", std::string()).empty()) return {{"error", "which instrument?"}};
+        sound = {{"plugin", in.value("plugin", std::string())}};
+        if (!in.value("preset", std::string()).empty()) sound["preset"] = in["preset"];
+    }
+    const std::string plugin = sound.value("plugin", std::string());
+    if (plugin.rfind("builtin:", 0) == 0 && plugin != "builtin:synth") return {{"error", plugin + " has no knobs to turn here"}};
+    const std::string key = fnv(sound.dump());
+    const fs::path dir = platform::cacheDir() / "knobs" / key;
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    json track = sound;
+    track["name"] = "Knobs";
+    track["notes"] = json::array();
+    std::ofstream(dir / "job.json") << json{{"tempo", 120}, {"tracks", json::array({track})}}.dump(1);
+    const fs::path jobFile = dir / "job.json";
+    json out = knobsAsk(key, &jobFile, nullptr);
+    if (out.contains("error")) return out;
+    out["key"] = key;
+    out["sound"] = sound;
+    out["current"] = json::array();
+    if (!params.empty()) {
+        const json r = knobsAsk(key, nullptr, {{"resolve", params}});
+        out["current"] = r.value("values", json::array());
+        out["unread"] = r.value("errors", json::array());
+    }
+    return out;
+}
+
+// the song's manifest lists `path` as a source file while it exists (history and packages keep it)
+void Server::listSource(const std::string &slug, const std::string &path, const std::string &mediaType) {
+    Song song;
+    std::string err;
+    std::error_code ec;
+    if (!openSong(songDir(slug).string(), song, err) || !song.hasManifest()) return;
+    json &files = song.manifest["files"];
+    if (!files.is_array()) files = json::array();
+    const bool listed = std::any_of(files.begin(), files.end(), [&](const json &x) { return x.value("path", std::string()) == path; });
+    const bool exists = fs::exists(songDir(slug) / path, ec);
+    if (exists && !listed) files.push_back({{"path", path}, {"role", "source"}, {"mediaType", mediaType}});
+    else if (!exists && listed) {
+        json kept = json::array();
+        for (auto &x : files) if (x.value("path", std::string()) != path) kept.push_back(x);
+        files = kept;
+    } else return;
+    writeManifest(song, err);
+}
+
+// GET /api/sounds: every track's sound as it plays, which ones sounds.json sets, the tempo and the brief
+json Server::sounds(const std::string &slug) {
+    const fs::path dir = songDir(slug);
+    const FileMap files = scanSong(dir);
+    const std::string jobPath = pick(files, "job.json", "job.json");
+    const fs::path base = jobPath.empty() ? dir : (dir / jobPath).parent_path();
+    json job, sf;
+    const bool hasJob = !jobPath.empty() && readJson(dir / jobPath, job);
+    readJson(base / "sounds.json", sf);
+    std::map<std::string, json> entries;
+    for (auto &e : sf.value("tracks", json::array()))
+        if (e.is_object() && e.contains("track") && e["track"].is_string()) entries[e["track"].get<std::string>()] = e;
+    std::vector<std::pair<std::string, std::string>> misses;
+    const json played = hasJob ? applySounds(job, base.string(), &misses) : json::object();
+    json tracks = json::array();
+    std::set<std::string> seen;
+    auto row = [&](const json &t, bool inJob) {
+        const std::string name = t.value(inJob ? "name" : "track", std::string());
+        json r = {{"name", name}, {"inJob", inJob}, {"custom", entries.count(name) > 0}};
+        for (const char *k : {"plugin", "preset", "state", "params"}) if (t.contains(k)) r[k] = t[k];
+        r["notes"] = t.contains("notes") && t["notes"].is_array() ? t["notes"].size() : 0;
+        r["clips"] = t.contains("clips") && t["clips"].is_array() ? t["clips"].size() : 0;
+        if (entries.count(name) && entries[name].contains("note")) r["note"] = entries[name]["note"];
+        for (auto &[mt, why] : misses) if (mt == name) r["unapplied"] = why;
+        seen.insert(name);
+        tracks.push_back(r);
+    };
+    for (auto &t : played.value("tracks", json::array())) if (t.is_object()) row(t, true);
+    for (auto &[name, e] : entries) if (!seen.count(name)) row(e, false);
+    json tempo = nullptr;
+    if (hasJob && job.contains("tempo")) tempo = job["tempo"];
+    bool generator = false;   // a script writes the job: the page says job.json may be written again
+    for (auto &[path, info] : files) if (path.find('/') == std::string::npos && path.size() > 3 && path.substr(path.size() - 3) == ".py") generator = true;
+    return {{"song", slug}, {"tracks", tracks}, {"tempo", tempo}, {"hasJob", hasJob}, {"generator", generator},
+            {"brief", files.count("brief.md") ? readFile(dir / "brief.md") : std::string()}, {"path", dir.string()}};
+}
+
+// POST /api/sounds {song, op, ...}: "set" {track, sound, note} a track's whole instrument; "add" {track, sound, note} a new
+// track (in job.json too, with no notes); "remove" {track}; "reset" {track} back to the job's own sound; "note" {track, note};
+// "tempo" {tempo}; "brief" {text}
+json Server::soundsChange(const std::string &slug, const json &in) {
+    std::lock_guard<std::mutex> lock(mu_);
+    const fs::path dir = songDir(slug);
+    const FileMap files = scanSong(dir);
+    std::string jobPath = pick(files, "job.json", "job.json");
+    const fs::path base = jobPath.empty() ? dir : (dir / jobPath).parent_path();
+    const fs::path soundsFile = base / "sounds.json", jobFile = jobPath.empty() ? dir / "job.json" : dir / jobPath;
+    json sf, job;
+    if (!readJson(soundsFile, sf) || !sf.contains("tracks") || !sf["tracks"].is_array())
+        sf = {{"format", "wavelength.sounds"}, {"formatVersion", "1.0"}, {"tracks", json::array()}};
+    const bool hasJob = readJson(jobFile, job) && job.contains("tracks") && job["tracks"].is_array();
+    const std::string op = in.value("op", std::string()), name = in.value("track", std::string());
+    std::string err;
+    bool jobChanged = false;
+    auto entry = [&]() -> json * {
+        for (auto &e : sf["tracks"]) if (e.is_object() && e.value("track", std::string()) == name) return &e;
+        return nullptr;
+    };
+    auto jobTrack = [&]() -> json * {
+        if (!hasJob) return nullptr;
+        for (auto &t : job["tracks"]) if (t.is_object() && t.value("name", std::string()) == name) return &t;
+        return nullptr;
+    };
+    auto soundFrom = [&](const json &src, json &e) -> bool {   // a whole instrument: plugin, preset, state, params
+        if (!src.is_object() || !src.contains("plugin") || !src["plugin"].is_string() || src["plugin"].get<std::string>().empty()) { err = "a sound needs a plugin"; return false; }
+        e["plugin"] = src["plugin"];
+        for (const char *k : {"preset", "state", "params"}) e.erase(k);
+        if (src.contains("preset") && src["preset"].is_string() && !src["preset"].get<std::string>().empty()) e["preset"] = src["preset"].get<std::string>().substr(0, 300);
+        if (src.contains("state") && (src["state"].is_string() || src["state"].is_object())) e["state"] = src["state"];
+        if (src.contains("params") && src["params"].is_object() && !src["params"].empty()) {
+            json ps = json::object();
+            for (auto &[k, v] : src["params"].items())
+                if ((v.is_number() || v.is_string()) && ps.size() < 4000) ps[k.substr(0, 200)] = v;
+            e["params"] = ps;
+        }
+        return true;
+    };
+    auto setNote = [&](json &e) {
+        if (!in.contains("note")) return;
+        const std::string n = in["note"].is_string() ? in["note"].get<std::string>() : "";
+        if (n.find_first_not_of(" \n\t") == std::string::npos) e.erase("note"); else e["note"] = n.substr(0, 2000);
+    };
+    if (op == "set" || op == "add") {
+        if (name.empty() || name.size() > 80) return {{"error", "a track needs a name (80 characters at most)"}};
+        if (op == "add" && (entry() || jobTrack())) return {{"error", "there is already a track named " + name}};
+        json e = entry() ? *entry() : json{{"track", name}};
+        if (!soundFrom(in.value("sound", json()), e)) return {{"error", err}};
+        setNote(e);
+        if (json *x = entry()) *x = e; else sf["tracks"].push_back(e);
+        if (!jobTrack()) {   // a new track: in job.json too, with no notes yet, so the job is whole without sounds.json
+            json t = {{"name", name}};
+            for (const char *k : {"plugin", "preset", "state", "params"}) if (e.contains(k)) t[k] = e[k];
+            t["notes"] = json::array();
+            if (!hasJob) job = {{"tempo", in.contains("tempo") && in["tempo"].is_number() ? in["tempo"] : json(128)}, {"tracks", json::array()}};
+            job["tracks"].push_back(t);
+            jobChanged = true;
+        }
+    } else if (op == "remove" || op == "reset") {
+        json kept = json::array();
+        for (auto &e : sf["tracks"]) if (!e.is_object() || e.value("track", std::string()) != name) kept.push_back(e);
+        sf["tracks"] = kept;
+        if (op == "remove") {
+            if (json *t = jobTrack()) {
+                const bool empty = (!t->contains("notes") || (*t)["notes"].empty()) && (!t->contains("clips") || (*t)["clips"].empty());
+                if (!empty) return {{"error", "'" + name + "' has notes in the job; only a track without notes or clips can be removed here"}};
+                json rest = json::array();
+                for (auto &x : job["tracks"]) if (!x.is_object() || x.value("name", std::string()) != name) rest.push_back(x);
+                job["tracks"] = rest;
+                jobChanged = true;
+            }
+        }
+    } else if (op == "note") {
+        json *e = entry();
+        if (!e) {   // words for a track whose sound comes from the job: its sound as it plays, then the note
+            json sound, params;
+            if (!trackSound(slug, name, sound, params, err)) return {{"error", err}};
+            json fresh = {{"track", name}};
+            if (json *t = jobTrack()) for (const char *k : {"plugin", "preset", "state", "params"}) if (t->contains(k)) fresh[k] = (*t)[k];
+            sf["tracks"].push_back(fresh);
+            e = &sf["tracks"].back();
+        }
+        setNote(*e);
+    } else if (op == "tempo") {
+        const double bpm = in.value("tempo", 0.0);
+        if (!(bpm >= 20 && bpm <= 400)) return {{"error", "a tempo from 20 to 400 BPM"}};
+        if (!hasJob) return {{"error", "add a track first"}};
+        if (job.contains("tempo") && !job["tempo"].is_number()) return {{"error", "the job has a tempo map; change it in the job"}};
+        job["tempo"] = std::round(bpm * 100) / 100;
+        jobChanged = true;
+    } else if (op == "brief") {
+        const std::string text = in.value("text", std::string());
+        std::error_code ec;
+        if (text.find_first_not_of(" \n\t") == std::string::npos) fs::remove(dir / "brief.md", ec);
+        else if (!platform::writeFileAtomic(dir / "brief.md", text.substr(0, 20000) + (text.back() == '\n' ? "" : "\n"), err)) return {{"error", err}};
+        listSource(slug, "brief.md", "text/markdown");
+        return {{"ok", true}};
+    } else return {{"error", "unknown op"}};
+
+    std::error_code ec;
+    if (jobChanged && !platform::writeFileAtomic(jobFile, job.dump(1) + "\n", err)) return {{"error", err}};
+    if (sf["tracks"].empty()) fs::remove(soundsFile, ec);
+    else if (!platform::writeFileAtomic(soundsFile, sf.dump(1) + "\n", err)) return {{"error", err}};
+    const std::string rel = fs::relative(soundsFile, dir, ec).generic_string();
+    listSource(slug, rel, "application/json");
+    if (jobChanged) listSource(slug, fs::relative(jobFile, dir, ec).generic_string(), "application/json");
+    return {{"ok", true}};
+}
+
+// POST /api/song/create {title}: a new song folder with a manifest; its job.json comes with the first track
+json Server::createSong(const std::string &titleIn) {
+    std::string title = titleIn.substr(0, 200);
+    title.erase(0, title.find_first_not_of(" \t"));
+    title.erase(title.find_last_not_of(" \t") + 1);
+    if (title.empty()) return {{"error", "a project needs a name"}};
+    std::string slug;
+    for (unsigned char c : title) {
+        if (std::isalnum(c)) slug += (char)std::tolower(c);
+        else if (!slug.empty() && slug.back() != '-') slug += '-';
+    }
+    while (!slug.empty() && slug.back() == '-') slug.pop_back();
+    if (slug.size() > 60) slug.resize(60);
+    while (!slug.empty() && slug.back() == '-') slug.pop_back();
+    if (slug.empty()) slug = "project";
+    std::error_code ec;
+    std::string pickSlug = slug;
+    for (int n = 2; fs::exists(songDir(pickSlug), ec) && n < 1000; ++n) pickSlug = slug + "-" + std::to_string(n);
+    if (!songSlug(pickSlug)) return {{"error", "could not make a folder name from that"}};
+    if (!fs::create_directories(songDir(pickSlug), ec) || ec) return {{"error", "could not make the folder: " + ec.message()}};
+    Song song;
+    song.dir = songDir(pickSlug);
+    song.manifest = newManifest(song.dir);
+    song.manifest["title"] = title;
+    song.manifest["slug"] = pickSlug;
+    std::string err;
+    if (!writeManifest(song, err)) return {{"error", err}};
+    return {{"ok", true}, {"song", pickSlug}};
 }
 
 // A live session: {id, plugin, preset} or {id, song, track}. Replaces the page's earlier session.
@@ -1218,6 +1566,44 @@ int Server::run() {
         }
         sendJson(res, {{"ok", true}, {"count", file["edits"].size()}});
     });
+    // the Sounds page: GET /api/sounds?song= lists every track's sound; POST /api/sounds {song, op, ...} changes
+    // sounds.json (see soundsChange); POST /api/knobs {song, track} | {plugin, preset} loads an instrument's knobs;
+    // POST /api/knobs/ask {key, text | parse | store} asks its worker; POST /api/song/create {title} makes a project
+    http_.Get("/api/sounds", [&](const httplib::Request &req, httplib::Response &res) {
+        std::string s;
+        if (!slugOf(req, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        sendJson(res, sounds(s));
+    });
+    http_.Post("/api/sounds", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        const json r = soundsChange(s, in);
+        sendJson(res, r, r.contains("error") ? 400 : 200);
+    });
+    http_.Post("/api/knobs", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        const json r = knobsOpen(in);
+        sendJson(res, r, r.contains("error") ? 500 : 200);
+    });
+    http_.Post("/api/knobs/ask", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        json q = json::object();
+        for (const char *k : {"text", "parse", "store"}) if (in.contains(k)) q[k] = in[k];
+        if (in.contains("parse")) q["text"] = in.value("text", std::string());
+        if (q.empty()) return sendJson(res, {{"error", "text, parse or store"}}, 400);
+        const json r = knobsAsk(in.value("key", std::string()), nullptr, q);
+        sendJson(res, r, r.value("error", std::string()) == "gone" ? 410 : 200);
+    });
+    http_.Post("/api/song/create", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        const json r = createSong(in.value("title", std::string()));
+        sendJson(res, r, r.contains("error") ? 400 : 200);
+    });
     // the Render button: POST {song}
     http_.Post("/api/render", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
@@ -1423,7 +1809,8 @@ int Server::run() {
 
     // live playing: POST /api/live/start {id, plugin, preset | song, track} loads the instrument; GET
     // /api/live/stream?id= is its audio (16-bit stereo PCM at the answer's sampleRate, as it plays);
-    // POST /api/live/event {id, on: key, vel} / {id, off: key} / {id, allOff: true}; POST /api/live/stop {id}
+    // POST /api/live/event {id, on: key, vel} / {id, off: key} / {id, allOff: true} / {id, param: id, value: plain};
+    // POST /api/live/stop {id}
     http_.Post("/api/live/start", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
@@ -1474,8 +1861,10 @@ int Server::run() {
             if (e.contains("on")) lines += json{{"on", std::clamp(e.value("on", 60), 0, 127)}, {"vel", std::clamp(e.value("vel", 0.8), 0.0, 1.0)}}.dump() + "\n";
             else if (e.contains("off")) lines += json{{"off", std::clamp(e.value("off", 60), 0, 127)}}.dump() + "\n";
             else if (e.value("allOff", false)) lines += "{\"allOff\":true}\n";
+            else if (e.contains("param") && e["param"].is_number_unsigned() && e.contains("value") && e["value"].is_number())
+                lines += json{{"param", e["param"].get<uint32_t>()}, {"value", e["value"].get<double>()}}.dump() + "\n";
         }
-        if (lines.empty()) return sendJson(res, {{"error", "on, off or allOff"}}, 400);
+        if (lines.empty()) return sendJson(res, {{"error", "on, off, allOff or param"}}, 400);
         std::lock_guard<std::mutex> lock(ls->io);
         if (!platform::writeInput(ls->proc, lines)) return sendJson(res, {{"error", "the instrument stopped"}}, 410);
         sendJson(res, {{"ok", true}});
@@ -1616,7 +2005,8 @@ int serve(const ServeOptions &o) {
 
 // `wavelength __live <job.json> <track>` (internal, started by serve): the track's instrument playing
 // continuously. After a JSON hello line, stdout is 16-bit stereo PCM paced to the clock (a little ahead);
-// stdin lines turn notes on and off: {"on": 60, "vel": 0.8}, {"off": 60}, {"allOff": true}, {"stop": true}.
+// stdin lines turn notes on and off: {"on": 60, "vel": 0.8}, {"off": 60}, {"allOff": true}, {"stop": true};
+// {"param": id, "value": plain} turns a knob.
 int liveWorker(const std::string &jobPath, const std::string &trackName, std::FILE *out) {
     auto say = [&](const json &j) { std::fprintf(out, "%s\n", j.dump(-1, ' ', false, json::error_handler_t::replace).c_str()); std::fflush(out); };
     json j;
@@ -1646,6 +2036,10 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
     if (!runPlugin(job, p, {}, nullptr, prime, err)) { say({{"error", err}}); return 1; }
     p.plugin->warmup = 0.02;
 
+    // knobs: {"param": id, "value": plain} reaches the plugin in the next block (CLAP wants each parameter's cookie)
+    std::map<ParamId, void *> cookies;
+    for (const auto &pi : p.plugin->params()) cookies[pi.id] = pi.cookie;
+
     // key presses from stdin, on a thread of their own
     std::mutex qm;
     std::vector<TimedEvent> queue;
@@ -1661,6 +2055,16 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
                 for (int k = 0; k < 128; ++k) queue.push_back({0, false, k, 0, 0.0});
             } else if (e.contains("on")) queue.push_back({0, true, e.value("on", 60), 0, e.value("vel", 0.8)});
             else if (e.contains("off")) queue.push_back({0, false, e.value("off", 60), 0, 0.0});
+            else if (e.contains("param") && e["param"].is_number_unsigned() && e.contains("value") && e["value"].is_number()) {
+                const auto c = cookies.find(e["param"].get<ParamId>());
+                if (c == cookies.end()) continue;
+                TimedEvent t{0, false, 0, 0, 0.0};
+                t.kind = TimedEvent::Param;
+                t.param = c->first;
+                t.cookie = c->second;
+                t.value = e["value"].get<double>();
+                queue.push_back(t);
+            }
         }
         stop = true;   // the server went away
     });
@@ -1693,6 +2097,204 @@ int liveWorker(const std::string &jobPath, const std::string &trackName, std::FI
     };
     Audio none;
     if (!runPlugin(live, p, {}, nullptr, none, err)) { std::fprintf(stderr, "live: %s\n", err.c_str()); return 1; }
+    return 0;
+}
+
+namespace {
+// the Sounds page groups builtin:synth's parameters the way a synth panel would
+const char *synthModule(const std::string &name) {
+    if (name == "cutoff" || name == "resonance" || name == "drive" || name == "env" || name == "keytrack") return "Filter";
+    if (name == "detune" || name == "spread") return "Unison";
+    if (name == "pw" || name == "fm" || name == "sub" || name == "noise") return "Oscillators";
+    if (name == "lfo" || name == "glide") return "Motion";
+    return "Output";
+}
+std::string synthText(const SynthParamInfo &p, double v) {
+    char buf[48];
+    if (p.unit == "Hz") std::snprintf(buf, sizeof buf, v >= 1000 ? "%.2f kHz" : "%.0f Hz", v >= 1000 ? v / 1000 : v);
+    else if (p.unit == "dB") std::snprintf(buf, sizeof buf, "%+.1f dB", v);
+    else if (p.unit == "oct") std::snprintf(buf, sizeof buf, "%+.2f oct", v);
+    else if (p.unit.empty()) std::snprintf(buf, sizeof buf, "%.2f", v);
+    else std::snprintf(buf, sizeof buf, "%.2f %s", v, p.unit.c_str());
+    return buf;
+}
+std::string lowerAscii(std::string s) { for (auto &c : s) c = (char)std::tolower((unsigned char)c); return s; }
+double roundSig(double v, int digits) {
+    if (v == 0 || !std::isfinite(v)) return v;
+    const double m = std::pow(10.0, digits - 1 - (int)std::floor(std::log10(std::fabs(v))));
+    return std::round(v * m) / m;
+}
+} // namespace
+
+int knobsWorker(const std::string &jobPath, const std::string &trackName, std::FILE *out) {
+    auto say = [&](const json &j) { std::fprintf(out, "%s\n", j.dump(-1, ' ', false, json::error_handler_t::replace).c_str()); std::fflush(out); };
+    json j;
+    if (!readJson(jobPath, j)) { say({{"error", "cannot read " + jobPath}}); return 1; }
+    Job job;
+    std::string err;
+    try {
+        if (!parseJob(j, fs::path(jobPath).parent_path().string(), job, err)) { say({{"error", err}}); return 1; }
+    } catch (const std::exception &e) { say({{"error", e.what()}}); return 1; }
+    const auto it = std::find_if(job.tracks.begin(), job.tracks.end(), [&](const Track &t) { return t.name == trackName; });
+    if (it == job.tracks.end()) { say({{"error", "no track named " + trackName}}); return 1; }
+    const Track track = *it;
+    std::string line;
+    char buf[1 << 16];
+    auto next = [&]() -> bool {   // one line of stdin
+        line.clear();
+        for (;;) {
+            if (!std::fgets(buf, sizeof buf, stdin)) return false;   // the server went away
+            line += buf;
+            if (!line.empty() && line.back() == '\n') return true;
+        }
+    };
+
+    if (track.plugin == "builtin:synth") {   // the synth's named parameters, from its patch
+        const auto &ps = synthParams();
+        std::vector<double> patch, current;
+        Track t = track;
+        t.params.clear();
+        if (!synthParamValues(job, t, patch, current, err)) { say({{"error", err}}); return 1; }
+        json list = json::array();
+        for (size_t i = 0; i < ps.size(); ++i)
+            list.push_back({{"id", i}, {"name", ps[i].name}, {"module", synthModule(ps[i].name)}, {"min", ps[i].min}, {"max", ps[i].max},
+                            {"default", ps[i].def}, {"value", patch[i]}, {"display", synthText(ps[i], patch[i])}, {"stepped", false},
+                            {"curve", ps[i].exp ? "exp" : "linear"}, {"about", ps[i].description}});
+        say({{"plugin", "builtin:synth"}, {"format", "builtin"}, {"preset", track.preset}, {"params", list}});
+        auto find = [&](const std::string &key) -> int {
+            for (size_t i = 0; i < ps.size(); ++i) if (lowerAscii(ps[i].name) == lowerAscii(key)) return (int)i;
+            return -1;
+        };
+        while (next()) {
+            json q;
+            try { q = json::parse(line); } catch (...) { say({{"error", "bad request"}}); continue; }
+            auto valid = [&](const json &id) { return id.is_number_unsigned() && id.get<size_t>() < ps.size(); };
+            if (q.contains("resolve") && q["resolve"].is_object()) {
+                json values = json::array(), errors = json::array();
+                for (auto &[k, v] : q["resolve"].items()) {
+                    const int i = find(k);
+                    double x = 0;
+                    if (i < 0) { errors.push_back("builtin:synth has no parameter '" + k + "'"); continue; }
+                    if (v.is_number()) x = v.get<double>();
+                    else if (!v.is_string() || !(Envelope::builtinText(v.get<std::string>(), x))) { errors.push_back("can't read the value of '" + k + "'"); continue; }
+                    x = std::clamp(x, ps[(size_t)i].min, ps[(size_t)i].max);
+                    values.push_back({{"key", k}, {"id", i}, {"value", x}, {"display", synthText(ps[(size_t)i], x)}});
+                }
+                say({{"values", values}, {"errors", errors}});
+            } else if (q.contains("text") && q["text"].is_array()) {
+                json texts = json::array();
+                for (auto &pair : q["text"]) texts.push_back(pair.is_array() && pair.size() == 2 && valid(pair[0]) && pair[1].is_number()
+                                                                  ? json(synthText(ps[pair[0].get<size_t>()], pair[1].get<double>())) : json(""));
+                say({{"text", texts}});
+            } else if (q.contains("parse") && valid(q["parse"])) {
+                const auto &p = ps[q["parse"].get<size_t>()];
+                double x = 0;
+                if (!Envelope::builtinText(q.value("text", std::string()), x)) { say({{"error", "a number, a note name, or text like \"800 Hz\""}}); continue; }
+                x = std::clamp(x, p.min, p.max);
+                say({{"value", x}, {"display", synthText(p, x)}});
+            } else if (q.contains("store") && q["store"].is_array()) {
+                json values = json::array();
+                for (auto &pair : q["store"]) values.push_back(pair.is_array() && pair.size() == 2 && pair[1].is_number() ? json(roundSig(pair[1].get<double>(), 4)) : json(nullptr));
+                say({{"store", values}});
+            } else say({{"error", "resolve, text, parse or store"}});
+        }
+        return 0;
+    }
+    if (isBuiltin(track.plugin)) { say({{"error", track.plugin + " has no knobs to turn here"}}); return 1; }
+
+    PluginSetup setup;   // the preset and state; the track's own "params" come as a resolve request
+    setup.spec = track.plugin;
+    setup.stateFile = track.stateFile;
+    setup.stateFormat = track.stateFormat;
+    setup.warmup = track.warmup;
+    setup.preset = track.preset;
+    OpenedPlugin p;
+    if (!openPlugin(setup, track.name, p, err)) { say({{"error", err}}); return 1; }
+    Plugin &plug = *p.plugin;
+    plug.pump(p.format == "vst3" ? 500 : 150);
+    if (p.format == "vst3") {   // some plugins (Surge XT) only publish real values after processing a few blocks
+        auto ps = plug.params();
+        if (!ps.empty()) plug.commitParams({{ps.front().id, ps.front().cookie, ps.front().value}}, 48000, 512, err);
+    }
+    std::map<ParamId, ParamInfo> byId;
+    json list = json::array();
+    for (const auto &pi : plug.params()) {
+        if (pi.hidden || pi.readonly || pi.name.rfind("MIDI CC ", 0) == 0 || pi.name == "MIDI") continue;   // JUCE's MIDI placeholders too
+        byId[pi.id] = pi;
+        json o = {{"id", pi.id}, {"name", pi.name}, {"module", pi.module}, {"min", pi.min}, {"max", pi.max}, {"default", pi.def},
+                  {"value", pi.value}, {"display", pi.display}, {"stepped", pi.stepped}};
+        if (pi.stepped && std::fabs(pi.max - pi.min) <= 128) {   // a switch or a menu: the name of each step
+            json labels = json::array();
+            for (double v = std::min(pi.min, pi.max); v <= std::max(pi.min, pi.max) + 1e-9; v += 1) {
+                std::string t;
+                labels.push_back(plug.textForValue(pi.id, v, t) ? t : std::to_string((int)std::lround(v)));
+            }
+            o["labels"] = labels;
+        }
+        list.push_back(o);
+    }
+    say({{"plugin", p.name}, {"format", p.format}, {"preset", p.preset}, {"params", list}, {"warnings", p.warnings}});
+    auto text = [&](const ParamInfo &pi, double v) {
+        std::string t;
+        return plug.textForValue(pi.id, v, t) ? t : std::string();
+    };
+    auto read = [&](const ParamInfo &pi, const std::string &s, double &v) {   // display text or a note name, as render reads it
+        double hz;
+        if (Envelope::noteHz(s, hz)) {
+            char b[40];
+            std::snprintf(b, sizeof b, "%.2f Hz", hz);
+            if (plug.valueFromText(pi.id, b, v)) return true;
+        }
+        return plug.valueFromText(pi.id, s, v);
+    };
+    while (next()) {
+        json q;
+        try { q = json::parse(line); } catch (...) { say({{"error", "bad request"}}); continue; }
+        auto known = [&](const json &id) -> const ParamInfo * {
+            if (!id.is_number_unsigned()) return nullptr;
+            auto f = byId.find(id.get<ParamId>());
+            return f == byId.end() ? nullptr : &f->second;
+        };
+        if (q.contains("resolve") && q["resolve"].is_object()) {
+            json values = json::array(), errors = json::array();
+            for (auto &[k, v] : q["resolve"].items()) {
+                ParamInfo pi;
+                if (!plug.findParam(k, pi)) { errors.push_back("no parameter '" + k + "' on " + p.name); continue; }
+                double x = 0;
+                if (v.is_number()) x = v.get<double>();
+                else if (!v.is_string() || !read(pi, v.get<std::string>(), x)) { errors.push_back(p.name + " could not read the value of '" + k + "'"); continue; }
+                x = std::clamp(x, std::min(pi.min, pi.max), std::max(pi.min, pi.max));
+                values.push_back({{"key", k}, {"id", pi.id}, {"value", x}, {"display", text(pi, x)}});
+            }
+            say({{"values", values}, {"errors", errors}});
+        } else if (q.contains("text") && q["text"].is_array()) {
+            json texts = json::array();
+            for (auto &pair : q["text"]) {
+                const ParamInfo *pi = pair.is_array() && pair.size() == 2 && pair[1].is_number() ? known(pair[0]) : nullptr;
+                texts.push_back(pi ? text(*pi, pair[1].get<double>()) : std::string());
+            }
+            say({{"text", texts}});
+        } else if (q.contains("parse") && known(q["parse"])) {
+            const ParamInfo &pi = *known(q["parse"]);
+            double x = 0;
+            if (!read(pi, q.value("text", std::string()), x)) { say({{"error", p.name + " can't read that as a value of '" + pi.name + "'"}}); continue; }
+            x = std::clamp(x, std::min(pi.min, pi.max), std::max(pi.min, pi.max));
+            say({{"value", x}, {"display", text(pi, x)}});
+        } else if (q.contains("store") && q["store"].is_array()) {
+            json values = json::array();
+            for (auto &pair : q["store"]) {
+                const ParamInfo *pi = pair.is_array() && pair.size() == 2 && pair[1].is_number() ? known(pair[0]) : nullptr;
+                if (!pi) { values.push_back(nullptr); continue; }
+                const double v = pair[1].get<double>(), range = std::fabs(pi->max - pi->min);
+                const std::string t = text(*pi, v);
+                double back = 0;
+                // readable text when the plugin reads it back as the same value: a step exactly, else within 0.1% of the range
+                const bool same = !t.empty() && read(*pi, t, back) && (pi->stepped ? std::lround(back) == std::lround(v) : std::fabs(back - v) <= 0.001 * range);
+                values.push_back(same ? json(t) : json(roundSig(v, 6)));
+            }
+            say({{"store", values}});
+        } else say({{"error", "resolve, text, parse or store"}});
+    }
     return 0;
 }
 

@@ -26,6 +26,8 @@ express-to-nowhere/
   NOTES.md             notes: the story of the song, credits, a table of its tracks
   make-job.py          source: how job.json was made (listed in the manifest)
   edits.json           source: note edits applied on top of the job (docs/job-format.md, "Note edits")
+  sounds.json          source: instruments set by ear, applied on top of the job (docs/job-format.md, "Sounds")
+  brief.md             source: what the song should be, written before its parts (serve's Sounds page)
   media/               files the job uses: samples, audio clips, preset files
   render/              the render that goes with the song: mix, picture, report (section 8)
   review.json          comments (section 7)
@@ -140,6 +142,8 @@ Whether a value is a file or a name is decided by its key alone:
 | `deliver[].file` | a file the render writes: a path under section 2, relative to the render's output folder |
 
 Effects are the entries of every `fx` list (tracks, fallbacks, buses, the master and a clip's rendered `file`) and of the chains inside effects: a delay's `loopFx` and a multiband's `bands[].fx`.
+
+`sounds.json` beside the job (instruments set by ear, docs/job-format.md "Sounds") is part of the job for these rules: each entry's `state` and `preset` follow the table as a track's do, whether or not the entry applies on a given computer.
 
 The files a song's own instruments name follow the same rule: an SFZ's samples and `#include`s and a DecentSampler preset's samples are inside the song; an EXS instrument's samples are inside the song or, found by name, in an installed library.
 

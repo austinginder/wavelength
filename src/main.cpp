@@ -60,6 +60,7 @@
 #include "parse_check.hpp"
 #include "song.hpp"
 #include "song_cli.hpp"
+#include "sounds.hpp"
 #include "mcp.hpp"
 #include "render.hpp"
 #include "state_file.hpp"
@@ -1288,6 +1289,8 @@ int cmdRender(const Args &a) {
     if (!in) return fail(a, "cannot read " + path);
     json j;
     try { in >> j; } catch (const std::exception &e) { return fail(a, std::string("job is not valid JSON: ") + e.what()); }
+    // sounds.json first (parseJob applies it again, the same way), so a fallback stands in only for the sound that plays
+    j = applySounds(j, fs::absolute(path).parent_path().string());
     // tracks whose plugin or sample library isn't on this computer play their "fallback"
     std::vector<std::string> fallbackNotes;
     if (a.has("--fallbacks") && a.has("--keep")) return fail(a, "--keep keeps the song's own render, not one with --fallbacks");
@@ -2094,6 +2097,7 @@ int run(int argc, char **argv) {
     if (cmd == "__save-state" && a.positional.size() > 3) return saveStateWorker(a.positional[1], a.positional[2], a.positional[3], OUT);
     if (cmd == "__play" && a.positional.size() > 2) return playWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live notes
     if (cmd == "__live" && a.positional.size() > 2) return liveWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's live playing
+    if (cmd == "__knobs" && a.positional.size() > 2) return knobsWorker(a.positional[1], a.positional[2], OUT);   // internal: serve's Sounds page
     if (cmd == "__parse") return parseCheck(std::vector<std::string>(a.positional.begin() + 1, a.positional.end()), OUT);   // internal: readers vs hostile files
     if (cmd == "__track" && a.positional.size() > 3)
         return renderTrackWorker(a.positional[1], std::stoul(a.positional[2]), a.positional[3],

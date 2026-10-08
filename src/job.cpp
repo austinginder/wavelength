@@ -6,6 +6,7 @@
 #include "midifx.hpp"
 
 #include "platform.hpp"
+#include "sounds.hpp"
 #include "synth.hpp"
 
 #include <algorithm>
@@ -369,9 +370,10 @@ json applyNoteEdits(const json &jobIn, const std::string &baseDir, std::vector<s
 bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::string &err, bool useDefaults) {
     // note edits (edits.json beside the job) change the notes before anything reads them; jobs Wavelength
     // builds internally (useDefaults false) are already edited
-    std::vector<std::pair<std::string, std::string>> editMisses;
+    // sounds set in serve's Sounds page (sounds.json) give tracks their instruments the same way
+    std::vector<std::pair<std::string, std::string>> editMisses, soundMisses;
     // the user's defaults fill in top-level settings the job leaves out
-    json j = useDefaults ? applyNoteEdits(jobIn, baseDir, &editMisses) : jobIn;
+    json j = useDefaults ? applySounds(applyNoteEdits(jobIn, baseDir, &editMisses), baseDir, &soundMisses) : jobIn;
     if (useDefaults) {
         const json defaults = userJobDefaults();   // named: items() must not outlive its object
         for (auto &[k, v] : defaults.items())
@@ -844,6 +846,10 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
         for (const auto &miss : editMisses) {   // on the track it was about, else on the master
             auto it = std::find_if(out.tracks.begin(), out.tracks.end(), [&](const Track &t) { return t.name == miss.first; });
             (it != out.tracks.end() ? it->warnings : out.masterWarnings).push_back("edits.json: " + miss.second);
+        }
+        for (const auto &miss : soundMisses) {
+            auto it = std::find_if(out.tracks.begin(), out.tracks.end(), [&](const Track &t) { return t.name == miss.first; });
+            (it != out.tracks.end() ? it->warnings : out.masterWarnings).push_back("sounds.json: " + miss.second);
         }
     } catch (const std::exception &e) {
         err = std::string("invalid job: ") + e.what();

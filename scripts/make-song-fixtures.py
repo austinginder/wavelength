@@ -22,6 +22,7 @@ Writes into DIR:
   bad-windows-name.wavelength          a listed media file named media/aux.wav (a Windows device name)
   bad-trailing-slash.wavelength        files[] lists the path "render/"
   bad-gitdot.wavelength                an entry under ".git." (Windows opens it as .git)
+  bad-sounds-state.wavelength          sounds.json gives a track the state file ../../outside.vital
   warn-extra.wavelength                an entry the manifest doesn't list: valid, with a warning
   warn-mimetype-compressed.wavelength  the mimetype entry is deflated: valid, with a warning
 
@@ -286,6 +287,13 @@ def main():
     def windows_name(m):
         m["files"].append({"path": "media/aux.wav", "role": "media", "mediaType": "audio/wav"})
 
+    def sounds_listed(m):
+        m["files"].append({"path": "sounds.json", "role": "source", "mediaType": "application/json"})
+
+    sounds = manifest_edit(sounds_listed)
+    sounds["sounds.json"] = as_json({"format": "wavelength.sounds", "formatVersion": "1.0",
+                                     "tracks": [{"track": "Lead", "plugin": "builtin:synth", "state": "../../outside.vital"}]})
+
     windows = manifest_edit(windows_name)
     windows["media/aux.wav"] = silent_wav()
     text = song["wavelength.json"].decode("utf-8")
@@ -306,6 +314,7 @@ def main():
          edited("job.json", lambda j: j.update(deliver=[{"format": "flac", "file": "/tmp/escape.flac"}])),
          "job delivers to /tmp/escape.flac"),
         ("bad-windows-name.wavelength", windows, "listed media file media/aux.wav"),
+        ("bad-sounds-state.wavelength", sounds, "sounds.json state ../../outside.vital"),
         ("bad-trailing-slash.wavelength",
          manifest_edit(lambda m: m["files"].append({"path": "render/", "role": "render"})), "files[] lists render/"),
     ]

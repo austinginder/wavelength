@@ -32,6 +32,8 @@ struct SynthParamInfo {
 };
 const std::vector<SynthParamInfo> &synthParams();
 bool isSynthExpParam(const std::string &name);
+// The values (synthParams() order) a track's patch gives its parameters, and the values after the track's "params".
+bool synthParamValues(const Job &job, const Track &track, std::vector<double> &patch, std::vector<double> &current, std::string &err);
 
 bool renderSynth(const Job &job, const Track &track, Audio &out, std::vector<std::string> &warnings, std::string &err);
 

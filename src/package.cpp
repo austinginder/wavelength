@@ -8,6 +8,7 @@
 #include "sampler.hpp"
 #include "sfz.hpp"
 #include "sha256.hpp"
+#include "sounds.hpp"
 #include "zip.hpp"
 
 #include <algorithm>
@@ -192,6 +193,7 @@ void validateFolder(const fs::path &dir, json &problems) {
     if (!parseJsonStrict(readText(song.jobPath()), job, why)) { problem("error", song.jobFile(), why); return; }
     Job parsed;
     if (!parseJob(job, song.dir.string(), parsed, err, false)) problem("error", song.jobFile(), err);
+    job = jobWithSounds(job, song.jobPath().parent_path().string());   // sounds.json's instruments read files too
     for (auto &[where, path] : jobFileRefs(job)) {
         if (!checkSongPath(path, why)) { problem("error", song.jobFile(), where + ": " + why + " (files the job uses belong in the song, e.g. media/; name outside sounds instead)"); continue; }
         const fs::path full = song.dir / fs::u8path(path);
@@ -329,7 +331,8 @@ std::vector<std::string> instrumentReadsOutside(const std::string &songDir, cons
     return out;
 }
 
-std::vector<std::string> readsOutside(const std::string &songDir, const json &job) {
+std::vector<std::string> readsOutside(const std::string &songDir, const json &jobIn) {
+    const json job = jobWithSounds(jobIn, songDir);   // sounds.json's instruments count as the job's
     std::vector<std::string> out;
     std::error_code ec;
     std::string why;
@@ -345,6 +348,8 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
     if (!song.hasManifest()) { err = song.dir.filename().string() + " has no wavelength.json (wavelength migrate makes one)"; return false; }
     json job;
     try { job = json::parse(readText(song.jobPath())); } catch (const std::exception &e) { err = song.jobFile() + " is not valid JSON: " + e.what(); return false; }
+    const json plays = applySounds(job, song.jobPath().parent_path().string());   // what each track plays: requires lists it
+    job = jobWithSounds(job, song.jobPath().parent_path().string());   // and the files the instruments sounds.json sets read
     // every file the job uses must travel with it
     std::error_code ec;
     std::string why, outside;
@@ -360,7 +365,7 @@ bool pack(Song &song, std::string out, const PackOptions &opt, json &result, std
     json &m = song.manifest;
     const json before = m;
     m["generator"] = {{"name", "wavelength"}, {"version", WAVELENGTH_VERSION}};
-    m["requires"] = requiresOf(job);
+    m["requires"] = requiresOf(plays);
     json files = json::array();
     std::set<std::string> known;
     for (auto &f : m.value("files", json::array())) known.insert(f.value("path", std::string()));

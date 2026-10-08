@@ -3,6 +3,7 @@
 #include "audio_file.hpp"
 #include "encode.hpp"
 #include "song.hpp"
+#include "sounds.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -83,8 +84,9 @@ void protect(const fs::path &songDir, std::set<std::string> &keep) {
     for (auto &f : s.manifest.value("files", json::array()))
         if (f.is_object() && f.contains("path") && f["path"].is_string()) keep.insert(key(s.dir / fs::u8path(f["path"].get<std::string>())));
     std::ifstream in(s.jobPath(), std::ios::binary);
-    const json job = json::parse(in, nullptr, false);
-    if (job.is_discarded()) return;
+    const json parsed = json::parse(in, nullptr, false);
+    if (parsed.is_discarded()) return;
+    const json job = jobWithSounds(parsed, s.jobPath().parent_path().string());   // sounds.json's files are the song's too
     for (auto &[where, path] : jobFileRefs(job)) {
         const fs::path p = fs::u8path(path);
         keep.insert(key(p.is_absolute() ? p : s.jobPath().parent_path() / p));

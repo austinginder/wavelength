@@ -352,6 +352,25 @@ A job is often written by a script (`make-job.py`) that makes its notes from pat
 - `serve` adds `batch`, `time` and `by` to each edit it saves (Undo last save removes a batch). Readers ignore keys they don't know.
 - To make the edits part of the script instead, change the script, render, and remove the edits it now covers (a moved note that the script already writes where the edit put it would no longer match, and warns).
 
+### Sounds: `sounds.json`
+
+A person tunes instruments by ear and an agent writes the parts. `sounds.json` beside the job holds each track's instrument as it was set on the `serve` Sounds page (pick a plugin and preset, turn its knobs while playing it), and every reader applies it on top of whatever wrote the job, the same way as `edits.json`: `render` (and its workers, previews, windows), `lint`, `serve` and its live notes. So a `make-job.py` that writes `job.json` again keeps the sounds.
+
+```json
+{"format": "wavelength.sounds", "formatVersion": "1.0", "tracks": [
+  {"track": "Bass", "plugin": "Wavelength Trance", "preset": "Driven Bass",
+   "params": {"Filter Cutoff": "917 Hz", "Filter Env Amt": "+15%"}, "note": "rolling offbeat bass, dark"},
+  {"track": "Acid", "plugin": "builtin:synth", "preset": "BA Acid", "params": {"cutoff": 800}}
+]}
+```
+
+- An entry names its track (`name` or `id`) and gives the track's whole instrument: `plugin`, `preset`, `state` and `params` (as on a track). It replaces the track's preset, state and params; a different plugin replaces its whole sound and drops the old plugin's `automation.params`, `cc` and `pressure` curves, the way a [fallback](#tracks) does. The track's other keys (notes, fx, gain, automation of `gain` and `pan`, sends) stay. An entry without `plugin` changes only the keys it gives.
+- `params` values are plain values or the plugin's display text. The Sounds page writes the text (`"917 Hz"`) when the plugin reads it back as the same value, so the file says what each knob was set to; `wavelength params <plugin> --set "Name=917 Hz"` shows what a value means.
+- `note` is words for whoever writes the part (its role, what it should do); readers ignore it.
+- An entry whose plugin isn't on this computer is skipped with a warning on its track (`sounds.json: No Such Synth is not installed ..., so the track plays its sound from the job`), so the track plays the job's own sound or its `fallback`. Render applies `sounds.json` before choosing fallbacks, so a fallback stands in only for the sound that would play.
+- An entry for a track the job doesn't have warns on the master and plays nothing.
+- To make a sound part of the script, copy the entry's keys into the track and remove the entry (the page's Reset does that last step).
+
 ## Output
 
 ```

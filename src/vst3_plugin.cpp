@@ -504,6 +504,7 @@ bool Vst3Plugin::render(const Job &job, const std::vector<TimedEvent> &events, c
                 for (size_t a = 0; a < autos.size(); ++a)
                     if (b < autoNorm[a].size() && autoNorm[a][b] != lastAuto[a]) { addParam(autos[a].id, autoNorm[a][b]); lastAuto[a] = autoNorm[a][b]; }
                 auto addEvent = [&](const TimedEvent &e) {
+                    if (e.kind == TimedEvent::Param) { addParam(e.param, im.toNorm(e.param, e.value)); return; }   // a knob turned while playing live
                     if (e.kind != TimedEvent::Note) {
                         const int ctl = e.kind == TimedEvent::CC ? e.number : e.kind == TimedEvent::PitchBend ? Vst::kPitchBend : Vst::kAfterTouch;
                         auto it = ctlMap.find({e.channel, ctl});

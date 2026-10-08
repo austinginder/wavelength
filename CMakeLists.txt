@@ -156,6 +156,7 @@ add_executable(wavelength
   ${CMAKE_CURRENT_BINARY_DIR}/docs_assets.cpp
   src/docs.cpp
   src/fallback.cpp
+  src/sounds.cpp
   src/kit.cpp
   src/self_upgrade.cpp
   src/help.cpp

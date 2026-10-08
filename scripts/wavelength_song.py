@@ -1300,7 +1300,18 @@ def check_job(tree, manifest, problems):
     check_ids(job, jp, problems)
 
     listed = listed_files(manifest)
-    for where, value, kind, target in job_references(job):
+    refs = job_references(job)
+    # sounds.json beside the job (docs/job-format.md, "Sounds"): the instruments it sets read files of the song too
+    sp = posixpath.join(posixpath.dirname(jp), "sounds.json")
+    sounds = load_json_file(tree, sp, problems, "sounds-json") if tree.exists(sp) else None
+    if isinstance(sounds, dict) and isinstance(sounds.get("tracks"), list):
+        extra = []
+        for e in sounds["tracks"]:
+            if isinstance(e, dict) and "plugin" in e:
+                t = {k: e[k] for k in ("plugin", "preset", "state", "params") if k in e}
+                extra.append(t)
+        refs += [("sounds.json " + w, v, k, t) for w, v, k, t in job_references({"tracks": extra})]
+    for where, value, kind, target in refs:
         if kind == "lib":   # one file of a sample library, by name
             if any(seg in ("", ".", "..") for seg in value[len(LIB_PREFIX):].split("/")):
                 problems.error(jp, "%s %r has an empty, '.' or '..' segment" % (where, value), "path-traversal")
