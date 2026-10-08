@@ -9,9 +9,12 @@
  *   page      the view's element: keys play only while it is shown
  *   current() the sound to play, or null: {id, label, song, track} or {id, label, plugin, preset}; a new id
  *             loads the sound again (the Sounds page's id changes with the instrument and preset, not the knobs)
- *   settings  {octave, vel, len, chord} (kept by the page), save() after they change
+ *   settings  {octave, vel, len, chord, midi} (kept by the page), save() after they change
+ *   onNote    optional: called as each note starts and stops sounding, {on, key, vel, t} with t the moment the
+ *             key went down or up (performance.now() time base): what a recording keeps
  * Returns {ensure(), close(), releaseAll(), param(id, value), status(msg, err), stats()}; ensure() resolves with the
- * live session ({id, ...}) when the sound plays live, else null.
+ * live session ({id, ...}) when the sound plays live, else null. A MIDI keyboard plays too (Web MIDI, its button in
+ * the controls): velocity from the keys, the sustain pedal (CC 64).
  * WLKeys.instruments() loads the installed instruments grouped by name, best format first.
  *
  * Uses the page's globals: postHeaders, postJson.
@@ -25,7 +28,7 @@
 	const CHORDS = { single: [0], octave: [0, 12], fifth: [0, 7], major: [0, 4, 7], minor: [0, 3, 7], maj7: [0, 4, 7, 11], min7: [0, 3, 7, 10], sus4: [0, 5, 7] };
 	const liveFormat = c => c && (c.song || /^(clap|vst3):/.test(c.plugin));   // song tracks: the worker says whether it can
 
-	function create({ page, mount, current, settings: P, save }) {
+	function create({ page, mount, current, settings: P, save, onNote }) {
 		if (!(P.len >= 1)) P.len = 4;   // older saved settings had a short fixed length
 		P.octave ??= 4; P.vel ??= .85; P.chord ??= 'single';
 		const keep = () => save?.();
@@ -36,6 +39,7 @@
 				<label data-r="lenwrap" title="Only for instruments that play note by note">Max length <input type="range" data-r="len" min="0.5" max="8" step="0.5"> <b data-r="lenv" class="mono"></b></label>
 				<label><input type="checkbox" data-r="sus"> Sustain <span class="mono" style="color:var(--muted)">(Space)</span></label>
 				<label>Play <select data-r="chord">${Object.keys(CHORDS).map(c => `<option value="${c}">${c === 'single' ? 'single notes' : c}</option>`).join('')}</select></label>
+				<button class="pg-midi" data-r="midi" title="Play from a MIDI keyboard (Web MIDI): its velocity and sustain pedal">MIDI keyboard</button>
 			</div>
 			<div class="pg-piano" data-r="piano"></div>
 			<div class="pg-status" data-r="status">Keys: A-K are the white keys, W E T Y U O P the black ones; Z / X change the octave; hold Space for sustain. Hold keys (several at once) as long as you want the notes; click or drag across the piano too.</div>`;
@@ -53,29 +57,59 @@
 		piano.addEventListener('pointerdown', e => {
 			const k = keyAt(e); if (k == null) return;
 			e.preventDefault(); piano.setPointerCapture(e.pointerId);
-			pointerKey = k; down('ptr', k);
+			pointerKey = k; down('ptr', k, P.vel, e.timeStamp);
 		});
 		piano.addEventListener('pointermove', e => {
 			if (pointerKey == null) return;
 			const k = keyAt(e);
-			if (k != null && k !== pointerKey) { up('ptr'); pointerKey = k; down('ptr', k); }
+			if (k != null && k !== pointerKey) { up('ptr', e.timeStamp); pointerKey = k; down('ptr', k, P.vel, e.timeStamp); }
 		});
-		const pointerUp = () => { if (pointerKey != null) { up('ptr'); pointerKey = null; } };
+		const pointerUp = e => { if (pointerKey != null) { up('ptr', e.timeStamp); pointerKey = null; } };
 		piano.addEventListener('pointerup', pointerUp);
 		piano.addEventListener('pointercancel', pointerUp);
 		const typing = e => e.metaKey || e.ctrlKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable || document.querySelector('dialog[open]');
 		document.addEventListener('keydown', e => {
 			if (page.hidden || typing(e)) return;
-			if (e.code in KEYMAP) { e.preventDefault(); if (!e.repeat) down(e.code, 12 * (P.octave + 1) + KEYMAP[e.code]); }
+			if (e.code in KEYMAP) { e.preventDefault(); if (!e.repeat) down(e.code, 12 * (P.octave + 1) + KEYMAP[e.code], P.vel, e.timeStamp); }
 			else if (e.code === 'KeyZ' || e.code === 'KeyX') { e.preventDefault(); octave(e.code === 'KeyX' ? 1 : -1); }
-			else if (e.code === 'Space' && !e.target.closest?.('button')) { e.preventDefault(); if (!e.repeat) sustain(true); }
+			else if (e.code === 'Space' && !e.target.closest?.('button')) { e.preventDefault(); if (!e.repeat) sustain(true, false, e.timeStamp); }
 		});
 		document.addEventListener('keyup', e => {
 			if (page.hidden) return;
-			if (e.code in KEYMAP) up(e.code);
-			else if (e.code === 'Space') sustain(false);
+			if (e.code in KEYMAP) up(e.code, e.timeStamp);
+			else if (e.code === 'Space') sustain(false, false, e.timeStamp);
 		});
-		addEventListener('blur', releaseAll);   // keyups never come for keys held while the window loses focus
+		addEventListener('blur', () => releaseAll());   // keyups never come for keys held while the window loses focus
+
+		/* ---------- a MIDI keyboard (Web MIDI) ---------- */
+		let midi = null;
+		async function midiOn() {
+			if (!navigator.requestMIDIAccess) return status('This browser has no Web MIDI (Chrome, Edge and Firefox do; Safari doesn\'t).', true);
+			try { midi = await navigator.requestMIDIAccess(); }
+			catch (e) { midi = null; P.midi = false; keep(); midiLabel(); return status('MIDI was not allowed: ' + e.message, true); }
+			P.midi = true; keep();
+			const hook = () => { for (const input of midi?.inputs.values() || []) input.onmidimessage = onMidi; midiLabel(); };
+			midi.onstatechange = hook;
+			hook();
+		}
+		function midiOff() {
+			if (midi) { midi.onstatechange = null; for (const i of midi.inputs.values()) i.onmidimessage = null; }
+			midi = null; P.midi = false; keep(); midiLabel();
+		}
+		function onMidi(e) {
+			if (page.hidden) return;
+			const [st, a, b] = e.data, type = st & 0xf0, t = e.timeStamp || performance.now();
+			if (type === 0x90 && b > 0) down('m' + a, a, b / 127, t);
+			else if (type === 0x80 || type === 0x90) up('m' + a, t);
+			else if (type === 0xb0 && a === 64) sustain(b >= 64, false, t);
+		}
+		function midiLabel() {
+			const b = $r('midi'), names = midi ? [...midi.inputs.values()].map(i => i.name) : [];
+			b.classList.toggle('on', !!midi);
+			b.textContent = midi ? 'MIDI: ' + (names.join(', ') || 'no keyboard connected') : 'MIDI keyboard';
+		}
+		$r('midi').addEventListener('click', () => midi ? midiOff() : midiOn());
+		if (P.midi) midiOn();
 
 		const status = (msg, err) => { const el = $r('status'); el.textContent = msg; el.classList.toggle('err', !!err); };
 
@@ -168,13 +202,13 @@
 
 		/* ---------- note by note (built-in, VST2, AU): a long note that fades out on release ---------- */
 		let actx = null;
-		async function clip(notes, handle) {
+		async function clip(notes, handle, vel = P.vel) {
 			const c = current();
 			if (!c) return status('Pick an instrument first.', true);
 			const id = c.id;
 			if (!loaded.has(id)) status(`Loading ${c.label}…`);
 			try {
-				const body = { notes: notes.map(k => ({ key: k, vel: P.vel, start: 0, dur: P.len })), tail: 1, ...(c.song ? { song: c.song, track: c.track } : { plugin: c.plugin, preset: c.preset }) };
+				const body = { notes: notes.map(k => ({ key: k, vel, start: 0, dur: P.len })), tail: 1, ...(c.song ? { song: c.song, track: c.track } : { plugin: c.plugin, preset: c.preset }) };
 				const r = await fetch('api/play', { method: 'POST', headers: postHeaders(), body: JSON.stringify(body) });
 				if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'the server answered ' + r.status); }
 				const info = JSON.parse(r.headers.get('X-Wavelength-Play') || '{}');
@@ -199,36 +233,53 @@
 		}
 
 		/* ---------- keys: down, up, sustain ---------- */
-		const held = new Map();   // source (a key code, the pointer) -> {notes, clip}
+		const held = new Map();   // source (a key code, the pointer, a MIDI key) -> {notes, clip}
 		let sustained = false, pedalOn = false;
-		const pedalled = new Set();   // notes let go while the pedal is down (live)
+		const pedalled = new Set();   // notes let go while the pedal is down
 		const pedalClips = [];
-		async function down(src, k) {
+		// what sounds, for onNote: a note starts when its key goes down and ends when it is let go (or the pedal lifts)
+		const sounding = new Set();
+		function emit(on, notes, t, vel) {
+			for (const n of notes) {
+				if (on) {
+					if (sounding.has(n)) onNote?.({ on: false, key: n, t });   // struck again while it still sounded
+					sounding.add(n);
+					onNote?.({ on: true, key: n, vel, t });
+				} else if (sounding.delete(n)) onNote?.({ on: false, key: n, t });
+			}
+		}
+		async function down(src, k, vel = P.vel, t = performance.now()) {
 			if (held.has(src)) return;
 			const notes = [...new Set(CHORDS[P.chord].map(i => Math.min(127, k + i)))];
 			const h = { notes };
 			held.set(src, h);
 			mark(notes, true);
+			emit(true, notes, t, vel);
 			const L = await ensure();
 			if (held.get(src) !== h) return;   // already let go while it loaded
 			if (L && live === L) {
 				notes.forEach(n => pedalled.delete(n));
-				send(L, notes.map(n => ({ on: n, vel: P.vel })));
-			} else clip(notes, h.clip = {});
+				send(L, notes.map(n => ({ on: n, vel })));
+			} else clip(notes, h.clip = {}, vel);
 		}
-		function up(src) {
+		function up(src, t = performance.now()) {
 			const h = held.get(src);
 			if (!h) return;
 			held.delete(src);
 			mark(h.notes, false);
-			if (h.clip) { if (sustained) pedalClips.push(h.clip); else fade(h.clip); return; }
-			if (!live || live.failed || !live.node) return;
 			const still = new Set([...held.values()].flatMap(x => x.notes));   // another key may hold the same note (chords)
 			const off = h.notes.filter(n => !still.has(n));
-			if (sustained) { off.forEach(n => pedalled.add(n)); return; }
+			if (sustained) {   // the pedal holds them until it lifts
+				off.forEach(n => pedalled.add(n));
+				if (h.clip) pedalClips.push(h.clip);
+				return;
+			}
+			emit(false, off, t);
+			if (h.clip) { fade(h.clip); return; }
+			if (!live || live.failed || !live.node) return;
 			if (off.length) send(live, off.map(n => ({ off: n })));
 		}
-		function sustain(on, fromBox) {
+		function sustain(on, fromBox, t = performance.now()) {
 			pedalOn = fromBox ? on : pedalOn;
 			const want = on || pedalOn;
 			if (!fromBox) $r('sus').checked = want;
@@ -238,13 +289,15 @@
 				const still = new Set([...held.values()].flatMap(x => x.notes));
 				const off = [...pedalled].filter(n => !still.has(n));
 				pedalled.clear();
+				emit(false, off, t);
 				if (off.length && live?.node) send(live, off.map(n => ({ off: n })));
 				pedalClips.splice(0).forEach(fade);
 			}
 		}
-		function releaseAll() {
-			for (const src of [...held.keys()]) up(src);
+		function releaseAll(t = performance.now()) {
+			for (const src of [...held.keys()]) up(src, t);
 			sustained = pedalOn = false; $r('sus').checked = false;
+			emit(false, [...sounding], t);
 			pedalled.clear(); pedalClips.splice(0).forEach(fade);
 			if (live?.node) send(live, [{ allOff: true }]);
 		}

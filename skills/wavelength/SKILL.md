@@ -28,7 +28,7 @@ Settle, from the request (ask only if it is genuinely unclear):
 
 Write the plan into the song folder's generator as comments; it doubles as documentation.
 
-If the song folder has a `sounds.json`, the human already chose and tuned its instruments on `serve`'s Sounds page: keep them (AGENTS.md, "Choosing sounds"), write a track for each name, read each entry's `note` and `brief.md`, and plan the piece around those sounds.
+If the song folder has a `sounds.json`, the human already chose and tuned its instruments on `serve`'s Sounds page: keep them (AGENTS.md, "Choosing sounds"), write a track for each name, read each entry's `note` and `brief.md`, and plan the piece around those sounds. A `riffs.json` holds riffs they recorded there: build the song around them (AGENTS.md, "Starting from a riff").
 
 If the human hands you material, start from it: `"$WAVELENGTH" import score.mxl` (MusicXML from MuseScore, Sibelius, Dorico; repeats played out, dynamics as velocities), `import part.mid`, or `import song.dawproject` (a DAW's tracks, plugins and mixer), or a Bitwig project as it is (`import ~/Documents/Bitwig\ Studio/Projects/<name>/<name>.bwproject`, no export needed), or a GarageBand project (`import ~/Music/GarageBand/<name>.band`; limited support: Apple's synths are approximations) each write a `job.json` that renders at once. Without Bitwig's sound content, run `"$WAVELENGTH" samples --install-soundfont` once so imported parts get General MIDI sounds.
 

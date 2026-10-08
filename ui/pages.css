@@ -60,6 +60,9 @@ main.page { padding: 26px 28px 48px; min-width: 0; }
 .pg-play h2 .r { display: inline-flex; gap: 4px; }
 .pg-fmt { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; font: 11px var(--mono); color: var(--muted); cursor: pointer; }
 .pg-fmt.on { color: var(--accent); border-color: var(--accent); }
+.pg-midi { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font: 500 12px var(--body); color: var(--muted); cursor: pointer; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-midi:hover { border-color: var(--accent); color: var(--accent); }
+.pg-midi.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
 .pg-controls { display: flex; flex-wrap: wrap; gap: 14px 22px; padding: 14px 16px 4px; font-size: 12.5px; color: var(--muted); }
 .pg-controls label { display: inline-flex; align-items: center; gap: 8px; }
 .pg-controls b { color: var(--text); font-weight: 600; min-width: 20px; }

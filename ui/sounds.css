@@ -8,7 +8,8 @@
 .sd-head p { margin: 0; color: var(--muted); font-size: 14px; }
 .sd-head code, .sd-hint code { font: 12px var(--mono); color: var(--text); }
 .sd-grid { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; align-items: start; }
-.sd-tracks { margin: 0; position: sticky; top: 12px; }
+.sd-left { position: sticky; top: 12px; min-width: 0; }
+.sd-tracks { margin: 0; }
 .sd-tracks h2 .ed-open { margin-left: auto; }
 .sd-tlist { padding: 6px; max-height: 52vh; overflow: auto; }
 .sd-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); vertical-align: middle; margin-left: 3px; }
@@ -94,5 +95,51 @@ dialog.wl-dlg.sd-dlg { width: min(860px, 94vw); }
 .sd-pickgrid input[type=search] { width: 100%; font: 13px var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; margin-bottom: 6px; }
 .sd-pickgrid .pg-list { max-height: 48vh; min-height: 200px; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
 
-@media (max-width: 1000px) { .sd-grid { grid-template-columns: 1fr; } .sd-tracks { position: static; } .sd-briefgrid { grid-template-columns: 1fr; } }
+@media (max-width: 1000px) { .sd-grid { grid-template-columns: 1fr; } .sd-left { position: static; } .sd-briefgrid { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .sd-pickgrid { grid-template-columns: 1fr; } .sd-modules { grid-template-columns: 1fr; } .sd-mod.wide { grid-column: auto; } .sd-q { width: 100%; } .sd-keys .pg-controls { display: none; } }
+
+/* riffs: the record bar by the keyboard, the list, the editor */
+.sd-rec { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; padding: 10px 14px 0; font-size: 12.5px; color: var(--muted); }
+.sd-rec label { display: inline-flex; align-items: center; gap: 6px; }
+.sd-rec input[type=number] { width: 62px; font: 12.5px var(--mono); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+.sd-rec select { font-size: 12.5px; padding: 3px 6px; }
+.sd-recbtn { display: inline-flex; align-items: center; gap: 7px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px; padding: 4px 14px 4px 10px; font: 600 12.5px var(--body); color: var(--text); cursor: pointer; }
+.sd-recbtn i { width: 10px; height: 10px; border-radius: 50%; background: #e5484d; }
+.sd-recbtn:hover { border-color: #e5484d; }
+.sd-recbtn.on { background: #e5484d; border-color: #e5484d; color: #fff; }
+.sd-recbtn.on i { background: #fff; border-radius: 2px; animation: pulse 1s infinite; }
+.sd-tap { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font: 600 11.5px var(--body); color: var(--muted); cursor: pointer; }
+.sd-tap:active { background: var(--accent); color: #fff; }
+.sd-recpos { color: var(--text); margin-left: auto; }
+.sd-songtempo { font: 11px var(--mono); color: var(--warn); }
+.sd-riffs { margin: 12px 0 0; }
+.sd-rlist { padding: 6px; max-height: 40vh; overflow: auto; }
+.sd-riff { display: flex; align-items: center; gap: 4px; }
+.sd-riff .pg-item { flex: 1; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.sd-rplay { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2); color: var(--accent); cursor: pointer; font-size: 10px; }
+.sd-rplay.on, .ed-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+dialog.wl-dlg.sd-riffdlg { width: min(1180px, 96vw); margin-top: 4vh; }   /* pinned: a centred dialog moves as its text changes */
+.sd-takebar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 10px; font-size: 12.5px; color: var(--muted); }
+.sd-takebar label { display: inline-flex; align-items: center; gap: 6px; }
+.sd-takebar input[type=number] { width: 62px; font: 12.5px var(--mono); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+.sd-takebar .sp { flex: 1; }
+.sd-takebar .ed-btn:disabled { opacity: .4; cursor: default; }
+.sd-rollwrap { display: flex; border: 1px solid var(--line); border-radius: 6px; max-height: 52vh; overflow: auto; background: var(--panel-2); }
+.sd-rollkeys { position: relative; flex: none; width: 38px; border-right: 1px solid var(--line); font-size: 9.5px; color: var(--muted); }
+.sd-rollkeys span { position: absolute; right: 4px; line-height: 12px; }
+.sd-rollbox { flex: 1; min-width: 0; outline: none; }
+.sd-rollbox:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.sd-roll { display: block; width: 100%; cursor: crosshair; touch-action: none; user-select: none; }
+.sd-roll .wk { fill: var(--panel); }
+.sd-roll .bk { fill: var(--panel-2); }
+.sd-roll line { vector-effect: non-scaling-stroke; }
+.sd-roll .bar { stroke: var(--muted); stroke-opacity: .55; }
+.sd-roll .bt { stroke: var(--line); }
+.sd-roll .sub { stroke: var(--line); stroke-opacity: .4; }
+.sd-roll .nt { fill: var(--accent); stroke: color-mix(in srgb, var(--accent) 60%, #000); stroke-width: 1; vector-effect: non-scaling-stroke; cursor: grab; }
+.sd-roll .nt.sel { fill: var(--amber); stroke: color-mix(in srgb, var(--amber) 50%, #000); }
+.sd-roll .gh { fill: none; stroke: var(--muted); stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.sd-roll .ph { stroke: #e5484d; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.sd-rollhelp { margin: 8px 0 12px !important; font-size: 12px !important; }
+.sd-riffmeta { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
+@media (max-width: 700px) { .sd-riffmeta { grid-template-columns: 1fr; } }

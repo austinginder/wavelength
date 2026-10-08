@@ -266,8 +266,9 @@ Usage:
       bars, any tracks, rendered through the song's sends, buses and master in seconds. Comments
       pinned to bars, tracks and notes go to each song's review.json for the agent; note edits go to
       edits.json. The Sounds page starts a project: an instrument and preset per part, its knobs
-      (or the plugin's own window, on macOS) turned while it plays, saved to sounds.json, and a
-      brief and a prompt for the agent. Plugins only run in child processes. --open opens the browser.
+      (or the plugin's own window, on macOS) turned while it plays, saved to sounds.json, riffs
+      recorded and edited in a piano roll (riffs.json), and a brief and a prompt for the agent.
+      Plugins only run in child processes. --open opens the browser.
   wavelength version [--check] [--json]
       This build's version (and the song format it reads); --check also asks GitHub for the latest release.
   wavelength upgrade [--check] [--force] [--json]

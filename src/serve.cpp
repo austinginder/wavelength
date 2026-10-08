@@ -870,6 +870,64 @@ fs::path Server::playgroundJob(const std::string &plugin, const std::string &pre
     return dir / "job.json";
 }
 
+// A riff recorded on the Sounds page, checked and tidied for riffs.json: {id?, name, track, tempo, timeSignature,
+// bars, quantize, note?, notes, played?}; notes are {beat, dur, key (a note name), vel} from the riff's first downbeat.
+bool normalizeRiff(const json &in, json &out, std::string &err) {
+    static const char *names[] = {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"};
+    auto text = [&](const char *k, size_t max) {
+        std::string v = in.contains(k) && in[k].is_string() ? in[k].get<std::string>() : "";
+        v.erase(0, v.find_first_not_of(" \t\n"));
+        v.erase(v.find_last_not_of(" \t\n") + 1);
+        return v.substr(0, max);
+    };
+    out = json::object();
+    const std::string id = text("id", 40);
+    if (!id.empty()) {
+        if (!std::all_of(id.begin(), id.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; })) { err = "a riff id is a-z, 0-9 and dashes"; return false; }
+        out["id"] = id;
+    }
+    out["name"] = text("name", 80).empty() ? "Riff" : text("name", 80);
+    out["track"] = text("track", 80);
+    const double tempo = in.value("tempo", 0.0);
+    if (!(tempo >= 20 && tempo <= 400)) { err = "a riff needs its tempo (20 to 400 BPM)"; return false; }
+    out["tempo"] = std::round(tempo * 100) / 100;
+    int num = 4, den = 4;
+    if (in.contains("timeSignature") && in["timeSignature"].is_array() && in["timeSignature"].size() == 2 && in["timeSignature"][0].is_number_integer() &&
+        in["timeSignature"][1].is_number_integer()) {
+        num = in["timeSignature"][0].get<int>();
+        den = in["timeSignature"][1].get<int>();
+    }
+    if (num < 1 || num > 32 || (den != 1 && den != 2 && den != 4 && den != 8 && den != 16)) { err = "a time signature like [4, 4]"; return false; }
+    out["timeSignature"] = {num, den};
+    const double bars = in.value("bars", 0.0), beats = bars * num * 4.0 / den;
+    if (!(bars >= 0.25 && bars <= 64)) { err = "a riff is a quarter of a bar to 64 bars long"; return false; }
+    out["bars"] = std::round(bars * 1000) / 1000;
+    const std::string q = text("quantize", 8);
+    static const std::set<std::string> grids = {"off", "1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T"};
+    out["quantize"] = grids.count(q) ? q : "off";
+    if (!text("note", 2000).empty()) out["note"] = text("note", 2000);
+    auto noteList = [&](const char *k, double digits, bool required) -> bool {
+        if (!in.contains(k)) { if (required) err = "a riff needs its notes"; return !required; }
+        if (!in[k].is_array() || in[k].size() > 2000) { err = std::string(k) + ": a list of at most 2000 notes"; return false; }
+        json list = json::array();
+        for (const auto &n : in[k]) {
+            if (!n.is_object()) continue;
+            int key;
+            try { key = parseKey(n.value("key", json(60))); } catch (...) { err = "a note's key: 60 or a name like \"F#4\""; return false; }
+            if (key < 0 || key > 127) continue;
+            const double beat = n.value("beat", -1.0), dur = n.value("dur", 0.0), vel = n.value("vel", 0.8);
+            if (!(beat >= 0 && beat <= beats) || !(dur > 0)) continue;
+            const double m = std::pow(10.0, digits);
+            list.push_back({{"beat", std::round(beat * m) / m}, {"dur", std::max(1 / m, std::round(std::min(dur, beats) * m) / m)},
+                            {"key", std::string(names[key % 12]) + std::to_string(key / 12 - 1)}, {"vel", std::round(std::clamp(vel, 0.0, 1.0) * 100) / 100}});
+        }
+        if (required && list.empty()) { err = "the riff has no notes inside its bars"; return false; }
+        if (!list.empty()) out[k] = list;
+        return true;
+    };
+    return noteList("notes", 4, true) && noteList("played", 3, false);
+}
+
 // ---- the Sounds page: knobs, sounds.json, new projects ----
 
 // A knobs worker by key (spawned from `jobFile` when there is none), its hello for a null request, else its answer.
@@ -1042,11 +1100,14 @@ json Server::sounds(const std::string &slug) {
     };
     for (auto &t : played.value("tracks", json::array())) if (t.is_object()) row(t, true);
     for (auto &[name, e] : entries) if (!seen.count(name)) row(e, false);
-    json tempo = nullptr;
+    json tempo = nullptr, meter = json::array({4, 4});
     if (hasJob && job.contains("tempo")) tempo = job["tempo"];
+    if (hasJob && job.contains("timeSignature") && job["timeSignature"].is_array() && job["timeSignature"].size() == 2) meter = job["timeSignature"];
+    json rf;
+    const json riffs = readJson(base / "riffs.json", rf) && rf.contains("riffs") && rf["riffs"].is_array() ? rf["riffs"] : json::array();
     bool generator = false;   // a script writes the job: the page says job.json may be written again
     for (auto &[path, info] : files) if (path.find('/') == std::string::npos && path.size() > 3 && path.substr(path.size() - 3) == ".py") generator = true;
-    return {{"song", slug}, {"tracks", tracks}, {"tempo", tempo}, {"hasJob", hasJob}, {"generator", generator},
+    return {{"song", slug}, {"tracks", tracks}, {"tempo", tempo}, {"timeSignature", meter}, {"riffs", riffs}, {"hasJob", hasJob}, {"generator", generator},
             {"brief", files.count("brief.md") ? readFile(dir / "brief.md") : std::string()}, {"path", dir.string()}};
 }
 
@@ -1142,6 +1203,45 @@ json Server::soundsChange(const std::string &slug, const json &in) {
         if (job.contains("tempo") && !job["tempo"].is_number()) return {{"error", "the job has a tempo map; change it in the job"}};
         job["tempo"] = std::round(bpm * 100) / 100;
         jobChanged = true;
+    } else if (op == "riff" || op == "riff-delete") {
+        const fs::path rfile = base / "riffs.json";
+        json rf;
+        if (!readJson(rfile, rf) || !rf.contains("riffs") || !rf["riffs"].is_array())
+            rf = {{"format", "wavelength.riffs"}, {"formatVersion", "1.0"}, {"riffs", json::array()}};
+        json &list = rf["riffs"];
+        std::string savedId;
+        auto at = [&](const std::string &id) { for (size_t i = 0; i < list.size(); ++i) if (list[i].value("id", std::string()) == id) return (long)i; return -1L; };
+        if (op == "riff-delete") {
+            const long i = at(in.value("id", std::string()));
+            if (i < 0) return {{"error", "no such riff"}};
+            list.erase(list.begin() + i);
+        } else {
+            json r;
+            if (!normalizeRiff(in.value("riff", json::object()), r, err)) return {{"error", err}};
+            if (!r.contains("id")) {   // a new one
+                std::set<std::string> ids;
+                for (auto &x : list) ids.insert(x.value("id", std::string()));
+                int n = 1;
+                while (ids.count("riff-" + std::to_string(n))) ++n;
+                r["id"] = "riff-" + std::to_string(n);
+                savedId = r["id"];
+                r["created"] = nowRfc3339();
+                r["by"] = actor();
+                list.push_back(r);
+            } else {
+                savedId = r["id"];
+                const long i = at(savedId);
+                if (i < 0) return {{"error", "no such riff"}};
+                for (const char *k : {"created", "by"}) if (list[(size_t)i].contains(k)) r[k] = list[(size_t)i][k];
+                r["updated"] = nowRfc3339();
+                list[(size_t)i] = r;
+            }
+        }
+        std::error_code ec;
+        if (list.empty()) fs::remove(rfile, ec);
+        else if (!platform::writeFileAtomic(rfile, rf.dump(1) + "\n", err)) return {{"error", err}};
+        listSource(slug, fs::relative(rfile, dir, ec).generic_string(), "application/json");
+        return {{"ok", true}, {"id", savedId}};
     } else if (op == "brief") {
         const std::string text = in.value("text", std::string());
         std::error_code ec;
@@ -1308,8 +1408,8 @@ json Server::play(const fs::path &jobFile, const std::string &track, const std::
     json notes = json::array();
     double end = 0;
     for (auto &n : in.value("notes", json::array())) {
-        if (!n.is_object() || notes.size() >= 64) continue;
-        const double start = std::max(0.0, n.value("start", 0.0)), dur = std::min(8.0, std::max(0.02, n.value("dur", 0.5)));
+        if (!n.is_object() || notes.size() >= 512) continue;   // a recorded riff plays back through here too
+        const double start = std::min(40.0, std::max(0.0, n.value("start", 0.0))), dur = std::min(32.0, std::max(0.02, n.value("dur", 0.5)));
         notes.push_back({{"key", std::max(0, std::min(127, n.value("key", 60)))}, {"vel", std::max(0.0, std::min(1.0, n.value("vel", 0.8)))}, {"start", start}, {"dur", dur}});
         end = std::max(end, start + dur);
     }
@@ -1317,7 +1417,9 @@ json Server::play(const fs::path &jobFile, const std::string &track, const std::
     const fs::path out = platform::cacheDir() / "play" / (fnv(key) + "-" + std::to_string(platform::processId()) + ".wav");
     std::error_code ec;
     fs::create_directories(out.parent_path(), ec);
-    const json req = {{"notes", notes}, {"seconds", std::min(12.0, end + in.value("tail", 1.2))}, {"out", out.string()}};
+    // "length": at least this long (a riff's loop, past its last note)
+    const double seconds = std::min(45.0, std::max(end + std::min(4.0, in.value("tail", 1.2)), in.value("length", 0.0)));
+    const json req = {{"notes", notes}, {"seconds", seconds}, {"out", out.string()}};
     std::string line;
     if (!platform::writeInput(w->proc, req.dump() + "\n") || !platform::readLine(w->proc, line, 30000)) return fail("the instrument stopped answering");
     json r;

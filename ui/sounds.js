@@ -3,7 +3,8 @@
  * hear a turn at once (a parameter event to the live worker), others on the next note. Everything saves to the
  * song's sounds.json as it changes (only the knobs that differ from the preset, in the plugin's own text where it
  * reads back the same), which every render applies on top of job.json. The brief and a prompt to copy hand the
- * song to an agent.
+ * song to an agent. Riffs recorded here (a count-in and click at the song's tempo, then the keys, a MIDI keyboard or
+ * the on-screen piano; quantized, reviewed in a piano roll) go to riffs.json for the agent to build the song around.
  *
  * api/sounds lists and changes the sounds; api/knobs loads an instrument's knobs in a __knobs worker, and
  * api/knobs/ask turns values into the plugin's text ("917 Hz") and back.
@@ -11,9 +12,10 @@
  * Uses the page's globals: $, esc, state, postJson, loadSongs, go.
  */
 (() => {
-	const S = { slug: '', data: null, sel: '', K: null, vals: new Map(), base: new Map(), text: new Map(), q: '', changedOnly: false, open: new Set(), octave: 4, vel: .85, len: 4, chord: 'single', tracks: {} };
+	const S = { slug: '', data: null, sel: '', K: null, vals: new Map(), base: new Map(), text: new Map(), q: '', changedOnly: false, open: new Set(), octave: 4, vel: .85, len: 4, chord: 'single', tracks: {},
+		recBars: 2, countIn: true, click: true, quant: '1/16' };
 	try { Object.assign(S, JSON.parse(localStorage.getItem('wl-sounds') || '{}'), { data: null, K: null, vals: new Map(), base: new Map(), text: new Map(), open: new Set() }); } catch {}
-	const keep = () => { try { const { slug, octave, vel, len, chord, tracks, changedOnly } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly })); } catch {} };
+	const keep = () => { try { const { slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant })); } catch {} };
 	const ROLES = ['Lead', 'Bass', 'Pad', 'Pluck', 'Arp', 'Keys', 'Stab', 'Chords', 'Sub', 'FX'];
 	let root, keys, built = false, saveTimer = 0, saving = Promise.resolve(), textTimer = 0;
 	const pendingText = new Map();
@@ -29,17 +31,33 @@
 			<p>Give each part an instrument and preset, then turn its knobs while you play it. Changes save to the song's <code>sounds.json</code> as you go, and every render keeps them; then hand the song to an agent with the prompt below.</p>
 		</div>
 		<div class="sd-grid">
+			<div class="sd-left">
 			<section class="card sd-tracks">
 				<h2>Tracks <button class="ed-open" id="sd-add">Add</button></h2>
 				<div class="sd-tlist" id="sd-tlist"></div>
 				<label class="sd-tempo">Tempo <input type="number" id="sd-tempo" min="20" max="400" step="1"> BPM</label>
 			</section>
+			<section class="card sd-riffs" id="sd-riffcard">
+				<h2>Riffs <span class="r" id="sd-riffcount"></span></h2>
+				<div class="sd-rlist" id="sd-rlist"></div>
+			</section>
+			</div>
 			<section class="sd-main">
 				<div class="card sd-inst" id="sd-inst"></div>
 				<div class="sd-modules" id="sd-modules"></div>
 			</section>
 		</div>
-		<section class="card sd-keys"><div id="sd-keys"></div></section>
+		<section class="card sd-keys">
+			<div class="sd-rec">
+				<button class="sd-recbtn" id="sd-rec" title="Record a riff on this track: a count-in, then play (keys, MIDI keyboard or the piano)"><i></i><span>Record</span></button>
+				<label title="The riff's tempo: the song's unless you change it here (record slower if that's easier; its notes are in beats either way)">Tempo <input type="number" id="sd-rtempo" min="20" max="400" step="1"> <button type="button" class="sd-tap" id="sd-tap" title="Tap the beat a few times">Tap</button><span class="sd-songtempo" id="sd-songtempo"></span></label>
+				<label>Length <select id="sd-bars"><option value="1">1 bar</option><option value="2">2 bars</option><option value="4">4 bars</option><option value="8">8 bars</option><option value="0">free (Stop ends it)</option></select></label>
+				<label><input type="checkbox" id="sd-countin"> Count-in</label>
+				<label><input type="checkbox" id="sd-click"> Click</label>
+				<label>Quantize <select id="sd-quant">${Object.keys(GRID).map(g => `<option value="${g}">${g === 'off' ? 'off (as played)' : g}</option>`).join('')}</select></label>
+				<span class="sd-recpos mono" id="sd-recpos"></span>
+			</div>
+			<div id="sd-keys"></div></section>
 		<section class="card sd-brief">
 			<h2>Hand it to an agent <span class="r" id="sd-briefsaved"></span></h2>
 			<div class="sd-briefgrid">
@@ -66,14 +84,34 @@
 		mods.addEventListener('keydown', knobKey);
 		mods.addEventListener('click', moduleClick);
 		mods.addEventListener('change', switchChange);
-		keys = WLKeys.create({ page: root, mount: root.querySelector('#sd-keys'), current, settings: S, save: keep });
+		keys = WLKeys.create({ page: root, mount: root.querySelector('#sd-keys'), current, settings: S, save: keep, onNote: recNote });
+		const bars = root.querySelector('#sd-bars'), cin = root.querySelector('#sd-countin'), clk = root.querySelector('#sd-click'), qn = root.querySelector('#sd-quant');
+		bars.value = S.recBars; cin.checked = S.countIn; clk.checked = S.click; qn.value = S.quant;
+		bars.addEventListener('change', () => { S.recBars = +bars.value; keep(); });
+		cin.addEventListener('change', () => { S.countIn = cin.checked; keep(); });
+		clk.addEventListener('change', () => { S.click = clk.checked; keep(); });
+		qn.addEventListener('change', () => { S.quant = qn.value; keep(); });
+		const rt = root.querySelector('#sd-rtempo');
+		rt.addEventListener('change', () => { const v = Math.round(+rt.value); if (v >= 20 && v <= 400) S.recTempo = v === songTempo() ? null : v; rt.value = recTempo(); songTempoNote(); });
+		const taps = [];
+		on('#sd-tap', 'click', e => {   // tap tempo: the average of the last few intervals
+			const t = e.timeStamp;
+			if (taps.length && t - taps[taps.length - 1] > 2000) taps.length = 0;
+			taps.push(t);
+			if (taps.length > 5) taps.shift();
+			if (taps.length < 2) return recStatus('Keep tapping…');
+			const bpm = Math.round(60000 / ((taps[taps.length - 1] - taps[0]) / (taps.length - 1)));
+			if (bpm >= 20 && bpm <= 400) { S.recTempo = bpm === songTempo() ? null : bpm; rt.value = bpm; songTempoNote(); recStatus(`${bpm} BPM from your taps`); }
+		});
+		on('#sd-rec', 'click', () => R.on ? stopRecording() : record());
+		on('#sd-rlist', 'click', e => { const pl = e.target.closest('[data-play]'); if (pl) return playRiff(riffById(pl.dataset.play), pl); const b = e.target.closest('[data-riff]'); if (b) editRiff(riffById(b.dataset.riff)); });
 		built = true;
 	}
 
 	/* ---------- the song and its tracks ---------- */
 	async function open(slug) {
 		if (!slug) { S.slug = ''; S.data = null; render(); return; }
-		if (slug !== S.slug) { keys?.releaseAll(); keys?.close(); S.K = null; }
+		if (slug !== S.slug) { keys?.releaseAll(); keys?.close(); S.K = null; S.recTempo = null; }
 		S.slug = slug; keep();
 		history.replaceState(null, '', '?view=sounds&song=' + encodeURIComponent(slug));
 		await reload();
@@ -94,6 +132,8 @@
 		sel.value = S.slug;
 		const d = S.data;
 		root.querySelector('#sd-tempo').value = d && typeof d.tempo === 'number' ? d.tempo : '';
+		if (document.activeElement !== root.querySelector('#sd-rtempo')) root.querySelector('#sd-rtempo').value = recTempo();
+		songTempoNote();
 		root.querySelector('#sd-tempo').disabled = !d?.hasJob || (d.tempo != null && typeof d.tempo !== 'number');
 		root.querySelector('#sd-add').disabled = !d;
 		root.querySelector('#sd-opensong').disabled = !S.slug;
@@ -106,6 +146,7 @@
 				<span class="f">${t.notes ? t.notes + ' notes' : t.clips ? 'clips' : ''}</span></button>`).join('')
 			+ (d.tracks.length ? '' : '<div class="empty">No tracks yet. Add the first instrument.</div>')
 			+ (d.generator ? '<div class="sd-hint">A script writes this song\'s job.json. Sounds set here stay in sounds.json, which every render applies on top.</div>' : '');
+		renderRiffs();
 		prompt();
 	}
 	const plainName = p => String(p || '').replace(/^(clap|vst3|vst2|au):/, '');
@@ -580,13 +621,420 @@ I chose and tuned its instruments by ear: sounds.json in that folder gives each 
 
 Tracks:
 ${lines.join('\n') || '- (none yet)'}
-${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''}${brief ? `\nBrief (also in brief.md):\n${brief}\n` : ''}`;
+${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''}${brief ? `\nBrief (also in brief.md):\n${brief}\n` : ''}`;
 	}
 	async function copyPrompt() {
 		const box = root.querySelector('#sd-prompt'), b = root.querySelector('#sd-copy');
 		try { await navigator.clipboard.writeText(box.value); }
 		catch { box.select(); document.execCommand('copy'); }
 		b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500);
+	}
+
+	/* ---------- riffs: record, review, keep (riffs.json) ---------- */
+	const GRID = { off: 0, '1/16': .25, '1/8': .5, '1/16T': 1 / 6, '1/8T': 1 / 3, '1/4': 1, '1/32': .125 };
+	const NOTE_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+	const keyNum = k => {   // 60, "F#4", "Eb3"
+		if (typeof k === 'number') return k;
+		const m = /^([A-Ga-g])([#b]?)(-?\d+)$/.exec(String(k).trim());
+		if (!m) return 60;
+		return 12 * (+m[3] + 1) + { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }[m[1].toLowerCase()] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+	};
+	const keyStr = k => NOTE_NAMES[k % 12] + (Math.floor(k / 12) - 1);
+	const R = { on: false, ctx: null, notes: [], open: new Map() };
+	const meter = () => S.data?.timeSignature?.length === 2 ? S.data.timeSignature : [4, 4];
+	const songTempo = () => typeof S.data?.tempo === 'number' ? S.data.tempo : 120;
+	const recTempo = () => S.recTempo || songTempo();
+	const songTempoNote = () => { const el = root.querySelector('#sd-songtempo'); if (el) el.textContent = S.recTempo ? `song: ${songTempo()}` : ''; };
+	const riffById = id => (S.data?.riffs || []).find(r => r.id === id);
+	function audio() {
+		R.ctx ??= new AudioContext({ latencyHint: 'interactive' });
+		if (R.ctx.state === 'suspended') R.ctx.resume();
+		return R.ctx;
+	}
+	// when a moment on the audio clock is heard, on the clock key presses carry (performance.now())
+	function heard(ctxTime) {
+		const c = R.ctx, ts = c.getOutputTimestamp?.();
+		if (ts && ts.performanceTime > 0) return ts.performanceTime + (ctxTime - ts.contextTime) * 1000;
+		return performance.now() + (ctxTime - c.currentTime + (c.outputLatency || c.baseLatency || 0)) * 1000;
+	}
+	function blip(at, accent) {
+		const c = R.ctx, o = c.createOscillator(), g = c.createGain();
+		o.frequency.value = accent ? 1760 : 1175;
+		g.gain.setValueAtTime(0, at);
+		g.gain.linearRampToValueAtTime(accent ? .32 : .2, at + .002);
+		g.gain.exponentialRampToValueAtTime(.0001, at + .06);
+		o.connect(g).connect(c.destination);
+		o.start(at); o.stop(at + .07);
+	}
+	async function record() {
+		const t = row(S.sel);
+		if (!t) return recStatus('Pick a track to record on.');
+		keys.releaseAll();
+		recStatus('Loading the instrument…');
+		await keys.ensure();   // so the first notes sound
+		const c = audio(), [num, den] = meter(), bpb = num * 4 / den, spb = 60 / recTempo();
+		const count = S.countIn ? Math.round(bpb) : 0, len = S.recBars ? S.recBars * bpb : 0;
+		Object.assign(R, { on: true, track: t.name, notes: [], open: new Map(), bpb, spb, tempo: recTempo(), meter: [num, den], len, count,
+			start: c.currentTime + .25, next: 0 });
+		R.zero = R.start + count * spb;   // beat 0 on the audio clock
+		const tick = () => {   // the click, scheduled a little ahead
+			while (R.on && R.start + R.next * spb < c.currentTime + .3 && (!len || R.next < count + len)) {
+				if (S.click || R.next < count) blip(R.start + R.next * spb, (R.next - count) % Math.round(bpb) === 0);
+				R.next++;
+			}
+		};
+		tick();
+		R.timer = setInterval(tick, 40);
+		if (len) R.stopper = setTimeout(() => R.on && stopRecording(), (R.zero + len * spb - c.currentTime) * 1000 + 30);
+		const btn = root.querySelector('#sd-rec');
+		btn.classList.add('on'); btn.querySelector('span').textContent = 'Stop';
+		const show = () => {
+			if (!R.on) return;
+			const b = (c.currentTime - R.zero) / spb;
+			recStatus(b < 0 ? `Count-in ${Math.min(count, Math.floor(b + count) + 1)} / ${count}` : `Recording ${t.name} · bar ${Math.floor(b / bpb) + 1}.${Math.floor(b % bpb) + 1}${len ? ' of ' + (len / bpb) : ''} · ${R.notes.length + R.open.size} notes`);
+			requestAnimationFrame(show);
+		};
+		show();
+	}
+	const beatAt = tms => (tms - heard(R.zero)) / (R.spb * 1000);
+	function recNote(e) {
+		if (!R.on) return;
+		const b = beatAt(e.t);
+		if (e.on) {
+			if (b < -.5 || (R.len && b >= R.len)) return;   // noodling in the count-in, or past the end
+			R.open.set(e.key, { beat: Math.max(b, -.5), vel: e.vel });
+		} else {
+			const o = R.open.get(e.key);
+			if (!o) return;
+			R.open.delete(e.key);
+			R.notes.push({ beat: o.beat, dur: Math.max(.02, b - o.beat), key: e.key, vel: o.vel });
+		}
+	}
+	function stopRecording() {
+		if (!R.on) return;
+		const end = R.len || Math.max(R.bpb, Math.ceil(beatAt(performance.now()) / R.bpb - .05) * R.bpb);   // free: up to the bar
+		for (const [key, o] of R.open) R.notes.push({ beat: o.beat, dur: Math.max(.02, end - o.beat), key, vel: o.vel });
+		R.on = false; R.open.clear();
+		clearInterval(R.timer); clearTimeout(R.stopper);
+		const btn = root.querySelector('#sd-rec');
+		btn.classList.remove('on'); btn.querySelector('span').textContent = 'Record';
+		// as played: from the first downbeat, cut at the end
+		const played = R.notes.map(n => {
+			const b = Math.max(0, n.beat), e = Math.min(end, n.beat + n.dur);
+			return { beat: b, dur: e - b, key: n.key, vel: n.vel };
+		}).filter(n => n.dur > .01 && n.beat < end).sort((a, b) => a.beat - b.beat || a.key - b.key);
+		if (!played.length) return recStatus('Nothing was played. Press Record and play after the count-in.');
+		recStatus('');
+		riffEditor({ track: R.track, tempo: R.tempo, timeSignature: R.meter, bars: +(end / R.bpb).toFixed(3), played, quantize: S.quant });
+	}
+	const recStatus = msg => { const el = root.querySelector('#sd-recpos'); if (el) el.textContent = msg; };
+	// quantize: starts to the grid, ends to the grid (a step at least); two notes landing on one key at one beat keep the longer
+	function quantize(played, q, beats) {
+		const g = GRID[q] || 0, out = new Map();
+		for (const n of played) {
+			let b = n.beat, e = n.beat + n.dur;
+			if (g) { b = Math.round(b / g) * g; e = Math.max(b + g, Math.round(e / g) * g); }
+			if (b >= beats) continue;
+			e = Math.min(e, beats);
+			const k = b.toFixed(4) + '|' + n.key, x = { beat: +b.toFixed(4), dur: +(e - b).toFixed(4), key: n.key, vel: n.vel };
+			if (!out.has(k) || out.get(k).dur < x.dur) out.set(k, x);
+		}
+		return [...out.values()].sort((a, b) => a.beat - b.beat || a.key - b.key);
+	}
+	// play notes (beats) through the track's own sound, looped: one render (api/play), then the audio repeats
+	let playing = null;
+	async function playNotes(track, notes, tempo, beats, btn) {
+		stopPlaying();
+		const spb = 60 / tempo, me = playing = { btn };
+		if (btn) btn.classList.add('on');
+		try {
+			const r = await fetch('api/play', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: S.slug, track,
+				notes: notes.map(n => ({ key: n.key, vel: n.vel ?? .8, start: n.beat * spb, dur: n.dur * spb })), tail: 1.5, length: beats * spb + .05 }) });
+			if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'the server answered ' + r.status); }
+			const c = audio(), buf = await c.decodeAudioData(await r.arrayBuffer());
+			if (playing !== me) return;
+			const src = c.createBufferSource();
+			src.buffer = buf; src.loop = true; src.loopEnd = Math.min(buf.duration, beats * spb);   // the notes' ring past the loop is cut
+			src.connect(c.destination); src.start();
+			Object.assign(me, { src, t0: c.currentTime, len: src.loopEnd, beats });
+		} catch (e) { if (playing === me) { stopPlaying(); recStatus('Could not play it: ' + e.message); } }
+	}
+	function stopPlaying() {
+		if (!playing) return;
+		try { playing.src?.stop(); } catch {}
+		playing.btn?.classList.remove('on');
+		playing = null;
+	}
+	const riffNotes = r => (r.notes || []).map(n => ({ ...n, key: keyNum(n.key) }));
+	function playRiff(r, btn) {
+		if (!r) return;
+		if (playing?.btn === btn) return stopPlaying();
+		const [num, den] = r.timeSignature || [4, 4];
+		playNotes(r.track, riffNotes(r), r.tempo, r.bars * num * 4 / den, btn);
+	}
+	// one note through the track's sound, to hear a pitch while editing (the newest request wins)
+	let audReq = null, audBusy = false;
+	async function audition(track, key, vel) {
+		audReq = { track, key, vel };
+		if (audBusy) return;
+		audBusy = true;
+		while (audReq) {
+			const q = audReq;
+			audReq = null;
+			try {
+				const r = await fetch('api/play', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: S.slug, track: q.track, notes: [{ key: q.key, vel: q.vel, start: 0, dur: .3 }], tail: .4 }) });
+				if (!r.ok) continue;
+				const c = audio(), buf = await c.decodeAudioData(await r.arrayBuffer()), src = c.createBufferSource();
+				src.buffer = buf; src.connect(c.destination); src.start();
+			} catch {}
+		}
+		audBusy = false;
+	}
+	// the riff editor: a take (or a kept riff) in a piano roll to clean up, heard looped, named and kept
+	async function riffEditor(take, existing) {
+		const [num, den] = take.timeSignature, bpb = num * 4 / den;
+		let bars = take.bars, beats = bars * bpb, tempo = take.tempo, uid = 0;
+		const mk = n => ({ id: ++uid, beat: n.beat, dur: n.dur, key: n.key, vel: n.vel ?? .8 });
+		let notes = (existing ? riffNotes(existing) : quantize(take.played, take.quantize, beats)).map(mk);
+		let snapName = take.quantize && take.quantize !== 'off' ? take.quantize : '1/16';
+		const sel = new Set(), hist = [], fut = [];
+		let lastLen = GRID[snapName] || .25, lastVel = .8, lo = 48, hi = 72, dirty = !existing;
+		const ROW = 12;
+		const state = () => JSON.stringify({ notes, bars });
+		const restore = st => { const o = JSON.parse(st); notes = o.notes; bars = o.bars; beats = bars * bpb; uid = Math.max(0, ...notes.map(n => n.id)); sel.clear(); };
+		const remember = () => { hist.push(state()); if (hist.length > 200) hist.shift(); fut.length = 0; dirty = true; };
+		const g = () => GRID[snapName] || 0;
+		const snapD = d => g() ? Math.round(d / g()) * g() : d;
+		const floorB = b => g() ? Math.floor(b / g() + 1e-6) * g() : b;
+		let d, svg, replayTimer = 0, raf = 0;
+		const range = () => {
+			const ks = notes.map(n => n.key), mn = ks.length ? Math.min(...ks) : 60, mx = ks.length ? Math.max(...ks) : 72;
+			lo = Math.max(0, mn - 5); hi = Math.min(127, mx + 5);
+			if (hi - lo < 24) { const mid = Math.round((lo + hi) / 2); lo = Math.max(0, mid - 12); hi = Math.min(127, lo + 24); }
+		};
+		function draw() {
+			const W = 1000, rows = hi - lo + 1, H = rows * ROW, x = b => b / beats * W, y = k => (hi - k) * ROW;
+			let bg = '';
+			for (let k = lo; k <= hi; k++) bg += `<rect class="${[1, 3, 6, 8, 10].includes(k % 12) ? 'bk' : 'wk'}" x="0" y="${y(k)}" width="${W}" height="${ROW}"/>`;
+			const step = g() || .25;
+			for (let b = 0; b <= beats + 1e-9; b += step) {
+				const bar = Math.abs(b / bpb - Math.round(b / bpb)) < 1e-6, beat = Math.abs(b - Math.round(b)) < 1e-6;
+				bg += `<line class="${bar ? 'bar' : beat ? 'bt' : 'sub'}" x1="${x(b).toFixed(2)}" x2="${x(b).toFixed(2)}" y1="0" y2="${H}"/>`;
+			}
+			const ghost = take.played && d.querySelector('[data-r="ghost"]')?.checked ? take.played.map(n => `<rect class="gh" x="${x(n.beat).toFixed(2)}" y="${y(n.key) + 1}" width="${Math.max(1.5, x(n.dur)).toFixed(2)}" height="${ROW - 2}" rx="1.5"/>`).join('') : '';
+			const ns = notes.map(n => `<rect class="nt ${sel.has(n.id) ? 'sel' : ''}" data-id="${n.id}" x="${x(n.beat).toFixed(2)}" y="${y(n.key) + 1}" width="${Math.max(2, x(n.dur) - .8).toFixed(2)}" height="${ROW - 2}" rx="2" style="fill-opacity:${(.4 + .6 * n.vel).toFixed(2)}"><title>${keyStr(n.key)} · beat ${(n.beat + 1).toFixed(2)} · ${n.dur.toFixed(2)} beats · velocity ${Math.round(n.vel * 127)}</title></rect>`).join('');
+			svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+			svg.style.height = H + 'px';
+			svg.innerHTML = bg + ghost + ns + `<line class="ph" data-r="ph" x1="-10" x2="-10" y1="0" y2="${H}"/>`;
+			let labels = '';
+			for (let k = lo; k <= hi; k++) if (k % 12 === 0 || k === lo || k === hi) labels += `<span style="top:${y(k)}px">${keyStr(k)}</span>`;
+			d.querySelector('[data-r="keys"]').innerHTML = labels;
+			d.querySelector('[data-r="keys"]').style.height = H + 'px';
+			d.querySelector('[data-r="count"]').textContent = `${notes.length} note${notes.length === 1 ? '' : 's'}${sel.size ? ` · ${sel.size} selected` : ''}`;
+			d.querySelector('[data-r="undo"]').disabled = !hist.length;
+			d.querySelector('[data-r="redo"]').disabled = !fut.length;
+		}
+		const changed = () => { draw(); if (playing?.editor) { clearTimeout(replayTimer); replayTimer = setTimeout(() => play(true), 350); } };
+		function play(again) {
+			const btn = d.querySelector('[data-r="play"]');
+			if (!again && playing?.btn === btn) return stopPlaying();
+			if (!notes.length) return;
+			playNotes(take.track, notes, tempo, beats, btn).then(() => { if (playing?.btn === btn) playing.editor = true; });
+			if (playing) playing.editor = true;
+			cancelAnimationFrame(raf);
+			const tick = () => {
+				const ph = d.querySelector('[data-r="ph"]');
+				if (!d.open) return;
+				if (ph && playing?.btn === btn && playing.src) {
+					const x = ((R.ctx.currentTime - playing.t0) % playing.len) / playing.len * Math.min(1, playing.len / (beats * 60 / tempo)) * 1000;
+					ph.setAttribute('x1', x); ph.setAttribute('x2', x);
+				} else if (ph) { ph.setAttribute('x1', -10); ph.setAttribute('x2', -10); }
+				raf = requestAnimationFrame(tick);
+			};
+			tick();
+		}
+		// pointer: on a note, drag moves it (and the other selected ones); near its end, resizes; on empty space, adds one
+		function pos(e) {
+			const r = svg.getBoundingClientRect();
+			return { beat: Math.min(beats, Math.max(0, (e.clientX - r.left) / r.width * beats)), key: Math.min(127, Math.max(0, hi - Math.floor((e.clientY - r.top) / ROW))), px: r.width / beats };
+		}
+		function down(e) {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			d.querySelector('[data-r="rollbox"]').focus();
+			const p = pos(e), id = +(e.target.closest('[data-id]')?.dataset.id || 0);
+			let n = notes.find(x => x.id === id), mode;
+			if (n) {
+				if (e.shiftKey) { sel.has(n.id) ? sel.delete(n.id) : sel.add(n.id); draw(); return; }
+				if (!sel.has(n.id)) { sel.clear(); sel.add(n.id); }
+				mode = (n.beat + n.dur - p.beat) * p.px < 8 ? 'resize' : 'move';
+				audition(take.track, n.key, n.vel);
+			} else {
+				remember();
+				n = mk({ beat: Math.min(floorB(p.beat), beats - (g() || .05)), dur: lastLen, key: p.key, vel: lastVel });
+				n.dur = Math.min(n.dur, beats - n.beat);
+				notes.push(n);
+				sel.clear(); sel.add(n.id);
+				mode = 'resize';
+				audition(take.track, n.key, n.vel);
+			}
+			// moves are measured from where the drag started (the dialog may shift as its text changes)
+			const start = { x: e.clientX, y: e.clientY, px: p.px }, orig = new Map(notes.filter(x => sel.has(x.id)).map(x => [x.id, { beat: x.beat, key: x.key, dur: x.dur }]));
+			let moved = mode === 'resize' && !id, lastKey = n.key;
+			svg.setPointerCapture(e.pointerId);
+			const move = ev => {
+				const dBeat = (ev.clientX - start.x) / start.px, db = snapD(dBeat), dk = -Math.round((ev.clientY - start.y) / ROW);
+				if (!moved && (Math.abs(ev.clientX - start.x) > 3 || dk)) { if (id) remember(); moved = true; }
+				if (!moved) return;
+				if (mode === 'move') {
+					const minB = Math.min(...[...orig.values()].map(o => o.beat)), maxE = Math.max(...[...orig.values()].map(o => o.beat + o.dur));
+					const shift = Math.min(Math.max(db, -minB), beats - maxE);
+					for (const x of notes) if (orig.has(x.id)) { const o = orig.get(x.id); x.beat = +(o.beat + shift).toFixed(4); x.key = Math.min(127, Math.max(0, o.key + dk)); }
+					if (n.key !== lastKey) { lastKey = n.key; audition(take.track, n.key, n.vel); }
+				} else {
+					const o = orig.get(n.id), end = g() ? Math.round((o.beat + o.dur + dBeat) / g()) * g() : o.beat + o.dur + dBeat;
+					n.dur = +Math.min(beats - n.beat, Math.max(g() || .05, end - n.beat)).toFixed(4);
+				}
+				draw();
+			};
+			const up = () => {
+				svg.removeEventListener('pointermove', move);
+				if (mode === 'resize') lastLen = n.dur;
+				lastVel = n.vel;
+				if (moved) { range(); changed(); } else draw();
+			};
+			svg.addEventListener('pointermove', move);
+			svg.addEventListener('pointerup', up, { once: true });
+			svg.addEventListener('pointercancel', up, { once: true });
+		}
+		const chosen = () => sel.size ? notes.filter(x => sel.has(x.id)) : notes;
+		function key(e) {
+			const mod = e.metaKey || e.ctrlKey;
+			if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+			if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); notes.forEach(x => sel.add(x.id)); draw(); return; }
+			if (e.key === 'Escape' && sel.size) { e.preventDefault(); sel.clear(); draw(); return; }
+			if ((e.key === 'Delete' || e.key === 'Backspace') && sel.size) { e.preventDefault(); remember(); notes = notes.filter(x => !sel.has(x.id)); sel.clear(); changed(); return; }
+			if (e.key === ' ') { e.preventDefault(); play(); return; }
+			const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+			if (!arrows || !sel.size) return;
+			e.preventDefault();
+			remember();
+			const step = g() || .25, list = chosen();
+			const db = arrows[0] * step, dk = arrows[1] * (e.shiftKey ? 12 : 1);
+			if (list.every(x => x.beat + db >= -1e-9 && x.beat + x.dur + db <= beats + 1e-9 && x.key + dk >= 0 && x.key + dk <= 127))
+				for (const x of list) { x.beat = +(x.beat + db).toFixed(4); x.key += dk; }
+			if (dk && list.length) audition(take.track, list[0].key, list[0].vel);
+			range(); changed();
+		}
+		function wheel(e) {
+			const id = +(e.target.closest('[data-id]')?.dataset.id || 0);
+			const list = id && !sel.has(id) ? notes.filter(x => x.id === id) : sel.size ? chosen() : [];
+			if (!list.length) return;
+			e.preventDefault();
+			if (!wheel.at || performance.now() - wheel.at > 600) remember();
+			wheel.at = performance.now();
+			for (const x of list) x.vel = Math.round(Math.min(1, Math.max(.05, x.vel + (e.deltaY < 0 ? .04 : -.04))) * 100) / 100;
+			lastVel = list[0].vel;
+			changed();
+		}
+		function undo() { if (!hist.length) return; fut.push(state()); restore(hist.pop()); range(); changed(); }
+		function redo() { if (!fut.length) return; hist.push(state()); restore(fut.pop()); range(); changed(); }
+		function act(a) {
+			if (a === 'quantize') {   // starts and ends to the snap grid
+				if (!g()) return;
+				remember();
+				for (const x of chosen()) { const b = Math.min(Math.round(x.beat / g()) * g(), beats - g()), e = Math.max(b + g(), Math.round((x.beat + x.dur) / g()) * g()); x.beat = +b.toFixed(4); x.dur = +(Math.min(e, beats) - b).toFixed(4); }
+				changed();
+			}
+			if (a === 'played' && take.played) { remember(); notes = take.played.filter(n => n.beat < beats).map(n => mk({ ...n, dur: Math.min(n.dur, beats - n.beat) })); sel.clear(); range(); changed(); }
+			if (a === 'delete' && sel.size) { remember(); notes = notes.filter(x => !sel.has(x.id)); sel.clear(); changed(); }
+			if (a === 'all') { notes.forEach(x => sel.add(x.id)); draw(); }
+			if (a === 'undo') undo();
+			if (a === 'redo') redo();
+			if (a === 'play') play();
+		}
+		const barOpts = [...new Set([1, 2, 3, 4, 6, 8, 12, 16, bars])].sort((a, b) => a - b);
+		const n = (S.data?.riffs?.length || 0) + 1;
+		const res = await WLUI.modal({ title: existing ? existing.name : `New riff on ${take.track}`, cls: 'sd-dlg sd-riffdlg', body: `
+			<div class="sd-takebar">
+				<button type="button" class="ed-btn" data-a="play" data-r="play" title="Space">Play (loops)</button>
+				<label>Snap <select data-r="snap">${Object.keys(GRID).map(k => `<option value="${k}" ${k === snapName ? 'selected' : ''}>${k === 'off' ? 'off' : k}</option>`).join('')}</select></label>
+				<button type="button" class="ed-btn" data-a="quantize" title="Starts and ends of the selected notes (or all) to the snap grid">Quantize</button>
+				${take.played ? `<button type="button" class="ed-btn" data-a="played" title="Back to the notes as you played them">As played</button><label title="The take as you played it, faint behind the notes"><input type="checkbox" data-r="ghost"> Show the take</label>` : ''}
+				<label>Bars <select data-r="bars">${barOpts.map(b => `<option value="${b}" ${b === bars ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
+				<label>Tempo <input type="number" data-r="tempo" min="20" max="400" step="1" value="${tempo}"></label>
+				<span class="sp"></span>
+				<button type="button" class="ed-btn" data-a="undo" data-r="undo" title="Cmd-Z">Undo</button>
+				<button type="button" class="ed-btn" data-a="redo" data-r="redo" title="Shift-Cmd-Z">Redo</button>
+			</div>
+			<div class="sd-rollwrap"><div class="sd-rollkeys mono" data-r="keys"></div>
+				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
+			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click to add a note (drag to set its length), drag to move, drag its end to resize, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
+			<div class="sd-riffmeta">
+				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
+				<label class="wl-field"><span>What it's for (the agent reads it)</span><input name="note" value="${esc(existing?.note || '')}" placeholder="The hook for the drops; the intro's motif; a bassline under the breakdown…" maxlength="2000" autocomplete="off"></label>
+			</div>`,
+			buttons: [...(existing ? [{ value: 'delete', label: 'Delete riff', cls: 'danger' }] : []), { value: 'cancel', label: existing ? 'Close' : 'Discard' }, { value: 'ok', label: existing ? 'Save' : 'Keep', cls: 'primary', submit: async api => {
+				if (!notes.length) return api.error('The riff has no notes.');
+				api.busy(true);
+				const asKey = x => ({ beat: +x.beat.toFixed(4), dur: +x.dur.toFixed(4), key: keyStr(x.key), vel: x.vel });
+				const riff = { ...(existing ? { id: existing.id } : {}), name: d.querySelector('[name="name"]').value, note: d.querySelector('[name="note"]').value, track: take.track,
+					tempo, timeSignature: take.timeSignature, bars, quantize: snapName,
+					notes: [...notes].sort((a, b) => a.beat - b.beat || a.key - b.key).map(asKey),
+					...(take.played ? { played: take.played.map(asKey) } : {}) };
+				try { await change({ op: 'riff', riff }); api.done('ok'); }
+				catch (e) { api.busy(false); api.error(e.message); }
+			} }],
+			init: api => {
+				d = api.dlg;
+				svg = d.querySelector('[data-r="svg"]');
+				const box = d.querySelector('[data-r="rollbox"]');
+				svg.addEventListener('pointerdown', down);
+				box.addEventListener('keydown', key);
+				svg.addEventListener('wheel', wheel, { passive: false });
+				d.querySelector('.sd-takebar').addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) act(b.dataset.a); });
+				d.querySelector('[data-r="snap"]').addEventListener('change', e => { snapName = e.target.value; lastLen = g() || lastLen; draw(); });
+				d.querySelector('[data-r="ghost"]')?.addEventListener('change', draw);
+				d.querySelector('[data-r="bars"]').addEventListener('change', e => {
+					remember();
+					bars = +e.target.value; beats = bars * bpb;
+					notes = notes.filter(x => x.beat < beats - 1e-6);
+					for (const x of notes) x.dur = Math.min(x.dur, beats - x.beat);
+					changed();
+				});
+				d.querySelector('[data-r="tempo"]').addEventListener('change', e => { const v = +e.target.value; if (v >= 20 && v <= 400) { tempo = v; dirty = true; changed(); } });
+				d.addEventListener('close', () => { stopPlaying(); cancelAnimationFrame(raf); clearTimeout(replayTimer); });
+				d.addEventListener('cancel', e => { if (dirty && notes.length && !existing && !confirm('Discard this take?')) e.preventDefault(); });
+				range(); draw();
+				box.focus();
+			} });
+		if (res?.value === 'delete') {
+			if (!await WLUI.confirm({ title: `Delete ${existing.name}?`, body: 'It leaves riffs.json.', ok: 'Delete', danger: true })) return;
+			try { await change({ op: 'riff-delete', id: existing.id }); } catch (e) { return recStatus(e.message); }
+		}
+		if (res) await reload();
+	}
+	function editRiff(r) {
+		if (!r) return;
+		const played = r.played ? r.played.map(n => ({ ...n, key: keyNum(n.key) })) : null;
+		riffEditor({ track: r.track, tempo: r.tempo, timeSignature: r.timeSignature || [4, 4], bars: r.bars, played, quantize: r.quantize || 'off' }, r);
+	}
+	function renderRiffs() {
+		const list = S.data?.riffs || [], box = root.querySelector('#sd-rlist');
+		root.querySelector('#sd-riffcard').hidden = !S.data;
+		root.querySelector('#sd-riffcount').textContent = list.length || '';
+		box.innerHTML = list.map(r => `<div class="sd-riff">
+			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it through ${esc(r.track)}'s sound (loops; click again to stop)">▶</button>
+			<button class="pg-item" data-riff="${esc(r.id)}" title="${esc(r.note || '')}"><span class="n">${esc(r.name)}</span><span class="v">${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'} · ${(r.notes || []).length} notes${r.note ? ' · ' + esc(r.note) : ''}</span></button></div>`).join('')
+			|| '<div class="sd-hint">Record one with the button by the keyboard: a count-in at the song\'s tempo, then play.</div>';
+	}
+	function riffLines(d) {
+		const list = d.riffs || [];
+		if (!list.length) return '';
+		return `
+Riffs I recorded (riffs.json; notes in beats from each riff's first downbeat): build the song around them. Keep each one recognisable where it matters (its rhythm and contour), and vary, transpose or extend it where the song needs:
+${list.map(r => `- ${r.name}: ${r.track}, ${r.bars} bar${r.bars === 1 ? '' : 's'} at ${r.tempo} BPM, ${(r.notes || []).length} notes${r.note ? `. ${r.note}` : ''}`).join('\n')}
+`;
 	}
 
 	function current() {
@@ -601,7 +1049,7 @@ ${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''}${brief ? `\nB
 			const want = slug || S.slug || state.slug || '';
 			if (want !== S.slug || !S.data) open(want); else { render(); keys.ensure(); }
 		},
-		hide() { if (built) { save(); clearInterval(S.winPoll); S.win = null; keys.releaseAll(); keys.close(); } },
+		hide() { if (built) { save(); clearInterval(S.winPoll); S.win = null; if (R.on) stopRecording(); stopPlaying(); keys.releaseAll(); keys.close(); } },
 		songsChanged() { if (built && !root.hidden) render(); },
 		stats: () => keys?.stats() ?? null,
 	};

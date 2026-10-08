@@ -41,6 +41,23 @@ A GarageBand project imports too (limited support: the structure, mixer and timi
 
 `wavelength import score.mxl --out songs/x --json` (or `.musicxml`) makes a job from a MusicXML score: the usual export of MuseScore, Sibelius, Finale and Dorico, and what music21 writes. It plays the score as written: repeats and first/second endings (and D.C./D.S. al Fine/Coda) laid out, ties joined, transposing instruments at concert pitch, dynamics and hairpins as velocities, staccato shortened, accents louder. The score's key signatures (when they carry a mode) become `keys`, so `lint --harmony` reads the composer's keys; tempo marks become the tempo map (a score without one imports at 120: set `tempo`); rehearsal marks become markers. Each note keeps its marks (`"marks": ["staccato", "accent"]`, the render ignores them): when you move a part onto an orchestral library, turn them into `art` with the track's `articulations`. Grace notes play as short notes just before the beat (`"marks": ["grace"]`); pedal marks hold notes until the pedal lifts.
 
+## Starting from a riff: `riffs.json`
+
+When the song folder has a `riffs.json`, the human recorded short riffs on `serve`'s Sounds page for you to build the song around: played from a keyboard over a count-in and click, then cleaned up in a piano roll. Each riff has a `name`, the `track` it was played on (its sound is that track's, in `sounds.json`), the `tempo` and `timeSignature` it was played at, its length in `bars`, the `quantize` grid, a `note` on what it is for ("the hook for the drops"), `notes` and, when it was recorded, `played`:
+
+```json
+{"format": "wavelength.riffs", "formatVersion": "1.0", "riffs": [
+  {"id": "riff-1", "name": "Hook", "track": "Lead", "tempo": 138, "timeSignature": [4, 4], "bars": 2, "quantize": "1/16",
+   "note": "the hook for the drops",
+   "notes": [{"beat": 0, "dur": 0.5, "key": "F4", "vel": 0.8}, {"beat": 0.75, "dur": 0.25, "key": "Ab4", "vel": 0.7}],
+   "played": [{"beat": 0.012, "dur": 0.431, "key": "F4", "vel": 0.8}, {"beat": 0.771, "dur": 0.2, "key": "Ab4", "vel": 0.7}]}]}
+```
+
+- `notes` is the riff as the human means it (quantized and edited): beats from its first downbeat, keys as names, velocities 0-1, the same shape as a track's notes. To place a riff, add the section's start beat to each note's beat. `played` is the take as played (unquantized); its timing and velocities show the feel, for `groove` or `humanize` if you want them.
+- Beats don't depend on the tempo, so a riff fits the song at any tempo; if the song's tempo differs from the riff's, say so (the human may have recorded it slower to play it cleanly).
+- Treat the riffs as the song's themes. Find their key and the chords they imply first: put a riff's notes in a job and run `wavelength lint job.json --harmony --chords`. Write the harmony, bass and other parts around them and place each one where its note says. Keep a riff recognisable where it matters (its rhythm and contour) and vary it elsewhere: octaves, other instruments, fragments, a changed ending, a transposition that follows the chords.
+- Don't rewrite `riffs.json`; it is the human's. Tell them which riff went where.
+
 ## Choosing sounds
 
 **When the song folder has a `sounds.json`, the human already chose them.** They picked each track's instrument and preset on `serve`'s Sounds page and tuned its knobs by ear while playing it; every render applies `sounds.json` on top of `job.json` (docs/job-format.md, "Sounds"). Write a track for each name it lists (the page also puts them in `job.json` with no notes yet) and leave its sound to the file: your job's `plugin`, `preset`, `state` and `params` for those tracks are replaced at render. Read each entry's `note` for the part's role and `brief.md` for the song they want. Add drums and effects, set gains and automate as usual. Change a chosen sound only when the song needs it, by editing `sounds.json`, and say what you changed and why.

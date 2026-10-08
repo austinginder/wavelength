@@ -1626,6 +1626,7 @@ else
 fi
 # a free port each run: two checkouts (or agents) running the check at once must not answer for each other
 sport=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+rm -rf out/check/serve-songs/riff-check*
 mkdir -p out/check/serve-songs/demo out/check/serve-songs/kitmap && cp examples/hello.json out/check/serve-songs/demo/job.json
 # a sampler kit given as a key -> file map (not a library name) once made /api/song throw: an empty 500
 cat > out/check/serve-songs/kitmap/job.json <<'JOB'
@@ -1641,8 +1642,42 @@ echo "$page" | grep -q 'wavelength-token' || serve_why="the page has no token ($
 [ -z "$serve_why" ] && { curl -s http://127.0.0.1:$sport/api/songs | grep -q '"demo"' || serve_why="the song list lacks demo: $(curl -s http://127.0.0.1:$sport/api/songs | head -c 200)"; }
 [ -z "$serve_why" ] && { code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' "http://127.0.0.1:$sport/api/review?song=demo"); [ "$code" = "403" ] || serve_why="a POST without the token got $code, not 403"; }
 [ -z "$serve_why" ] && { curl -s "http://127.0.0.1:$sport/api/song?song=kitmap" | grep -q '"custom kit"' || serve_why="a song with a kit map: $(curl -s -w ' HTTP %{http_code}' "http://127.0.0.1:$sport/api/song?song=kitmap" | head -c 200)"; }
+# the Sounds page: a new project, a track, a riff saved (key names, listed in the manifest), a bad riff refused,
+# the riff played back for its whole loop through the track's sound, then deleted
+[ -z "$serve_why" ] && serve_why=$(python3 - "$sport" "out/check/serve-songs" <<'PY'
+import json, re, sys, urllib.request
+port, root = sys.argv[1], sys.argv[2]
+base = "http://127.0.0.1:%s/" % port
+tok = re.search(r'name="wavelength-token" content="([0-9a-f]+)"', urllib.request.urlopen(base).read().decode()).group(1)
+def post(path, body, raw=False):
+    req = urllib.request.Request(base + path, json.dumps(body).encode(), {"Content-Type": "application/json", "X-Wavelength-Token": tok})
+    try:
+        r = urllib.request.urlopen(req)
+        return r.read() if raw else json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, **json.loads(e.read() or b"{}")}
+song = post("api/song/create", {"title": "Riff Check"})["song"]
+assert post("api/sounds", {"song": song, "op": "add", "track": "Lead", "sound": {"plugin": "builtin:synth", "preset": "LD Chip"}, "tempo": 120}).get("ok")
+riff = {"name": "Hook", "track": "Lead", "tempo": 120, "timeSignature": [4, 4], "bars": 2, "quantize": "1/16", "note": "the hook",
+        "notes": [{"beat": 0, "dur": 0.5, "key": "C5", "vel": 0.8}, {"beat": 1.5, "dur": 0.5, "key": 74, "vel": 0.7}],
+        "played": [{"beat": 0.02, "dur": 0.4, "key": 72, "vel": 0.8}]}
+r = post("api/sounds", {"song": song, "op": "riff", "riff": riff})
+if not r.get("ok") or r.get("id") != "riff-1": sys.exit(print("saving a riff: %s" % r) or 1)
+if post("api/sounds", {"song": song, "op": "riff", "riff": {**riff, "notes": []}}).get("status") != 400: sys.exit(print("a riff without notes was taken") or 1)
+d = json.loads(urllib.request.urlopen(base + "api/sounds?song=" + song).read())
+got = d["riffs"][0]
+if [n["key"] for n in got["notes"]] != ["C5", "D5"] or got["played"][0]["key"] != "C5": sys.exit(print("riff notes: %s" % got) or 1)
+man = json.load(open("%s/%s/wavelength.json" % (root, song)))
+if not any(f["path"] == "riffs.json" for f in man["files"]): sys.exit(print("riffs.json is not listed in the manifest") or 1)
+wav = post("api/play", {"song": song, "track": "Lead", "notes": [{"key": 72, "vel": 0.8, "start": 0, "dur": 0.25}], "tail": 0.5, "length": 4.0}, raw=True)
+if not isinstance(wav, bytes) or len(wav) < 4.0 * 48000 * 4: sys.exit(print("the riff's playback is shorter than its loop (%s)" % (len(wav) if isinstance(wav, bytes) else wav)) or 1)
+if not post("api/sounds", {"song": song, "op": "riff-delete", "id": "riff-1"}).get("ok"): sys.exit(print("deleting the riff failed") or 1)
+import os
+if os.path.exists("%s/%s/riffs.json" % (root, song)): sys.exit(print("riffs.json stayed after its last riff went") or 1)
+PY
+)
 if [ -z "$serve_why" ]; then
-  echo "ok   serve: UI, song list, token check, a song with a kit map"
+  echo "ok   serve: UI, song list, token check, a song with a kit map, a project with a riff"
 else
   echo "FAIL serve: $serve_why"; fail=1
 fi
