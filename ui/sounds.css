@@ -1,0 +1,98 @@
+/* The Sounds page (sounds.js): tracks, an instrument's modules of knobs, the keyboard, the hand-off.
+   Brand tokens only, so it follows the light and dark themes. */
+.sd-head { margin-bottom: 16px; max-width: 980px; }
+.sd-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.sd-title h1 { margin: 0 6px 0 0; font: 800 32px/1.05 var(--display); font-variation-settings: "wdth" 114; }
+.sd-title select { font: 600 13.5px var(--body); padding: 6px 8px; max-width: 320px; }
+.sd-title .ed-open { margin-left: 0; }
+.sd-head p { margin: 0; color: var(--muted); font-size: 14px; }
+.sd-head code, .sd-hint code { font: 12px var(--mono); color: var(--text); }
+.sd-grid { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; align-items: start; }
+.sd-tracks { margin: 0; position: sticky; top: 12px; }
+.sd-tracks h2 .ed-open { margin-left: auto; }
+.sd-tlist { padding: 6px; max-height: 52vh; overflow: auto; }
+.sd-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); vertical-align: middle; margin-left: 3px; }
+.sd-tempo { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.sd-tempo input { width: 70px; font: 13px var(--mono); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.sd-hint { padding: 8px 10px; font-size: 12px; color: var(--muted); }
+.sd-hint.err { color: var(--warn); padding: 4px 14px 10px; }
+.sd-main { min-width: 0; }
+.sd-inst { margin-bottom: 12px; }
+.sd-inst h2 { flex-wrap: wrap; }
+.sd-name { font: 800 20px/1.1 var(--display); font-variation-settings: "wdth" 112; margin-right: 4px; }
+.sd-pick { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font: 600 13px var(--body); color: var(--text); cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-pick:hover { border-color: var(--accent); color: var(--accent); }
+.sd-preset { display: inline-flex; align-items: center; gap: 2px; }
+.sd-preset > button:not(.sd-pick) { width: 26px; height: 28px; border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px; cursor: pointer; color: var(--muted); font: 600 16px/1 var(--body); }
+.sd-preset > button:not(.sd-pick):hover { color: var(--accent); border-color: var(--accent); }
+.sd-inst h2 .ed-open { margin-left: auto; }
+.sd-bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px 0; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.sd-bar:last-of-type { padding-bottom: 12px; }
+.sd-bar input[type=text], .sd-bar input[type=search] { font: 13px var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+.sd-note { flex: 1; min-width: 240px; }
+.sd-q { width: 200px; }
+.sd-only { display: inline-flex; align-items: center; gap: 6px; }
+.sd-saved { margin-left: auto; }
+.sd-saved.err { color: #e5484d; }
+
+/* modules and their controls */
+.sd-modules { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; align-items: start; margin-bottom: 16px; }
+.sd-modules > .card { margin: 0; }
+.sd-mod h3 { margin: 0; display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); font: 700 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.sd-mod h3 .t { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-mod h3 .n { font: 600 10.5px var(--mono); letter-spacing: 0; background: var(--amber); color: #1a1c2b; border-radius: 99px; padding: 0 6px; line-height: 16px; }
+.sd-mod h3 .c { margin-left: auto; font: 400 10.5px var(--mono); letter-spacing: 0; color: var(--muted); cursor: pointer; }
+.sd-mod.wide { grid-column: span 2; }
+.sd-mod.shut h3 { border-bottom: 0; }
+.sd-mod.off .sd-ctls { opacity: .45; }
+.sd-power { accent-color: var(--accent); margin: 0; }
+.sd-ctls { display: flex; flex-wrap: wrap; gap: 8px 2px; padding: 10px 8px 12px; align-items: flex-start; }
+.sd-knob { width: 70px; display: flex; flex-direction: column; align-items: center; gap: 1px; cursor: ns-resize; border-radius: 6px; padding: 2px 0 4px; outline: none; touch-action: none; user-select: none; }
+.sd-knob:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent); }
+.sd-knob svg { width: 44px; height: 44px; }
+.sd-knob .tr { fill: none; stroke: var(--line); stroke-width: 3.5; stroke-linecap: round; }
+.sd-knob .va { fill: none; stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round; }
+.sd-knob .cap { fill: var(--panel-2); stroke: var(--line); }
+.sd-knob .ptr { stroke: var(--text); stroke-width: 2.2; stroke-linecap: round; }
+.sd-knob .pre { fill: var(--muted); opacity: 0; }
+.sd-knob.ch .va { stroke: var(--amber); }
+.sd-knob.ch .pre { opacity: .9; }
+.sd-knob.drag .cap { stroke: var(--accent); }
+.sd-knob .l, .sd-seg .l, .sd-menu .l { font-size: 11.5px; text-align: center; line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-knob .v { font: 10.5px var(--mono); color: var(--muted); cursor: text; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 1.3em; }
+.sd-knob .v:hover { color: var(--accent); }
+.ch > .l, .sd-sw.ch span { color: var(--amber); font-weight: 600; }
+.sd-seg, .sd-menu { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; max-width: 100%; }
+.sd-seg .b { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.sd-seg button { background: var(--panel-2); border: 0; border-right: 1px solid var(--line); padding: 4px 8px; font: 500 11.5px var(--body); color: var(--muted); cursor: pointer; }
+.sd-seg button:last-child { border-right: 0; }
+.sd-seg button.on { background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); color: var(--accent); font-weight: 600; }
+.sd-seg.ch button.on { background: color-mix(in srgb, var(--amber) 25%, var(--panel-2)); color: var(--text); }
+.sd-menu select { font: 12px var(--body); max-width: 150px; }
+.sd-sw { display: inline-flex; align-items: center; gap: 6px; padding: 8px 8px; font-size: 12px; cursor: pointer; align-self: center; }
+.sd-sw input { accent-color: var(--accent); margin: 0; }
+
+/* the keyboard stays in reach while the knobs scroll */
+.sd-keys { position: sticky; bottom: 0; z-index: 4; margin: 0 0 16px; box-shadow: 0 -10px 30px color-mix(in srgb, var(--bg) 80%, transparent); }
+.sd-keys .pg-controls { padding: 8px 14px 0; }
+.sd-keys .pg-piano { padding: 8px 14px 6px; }
+.sd-keys .pg-keys { height: 92px; }
+.sd-keys .pg-k.w { padding-bottom: 4px; }
+.sd-keys .pg-status { padding: 0 14px 8px; }
+
+/* the hand-off */
+.sd-briefgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 12px 14px 4px; }
+.sd-briefgrid .wl-field > span { display: flex; align-items: center; gap: 8px; }
+.sd-briefgrid .wl-field > span .ed-open { margin-left: auto; }
+.sd-briefgrid textarea { width: 100%; font: 13px/1.45 var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; resize: vertical; }
+.sd-briefgrid textarea.mono { font: 11.5px/1.5 var(--mono); color: var(--muted); }
+
+/* the instrument and preset picker */
+dialog.wl-dlg.sd-dlg { width: min(860px, 94vw); }
+.sd-pickgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sd-pickgrid.one { grid-template-columns: 1fr; }
+.sd-pickgrid input[type=search] { width: 100%; font: 13px var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; margin-bottom: 6px; }
+.sd-pickgrid .pg-list { max-height: 48vh; min-height: 200px; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+
+@media (max-width: 1000px) { .sd-grid { grid-template-columns: 1fr; } .sd-tracks { position: static; } .sd-briefgrid { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .sd-pickgrid { grid-template-columns: 1fr; } .sd-modules { grid-template-columns: 1fr; } .sd-mod.wide { grid-column: auto; } .sd-q { width: 100%; } .sd-keys .pg-controls { display: none; } }

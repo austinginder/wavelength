@@ -1,7 +1,8 @@
 #pragma once
 // `wavelength serve`: a local web UI for reviewing songs. Reads song folders (job.json, report.json,
 // stems, review.json), renders previews of bars and tracks in child processes (never a plugin in
-// this process), and takes review comments for the agent. Read-only on the music.
+// this process), and takes review comments for the agent. The music changes only through edits.json
+// (note edits) and the Sounds page (sounds.json, brief.md, new tracks and the tempo in job.json).
 #include <cstdio>
 #include <string>
 

@@ -14,6 +14,7 @@ try { const t = localStorage.getItem('wl-theme'); if (t === 'light' || t === 'da
 <link rel="stylesheet" href="ui/brand.css">
 <link rel="stylesheet" href="ui/editor.css">
 <link rel="stylesheet" href="ui/pages.css">
+<link rel="stylesheet" href="ui/sounds.css">
 <style>
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -110,6 +111,7 @@ canvas#tl { display: block; width: 100%; cursor: crosshair; }
 		<nav class="nav" id="nav">
 			<a href="./" data-view="home"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Overview</a>
 			<a href="?view=playground" data-view="play"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M7 5v9M12 5v9M17 5v9"/></svg>Playground</a>
+			<a href="?view=sounds" data-view="sounds"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="12" r="4"/><path d="M7 12l2.2-2.2"/><circle cx="17" cy="12" r="4"/><path d="M17 12l-1-3"/><path d="M3 20h18"/></svg>Sounds</a>
 		</nav>
 		<div class="nav-h">Songs</div>
 		<div id="songs"></div>
@@ -118,9 +120,11 @@ canvas#tl { display: block; width: 100%; cursor: crosshair; }
 
 	<main id="homeview" class="page" hidden></main>
 	<main id="playview" class="page" hidden></main>
+	<main id="soundsview" class="page" hidden></main>
 	<main id="songview">
 		<div class="head"><h1 id="title">...</h1><span class="status" id="status"></span>
-			<button class="ed-open" id="detailsbtn" title="Title, folder name, authors (right-click a song for more)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>Details</button></div>
+			<button class="ed-open" id="detailsbtn" title="Title, folder name, authors (right-click a song for more)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>Details</button>
+			<button class="ed-open" id="soundsbtn" title="The song's instruments: presets and knobs, set by ear (sounds.json)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><path d="M12 12l3.5-3.5"/></svg>Sounds</button></div>
 		<div class="byline" id="byline"></div>
 		<div class="renderbar"><button class="ed-open" id="renderbtn" title="Render the whole song again (job.json with any edits.json) into its out folder">Render</button><span id="renderinfo"></span><button class="wl-cancel" id="rendercancel" hidden>Cancel render</button></div>
 		<div class="chips" id="chips"></div>
@@ -201,7 +205,7 @@ async function loadSongs() {
 }
 function setSongs(list) {
 	state.songs = list;
-	if (state.view !== 'song') { renderSongList(); if (state.view === 'home') renderHome(); return; }
+	if (state.view !== 'song') { renderSongList(); if (state.view === 'home') renderHome(); if (state.view === 'sounds') WLSounds.songsChanged(); return; }
 	if ($('#follow').checked && list[0] && list[0].slug !== state.slug && Date.now() / 1000 - list[0].mtime < 600) selectSong(list[0].slug);
 	if (!state.slug && list[0]) selectSong(list[0].slug);
 	else if (state.slug && !state.renaming && !list.some(s => s.slug === state.slug) && list[0]) selectSong(list[0].slug);
@@ -658,26 +662,31 @@ function showView(v) {
 	$('#songview').hidden = v !== 'song';
 	$('#homeview').hidden = v !== 'home';
 	$('#playview').hidden = v !== 'play';
+	$('#soundsview').hidden = v !== 'sounds';
 	document.querySelector('aside.side').hidden = v !== 'song';
 	document.querySelector('.app').classList.toggle('wide', v !== 'song');
 	document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('sel', a.dataset.view === v));
 	if (v !== 'song') { audio.pause(); document.querySelector('dialog.ed[open]')?.close(); }
 	if (v === 'home') { renderHome(); document.title = 'Wavelength'; }
 	if (v === 'play') WLPlay.show(); else WLPlay.hide();
+	if (v === 'sounds') WLSounds.show(state.soundsSong); else WLSounds.hide();
 	if (!es && v !== 'song') connect();   // the song list stays live everywhere
 	renderSongList();
 }
-function go(v) {
-	history.pushState(null, '', v === 'home' ? './' : '?view=playground');
+function go(v, slug) {
+	state.soundsSong = v === 'sounds' ? slug || '' : '';
+	history.pushState(null, '', v === 'home' ? './' : v === 'sounds' ? '?view=sounds' + (slug ? '&song=' + encodeURIComponent(slug) : '') : '?view=playground');
 	showView(v);
 }
 $('#nav').addEventListener('click', e => { const a = e.target.closest('a[data-view]'); if (!a || e.metaKey || e.ctrlKey) return; e.preventDefault(); go(a.dataset.view); });
 $('#home-link').addEventListener('click', e => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); go('home'); });
 function route() {
 	const q = new URLSearchParams(location.search);
-	if (q.get('song')) { $('#follow').checked = false; selectSong(q.get('song')); }
+	if (q.get('view') === 'sounds') { state.soundsSong = q.get('song') || ''; showView('sounds'); }
+	else if (q.get('song')) { $('#follow').checked = false; selectSong(q.get('song')); }
 	else showView(q.get('view') === 'playground' ? 'play' : 'home');
 }
+$('#soundsbtn').addEventListener('click', () => { if (state.slug) go('sounds', state.slug); });
 addEventListener('popstate', route);
 
 const ICON_WAVE = '<svg viewBox="0 3 24 18"><path d="M0 12 H2 V4.25 H6 V19.75 H10 V10 H14 V19.75 H18 V4.25 H22 V12 H24" fill="none" stroke="currentColor" stroke-width="2.5"/></svg>';
@@ -699,6 +708,10 @@ function renderHome() {
 				<h2><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M7 5v9M12 5v9M17 5v9"/></svg>Playground ${instrumentCount ? `<b>${instrumentCount}</b>` : ''}</h2>
 				<p>Pick any installed instrument and preset (or a track from a song) and play it from the on-screen piano or your computer keyboard.</p>
 				<div class="go">Start playing →</div></a>
+			<a class="tile" href="?view=sounds" data-sounds>
+				<h2><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="12" r="4"/><path d="M7 12l2.2-2.2"/><circle cx="17" cy="12" r="4"/><path d="M17 12l-1-3"/><path d="M3 20h18"/></svg>Sounds</h2>
+				<p>Start a project: choose an instrument and preset for each part, tune its knobs by ear while you play, then hand the song to an agent to write.</p>
+				<div class="go">Tune a song's sounds →</div></a>
 		</div>
 		<h2 class="sect-h">Songs <span>newest first</span></h2>
 		<div class="songgrid">${list.map(s => `<button class="scard" data-open="${esc(s.slug)}">
@@ -707,9 +720,10 @@ function renderHome() {
 			<span class="m">${s.seconds ? `<span><b>${fmtTime(s.seconds - 0)}</b></span>` : ''}${s.lufs != null ? `<span><b>${(+s.lufs).toFixed(1)}</b> LUFS</span>` : ''}${s.tracks ? `<span><b>${s.tracks}</b> tracks</span>` : ''}<span>${ago(s.mtime)} ago</span></span></button>`).join('') || '<div class="empty">No songs in this folder yet.</div>'}</div>`;
 }
 $('#homeview').addEventListener('click', e => {
-	const o = e.target.closest('[data-open]'), pl = e.target.closest('[data-play]');
+	const o = e.target.closest('[data-open]'), pl = e.target.closest('[data-play]'), sd = e.target.closest('[data-sounds]');
 	if (e.metaKey || e.ctrlKey) return;
 	if (pl) { e.preventDefault(); go('play'); }
+	else if (sd) { e.preventDefault(); go('sounds'); }
 	else if (o && o.dataset.open) { e.preventDefault(); $('#follow').checked = false; selectSong(o.dataset.open, true); }
 });
 $('#homeview').addEventListener('contextmenu', e => { const o = e.target.closest('.scard'); if (o) songMenu(e, o.dataset.open); });
@@ -873,7 +887,9 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', repaint);
 loadSongs().then(route);
 </script>
 <script src="ui/menus.js"></script>
+<script src="ui/keys.js"></script>
 <script src="ui/playground.js"></script>
+<script src="ui/sounds.js"></script>
 <script src="ui/live.js"></script>
 <script src="ui/editor.js"></script>
 </body>

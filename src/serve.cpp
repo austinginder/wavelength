@@ -1020,7 +1020,7 @@ json Server::sounds(const std::string &slug) {
     const fs::path base = jobPath.empty() ? dir : (dir / jobPath).parent_path();
     json job, sf;
     const bool hasJob = !jobPath.empty() && readJson(dir / jobPath, job);
-    readJson(base / "sounds.json", sf);
+    if (!readJson(base / "sounds.json", sf)) sf = json::object();
     std::map<std::string, json> entries;
     for (auto &e : sf.value("tracks", json::array()))
         if (e.is_object() && e.contains("track") && e["track"].is_string()) entries[e["track"].get<std::string>()] = e;

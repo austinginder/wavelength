@@ -264,8 +264,10 @@ Usage:
       A local web UI for reviewing songs (a folder of song folders, default the current one): the
       arrangement with its chords and harmony problems, loudness, stems, and quick previews: any
       bars, any tracks, rendered through the song's sends, buses and master in seconds. Comments
-      pinned to bars, tracks and notes go to each song's review.json for the agent. Read-only on
-      the music; plugins only run in render child processes. --open opens the browser.
+      pinned to bars, tracks and notes go to each song's review.json for the agent; note edits go to
+      edits.json. The Sounds page starts a project: an instrument and preset per part, its knobs
+      turned while it plays, saved to sounds.json, and a brief and a prompt for the agent. Plugins
+      only run in child processes. --open opens the browser.
   wavelength version [--check] [--json]
       This build's version (and the song format it reads); --check also asks GitHub for the latest release.
   wavelength upgrade [--check] [--force] [--json]
