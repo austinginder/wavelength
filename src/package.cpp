@@ -179,6 +179,7 @@ void validateFolder(const fs::path &dir, json &problems) {
         const std::string p = str(f, "path"), role = str(f, "role");
         if (!checkSongPath(p, why)) { problem("error", p.empty() ? "wavelength.json" : p, p.empty() ? "a file without a path" : why); continue; }
         if (p.rfind("history/", 0) == 0 || p.rfind("out/", 0) == 0) { problem("error", p, "history/ and out/ can't be listed as files of the song"); continue; }
+        if (foldName(p) == foldName(song.jobFile())) { problem("error", p, "the job is the manifest's \"job\"; files may not list it too (remove this entry)"); continue; }
         if (!seen.insert(foldName(p)).second) { problem("error", p, "listed twice, or the same name as another file when case is ignored"); continue; }
         static const std::set<std::string> roles = {"source", "notes", "media", "render", "other"};
         if (!roles.count(role)) problem("warning", p, "role '" + role + "' isn't one this Wavelength knows; read as other");

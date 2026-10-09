@@ -1061,9 +1061,10 @@ void Server::listSource(const std::string &slug, const std::string &path, const 
     json &files = song.manifest["files"];
     if (!files.is_array()) files = json::array();
     const bool listed = std::any_of(files.begin(), files.end(), [&](const json &x) { return x.value("path", std::string()) == path; });
-    const bool exists = fs::exists(songDir(slug) / path, ec);
-    if (exists && !listed) files.push_back({{"path", path}, {"role", "source"}, {"mediaType", mediaType}});
-    else if (!exists && listed) {
+    // the job is the manifest's "job" and never a file entry too (validate refuses that); an entry an older build added goes
+    const bool wanted = path != song.jobFile() && fs::exists(songDir(slug) / path, ec);
+    if (wanted && !listed) files.push_back({{"path", path}, {"role", "source"}, {"mediaType", mediaType}});
+    else if (!wanted && listed) {
         json kept = json::array();
         for (auto &x : files) if (x.value("path", std::string()) != path) kept.push_back(x);
         files = kept;

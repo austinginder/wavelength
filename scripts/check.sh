@@ -1644,7 +1644,7 @@ echo "$page" | grep -q 'wavelength-token' || serve_why="the page has no token ($
 [ -z "$serve_why" ] && { curl -s "http://127.0.0.1:$sport/api/song?song=kitmap" | grep -q '"custom kit"' || serve_why="a song with a kit map: $(curl -s -w ' HTTP %{http_code}' "http://127.0.0.1:$sport/api/song?song=kitmap" | head -c 200)"; }
 # the Sounds page: a new project, a track, a riff saved (key names, listed in the manifest), a bad riff refused,
 # the riff played back for its whole loop through the track's sound, then deleted
-[ -z "$serve_why" ] && serve_why=$(python3 - "$sport" "out/check/serve-songs" <<'PY'
+[ -z "$serve_why" ] && serve_why=$(python3 - "$sport" "out/check/serve-songs" "./$build/wavelength" <<'PY'
 import json, re, sys, urllib.request
 port, root = sys.argv[1], sys.argv[2]
 base = "http://127.0.0.1:%s/" % port
@@ -1657,7 +1657,11 @@ def post(path, body, raw=False):
     except urllib.error.HTTPError as e:
         return {"status": e.code, **json.loads(e.read() or b"{}")}
 song = post("api/song/create", {"title": "Riff Check"})["song"]
+mpath = "%s/%s/wavelength.json" % (root, song)
+man = json.load(open(mpath))   # the job as a file entry, as builds before 2026-10-09 wrote it: the next save drops it
+json.dump(dict(man, files=man["files"] + [{"path": "job.json", "role": "source"}]), open(mpath, "w"))
 assert post("api/sounds", {"song": song, "op": "add", "track": "Lead", "sound": {"plugin": "builtin:synth", "preset": "LD Chip"}, "tempo": 120}).get("ok")
+if any(f["path"] == "job.json" for f in json.load(open(mpath))["files"]): sys.exit(print("the manifest lists the job as a file") or 1)
 riff = {"name": "Hook", "track": "Lead", "tempo": 120, "timeSignature": [4, 4], "bars": 2, "quantize": "1/16", "note": "the hook",
         "notes": [{"beat": 0, "dur": 0.5, "key": "C5", "vel": 0.8}, {"beat": 1.5, "dur": 0.5, "key": 74, "vel": 0.7}],
         "played": [{"beat": 0.02, "dur": 0.4, "key": 72, "vel": 0.8}]}
@@ -1669,6 +1673,9 @@ got = d["riffs"][0]
 if [n["key"] for n in got["notes"]] != ["C5", "D5"] or got["played"][0]["key"] != "C5": sys.exit(print("riff notes: %s" % got) or 1)
 man = json.load(open("%s/%s/wavelength.json" % (root, song)))
 if not any(f["path"] == "riffs.json" for f in man["files"]): sys.exit(print("riffs.json is not listed in the manifest") or 1)
+import subprocess
+v = subprocess.run([sys.argv[3], "validate", "%s/%s" % (root, song)], capture_output=True, text=True)
+if v.returncode != 0: sys.exit(print("the project does not validate: %s" % (v.stdout + v.stderr).strip()[-300:]) or 1)
 wav = post("api/play", {"song": song, "track": "Lead", "notes": [{"key": 72, "vel": 0.8, "start": 0, "dur": 0.25}], "tail": 0.5, "length": 4.0}, raw=True)
 if not isinstance(wav, bytes) or len(wav) < 4.0 * 48000 * 4: sys.exit(print("the riff's playback is shorter than its loop (%s)" % (len(wav) if isinstance(wav, bytes) else wav)) or 1)
 if not post("api/sounds", {"song": song, "op": "riff-delete", "id": "riff-1"}).get("ok"): sys.exit(print("deleting the riff failed") or 1)
