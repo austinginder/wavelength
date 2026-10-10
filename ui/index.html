@@ -891,7 +891,9 @@ const repaint = () => { laneTone = null; if (state.song) drawTimeline(); window.
 document.fonts?.ready.then(repaint);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', repaint);
 
-loadSongs().then(route);
+// route once the scripts below have run too: the song list can arrive before a slow sounds.js (WLSounds undefined)
+const scriptsReady = new Promise(r => document.readyState === 'loading' ? addEventListener('DOMContentLoaded', r, { once: true }) : r());
+Promise.all([loadSongs(), scriptsReady]).then(route);
 </script>
 <script src="ui/menus.js"></script>
 <script src="ui/keys.js"></script>
