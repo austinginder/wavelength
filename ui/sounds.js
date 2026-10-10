@@ -483,7 +483,7 @@
 				<button class="sd-pick" data-act="inst" title="Choose the instrument">${esc(plainName(t.plugin))}</button>
 				<span class="sd-preset"><button data-act="prev" title="The preset before">‹</button><button class="sd-pick" data-act="preset" title="Choose a preset">${esc(t.preset || 'Default sound')}</button><button data-act="next" title="The preset after">›</button></span>
 				${live ? `<button class="ed-open" data-act="window" title="Open ${esc(plainName(t.plugin))}'s own window: what you change there comes back here">${S.win ? 'Close window' : 'Plugin window'}</button>` : ''}
-				<button class="ed-open" data-act="menu" title="Reset or remove">More</button></h2>
+				<button class="ed-open" data-act="menu" title="Rename, reset or remove">More</button></h2>
 			<div class="sd-bar">
 				<input type="text" class="sd-note" data-act="note" value="${esc(t.note || '')}" placeholder="What this part is for (the agent reads it): rolling offbeat bass, the hook in the drops…" maxlength="2000">
 			</div>
@@ -686,8 +686,18 @@
 		await pick(name);
 	}
 	function trackMenu(e, name) {
-		const t = row(name);
+		const t = row(name), script = !!S.data?.generator && !S.lib;
 		WLUI.menu(e, [
+			{ label: 'Rename…', disabled: script, hint: script ? 'a script writes job.json' : '', run: async () => {
+				const taken = new Set(S.data.tracks.map(x => x.name.toLowerCase()).filter(n => n !== name.toLowerCase()));
+				const to = await WLUI.prompt({ title: 'Rename ' + name, label: 'Name', value: name, ok: 'Rename',
+					check: v => !v ? 'Give it a name.' : v.length > 80 ? 'Keep it to 80 characters.' : taken.has(v.toLowerCase()) ? 'There is already a track named ' + v + '.' : '' });
+				if (!to || to === name) return;
+				try { await change({ op: 'rename', track: name, to }); } catch (err) { return status(err.message, true); }
+				if (name === S.sel) keys.close();   // its live sound and knobs start again under the new name
+				await reload();
+				if (name === S.sel) await pick(to);
+			} },
 			{ label: 'Reset to the job\'s sound', hint: 'forget what was set here', disabled: !t?.custom || !t.inJob, run: async () => {
 				if (!await WLUI.confirm({ title: 'Reset ' + name + '?', body: `Its instrument, preset and knobs go back to what <code>job.json</code> gives it, and its entry leaves <code>sounds.json</code>.`, ok: 'Reset' })) return;
 				await change({ op: 'reset', track: name }); await reload(); if (name === S.sel) { await loadKnobs(); keys.close(); keys.ensure(); }

@@ -1677,7 +1677,16 @@ if not any(f["path"] == "riffs.json" for f in man["files"]): sys.exit(print("rif
 import subprocess
 v = subprocess.run([sys.argv[3], "validate", "%s/%s" % (root, song)], capture_output=True, text=True)
 if v.returncode != 0: sys.exit(print("the project does not validate: %s" % (v.stdout + v.stderr).strip()[-300:]) or 1)
-wav = post("api/play", {"song": song, "track": "Lead", "notes": [{"key": 72, "vel": 0.8, "start": 0, "dur": 0.25}], "tail": 0.5, "length": 4.0}, raw=True)
+# rename the track: its riff, its sound and the job follow; a taken name is refused
+r = post("api/sounds", {"song": song, "op": "rename", "track": "Lead", "to": "Hook"})
+if not r.get("ok"): sys.exit(print("renaming a track: %s" % r) or 1)
+d = json.loads(urllib.request.urlopen(base + "api/sounds?song=" + song).read())
+if [t["name"] for t in d["tracks"]] != ["Hook"] or d["riffs"][0]["track"] != "Hook": sys.exit(print("after a rename: %s" % d) or 1)
+if json.load(open("%s/%s/job.json" % (root, song)))["tracks"][0]["name"] != "Hook": sys.exit(print("the job kept the old name") or 1)
+post("api/sounds", {"song": song, "op": "add", "track": "Pad", "sound": {"plugin": "builtin:synth", "preset": "PD Warm"}})
+if post("api/sounds", {"song": song, "op": "rename", "track": "Pad", "to": "Hook"}).get("status") != 400: sys.exit(print("a rename onto a taken name was taken") or 1)
+post("api/sounds", {"song": song, "op": "remove", "track": "Pad"})
+wav = post("api/play", {"song": song, "track": "Hook", "notes": [{"key": 72, "vel": 0.8, "start": 0, "dur": 0.25}], "tail": 0.5, "length": 4.0}, raw=True)
 if not isinstance(wav, bytes) or len(wav) < 4.0 * 48000 * 4: sys.exit(print("the riff's playback is shorter than its loop (%s)" % (len(wav) if isinstance(wav, bytes) else wav)) or 1)
 if not post("api/sounds", {"song": song, "op": "riff-delete", "id": "riff-1"}).get("ok"): sys.exit(print("deleting the riff failed") or 1)
 import os
@@ -1712,7 +1721,7 @@ if again["riffs"] or len(again["skipped"]) != 1: sys.exit(print("a riff copied t
 PY
 )
 if [ -z "$serve_why" ]; then
-  echo "ok   serve: UI, song list, token check, a song with a kit map, a project with a riff, the riff library and riffs use"
+  echo "ok   serve: UI, song list, token check, a song with a kit map, a project with a riff (renamed), the riff library and riffs use"
 else
   echo "FAIL serve: $serve_why"; fail=1
 fi

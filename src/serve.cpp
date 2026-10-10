@@ -23,6 +23,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -1059,7 +1060,7 @@ json Server::sounds(const std::string &slug) {
 
 // POST /api/sounds {song, op, ...}: "set" {track, sound, note} a track's whole instrument; "add" {track, sound, note} a new
 // track (in job.json too, with no notes); "remove" {track}; "reset" {track} back to the job's own sound; "note" {track, note};
-// "tempo" {tempo}; "brief" {text}
+// "rename" {track, to}; "tempo" {tempo}; "brief" {text}
 json Server::soundsChange(const std::string &slug, const json &in) {
     std::lock_guard<std::mutex> lock(mu_);
     const fs::path dir = songDir(slug);
@@ -1149,6 +1150,46 @@ json Server::soundsChange(const std::string &slug, const json &in) {
             e = &sf["tracks"].back();
         }
         setNote(*e);
+    } else if (op == "rename") {   // the new name everywhere the song names the track: job, sounds, riffs, note edits
+        std::string to = in.value("to", std::string());
+        to.erase(0, to.find_first_not_of(" \t"));
+        to.erase(to.find_last_not_of(" \t") + 1);
+        if (to.empty() || to.size() > 80) return {{"error", "a track needs a name (80 characters at most)"}};
+        if (!entry() && !jobTrack()) return {{"error", "there is no track named " + name}};
+        if (to == name) return {{"ok", true}};
+        for (auto &[path, info] : files)   // a script writes the job: its next run would bring the old name back
+            if (path.find('/') == std::string::npos && path.size() > 3 && path.substr(path.size() - 3) == ".py")
+                return {{"error", path + " writes this song's job.json; rename the track there"}};
+        for (const auto &e : sf["tracks"]) if (e.is_object() && e.value("track", std::string()) == to) return {{"error", "there is already a track named " + to}};
+        if (hasJob) for (const auto &t : job["tracks"]) if (t.is_object() && t.value("name", std::string()) == to) return {{"error", "there is already a track named " + to}};
+        std::error_code ec;
+        const fs::path rfile = base / "riffs.json", efile = base / "edits.json";
+        if (fs::exists(rfile, ec)) {
+            json rf = readRiffFile(rfile);
+            bool changed = false;
+            for (auto &r : rf["riffs"]) if (r.is_object() && r.value("track", std::string()) == name) { r["track"] = to; changed = true; }
+            if (changed && !platform::writeFileAtomic(rfile, rf.dump(1) + "\n", err)) return {{"error", err}};
+        }
+        json edits;
+        if (readJson(efile, edits) && edits.contains("edits") && edits["edits"].is_array()) {
+            bool changed = false;
+            for (auto &x : edits["edits"]) if (x.is_object() && x.value("track", std::string()) == name) { x["track"] = to; changed = true; }
+            if (changed && !platform::writeFileAtomic(efile, edits.dump(1) + "\n", err)) return {{"error", err}};
+        }
+        if (json *e = entry()) (*e)["track"] = to;
+        if (json *t = jobTrack()) {
+            (*t)["name"] = to;
+            // effects keyed on the track follow it: duck and gate "trigger", compressor and plugin "sidechain"
+            std::function<void(json &)> follow = [&](json &x) {
+                if (x.is_object()) {
+                    for (auto &[k, v] : x.items())
+                        if ((k == "trigger" || k == "sidechain") && v.is_string() && v.get<std::string>() == name) v = to;
+                        else if (v.is_structured()) follow(v);
+                } else if (x.is_array()) for (auto &v : x) if (v.is_structured()) follow(v);
+            };
+            follow(job);
+            jobChanged = true;
+        }
     } else if (op == "tempo") {
         const double bpm = in.value("tempo", 0.0);
         if (!(bpm >= 20 && bpm <= 400)) return {{"error", "a tempo from 20 to 400 BPM"}};
