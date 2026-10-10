@@ -110,6 +110,8 @@ dialog.wl-dlg.sd-dlg { width: min(860px, 94vw); }
 .sd-recbtn:hover { border-color: #e5484d; }
 .sd-recbtn.on { background: #e5484d; border-color: #e5484d; color: #fff; }
 .sd-recbtn.on i { background: #fff; border-radius: 2px; animation: pulse 1s infinite; }
+.sd-writebtn svg { color: var(--accent); }
+.sd-writebtn:hover { border-color: var(--accent); }
 .sd-tap { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font: 600 11.5px var(--body); color: var(--muted); cursor: pointer; }
 .sd-tap:active { background: var(--accent); color: #fff; }
 .sd-recpos { color: var(--text); margin-left: auto; }

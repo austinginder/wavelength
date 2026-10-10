@@ -33,7 +33,7 @@
 				<select id="sd-song" class="song-only" title="The song (project) whose sounds these are"></select>
 				<button class="ed-open song-only" id="sd-new">New project</button>
 				<button class="ed-open song-only" id="sd-opensong" title="The song's page: arrangement, renders, the agent's work">Song page</button></div>
-			<p class="lib-only">Record a riff whenever an idea comes: no project and no name needed. Each one plays on an instrument you tune here and keeps the take as you played it. File them in groups, then tick some (or pick a group) and copy the prompt at the bottom to have an agent write a song from them.</p>
+			<p class="lib-only">Record a riff whenever an idea comes, or write one note by note: no project and no name needed. Each one plays on an instrument you tune here and keeps the take as you played it. File them in groups, then tick some (or pick a group) and copy the prompt at the bottom to have an agent write a song from them.</p>
 			<p class="song-only">Give each part an instrument and preset, then turn its knobs while you play it. Changes save to the song's <code>sounds.json</code> as you go, and every render keeps them; then hand the song to an agent with the prompt below.</p>
 		</div>
 		<div class="sd-grid">
@@ -62,6 +62,7 @@
 		<section class="card sd-keys">
 			<div class="sd-rec">
 				<button class="sd-recbtn" id="sd-rec" title="Record a riff on this track: a count-in, then play (keys, MIDI keyboard or the piano)"><i></i><span>Record</span></button>
+				<button class="sd-recbtn sd-writebtn" id="sd-write" title="Write a riff on this track note by note in a piano roll: no recording, the Length and Quantize set its bars and grid"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M11.3 1.7a1.5 1.5 0 0 1 2.1 0l.9.9a1.5 1.5 0 0 1 0 2.1L5.6 13.4 2 14l.6-3.6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><span>Write</span></button>
 				<label title="The riff's tempo: the song's unless you change it here (record slower if that's easier; its notes are in beats either way)">Tempo <input type="number" id="sd-rtempo" min="20" max="400" step="1"> <button type="button" class="sd-tap" id="sd-tap" title="Tap the beat a few times">Tap</button><span class="sd-songtempo" id="sd-songtempo"></span></label>
 				<label>Length <select id="sd-bars"><option value="1">1 bar</option><option value="2">2 bars</option><option value="4">4 bars</option><option value="8">8 bars</option><option value="0">free (Stop ends it)</option></select></label>
 				<label><input type="checkbox" id="sd-countin"> Count-in</label>
@@ -123,6 +124,7 @@
 			if (bpm >= 20 && bpm <= 400) { S.recTempo = bpm === songTempo() ? null : bpm; rt.value = bpm; songTempoNote(); recStatus(`${bpm} BPM from your taps`); }
 		});
 		on('#sd-rec', 'click', () => R.on ? stopRecording() : record());
+		on('#sd-write', 'click', writeRiff);
 		on('#sd-rlist', 'click', e => { const pl = e.target.closest('[data-play]'); if (pl) return playRiff(riffById(pl.dataset.play), pl); const b = e.target.closest('[data-riff]'); if (b) editRiff(riffById(b.dataset.riff)); });
 		// the library: search, sort, groups (click to show, right-click to rename or delete, drop riffs on one to file them),
 		// ticked riffs (move, delete), and the prompt to write a song from them
@@ -854,6 +856,15 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		riffEditor({ track: R.track, tempo: R.tempo, timeSignature: R.meter, bars: +(end / R.bpb).toFixed(3), played, quantize: S.quant });
 	}
 	const recStatus = msg => { const el = root.querySelector('#sd-recpos'); if (el) el.textContent = msg; };
+	// a riff written note by note: the editor opens empty, at the record bar's tempo, length (2 bars when it's free) and grid
+	function writeRiff() {
+		const t = row(S.sel);
+		if (!t) return recStatus('Pick a track to write a riff on.');
+		if (R.on) return;
+		keys.releaseAll();
+		recStatus('');
+		riffEditor({ track: t.name, tempo: recTempo(), timeSignature: meter(), bars: S.recBars || 2, played: null, quantize: S.quant === 'off' ? '1/16' : S.quant });
+	}
 	// quantize: starts to the grid, ends to the grid (a step at least); two notes landing on one key at one beat keep the longer
 	function quantize(played, q, beats) {
 		const g = GRID[q] || 0, out = new Map();
@@ -935,7 +946,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		const [num, den] = take.timeSignature, bpb = num * 4 / den;
 		let bars = take.bars, beats = bars * bpb, tempo = take.tempo, uid = 0;
 		const mk = n => ({ id: ++uid, beat: n.beat, dur: n.dur, key: n.key, vel: n.vel ?? .8 });
-		let notes = (existing ? riffNotes(existing) : quantize(take.played, take.quantize, beats)).map(mk);
+		let notes = (existing ? riffNotes(existing) : take.played ? quantize(take.played, take.quantize, beats) : []).map(mk);
 		let snapName = take.quantize && take.quantize !== 'off' ? take.quantize : '1/16';
 		const sel = new Set(), hist = [], fut = [];
 		let lastLen = GRID[snapName] || .25, lastVel = .8, lo = 48, hi = 72, dirty = !existing;
@@ -947,8 +958,12 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		const snapD = d => g() ? Math.round(d / g()) * g() : d;
 		const floorB = b => g() ? Math.floor(b / g() + 1e-6) * g() : b;
 		let d, svg, replayTimer = 0, raf = 0;
-		const range = () => {
-			const ks = notes.map(n => n.key), mn = ks.length ? Math.min(...ks) : 60, mx = ks.length ? Math.max(...ks) : 72;
+		// the rows shown: fitted to the notes when the editor opens (an empty one around the keyboard's octave); after an
+		// edit they only grow to take in a note outside them, so the roll never moves under the pointer
+		const range = fit => {
+			if (!notes.length) { if (fit) { lo = Math.max(0, Math.min(103, 12 * ((S.octave ?? 4) + 1) - 1)); hi = lo + 24; } return; }
+			const ks = notes.map(n => n.key), mn = Math.min(...ks), mx = Math.max(...ks);
+			if (!fit) { lo = Math.max(0, Math.min(lo, mn - 2)); hi = Math.min(127, Math.max(hi, mx + 2)); return; }
 			lo = Math.max(0, mn - 5); hi = Math.min(127, mx + 5);
 			if (hi - lo < 24) { const mid = Math.round((lo + hi) / 2); lo = Math.max(0, mid - 12); hi = Math.min(127, lo + 24); }
 		};
@@ -1175,7 +1190,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				for (const x of chosen()) { const b = Math.min(Math.round(x.beat / g()) * g(), beats - g()), e = Math.max(b + g(), Math.round((x.beat + x.dur) / g()) * g()); x.beat = +b.toFixed(4); x.dur = +(Math.min(e, beats) - b).toFixed(4); }
 				changed();
 			}
-			if (a === 'played' && take.played) { remember(); notes = take.played.filter(n => n.beat < beats).map(n => mk({ ...n, dur: Math.min(n.dur, beats - n.beat) })); sel.clear(); range(); changed(); }
+			if (a === 'played' && take.played) { remember(); notes = take.played.filter(n => n.beat < beats).map(n => mk({ ...n, dur: Math.min(n.dur, beats - n.beat) })); sel.clear(); range(true); changed(); }
 			if (a === 'delete' && sel.size) { remember(); notes = notes.filter(x => !sel.has(x.id)); sel.clear(); changed(); }
 			if (a === 'all') { notes.forEach(x => sel.add(x.id)); draw(); }
 			if (a === 'duplicate') { duplicate(); d.querySelector('[data-r="rollbox"]').focus(); }
@@ -1186,7 +1201,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		const barOpts = [...new Set([1, 2, 3, 4, 6, 8, 12, 16, bars])].sort((a, b) => a - b);
 		const n = (S.data?.riffs?.length || 0) + 1;
 		const groups = S.data?.groups || [], groupNow = existing ? existing.group || '' : S.rgroup >= 0 ? groups[S.rgroup] || '' : '';
-		const res = await WLUI.modal({ title: existing ? existing.name : `New riff on ${take.track}`, cls: 'sd-dlg sd-riffdlg' + (S.lib ? ' lib' : ''), body: `
+		const res = await WLUI.modal({ title: existing ? existing.name : take.played ? `New riff on ${take.track}` : `Write a riff on ${take.track}`, cls: 'sd-dlg sd-riffdlg' + (S.lib ? ' lib' : ''), body: `
 			<div class="sd-takebar">
 				<button type="button" class="ed-btn" data-a="play" data-r="play" title="Space">Play (loops)</button>
 				<label>Snap <select data-r="snap">${Object.keys(GRID).map(k => `<option value="${k}" ${k === snapName ? 'selected' : ''}>${k === 'off' ? 'off' : k}</option>`).join('')}</select></label>
@@ -1255,8 +1270,8 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				});
 				d.querySelector('[data-r="tempo"]').addEventListener('change', e => { const v = +e.target.value; if (v >= 20 && v <= 400) { tempo = v; dirty = true; changed(); } });
 				d.addEventListener('close', () => { stopPlaying(); cancelAnimationFrame(raf); clearTimeout(replayTimer); });
-				d.addEventListener('cancel', e => { if (dirty && notes.length && !existing && !confirm('Discard this take?')) e.preventDefault(); });
-				range(); draw();
+				d.addEventListener('cancel', e => { if (dirty && notes.length && !existing && !confirm(take.played ? 'Discard this take?' : 'Discard this riff?')) e.preventDefault(); });
+				range(true); draw();
 				box.focus();
 			} });
 		if (res?.value === 'delete') {
@@ -1278,7 +1293,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		box.innerHTML = list.map(r => `<div class="sd-riff">
 			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it through ${esc(r.track)}'s sound (loops; click again to stop)">▶</button>
 			<button class="pg-item" data-riff="${esc(r.id)}" title="${esc(r.note || '')}"><span class="n">${esc(r.name)}</span><span class="v">${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'} · ${(r.notes || []).length} notes${r.note ? ' · ' + esc(r.note) : ''}</span></button></div>`).join('')
-			|| '<div class="sd-hint">Record one with the button by the keyboard: a count-in at the song\'s tempo, then play.</div>';
+			|| '<div class="sd-hint">Record one with the button by the keyboard (a count-in at the song\'s tempo, then play), or Write one note by note.</div>';
 	}
 	/* ---------- the riff library: groups, search, sort, ticked riffs, the prompt ---------- */
 	const ALL = -1, NONE = -2;   // the group filter: all riffs, riffs in no group, else an index into the groups
@@ -1344,7 +1359,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			${miniRoll(r)}
 			<button class="pg-item" data-riff="${esc(r.id)}" title="Edit ${esc(r.name)}${r.note ? ': ' + esc(r.note) : ''}"><span class="n">${esc(r.name)}${r.group && S.rgroup === ALL ? ` <i class="sd-gtag">${esc(r.group)}</i>` : ''}</span>
 				<span class="v">${esc([r.track, `${r.bars} bar${r.bars === 1 ? '' : 's'}`, `${r.tempo} BPM`, riffLine(r), when(r.created), r.note].filter(Boolean).join(' · '))}</span></button></div>`).join('')
-			|| `<div class="sd-hint">${all.length ? 'No riffs match.' : S.data?.tracks.length ? 'Press Record below and play: a count-in, then your riff. Keep it and it lands here.' : 'Add an instrument (left), then press Record below and play.'}</div>`;
+			|| `<div class="sd-hint">${all.length ? 'No riffs match.' : S.data?.tracks.length ? 'Press Record below and play (a count-in, then your riff), or Write one note by note. Keep it and it lands here.' : 'Add an instrument (left), then press Record below and play, or Write a riff note by note.'}</div>`;
 		renderSelbar();
 		usePrompt();
 	}

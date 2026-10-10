@@ -43,7 +43,7 @@ A GarageBand project imports too (limited support: the structure, mixer and timi
 
 ## Starting from a riff: `riffs.json`
 
-When the song folder has a `riffs.json`, the human recorded short riffs on `serve`'s Sounds page for you to build the song around: played from a keyboard over a count-in and click, then cleaned up in a piano roll. Each riff has a `name`, the `track` it was played on (its sound is that track's, in `sounds.json`), the `tempo` and `timeSignature` it was played at, its length in `bars`, the `quantize` grid, a `note` on what it is for ("the hook for the drops"), `notes` and, when it was recorded, `played`:
+When the song folder has a `riffs.json`, the human recorded or wrote short riffs on `serve`'s Sounds page for you to build the song around: played from a keyboard over a count-in and click, then cleaned up in a piano roll, or written note by note in that piano roll. Each riff has a `name`, the `track` it was played on (its sound is that track's, in `sounds.json`), the `tempo` and `timeSignature` it was played at, its length in `bars`, the `quantize` grid, a `note` on what it is for ("the hook for the drops"), `notes` and, when it was recorded (a written riff has none), `played`:
 
 ```json
 {"format": "wavelength.riffs", "formatVersion": "1.0", "riffs": [
@@ -61,7 +61,7 @@ When the song folder has a `riffs.json`, the human recorded short riffs on `serv
 
 ### The riff library: `wavelength riffs`
 
-The human also records riffs apart from any song, on `serve`'s Riffs page: no project or name needed, each on an instrument they tuned there, filed in groups. When a prompt names riffs or a group ("use my riffs Crawl and Glass Steps", "the riffs in my Night drive group"), or is the prompt that page writes, find them and copy them into the song folder before writing anything:
+The human also records or writes riffs apart from any song, on `serve`'s Riffs page: no project or name needed, each on an instrument they tuned there, filed in groups. When a prompt names riffs or a group ("use my riffs Crawl and Glass Steps", "the riffs in my Night drive group"), or is the prompt that page writes, find them and copy them into the song folder before writing anything:
 
 ```sh
 wavelength riffs                          # every riff: id, name, group, instrument and sound, length, tempo, notes by bar
