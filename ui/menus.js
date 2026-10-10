@@ -94,7 +94,18 @@
 				const b = buttons.find(x => x.value === v);
 				if (b?.submit) b.submit(api); else api.done(v);
 			});
-			d.addEventListener('keydown', e => e.stopPropagation());   // keys belong to the dialog, not the editor behind it
+			d.addEventListener('keydown', e => {
+				e.stopPropagation();   // keys belong to the dialog, not the editor behind it
+				// Enter in a field: the browser would submit with the form's first button, Cancel, and drop what was typed.
+				// In a text field it submits with the main button; in another field (a number) it only commits the value
+				const t = e.target;
+				if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || t.tagName !== 'INPUT') return;
+				if (['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image'].includes(t.type)) return;
+				e.preventDefault();
+				if (!['text', 'search', 'email', 'url', 'tel', 'password'].includes(t.type)) { t.dispatchEvent(new Event('change', { bubbles: true })); return; }
+				const main = d.querySelector('.wl-dlg-foot button.primary');
+				if (main && !main.disabled) d.querySelector('form').requestSubmit(main);
+			});
 			d.showModal();
 			init?.(api);
 		});
