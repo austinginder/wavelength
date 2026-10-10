@@ -7,12 +7,15 @@
  *
  * WLKeys.create({page, mount, current, settings, save}) builds the controls, piano and status line into `mount`.
  *   page      the view's element: keys play only while it is shown
- *   current() the sound to play, or null: {id, label, song, track} or {id, label, plugin, preset}; a new id
- *             loads the sound again (the Sounds page's id changes with the instrument and preset, not the knobs)
+ *   current() the sound to play, or null: {id, label, song, track} or {id, label, plugin, preset, live?}; a new id
+ *             loads the sound again (the Sounds page's id changes with the instrument and preset, not the knobs);
+ *             live: try a plugin named without its format live (the server says when it can only play note by note)
+ * Keys are ignored while a dialog is open, unless the dialog has a data-keys attribute (the Sounds page's preset
+ * chooser: play a preset before you pick it) and you aren't typing in one of its fields.
  *   settings  {octave, vel, len, chord, midi} (kept by the page), save() after they change
  *   onNote    optional: called as each note starts and stops sounding, {on, key, vel, t} with t the moment the
  *             key went down or up (performance.now() time base): what a recording keeps
- * Returns {ensure(), close(), releaseAll(), param(id, value), status(msg, err), stats()}; ensure() resolves with the
+ * Returns {ensure(), close(), releaseAll(), param(id, value), status(msg, err), stats(), keydown(e)}; ensure() resolves with the
  * live session ({id, ...}) when the sound plays live, else null. A MIDI keyboard plays too (Web MIDI, its button in
  * the controls): velocity from the keys, the sustain pedal (CC 64).
  * WLKeys.instruments() loads the installed instruments grouped by name, best format first.
@@ -26,7 +29,7 @@
 	const KEYMAP = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14, KeyP: 15, Semicolon: 16 };
 	const LETTER = Object.fromEntries(Object.entries(KEYMAP).map(([c, n]) => [n, c === 'Semicolon' ? ';' : c.slice(3)]));
 	const CHORDS = { single: [0], octave: [0, 12], fifth: [0, 7], major: [0, 4, 7], minor: [0, 3, 7], maj7: [0, 4, 7, 11], min7: [0, 3, 7, 10], sus4: [0, 5, 7] };
-	const liveFormat = c => c && (c.song || /^(clap|vst3):/.test(c.plugin));   // song tracks: the worker says whether it can
+	const liveFormat = c => c && (c.song || c.live || /^(clap|vst3):/.test(c.plugin));   // song tracks: the worker says whether it can
 
 	function create({ page, mount, current, settings: P, save, onNote }) {
 		if (!(P.len >= 1)) P.len = 4;   // older saved settings had a short fixed length
@@ -67,13 +70,15 @@
 		const pointerUp = e => { if (pointerKey != null) { up('ptr', e.timeStamp); pointerKey = null; } };
 		piano.addEventListener('pointerup', pointerUp);
 		piano.addEventListener('pointercancel', pointerUp);
-		const typing = e => e.metaKey || e.ctrlKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable || document.querySelector('dialog[open]');
-		document.addEventListener('keydown', e => {
+		const typing = e => e.metaKey || e.ctrlKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.target.isContentEditable || document.querySelector('dialog[open]:not([data-keys])');
+		// a dialog stops keydowns from reaching the page (WLUI.modal), so a dialog that lets the keys play hands them over: keydown(e)
+		const onKey = e => {
 			if (page.hidden || typing(e)) return;
 			if (e.code in KEYMAP) { e.preventDefault(); if (!e.repeat) down(e.code, 12 * (P.octave + 1) + KEYMAP[e.code], P.vel, e.timeStamp); }
 			else if (e.code === 'KeyZ' || e.code === 'KeyX') { e.preventDefault(); octave(e.code === 'KeyX' ? 1 : -1); }
 			else if (e.code === 'Space' && !e.target.closest?.('button')) { e.preventDefault(); if (!e.repeat) sustain(true, false, e.timeStamp); }
-		});
+		};
+		document.addEventListener('keydown', onKey);
 		document.addEventListener('keyup', e => {
 			if (page.hidden) return;
 			if (e.code in KEYMAP) up(e.code, e.timeStamp);
@@ -326,7 +331,7 @@
 		controls(); renderPiano();
 
 		return {
-			ensure, close, releaseAll, param, status,
+			ensure, close, releaseAll, param, status, keydown: onKey,
 			stats: () => live ? { id: live.id, live: !!live.node, frames: live.frames || 0, peak: live.peak || 0, state: live.ctx?.state } : null,
 		};
 	}

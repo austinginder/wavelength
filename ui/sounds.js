@@ -581,7 +581,8 @@
 			<div class="sd-pickgrid ${presetOnly ? 'one' : ''}">
 				${presetOnly ? '' : `<div><input type="search" data-q="i" placeholder="Search instruments" autocomplete="off" spellcheck="false"><div class="pg-list" data-l="i"></div></div>`}
 				<div><input type="search" data-q="p" placeholder="Search presets" autocomplete="off" spellcheck="false"><div class="pt-body"><div class="pt-rail" data-r="types"></div><div class="pg-list" data-l="p"></div></div></div>
-			</div>`,
+			</div>
+			<p class="sd-try" data-r="try">Click a preset, then play it on your computer keys (A to K, W E T Y U O P; Z and X change the octave) or a MIDI keyboard before you pick it. Up and down step through the list.</p>`,
 			buttons: [{ value: 'cancel', label: 'Cancel' }, { value: 'ok', label: name != null ? 'Add' : 'Use it', cls: 'primary', submit: api => {
 				const n = api.dlg.querySelector('input[name="name"]');
 				if (n && !n.value.trim()) return api.error('Give the track a name.');
@@ -610,15 +611,54 @@
 						: rowP('', 'what the plugin loads with') + hits.slice(0, 400).map(p => rowP(p.name, p.category)).join('') + (hits.length > 400 ? `<div class="empty">${hits.length - 400} more: search to narrow them down.</div>` : '');
 				};
 				const loadP = async () => { presets = []; types = []; ptype = ''; drawP(); if (!spec) return; const s = spec; const list = await presetsOf(s); if (s === spec) { presets = list; types = WLPresets.classify(list); drawP(); } };
+				// trying a sound: the keys play it in the background (keys.js loads it); the line under the lists says how far it got
+				let tryTimer = 0, tryN = 0;
+				const tryLine = d.querySelector('[data-r="try"]');
+				const trySound = () => {
+					if (!spec) return;
+					S.audition = { plugin: spec, preset: chosen };
+					clearTimeout(tryTimer);
+					const n = ++tryN, label = plainName(spec) + (chosen ? ' · ' + chosen : ' · its default sound');
+					tryLine.textContent = `Loading ${label}…`;
+					tryTimer = setTimeout(async () => {   // a quick run through the list loads only where it stops
+						keys?.releaseAll();
+						const L = await keys?.ensure();
+						if (n !== tryN || !d.open) return;
+						if (L) { tryLine.textContent = `Live: ${label}. Play it now on A to K or a MIDI keyboard.`; tryLine.classList.remove('err'); }   // else the keys' own line says why (mirrored below)
+					}, 220);
+				};
+				d.dataset.keys = '';   // keys.js plays while this dialog is open
+				// what the keys say about the sound being tried (note by note, or why it didn't load) shows here, not behind the dialog
+				const keysLine = root.querySelector('#sd-keys [data-r="status"]');
+				const mirror = new MutationObserver(() => { if (!S.audition || /^Live: /.test(keysLine.textContent)) return; tryLine.textContent = keysLine.textContent; tryLine.classList.toggle('err', keysLine.classList.contains('err')); });
+				if (keysLine) mirror.observe(keysLine, { childList: true, characterData: true, subtree: true, attributes: true });
+				d.addEventListener('close', () => mirror.disconnect());
 				iq?.addEventListener('input', drawI);
 				pq.addEventListener('input', drawP);
-				d.querySelector('[data-l="i"]')?.addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (!b) return; spec = specOf(groups[+b.dataset.g]); chosen = ''; drawI(); loadP(); });
-				d.querySelector('[data-l="p"]').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (!b) return; chosen = b.dataset.p; drawP(); });
+				d.querySelector('[data-l="i"]')?.addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (!b) return; spec = specOf(groups[+b.dataset.g]); chosen = ''; drawI(); loadP(); trySound(); });
+				const focusChosen = () => { const b = d.querySelector(`[data-l="p"] [data-p="${CSS.escape(chosen)}"]`); b?.focus(); b?.scrollIntoView({ block: 'nearest' }); };
+				d.querySelector('[data-l="p"]').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (!b) return; chosen = b.dataset.p; drawP(); focusChosen(); trySound(); });
+				// up and down step through the presets shown, each one tried as it is reached
+				d.addEventListener('keydown', e => {
+					if (e.target.tagName !== 'INPUT') keys?.keydown(e);   // the dialog keeps keydowns from the page: hand the notes to the keys
+					if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.target.closest('[data-l="i"]') || (e.target.tagName === 'INPUT' && e.target !== pq)) return;
+					const items = [...d.querySelectorAll('[data-l="p"] [data-p]')];
+					if (!items.length) return;
+					e.preventDefault();
+					const at = items.findIndex(b => b.dataset.p === chosen);
+					chosen = items[Math.max(0, Math.min(items.length - 1, at < 0 ? 0 : at + (e.key === 'ArrowDown' ? 1 : -1)))].dataset.p;
+					drawP(); focusChosen(); trySound();
+				});
 				d.querySelector('[data-r="types"]').addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (!b) return; ptype = b.dataset.type; drawP(); });
 				d.querySelector('[data-l="p"]').addEventListener('dblclick', e => { if (e.target.closest('[data-p]')) d.querySelector('button[value="ok"]').click(); });
 				drawI(); loadP();
 				(d.querySelector('input[name="name"]') || iq || pq).focus();
 			} });
+		if (S.audition) {
+			S.audition = null;
+			keys?.releaseAll();
+			if (!out) keys?.ensure();
+		}
 		return out;
 	}
 
@@ -1308,6 +1348,10 @@ ${list.map(r => `- ${r.name}: ${r.track}, ${r.bars} bar${r.bars === 1 ? '' : 's'
 	}
 
 	function current() {
+		if (S.audition) {   // the preset chooser is open: the preset clicked there plays, as it would be picked (no knobs)
+			const a = S.audition;
+			return { id: 'try|' + a.plugin + '|' + (a.preset || ''), label: plainName(a.plugin) + (a.preset ? ' · ' + a.preset : ''), plugin: a.plugin, preset: a.preset || '', live: !/^builtin:/.test(a.plugin) };
+		}
 		const t = row(S.sel);
 		return t && S.slug ? { song: S.slug, track: t.name, label: `${t.name} (${plainName(t.plugin)}${t.preset ? ' · ' + t.preset : ''})`, id: 'sd|' + S.slug + '|' + t.name + '|' + soundKey(t) } : null;
 	}

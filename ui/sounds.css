@@ -94,6 +94,8 @@ dialog.wl-dlg.sd-dlg { width: min(860px, 94vw); }
 .sd-pickgrid.one { grid-template-columns: 1fr; }
 .sd-pickgrid input[type=search] { width: 100%; font: 13px var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; margin-bottom: 6px; }
 .sd-pickgrid .pg-list { max-height: 48vh; min-height: 200px; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+.sd-try { margin: 10px 2px 0; font-size: 12.5px; color: var(--muted); }
+.sd-try.err { color: var(--warn); }
 
 @media (max-width: 1000px) { .sd-grid { grid-template-columns: 1fr; } .sd-left { position: static; } .sd-briefgrid { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .sd-pickgrid { grid-template-columns: 1fr; } .sd-modules { grid-template-columns: 1fr; } .sd-mod.wide { grid-column: auto; } .sd-q { width: 100%; } .sd-keys .pg-controls { display: none; } }
