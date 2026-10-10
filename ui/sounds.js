@@ -867,11 +867,12 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		}
 		return [...out.values()].sort((a, b) => a.beat - b.beat || a.key - b.key);
 	}
-	// play notes (beats) through the track's own sound, looped: one render (api/play), then the audio repeats
+	// play notes (beats) through the track's own sound, looped: one render (api/play), then the audio repeats.
+	// `from` is the beat it starts at (the loop still wraps to the riff's start)
 	let playing = null;
-	async function playNotes(track, notes, tempo, beats, btn) {
+	async function playNotes(track, notes, tempo, beats, btn, from = 0) {
 		stopPlaying();
-		const spb = 60 / tempo, me = playing = { btn };
+		const spb = 60 / tempo, me = playing = { btn, from, tempo };
 		if (btn) btn.classList.add('on');
 		try {
 			const r = await fetch('api/play', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: S.slug, track,
@@ -881,9 +882,22 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			if (playing !== me) return;
 			const src = c.createBufferSource();
 			src.buffer = buf; src.loop = true; src.loopEnd = Math.min(buf.duration, beats * spb);   // the notes' ring past the loop is cut
-			src.connect(c.destination); src.start();
-			Object.assign(me, { src, t0: c.currentTime, len: src.loopEnd, beats });
+			const off = Math.min(Math.max(0, me.from * spb), Math.max(0, src.loopEnd - 1e-3));
+			src.connect(c.destination); src.start(0, off);
+			Object.assign(me, { src, buf, t0: c.currentTime - off, len: src.loopEnd, beats });
 		} catch (e) { if (playing === me) { stopPlaying(); recStatus('Could not play it: ' + e.message); } }
+	}
+	// the loop goes on from `beat` (the same audio, no new render); before the audio arrives, it starts there
+	function seekPlaying(beat) {
+		const p = playing;
+		if (!p) return;
+		if (!p.src) { p.from = beat; return; }
+		const c = audio(), off = Math.min(Math.max(0, beat * 60 / p.tempo), Math.max(0, p.len - 1e-3));
+		try { p.src.stop(); } catch {}
+		const src = c.createBufferSource();
+		src.buffer = p.buf; src.loop = true; src.loopEnd = p.len;
+		src.connect(c.destination); src.start(0, off);
+		Object.assign(p, { src, t0: c.currentTime - off });
 	}
 	function stopPlaying() {
 		if (!playing) return;
@@ -952,6 +966,12 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 			svg.style.height = H + 'px';
 			svg.innerHTML = bg + ghost + ns + `<line class="ph" data-r="ph" x1="-10" x2="-10" y1="0" y2="${H}"/>`;
+			let ruler = '';
+			for (let b = 0; b < beats - 1e-9; b++) {
+				const bar = b % bpb === 0, at = (b / beats * 100).toFixed(3) + '%';
+				ruler += `<i class="${bar ? 'bar' : ''}" style="left:${at}"></i>` + (bar ? `<span style="left:${at}">${b / bpb + 1}</span>` : '');
+			}
+			d.querySelector('[data-r="ruler"]').innerHTML = ruler + '<b class="rph" data-r="rph" hidden></b>';
 			let labels = '';
 			for (let k = lo; k <= hi; k++) if (k % 12 === 0 || k === lo || k === hi) labels += `<span style="top:${y(k)}px">${keyStr(k)}</span>`;
 			d.querySelector('[data-r="keys"]').innerHTML = labels;
@@ -961,20 +981,35 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			d.querySelector('[data-r="redo"]').disabled = !fut.length;
 		}
 		const changed = () => { draw(); if (playing?.editor) { clearTimeout(replayTimer); replayTimer = setTimeout(() => play(true), 350); } };
-		function play(again) {
+		// where the loop is now, in beats (null when the editor isn't playing)
+		function nowBeat() {
 			const btn = d.querySelector('[data-r="play"]');
-			if (!again && playing?.btn === btn) return stopPlaying();
+			if (playing?.btn !== btn) return null;
+			if (!playing.src) return playing.from;
+			return ((R.ctx.currentTime - playing.t0) % playing.len) * playing.tempo / 60;
+		}
+		// Play toggles from the start; `from` (the ruler) plays from there, or jumps there while playing; a re-render
+		// after an edit (`again`) goes on from where the loop was
+		function play(again, from) {
+			const btn = d.querySelector('[data-r="play"]');
+			if (from != null && playing?.btn === btn) return seekPlaying(from);
+			if (!again && from == null && playing?.btn === btn) return stopPlaying();
 			if (!notes.length) return;
-			playNotes(take.track, notes, tempo, beats, btn).then(() => { if (playing?.btn === btn) playing.editor = true; });
+			if (again && from == null) from = Math.min(nowBeat() ?? 0, beats - 1e-3);
+			playNotes(take.track, notes, tempo, beats, btn, from || 0).then(() => { if (playing?.btn === btn) playing.editor = true; });
 			if (playing) playing.editor = true;
 			cancelAnimationFrame(raf);
 			const tick = () => {
-				const ph = d.querySelector('[data-r="ph"]');
+				const ph = d.querySelector('[data-r="ph"]'), rph = d.querySelector('[data-r="rph"]');
 				if (!d.open) return;
 				if (ph && playing?.btn === btn && playing.src) {
 					const x = ((R.ctx.currentTime - playing.t0) % playing.len) / playing.len * Math.min(1, playing.len / (beats * 60 / tempo)) * 1000;
 					ph.setAttribute('x1', x); ph.setAttribute('x2', x);
-				} else if (ph) { ph.setAttribute('x1', -10); ph.setAttribute('x2', -10); }
+					if (rph) { rph.hidden = false; rph.style.left = x / 10 + '%'; }
+				} else {
+					if (ph) { ph.setAttribute('x1', -10); ph.setAttribute('x2', -10); }
+					if (rph) rph.hidden = true;
+				}
 				raf = requestAnimationFrame(tick);
 			};
 			tick();
@@ -1094,9 +1129,9 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				<button type="button" class="ed-btn" data-a="undo" data-r="undo" title="Cmd-Z">Undo</button>
 				<button type="button" class="ed-btn" data-a="redo" data-r="redo" title="Shift-Cmd-Z">Redo</button>
 			</div>
-			<div class="sd-rollwrap"><div class="sd-rollkeys mono" data-r="keys"></div>
-				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
-			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click to add a note (drag to set its length), drag to move, drag its end to resize, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
+			<div class="sd-rollwrap"><div class="sd-rollkeys mono"><div class="sd-rollcorner"></div><div class="sd-rollkeyl" data-r="keys"></div></div>
+				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><div class="sd-ruler mono" data-r="ruler" title="Click to play from here; drag to move along"></div><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
+			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (drag to set its length), drag to move, drag its end to resize, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
 			<div class="sd-riffmeta">
 				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (S.lib ? nextRiffName() : take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
 				${S.lib ? `<label class="wl-field"><span>Group</span><select name="group"><option value="">No group</option>${groups.map(g => `<option ${g === groupNow ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></label>` : ''}
@@ -1119,6 +1154,23 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				svg = d.querySelector('[data-r="svg"]');
 				const box = d.querySelector('[data-r="rollbox"]');
 				svg.addEventListener('pointerdown', down);
+				const ruler = d.querySelector('[data-r="ruler"]');
+				ruler.addEventListener('pointerdown', e => {
+					if (e.button !== 0) return;
+					e.preventDefault();
+					box.focus();
+					ruler.setPointerCapture(e.pointerId);
+					let last = null;
+					const to = ev => {   // snapped to the grid; a drag jumps again only when it reaches another step
+						const r = ruler.getBoundingClientRect(), b = floorB(Math.min(beats - 1e-3, Math.max(0, (ev.clientX - r.left) / r.width * beats)));
+						if (b !== last) { last = b; play(false, b); }
+					};
+					to(e);
+					const up = () => { ruler.removeEventListener('pointermove', to); };
+					ruler.addEventListener('pointermove', to);
+					ruler.addEventListener('pointerup', up, { once: true });
+					ruler.addEventListener('pointercancel', up, { once: true });
+				});
 				box.addEventListener('keydown', key);
 				svg.addEventListener('wheel', wheel, { passive: false });
 				d.querySelector('.sd-takebar').addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) act(b.dataset.a); });

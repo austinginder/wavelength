@@ -18,6 +18,7 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 - Track `realtime`: renders a plugin at wall-clock speed while its notes play (from 0.5 s before a note-on to 1.5 s after the last held note ends) and at full speed elsewhere, in every plugin format. Some plugins start or feed their voices from a timer on their main thread and rendered silence faster than real time; discoDSP Roboto, a free singing synthesizer, is one, and is paced by default. AGENTS.md shows how to give Roboto its words through its state and place each phrase with a held key.
 
 - The Sounds and Riffs pages rename a track or instrument (More > Rename…). The new name follows it everywhere the song names it: `job.json`, `sounds.json`, the riffs that play on it, note edits, and effects keyed on it (a duck or gate `trigger`, a `sidechain`). A song whose `job.json` a script writes is renamed in the script instead (the page says so). `POST /api/sounds` takes `{"op": "rename", "track", "to"}`.
+- The riff editor has a ruler over the piano roll: click a bar or beat to play the riff from there (while it loops, it jumps there), or drag along it to move through the riff. Clicks land on the snap grid. An edit while the riff plays keeps its place instead of starting it over.
 
 ### Fixed
 - `serve` no longer opens the Sounds or Riffs page blank now and then: when the song list came back before the page's scripts had run, the page asked for them too early ("WLSounds is not defined"). It routes once both are ready.
