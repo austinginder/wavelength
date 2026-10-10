@@ -24,7 +24,7 @@
 			<section class="card pg-col" id="pg-prescol">
 				<h2>Preset <span class="r" id="pg-pcount"></span></h2>
 				<input type="search" id="pg-pq" placeholder="Search presets" autocomplete="off" spellcheck="false">
-				<div class="pg-list" id="pg-plist"><div class="empty">Pick an instrument.</div></div>
+				<div class="pt-body"><div class="pt-rail" id="pg-ptypes"></div><div class="pg-list" id="pg-plist"><div class="empty">Pick an instrument.</div></div></div>
 			</section>
 			<section class="card pg-play">
 				<h2><span id="pg-now">Pick an instrument</span><span class="r" id="pg-formats"></span></h2>
@@ -35,6 +35,7 @@
 		on('#pg-q', 'input', e => { P.q = e.target.value; renderInstruments(); });
 		on('#pg-pq', 'input', e => { P.pq = e.target.value; renderPresets(); });
 		on('#pg-list', 'click', e => { const b = e.target.closest('[data-g]'); if (b) pickInstrument(P.groups[+b.dataset.g]); });
+		on('#pg-ptypes', 'click', e => { const b = e.target.closest('[data-type]'); if (b) { P.ptype = b.dataset.type; renderPresets(); } });
 		on('#pg-plist', 'click', e => { const b = e.target.closest('[data-p]'); if (b) { P.preset = b.dataset.p; keep(); renderPresets(); renderNow(); keys.ensure(); } });
 		on('#pg-formats', 'click', e => { const b = e.target.closest('[data-spec]'); if (b) { P.spec = b.dataset.spec; P.preset = ''; keep(); loadPresets(); renderNow(); } });
 		on('.pg-seg', 'click', e => { const b = e.target.closest('[data-src]'); if (b) { P.source = b.dataset.src; keep(); renderSource(); } });
@@ -72,13 +73,17 @@
 		list.innerHTML = '<div class="empty">Reading presets…</div>';
 		const r = await fetch('api/presets?plugin=' + encodeURIComponent(spec)).then(r => r.json()).catch(() => ({ presets: [] }));
 		if (spec !== P.spec) return;
-		P.presets = r.presets || [];
+		P.presets = r.presets || []; P.types = WLPresets.classify(P.presets); P.ptype = '';
 		renderPresets();
 	}
 	function renderPresets() {
 		const q = P.pq.trim().toLowerCase(), all = P.presets;
-		const hits = all.filter(p => !q || (p.name + ' ' + (p.category || '') + ' ' + (p.features || []).join(' ')).toLowerCase().includes(q));
-		root.querySelector('#pg-pcount').textContent = all.length ? (q ? `${hits.length} of ${all.length}` : all.length) : '';
+		const types = P.types || [];
+		const found = all.map((p, i) => i).filter(i => !q || (all[i].name + ' ' + (all[i].category || '') + ' ' + types[i] + ' ' + (all[i].features || []).join(' ')).toLowerCase().includes(q));
+		const railHtml = WLPresets.rail(types, found, P.ptype || ''), railEl = root.querySelector('#pg-ptypes');
+		railEl.innerHTML = railHtml; railEl.hidden = !railHtml; railEl.parentElement.classList.toggle('flat', !railHtml);
+		const hits = found.filter(i => !P.ptype || types[i] === P.ptype).map(i => all[i]);
+		root.querySelector('#pg-pcount').textContent = all.length ? (q || P.ptype ? `${hits.length} of ${all.length}` : all.length) : '';
 		const row = (name, sub) => `<button class="pg-item ${name === P.preset ? 'sel' : ''}" data-p="${esc(name)}"><span class="n">${esc(name || 'Default sound')}</span><span class="v">${esc(sub || '')}</span></button>`;
 		root.querySelector('#pg-plist').innerHTML = row('', 'what the plugin loads with')
 			+ hits.slice(0, 400).map(p => row(p.name, [p.category, ...(p.features || [])].filter(Boolean).join(' · '))).join('')

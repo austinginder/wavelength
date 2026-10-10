@@ -47,6 +47,21 @@ main.page { padding: 26px 28px 48px; min-width: 0; }
 .pg-col { display: flex; flex-direction: column; min-height: 0; margin: 0; }
 .pg-col input[type=search], .pg-col select { margin: 10px 12px 6px; width: calc(100% - 24px); font: 13px var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; max-width: none; }
 .pg-list { max-height: 60vh; overflow: auto; padding: 2px 6px 8px; }
+/* preset types (presets.js): a side column beside a preset list, chips above it where the column is narrow (the playground) */
+.pt-body { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px; align-items: start; min-height: 0; }
+.pt-body.flat { grid-template-columns: minmax(0, 1fr); }
+.pt-rail { display: flex; flex-direction: column; gap: 1px; max-height: 48vh; overflow: auto; padding: 2px; }
+.pt-type { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; width: 100%; text-align: left; border: 0; background: none; border-radius: 6px; padding: 5px 9px; font: 600 12.5px var(--body); color: var(--text); cursor: pointer; }
+.pt-type b { font: 500 11px var(--mono); color: var(--muted); }
+.pt-type:hover:not(:disabled) { background: var(--panel-2); }
+.pt-type:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pt-type.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); box-shadow: inset 2px 0 0 var(--accent); }
+.pt-type:disabled { color: var(--muted); opacity: .5; cursor: default; }
+.pg-col .pt-body { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.pg-col .pt-rail { flex-direction: row; flex-wrap: wrap; gap: 4px; max-height: 132px; padding: 0 12px 6px; }
+.pg-col .pt-type { width: auto; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
+.pg-col .pt-type.on { box-shadow: none; border-color: var(--accent); }
+@media (max-width: 700px) { .pt-body { grid-template-columns: minmax(0, 1fr); } .pt-rail { flex-direction: row; flex-wrap: wrap; max-height: 96px; } .pt-type { width: auto; } }
 .pg-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 6px 8px; cursor: pointer; color: var(--text); font: inherit; }
 .pg-item:hover { background: var(--panel-2); }
 .pg-item.sel { background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); box-shadow: inset 2px 0 0 var(--accent); }

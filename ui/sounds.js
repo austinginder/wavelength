@@ -572,7 +572,7 @@
 	// the picker: instruments (unless presetOnly) and their presets, searchable; resolves with {plugin, preset} or null
 	async function chooseSound({ title, plugin, preset, presetOnly, name }) {
 		const groups = presetOnly ? [] : await WLKeys.instruments();
-		let spec = plugin || '', chosen = preset || '', presets = [];
+		let spec = plugin || '', chosen = preset || '', presets = [], types = [], ptype = '';
 		const specOf = g => g.formats[0].format === 'clap' && g.formats.filter(f => f.format === 'clap').length === 1 ? g.name : g.formats[0].spec;
 		const groupOf = s => groups.find(g => g.formats.some(f => f.spec === s) || g.name.toLowerCase() === plainName(s).toLowerCase());
 		let out = null;
@@ -580,7 +580,7 @@
 			${name != null ? `<label class="wl-field"><span>Track name</span><input name="name" value="${esc(name)}" list="sd-roles" autocomplete="off" spellcheck="false"><datalist id="sd-roles">${ROLES.map(r => `<option value="${r}">`).join('')}</datalist></label>` : ''}
 			<div class="sd-pickgrid ${presetOnly ? 'one' : ''}">
 				${presetOnly ? '' : `<div><input type="search" data-q="i" placeholder="Search instruments" autocomplete="off" spellcheck="false"><div class="pg-list" data-l="i"></div></div>`}
-				<div><input type="search" data-q="p" placeholder="Search presets" autocomplete="off" spellcheck="false"><div class="pg-list" data-l="p"></div></div>
+				<div><input type="search" data-q="p" placeholder="Search presets" autocomplete="off" spellcheck="false"><div class="pt-body"><div class="pt-rail" data-r="types"></div><div class="pg-list" data-l="p"></div></div></div>
 			</div>`,
 			buttons: [{ value: 'cancel', label: 'Cancel' }, { value: 'ok', label: name != null ? 'Add' : 'Use it', cls: 'primary', submit: api => {
 				const n = api.dlg.querySelector('input[name="name"]');
@@ -600,16 +600,21 @@
 				};
 				const drawP = () => {
 					const q = pq.value.trim().toLowerCase();
-					const hits = presets.filter(p => !q || (p.name + ' ' + (p.category || '')).toLowerCase().includes(q));
+					// the search first, then the type picked in the side column (its counts follow the search)
+					const found = presets.map((p, i) => i).filter(i => !q || (presets[i].name + ' ' + (presets[i].category || '') + ' ' + types[i]).toLowerCase().includes(q));
+					const railHtml = WLPresets.rail(types, found, ptype), railEl = d.querySelector('[data-r="types"]');
+					railEl.innerHTML = railHtml; railEl.hidden = !railHtml; railEl.parentElement.classList.toggle('flat', !railHtml);
+					const hits = found.filter(i => !ptype || types[i] === ptype).map(i => presets[i]);
 					const rowP = (n, sub) => `<button type="button" class="pg-item ${n === chosen ? 'sel' : ''}" data-p="${esc(n)}"><span class="n">${esc(n || 'Default sound')}</span><span class="v">${esc(sub || '')}</span></button>`;
 					d.querySelector('[data-l="p"]').innerHTML = !spec ? '<div class="empty">Pick an instrument.</div>'
 						: rowP('', 'what the plugin loads with') + hits.slice(0, 400).map(p => rowP(p.name, p.category)).join('') + (hits.length > 400 ? `<div class="empty">${hits.length - 400} more: search to narrow them down.</div>` : '');
 				};
-				const loadP = async () => { presets = []; drawP(); if (!spec) return; const s = spec; const list = await presetsOf(s); if (s === spec) { presets = list; drawP(); } };
+				const loadP = async () => { presets = []; types = []; ptype = ''; drawP(); if (!spec) return; const s = spec; const list = await presetsOf(s); if (s === spec) { presets = list; types = WLPresets.classify(list); drawP(); } };
 				iq?.addEventListener('input', drawI);
 				pq.addEventListener('input', drawP);
 				d.querySelector('[data-l="i"]')?.addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (!b) return; spec = specOf(groups[+b.dataset.g]); chosen = ''; drawI(); loadP(); });
 				d.querySelector('[data-l="p"]').addEventListener('click', e => { const b = e.target.closest('[data-p]'); if (!b) return; chosen = b.dataset.p; drawP(); });
+				d.querySelector('[data-r="types"]').addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (!b) return; ptype = b.dataset.type; drawP(); });
 				d.querySelector('[data-l="p"]').addEventListener('dblclick', e => { if (e.target.closest('[data-p]')) d.querySelector('button[value="ok"]').click(); });
 				drawI(); loadP();
 				(d.querySelector('input[name="name"]') || iq || pq).focus();
