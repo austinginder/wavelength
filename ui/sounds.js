@@ -305,7 +305,7 @@
 		if (k === 'switch') return `<label class="sd-sw ${ch ? 'ch' : ''}" data-id="${p.id}" title="${esc(p.name)}"><input type="checkbox" data-sw="${p.id}" ${v ? 'checked' : ''}><span>${esc(label)}</span></label>`;
 		if (k === 'seg') return `<div class="sd-seg ${ch ? 'ch' : ''}" data-id="${p.id}"><div class="b">${p.labels.map((l, i) => `<button data-step="${i}" class="${i === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div><span class="l">${esc(label)}</span></div>`;
 		if (k === 'menu') return `<label class="sd-menu ${ch ? 'ch' : ''}" data-id="${p.id}"><select data-menu="${p.id}">${p.labels.map((l, i) => `<option value="${i}" ${i === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select><span class="l">${esc(label)}</span></label>`;
-		return `<div class="sd-knob ${ch ? 'ch' : ''}" data-id="${p.id}" tabindex="0" title="${title}. Drag, Shift for fine steps, double-click for the preset's value, click the value to type one">${knobSvg(p)}<span class="l">${esc(label)}</span><span class="v">${esc(S.text.get(p.id) ?? '')}</span></div>`;
+		return `<div class="sd-knob ${ch ? 'ch' : ''}" data-id="${p.id}" tabindex="0" title="${title}. Drag, Shift for fine steps, double-click for the preset's value, click the value to type one; click it and the wheel turns it">${knobSvg(p)}<span class="l">${esc(label)}</span><span class="v">${esc(S.text.get(p.id) ?? '')}</span></div>`;
 	}
 	function renderModules() {
 		const box = root.querySelector('#sd-modules');
@@ -397,9 +397,16 @@
 		if (p.stepped) return set(id, S.vals.get(id) + dir);
 		set(id, fromNorm(p, norm(p, S.vals.get(id)) + dir * (fine ? .002 : .01)));
 	}
+	// The wheel turns a knob only once it is picked (a click, a drag or Tab focuses it) and only when the wheel
+	// gesture starts on it: hovering never takes the page's scroll, and a scroll in flight (momentum included)
+	// stays a scroll when it passes over the picked knob.
+	let pageWheelAt = -1e9;
+	addEventListener('wheel', e => {
+		if (e.target.closest?.('.sd-knob') !== document.activeElement) pageWheelAt = e.timeStamp;
+	}, { passive: true, capture: true });
 	function knobWheel(e) {
 		const el = e.target.closest('.sd-knob');
-		if (!el) return;
+		if (!el || el !== document.activeElement || e.timeStamp - pageWheelAt < 400) return;
 		e.preventDefault();
 		nudge(+el.dataset.id, e.deltaY < 0 ? 1 : -1, e.shiftKey);
 	}

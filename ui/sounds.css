@@ -58,7 +58,7 @@
 .sd-knob .pre { fill: var(--muted); opacity: 0; }
 .sd-knob.ch .va { stroke: var(--amber); }
 .sd-knob.ch .pre { opacity: .9; }
-.sd-knob.drag .cap { stroke: var(--accent); }
+.sd-knob.drag .cap, .sd-knob:focus .cap { stroke: var(--accent); }
 .sd-knob .l, .sd-seg .l, .sd-menu .l { font-size: 11.5px; text-align: center; line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sd-knob .v { font: 10.5px var(--mono); color: var(--muted); cursor: text; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 1.3em; }
 .sd-knob .v:hover { color: var(--accent); }
