@@ -143,3 +143,42 @@ dialog.wl-dlg.sd-riffdlg { width: min(1180px, 96vw); margin-top: 4vh; }   /* pin
 .sd-rollhelp { margin: 8px 0 12px !important; font-size: 12px !important; }
 .sd-riffmeta { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
 @media (max-width: 700px) { .sd-riffmeta { grid-template-columns: 1fr; } }
+
+/* the Riffs page: this page on the riff library (sounds.js, lib mode): groups, search, ticked riffs, a song from them */
+#soundsview:not(.lib) .lib-only, #soundsview.lib .song-only { display: none !important; }
+#soundsview.lib .sd-riffs { margin: 0 0 12px; }
+#soundsview.lib .sd-rlist { max-height: 58vh; }
+.sd-riffs h2 #sd-fromlib { margin-left: auto; }
+.sd-libbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 12px 4px; font-size: 12.5px; color: var(--muted); }
+.sd-libbar input[type=search] { flex: 1 1 220px; min-width: 0; font: 13px var(--body); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+.sd-libbar label { display: inline-flex; align-items: center; gap: 6px; }
+.sd-libbar select { font: 600 12.5px var(--body); padding: 4px 6px; }
+.sd-groups { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 6px; }
+.sd-gchip, .sd-gadd { font: 600 12px var(--body); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; }
+.sd-gchip b { font: 600 11px var(--mono); color: var(--muted); margin-left: 3px; }
+.sd-gchip:hover, .sd-gadd:hover { border-color: var(--accent); }
+.sd-gchip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sd-gchip.on b { color: rgb(255 255 255 / .8); }
+.sd-gchip.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.sd-gadd { color: var(--muted); border-style: dashed; background: none; }
+.sd-selbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 4px 12px 2px; padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); font-size: 12.5px; }
+.sd-selbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.sd-selbar .danger { margin-left: auto; }
+.sd-riff.lib { display: grid; grid-template-columns: auto auto 132px minmax(0, 1fr); gap: 8px; align-items: center; padding: 2px 4px; border-radius: 6px; }
+.sd-riff.lib.sel { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.sd-riff.lib input[type=checkbox] { margin: 0 2px; accent-color: var(--accent); }
+.sd-riff.lib .pg-item .v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-mini { display: block; width: 132px; height: 30px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; }
+.sd-mini rect { fill: var(--accent); }
+.sd-mini line { stroke: var(--line); }
+.sd-gtag { font: normal 600 10.5px var(--body); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+dialog.wl-dlg.sd-riffdlg.lib .sd-riffmeta { grid-template-columns: 1fr 1fr 2fr; }
+.sd-libpick { max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px 8px; }
+.sd-libpick h4 { margin: 10px 0 4px; font: 700 11.5px var(--body); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.sd-libpick label { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; cursor: pointer; min-width: 0; }
+.sd-libpick label span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 700px) {
+	.sd-riff.lib { grid-template-columns: auto auto minmax(0, 1fr); }
+	.sd-riff.lib .sd-mini { display: none; }
+	dialog.wl-dlg.sd-riffdlg.lib .sd-riffmeta { grid-template-columns: 1fr; }
+}

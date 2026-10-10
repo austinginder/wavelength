@@ -6,16 +6,22 @@
  * song to an agent. Riffs recorded here (a count-in and click at the song's tempo, then the keys, a MIDI keyboard or
  * the on-screen piano; quantized, reviewed in a piano roll) go to riffs.json for the agent to build the song around.
  *
+ * The Riffs page is this page on the riff library (riffs.hpp, the song "_riffs"): instruments instead of tracks, and
+ * riffs recorded with no project or name, filed in groups, searched and sorted, then handed to an agent in a prompt
+ * that copies them into a new song (`wavelength riffs use`). A song's Riffs card copies them in from the library too.
+ *
  * api/sounds lists and changes the sounds; api/knobs loads an instrument's knobs in a __knobs worker, and
  * api/knobs/ask turns values into the plugin's text ("917 Hz") and back.
  *
  * Uses the page's globals: $, esc, state, postJson, loadSongs, go.
  */
 (() => {
+	const LIB = '_riffs';   // the riff library, as the server names it
 	const S = { slug: '', data: null, sel: '', K: null, vals: new Map(), base: new Map(), text: new Map(), q: '', changedOnly: false, open: new Set(), octave: 4, vel: .85, len: 4, chord: 'single', tracks: {},
-		recBars: 2, countIn: true, click: true, quant: '1/16' };
+		recBars: 2, countIn: true, click: true, quant: '1/16', rsort: 'newest', rgroup: -1, ubrief: '' };
 	try { Object.assign(S, JSON.parse(localStorage.getItem('wl-sounds') || '{}'), { data: null, K: null, vals: new Map(), base: new Map(), text: new Map(), open: new Set() }); } catch {}
-	const keep = () => { try { const { slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant })); } catch {} };
+	Object.assign(S, { songSlug: S.slug === LIB ? '' : S.slug, lib: false, rq: '', rsel: new Set() });
+	const keep = () => { try { const { songSlug: slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief })); } catch {} };
 	const ROLES = ['Lead', 'Bass', 'Pad', 'Pluck', 'Arp', 'Keys', 'Stab', 'Chords', 'Sub', 'FX'];
 	let root, keys, built = false, saveTimer = 0, saving = Promise.resolve(), textTimer = 0;
 	const pendingText = new Map();
@@ -24,21 +30,28 @@
 		root = $('#soundsview');
 		root.innerHTML = `
 		<div class="sd-head">
-			<div class="sd-title"><h1>Sounds</h1>
-				<select id="sd-song" title="The song (project) whose sounds these are"></select>
-				<button class="ed-open" id="sd-new">New project</button>
-				<button class="ed-open" id="sd-opensong" title="The song's page: arrangement, renders, the agent's work">Song page</button></div>
-			<p>Give each part an instrument and preset, then turn its knobs while you play it. Changes save to the song's <code>sounds.json</code> as you go, and every render keeps them; then hand the song to an agent with the prompt below.</p>
+			<div class="sd-title"><h1 id="sd-h1">Sounds</h1>
+				<select id="sd-song" class="song-only" title="The song (project) whose sounds these are"></select>
+				<button class="ed-open song-only" id="sd-new">New project</button>
+				<button class="ed-open song-only" id="sd-opensong" title="The song's page: arrangement, renders, the agent's work">Song page</button></div>
+			<p class="lib-only">Record a riff whenever an idea comes: no project and no name needed. Each one plays on an instrument you tune here and keeps the take as you played it. File them in groups, then tick some (or pick a group) and copy the prompt at the bottom to have an agent write a song from them.</p>
+			<p class="song-only">Give each part an instrument and preset, then turn its knobs while you play it. Changes save to the song's <code>sounds.json</code> as you go, and every render keeps them; then hand the song to an agent with the prompt below.</p>
 		</div>
 		<div class="sd-grid">
 			<div class="sd-left">
 			<section class="card sd-tracks">
-				<h2>Tracks <button class="ed-open" id="sd-add">Add</button></h2>
+				<h2><span id="sd-trackh">Tracks</span> <button class="ed-open" id="sd-add">Add</button></h2>
 				<div class="sd-tlist" id="sd-tlist"></div>
 				<label class="sd-tempo">Tempo <input type="number" id="sd-tempo" min="20" max="400" step="1"> BPM</label>
 			</section>
 			<section class="card sd-riffs" id="sd-riffcard">
-				<h2>Riffs <span class="r" id="sd-riffcount"></span></h2>
+				<h2>Riffs <span class="r" id="sd-riffcount"></span><button class="ed-open song-only" id="sd-fromlib" title="Copy riffs from your riff library into this song, with the instruments they play on">From library</button></h2>
+				<div class="sd-libbar lib-only">
+					<input type="search" id="sd-rq" placeholder="Search names, notes, groups, instruments" autocomplete="off" aria-label="Search riffs">
+					<label>Sort <select id="sd-rsort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name</option><option value="instrument">Instrument</option><option value="tempo">Tempo</option><option value="length">Length</option></select></label>
+				</div>
+				<div class="sd-groups lib-only" id="sd-groups"></div>
+				<div class="sd-selbar lib-only" id="sd-selbar" hidden></div>
 				<div class="sd-rlist" id="sd-rlist"></div>
 			</section>
 			</div>
@@ -58,7 +71,14 @@
 				<span class="sd-recpos mono" id="sd-recpos"></span>
 			</div>
 			<div id="sd-keys"></div></section>
-		<section class="card sd-brief">
+		<section class="card sd-brief lib-only" id="sd-use">
+			<h2>Write a song from riffs <span class="r" id="sd-usecount"></span></h2>
+			<div class="sd-briefgrid">
+				<label class="wl-field"><span>Brief: style, mood, length, structure</span><textarea id="sd-ubrief" rows="7" placeholder="Dark techno, 128 BPM. Open with the first riff alone on its bass, then bring the second in for the drop..."></textarea></label>
+				<div class="wl-field"><span>Prompt for Claude Code <button class="ed-open" id="sd-ucopy">Copy</button></span><textarea id="sd-uprompt" rows="7" readonly class="mono" placeholder="Tick riffs above, or pick a group, and the prompt appears here."></textarea></div>
+			</div>
+		</section>
+		<section class="card sd-brief song-only">
 			<h2>Hand it to an agent <span class="r" id="sd-briefsaved"></span></h2>
 			<div class="sd-briefgrid">
 				<label class="wl-field"><span>Brief: style, mood, length, structure, references</span><textarea id="sd-brief" rows="7" placeholder="Uplifting trance, 138 BPM, F minor. 6 minutes: long breakdown with the pad alone, then the lead's hook over the full drop..."></textarea></label>
@@ -105,15 +125,45 @@
 		});
 		on('#sd-rec', 'click', () => R.on ? stopRecording() : record());
 		on('#sd-rlist', 'click', e => { const pl = e.target.closest('[data-play]'); if (pl) return playRiff(riffById(pl.dataset.play), pl); const b = e.target.closest('[data-riff]'); if (b) editRiff(riffById(b.dataset.riff)); });
+		// the library: search, sort, groups (click to show, right-click to rename or delete, drop riffs on one to file them),
+		// ticked riffs (move, delete), and the prompt to write a song from them
+		on('#sd-fromlib', 'click', fromLibrary);
+		on('#sd-rq', 'input', e => { S.rq = e.target.value; renderRiffs(); });
+		const rs = root.querySelector('#sd-rsort');
+		rs.value = S.rsort;
+		rs.addEventListener('change', () => { S.rsort = rs.value; keep(); renderRiffs(); });
+		on('#sd-groups', 'click', groupClick);
+		on('#sd-groups', 'contextmenu', groupMenu);
+		on('#sd-groups', 'dragover', e => { const c = e.target.closest('[data-gi]'); if (c && +c.dataset.gi !== -1) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; c.classList.add('drop'); } });
+		on('#sd-groups', 'dragleave', e => e.target.closest('[data-gi]')?.classList.remove('drop'));
+		on('#sd-groups', 'drop', groupDrop);
+		on('#sd-selbar', 'click', selClick);
+		on('#sd-selbar', 'change', selChange);
+		on('#sd-rlist', 'change', e => { const c = e.target.closest('[data-check]'); if (!c) return; c.checked ? S.rsel.add(c.dataset.check) : S.rsel.delete(c.dataset.check); renderRiffs(); });
+		on('#sd-rlist', 'contextmenu', e => { const b = e.target.closest('[data-rid]'); if (b && S.lib) riffMenu(e, b.dataset.rid); });
+		on('#sd-rlist', 'dragstart', e => {
+			const b = e.target.closest('[data-rid]');
+			if (!b) return;
+			const ids = S.rsel.has(b.dataset.rid) ? [...S.rsel] : [b.dataset.rid];
+			e.dataTransfer.setData('text/x-wl-riffs', JSON.stringify(ids));
+			e.dataTransfer.effectAllowed = 'move';
+		});
+		const ub = root.querySelector('#sd-ubrief');
+		ub.value = S.ubrief || '';
+		ub.addEventListener('input', () => { S.ubrief = ub.value; keep(); usePrompt(); });
+		on('#sd-ucopy', 'click', () => copyText('#sd-uprompt', '#sd-ucopy'));
 		built = true;
 	}
 
 	/* ---------- the song and its tracks ---------- */
-	async function open(slug) {
-		if (!slug) { S.slug = ''; S.data = null; render(); return; }
-		if (slug !== S.slug) { keys?.releaseAll(); keys?.close(); S.K = null; S.recTempo = null; }
+	async function open(slug, lib = false) {
+		S.lib = lib;
+		root.classList.toggle('lib', lib);
+		if (!lib) S.songSlug = slug;
+		if (!slug) { S.slug = ''; S.data = null; keep(); render(); return; }
+		if (slug !== S.slug) { keys?.releaseAll(); keys?.close(); S.K = null; S.recTempo = null; S.rsel.clear(); }
 		S.slug = slug; keep();
-		history.replaceState(null, '', '?view=sounds&song=' + encodeURIComponent(slug));
+		history.replaceState(null, '', lib ? '?view=riffs' : '?view=sounds&song=' + encodeURIComponent(slug));
 		await reload();
 		const want = S.tracks[slug];
 		const names = (S.data?.tracks || []).map(t => t.name);
@@ -127,6 +177,12 @@
 		render();
 	}
 	function render() {
+		const lib = S.lib;
+		root.querySelector('#sd-h1').textContent = lib ? 'Riffs' : 'Sounds';
+		root.querySelector('#sd-trackh').textContent = lib ? 'Instruments' : 'Tracks';
+		// the riff list is the library's main column, and a side card of a song's
+		const card = root.querySelector('#sd-riffcard'), home = root.querySelector(lib ? '.sd-main' : '.sd-left');
+		if (card.parentElement !== home) lib ? home.prepend(card) : home.append(card);
 		const sel = root.querySelector('#sd-song');
 		sel.innerHTML = '<option value="">Pick a song…</option>' + state.songs.map(s => `<option value="${esc(s.slug)}">${esc(s.title || s.slug)}</option>`).join('');
 		sel.value = S.slug;
@@ -139,13 +195,14 @@
 		root.querySelector('#sd-opensong').disabled = !S.slug;
 		const brief = root.querySelector('#sd-brief');
 		if (document.activeElement !== brief) brief.value = d?.brief || '';
-		root.querySelector('#sd-tlist').innerHTML = !d ? '<div class="empty">Pick a song above, or start a new project.</div>'
+		const onIt = name => (d?.riffs || []).filter(r => r.track === name).length;
+		root.querySelector('#sd-tlist').innerHTML = !d ? `<div class="empty">${lib ? 'Loading the library…' : 'Pick a song above, or start a new project.'}</div>`
 			: d.tracks.map(t => `<button class="pg-item ${t.name === S.sel ? 'sel' : ''}" data-t="${esc(t.name)}">
-				<span class="n">${esc(t.name)}${t.custom ? ' <i class="sd-dot" title="set here (sounds.json)"></i>' : ''}</span>
+				<span class="n">${esc(t.name)}${t.custom && !lib ? ' <i class="sd-dot" title="set here (sounds.json)"></i>' : ''}</span>
 				<span class="v">${esc(soundLine(t))}</span>
-				<span class="f">${t.notes ? t.notes + ' notes' : t.clips ? 'clips' : ''}</span></button>`).join('')
-			+ (d.tracks.length ? '' : '<div class="empty">No tracks yet. Add the first instrument.</div>')
-			+ (d.generator ? '<div class="sd-hint">A script writes this song\'s job.json. Sounds set here stay in sounds.json, which every render applies on top.</div>' : '');
+				<span class="f">${lib ? (onIt(t.name) ? onIt(t.name) + ' riff' + (onIt(t.name) === 1 ? '' : 's') : '') : t.notes ? t.notes + ' notes' : t.clips ? 'clips' : ''}</span></button>`).join('')
+			+ (d.tracks.length ? '' : `<div class="empty">${lib ? 'Add an instrument to record riffs on: a synth and a preset, tuned by ear.' : 'No tracks yet. Add the first instrument.'}</div>`)
+			+ (d.generator && !lib ? '<div class="sd-hint">A script writes this song\'s job.json. Sounds set here stay in sounds.json, which every render applies on top.</div>' : '');
 		renderRiffs();
 		prompt();
 	}
@@ -623,8 +680,10 @@ Tracks:
 ${lines.join('\n') || '- (none yet)'}
 ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''}${brief ? `\nBrief (also in brief.md):\n${brief}\n` : ''}`;
 	}
-	async function copyPrompt() {
-		const box = root.querySelector('#sd-prompt'), b = root.querySelector('#sd-copy');
+	const copyPrompt = () => copyText('#sd-prompt', '#sd-copy');
+	async function copyText(boxSel, btnSel) {
+		const box = root.querySelector(boxSel), b = root.querySelector(btnSel);
+		if (!box.value) return;
 		try { await navigator.clipboard.writeText(box.value); }
 		catch { box.select(); document.execCommand('copy'); }
 		b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1500);
@@ -955,7 +1014,8 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		}
 		const barOpts = [...new Set([1, 2, 3, 4, 6, 8, 12, 16, bars])].sort((a, b) => a - b);
 		const n = (S.data?.riffs?.length || 0) + 1;
-		const res = await WLUI.modal({ title: existing ? existing.name : `New riff on ${take.track}`, cls: 'sd-dlg sd-riffdlg', body: `
+		const groups = S.data?.groups || [], groupNow = existing ? existing.group || '' : S.rgroup >= 0 ? groups[S.rgroup] || '' : '';
+		const res = await WLUI.modal({ title: existing ? existing.name : `New riff on ${take.track}`, cls: 'sd-dlg sd-riffdlg' + (S.lib ? ' lib' : ''), body: `
 			<div class="sd-takebar">
 				<button type="button" class="ed-btn" data-a="play" data-r="play" title="Space">Play (loops)</button>
 				<label>Snap <select data-r="snap">${Object.keys(GRID).map(k => `<option value="${k}" ${k === snapName ? 'selected' : ''}>${k === 'off' ? 'off' : k}</option>`).join('')}</select></label>
@@ -971,7 +1031,8 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
 			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click to add a note (drag to set its length), drag to move, drag its end to resize, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
 			<div class="sd-riffmeta">
-				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
+				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (S.lib ? nextRiffName() : take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
+				${S.lib ? `<label class="wl-field"><span>Group</span><select name="group"><option value="">No group</option>${groups.map(g => `<option ${g === groupNow ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></label>` : ''}
 				<label class="wl-field"><span>What it's for (the agent reads it)</span><input name="note" value="${esc(existing?.note || '')}" placeholder="The hook for the drops; the intro's motif; a bassline under the breakdown…" maxlength="2000" autocomplete="off"></label>
 			</div>`,
 			buttons: [...(existing ? [{ value: 'delete', label: 'Delete riff', cls: 'danger' }] : []), { value: 'cancel', label: existing ? 'Close' : 'Discard' }, { value: 'ok', label: existing ? 'Save' : 'Keep', cls: 'primary', submit: async api => {
@@ -979,6 +1040,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				api.busy(true);
 				const asKey = x => ({ beat: +x.beat.toFixed(4), dur: +x.dur.toFixed(4), key: keyStr(x.key), vel: x.vel });
 				const riff = { ...(existing ? { id: existing.id } : {}), name: d.querySelector('[name="name"]').value, note: d.querySelector('[name="note"]').value, track: take.track,
+					...(S.lib ? { group: d.querySelector('[name="group"]').value } : {}),
 					tempo, timeSignature: take.timeSignature, bars, quantize: snapName,
 					notes: [...notes].sort((a, b) => a.beat - b.beat || a.key - b.key).map(asKey),
 					...(take.played ? { played: take.played.map(asKey) } : {}) };
@@ -1009,7 +1071,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				box.focus();
 			} });
 		if (res?.value === 'delete') {
-			if (!await WLUI.confirm({ title: `Delete ${existing.name}?`, body: 'It leaves riffs.json.', ok: 'Delete', danger: true })) return;
+			if (!await WLUI.confirm({ title: `Delete ${existing.name}?`, body: S.lib ? 'It leaves your riff library.' : 'It leaves riffs.json.', ok: 'Delete', danger: true })) return;
 			try { await change({ op: 'riff-delete', id: existing.id }); } catch (e) { return recStatus(e.message); }
 		}
 		if (res) await reload();
@@ -1020,6 +1082,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		riffEditor({ track: r.track, tempo: r.tempo, timeSignature: r.timeSignature || [4, 4], bars: r.bars, played, quantize: r.quantize || 'off' }, r);
 	}
 	function renderRiffs() {
+		if (S.lib) return renderLibrary();
 		const list = S.data?.riffs || [], box = root.querySelector('#sd-rlist');
 		root.querySelector('#sd-riffcard').hidden = !S.data;
 		root.querySelector('#sd-riffcount').textContent = list.length || '';
@@ -1027,6 +1090,208 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it through ${esc(r.track)}'s sound (loops; click again to stop)">▶</button>
 			<button class="pg-item" data-riff="${esc(r.id)}" title="${esc(r.note || '')}"><span class="n">${esc(r.name)}</span><span class="v">${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'} · ${(r.notes || []).length} notes${r.note ? ' · ' + esc(r.note) : ''}</span></button></div>`).join('')
 			|| '<div class="sd-hint">Record one with the button by the keyboard: a count-in at the song\'s tempo, then play.</div>';
+	}
+	/* ---------- the riff library: groups, search, sort, ticked riffs, the prompt ---------- */
+	const ALL = -1, NONE = -2;   // the group filter: all riffs, riffs in no group, else an index into the groups
+	const riffLine = r => {   // "C2 G2 | F#2 G2 Bb2", a chord as "C4+Eb4+G4"
+		const [num, den] = r.timeSignature || [4, 4], bpb = num * 4 / den;
+		const ns = [...(r.notes || [])].sort((a, b) => a.beat - b.beat);
+		let out = '', bar = 0, last = -1;
+		for (const n of ns) {
+			const b = Math.floor(n.beat / bpb + 1e-6);
+			if (!out) out += '- | '.repeat(b);
+			else if (Math.abs(n.beat - last) < 1e-6) out += '+';
+			else out += (b > bar ? ' | ' : ' ') + '- | '.repeat(Math.max(0, b - bar - 1));
+			out += keyStr(keyNum(n.key)); bar = b; last = n.beat;
+		}
+		return out;
+	};
+	function nextRiffName() {
+		let n = 0;
+		for (const r of S.data?.riffs || []) { const m = /^Riff (\d+)$/.exec(r.name); if (m) n = Math.max(n, +m[1]); }
+		return 'Riff ' + Math.max(n + 1, (S.data?.riffs?.length || 0) + 1);
+	}
+	const groupOf = gi => gi >= 0 ? (S.data?.groups || [])[gi] : null;
+	function libRiffs() {   // the library as shown: the group, the search, the sort
+		const q = S.rq.trim().toLowerCase(), g = groupOf(S.rgroup);
+		let list = (S.data?.riffs || []).filter(r => S.rgroup === ALL || (S.rgroup === NONE ? !r.group : r.group === g));
+		if (q) list = list.filter(r => [r.name, r.note, r.group, r.track, riffLine(r)].join(' ').toLowerCase().includes(q));
+		const num = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+		const by = { newest: (a, b) => (b.created || '').localeCompare(a.created || ''), oldest: (a, b) => (a.created || '').localeCompare(b.created || ''), name: num,
+			instrument: (a, b) => a.track.localeCompare(b.track) || num(a, b), tempo: (a, b) => a.tempo - b.tempo || num(a, b), length: (a, b) => a.bars - b.bars || num(a, b) };
+		return list.sort(by[S.rsort] || by.newest);
+	}
+	function miniRoll(r) {   // the riff's shape at a glance
+		const [num, den] = r.timeSignature || [4, 4], bpb = num * 4 / den, beats = (r.bars || 1) * bpb;
+		const ns = riffNotes(r);
+		if (!ns.length) return '<span class="sd-mini"></span>';
+		let lo = Math.min(...ns.map(n => n.key)), hi = Math.max(...ns.map(n => n.key));
+		if (hi - lo < 8) { const mid = (lo + hi) / 2; lo = mid - 4; hi = mid + 4; }
+		const W = 132, H = 30, x = b => b / beats * W, y = k => 2 + (hi - k) / (hi - lo) * (H - 7);
+		let bars = '';
+		for (let b = bpb; b < beats - 1e-6; b += bpb) bars += `<line x1="${x(b).toFixed(1)}" x2="${x(b).toFixed(1)}" y1="0" y2="${H}"/>`;
+		return `<svg class="sd-mini" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${bars}${ns.map(n => `<rect x="${x(n.beat).toFixed(1)}" y="${y(n.key).toFixed(1)}" width="${Math.max(1.5, x(n.dur) - 1).toFixed(1)}" height="3" rx="1"/>`).join('')}</svg>`;
+	}
+	const when = iso => {
+		const t = iso ? new Date(iso) : null;
+		if (!t || isNaN(t)) return '';
+		return t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : t.toLocaleDateString([], { month: 'short', day: 'numeric' });
+	};
+	function renderLibrary() {
+		const all = S.data?.riffs || [], groups = S.data?.groups || [], box = root.querySelector('#sd-rlist');
+		if (S.rgroup >= groups.length) S.rgroup = ALL;
+		for (const id of [...S.rsel]) if (!all.some(r => r.id === id)) S.rsel.delete(id);
+		root.querySelector('#sd-riffcard').hidden = !S.data;
+		root.querySelector('#sd-riffcount').textContent = all.length || '';
+		const count = gi => gi === ALL ? all.length : all.filter(r => gi === NONE ? !r.group : r.group === groups[gi]).length;
+		const chip = (gi, label, tip) => `<button class="sd-gchip ${S.rgroup === gi ? 'on' : ''}" data-gi="${gi}" title="${esc(tip)}">${esc(label)} <b>${count(gi)}</b></button>`;
+		root.querySelector('#sd-groups').innerHTML = chip(ALL, 'All', 'Every riff')
+			+ groups.map((g, i) => chip(i, g, 'Drop riffs here to file them. Right-click to rename or delete the group')).join('')
+			+ (groups.length && all.some(r => !r.group) ? chip(NONE, 'No group', 'Riffs not filed yet. Drop riffs here to take them out of their group') : '')
+			+ '<button class="sd-gadd" data-gadd title="A new group">+ Group</button>';
+		box.innerHTML = libRiffs().map(r => `<div class="sd-riff lib ${S.rsel.has(r.id) ? 'sel' : ''}" data-rid="${esc(r.id)}" draggable="true">
+			<input type="checkbox" data-check="${esc(r.id)}" ${S.rsel.has(r.id) ? 'checked' : ''} aria-label="Tick ${esc(r.name)}">
+			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it on ${esc(r.track)} (loops; click again to stop)">▶</button>
+			${miniRoll(r)}
+			<button class="pg-item" data-riff="${esc(r.id)}" title="Edit ${esc(r.name)}${r.note ? ': ' + esc(r.note) : ''}"><span class="n">${esc(r.name)}${r.group && S.rgroup === ALL ? ` <i class="sd-gtag">${esc(r.group)}</i>` : ''}</span>
+				<span class="v">${esc([r.track, `${r.bars} bar${r.bars === 1 ? '' : 's'}`, `${r.tempo} BPM`, riffLine(r), when(r.created), r.note].filter(Boolean).join(' · '))}</span></button></div>`).join('')
+			|| `<div class="sd-hint">${all.length ? 'No riffs match.' : S.data?.tracks.length ? 'Press Record below and play: a count-in, then your riff. Keep it and it lands here.' : 'Add an instrument (left), then press Record below and play.'}</div>`;
+		renderSelbar();
+		usePrompt();
+	}
+	function renderSelbar() {
+		const bar = root.querySelector('#sd-selbar'), n = S.rsel.size, groups = S.data?.groups || [];
+		bar.hidden = !n;
+		if (!n) return;
+		bar.innerHTML = `<b>${n} ticked</b>
+			<label>Move to <select data-sel="move"><option value="">a group…</option>${groups.map((g, i) => `<option value="${i}">${esc(g)}</option>`).join('')}<option value="none">No group</option><option value="new">New group…</option></select></label>
+			<button type="button" class="ed-btn" data-sel="all">Tick all shown</button>
+			<button type="button" class="ed-btn" data-sel="clear">Clear</button>
+			<button type="button" class="ed-btn danger" data-sel="delete">Delete</button>`;
+	}
+	async function libChange(body, after) {
+		try { await change(body); } catch (e) { return WLUI.confirm({ title: 'Could not do that', body: esc(e.message) }); }
+		after?.();
+		await reload();
+	}
+	const fileRiffs = (ids, group) => libChange({ op: 'riff-group', ids, group });
+	async function newGroup() {
+		const groups = S.data?.groups || [];
+		return WLUI.prompt({ title: 'New group', body: 'A group for riffs that belong together: a mood, a song idea, a kind of part.', label: 'Name', value: '', ok: 'Create',
+			check: v => !v.trim() ? 'Give it a name.' : groups.some(g => g.toLowerCase() === v.trim().toLowerCase()) ? 'There is already a group by that name.' : '' });
+	}
+	async function groupClick(e) {
+		if (e.target.closest('[data-gadd]')) {
+			const name = await newGroup();
+			if (name) await libChange({ op: 'group-add', group: name.trim() }, () => { S.rgroup = (S.data?.groups || []).length; keep(); });
+			return;
+		}
+		const c = e.target.closest('[data-gi]');
+		if (!c) return;
+		S.rgroup = +c.dataset.gi; keep(); renderRiffs();
+	}
+	function groupMenu(e) {
+		const c = e.target.closest('[data-gi]'), g = c ? groupOf(+c.dataset.gi) : null;
+		if (!g) return;
+		WLUI.menu(e, [
+			{ label: 'Tick its riffs', run: () => { for (const r of S.data.riffs) if (r.group === g) S.rsel.add(r.id); renderRiffs(); } },
+			{ label: 'Rename…', run: async () => {
+				const to = await WLUI.prompt({ title: 'Rename ' + g, label: 'Name', value: g, ok: 'Rename', check: v => v.trim() ? '' : 'Give it a name.' });
+				if (to && to.trim() !== g) await libChange({ op: 'group-rename', group: g, to: to.trim() });
+			} },
+			'-',
+			{ label: 'Delete group', danger: true, run: async () => {
+				if (!await WLUI.confirm({ title: `Delete the group ${g}?`, body: 'Its riffs stay in the library, in no group.', ok: 'Delete group', danger: true })) return;
+				await libChange({ op: 'group-delete', group: g }, () => { S.rgroup = ALL; keep(); });
+			} },
+		]);
+	}
+	function groupDrop(e) {
+		const c = e.target.closest('[data-gi]');
+		root.querySelectorAll('.sd-gchip.drop').forEach(x => x.classList.remove('drop'));
+		if (!c) return;
+		e.preventDefault();
+		let ids;
+		try { ids = JSON.parse(e.dataTransfer.getData('text/x-wl-riffs') || '[]'); } catch { return; }
+		const gi = +c.dataset.gi;
+		if (ids.length && gi !== ALL) fileRiffs(ids, gi === NONE ? '' : groupOf(gi));
+	}
+	async function selChange(e) {
+		const s = e.target.closest('[data-sel="move"]');
+		if (!s || !s.value) return;
+		const g = s.value === 'none' ? '' : s.value === 'new' ? await newGroup() : groupOf(+s.value);
+		if (g == null) { s.value = ''; return; }
+		await fileRiffs([...S.rsel], g.trim());
+	}
+	async function selClick(e) {
+		const b = e.target.closest('button[data-sel]');
+		if (!b) return;
+		if (b.dataset.sel === 'all') { for (const r of libRiffs()) S.rsel.add(r.id); return renderRiffs(); }
+		if (b.dataset.sel === 'clear') { S.rsel.clear(); return renderRiffs(); }
+		if (b.dataset.sel === 'delete') {
+			const n = S.rsel.size;
+			if (!await WLUI.confirm({ title: `Delete ${n} riff${n === 1 ? '' : 's'}?`, body: 'They leave your riff library. Songs they were copied into keep their copies.', ok: 'Delete', danger: true })) return;
+			await libChange({ op: 'riff-delete', ids: [...S.rsel] }, () => S.rsel.clear());
+		}
+	}
+	function riffMenu(e, id) {
+		const r = riffById(id), groups = S.data?.groups || [];
+		if (!r) return;
+		WLUI.menu(e, [
+			{ label: 'Edit…', run: () => editRiff(r) },
+			{ label: S.rsel.has(id) ? 'Untick' : 'Tick', run: () => { S.rsel.has(id) ? S.rsel.delete(id) : S.rsel.add(id); renderRiffs(); } },
+			'-',
+			...groups.filter(g => g !== r.group).map(g => ({ label: 'Move to ' + g, run: () => fileRiffs([id], g) })),
+			...(r.group ? [{ label: 'Take out of ' + r.group, run: () => fileRiffs([id], '') }] : []),
+			{ label: 'Move to a new group…', run: async () => { const g = await newGroup(); if (g) fileRiffs([id], g.trim()); } },
+			'-',
+			{ label: 'Delete', danger: true, run: async () => {
+				if (!await WLUI.confirm({ title: `Delete ${r.name}?`, body: 'It leaves your riff library. Songs it was copied into keep their copies.', ok: 'Delete', danger: true })) return;
+				await libChange({ op: 'riff-delete', ids: [id] }, () => S.rsel.delete(id));
+			} },
+		]);
+	}
+	// the prompt: the ticked riffs, else the group shown; the agent copies them into a new song folder it names
+	function usePrompt() {
+		const box = root?.querySelector('#sd-uprompt');
+		if (!box || !S.lib) return;
+		const all = S.data?.riffs || [], g = groupOf(S.rgroup);
+		let picked = all.filter(r => S.rsel.has(r.id)), refs = picked.map(r => r.id);
+		if (!picked.length && g) { picked = all.filter(r => r.group === g); refs = ['group:' + g]; }
+		root.querySelector('#sd-usecount').textContent = !picked.length ? '' : S.rsel.size ? `${picked.length} ticked` : `${picked.length} in ${g}`;
+		if (!picked.length) { box.value = ''; return; }
+		const q = v => /^[\w.:/@+-]+$/.test(v) ? v : `"${v.replace(/(["\\$`])/g, '\\$1')}"`;
+		const dir = (S.data.songsDir || '').replace(/\/+$/, '');
+		const brief = root.querySelector('#sd-ubrief').value.trim();
+		box.value = `/wavelength Write a new song from riffs in my riff library.
+
+Make a folder for it in ${dir || 'my songs folder'}, named after the song you write, and copy the riffs in first:
+
+wavelength riffs use ${q((dir || '<songs folder>') + '/<song-folder>')} ${refs.map(q).join(' ')}
+
+That puts them in the song's riffs.json, and the instruments I played them on, as I tuned them, in its sounds.json and job.json. Then build the song around them (AGENTS.md, "Starting from a riff"). \`wavelength riffs show <id>\` shows a riff in full.
+
+Riffs:
+${picked.map(r => `- ${r.id} "${r.name}": ${r.track} (${soundLine(row(r.track) || {})}), ${r.bars} bar${r.bars === 1 ? '' : 's'} at ${r.tempo} BPM: ${riffLine(r)}${r.note ? `. ${r.note}` : ''}`).join('\n')}
+${brief ? `\nBrief:\n${brief}\n` : ''}`;
+	}
+	// a song's Riffs card: copy riffs in from the library, each with the instrument it plays on
+	async function fromLibrary() {
+		if (!S.data || S.lib) return;
+		const lib = await fetch('api/sounds?song=' + LIB).then(r => r.json()).catch(() => null), riffs = lib?.riffs || [];
+		if (!riffs.length) return WLUI.confirm({ title: 'Your riff library is empty', body: 'Record riffs on the Riffs page (in the menu on the left), then copy them into songs from here.', ok: 'OK' });
+		const groups = [...(lib.groups || []), ''];
+		const body = `<p>Tick the riffs to copy into ${esc(S.data.song)}. Each comes with the instrument it plays on, as a track in <code>sounds.json</code> and the job when the song has none like it.</p>
+			<div class="sd-libpick">${groups.map(g => { const rs = riffs.filter(r => (r.group || '') === g); return rs.length ? `<div><h4>${esc(g || 'No group')}</h4>${rs.map(r =>
+				`<label><input type="checkbox" value="${esc(r.id)}"> <b>${esc(r.name)}</b> <span>${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'} · ${r.tempo} BPM · ${esc(riffLine(r))}</span></label>`).join('')}</div>` : ''; }).join('')}</div>`;
+		const res = await WLUI.modal({ title: 'Riffs from your library', cls: 'sd-dlg', body, buttons: [{ value: 'cancel', label: 'Cancel' }, { value: 'ok', label: 'Copy into the song', cls: 'primary', submit: async api => {
+			const ids = [...api.dlg.querySelectorAll('.sd-libpick input:checked')].map(x => x.value);
+			if (!ids.length) return api.error('Tick a riff first.');
+			api.busy(true);
+			try { const r = await postJson('api/riffs/use', { song: S.slug, ids }); if (r.error) throw new Error(r.error); api.done('ok'); }
+			catch (e) { api.busy(false); api.error(e.message); }
+		} }] });
+		if (res?.value === 'ok') await reload();
 	}
 	function riffLines(d) {
 		const list = d.riffs || [];
@@ -1046,8 +1311,13 @@ ${list.map(r => `- ${r.name}: ${r.track}, ${r.bars} bar${r.bars === 1 ? '' : 's'
 		show(slug) {
 			if (!built) build();
 			document.title = 'Sounds · Wavelength';
-			const want = slug || S.slug || state.slug || '';
-			if (want !== S.slug || !S.data) open(want); else { render(); keys.ensure(); }
+			const want = slug || S.songSlug || state.slug || '';
+			if (want !== S.slug || !S.data || S.lib) open(want); else { render(); keys.ensure(); }
+		},
+		showLibrary() {
+			if (!built) build();
+			document.title = 'Riffs · Wavelength';
+			if (S.slug !== LIB || !S.data || !S.lib) open(LIB, true); else { render(); keys.ensure(); }
 		},
 		hide() { if (built) { save(); clearInterval(S.winPoll); S.win = null; if (R.on) stopRecording(); stopPlaying(); keys.releaseAll(); keys.close(); } },
 		songsChanged() { if (built && !root.hidden) render(); },

@@ -157,6 +157,7 @@ add_executable(wavelength
   src/docs.cpp
   src/fallback.cpp
   src/sounds.cpp
+  src/riffs.cpp
   src/editor_window.cpp
   src/kit.cpp
   src/self_upgrade.cpp

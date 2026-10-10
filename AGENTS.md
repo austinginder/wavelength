@@ -57,6 +57,20 @@ When the song folder has a `riffs.json`, the human recorded short riffs on `serv
 - Beats don't depend on the tempo, so a riff fits the song at any tempo; if the song's tempo differs from the riff's, say so (the human may have recorded it slower to play it cleanly).
 - Treat the riffs as the song's themes. Find their key and the chords they imply first: put a riff's notes in a job and run `wavelength lint job.json --harmony --chords`. Write the harmony, bass and other parts around them and place each one where its note says. Keep a riff recognisable where it matters (its rhythm and contour) and vary it elsewhere: octaves, other instruments, fragments, a changed ending, a transposition that follows the chords.
 - Don't rewrite `riffs.json`; it is the human's. Tell them which riff went where.
+- A riff with `"from": "library:riff-12"` was copied in from the riff library (below).
+
+### The riff library: `wavelength riffs`
+
+The human also records riffs apart from any song, on `serve`'s Riffs page: no project or name needed, each on an instrument they tuned there, filed in groups. When a prompt names riffs or a group ("use my riffs Crawl and Glass Steps", "the riffs in my Night drive group"), or is the prompt that page writes, find them and copy them into the song folder before writing anything:
+
+```sh
+wavelength riffs                          # every riff: id, name, group, instrument and sound, length, tempo, notes by bar
+wavelength riffs --group "Night drive"    # one group (--search TEXT, --sort newest|oldest|name|tempo|length, --json)
+wavelength riffs show riff-12 "Glass Steps" --json    # notes in full, the take as played, the instrument's sound
+wavelength riffs use songs/night-run riff-12 "Glass Steps" group:Hooks
+```
+
+A riff is its id, its name, or `group:NAME` for a whole group. `use` makes the song folder when it doesn't exist and puts the riffs in its `riffs.json`, the instruments they were played on in `sounds.json` and the job (a track each, no notes yet; the job takes the first riff's tempo when it is new), so the song starts like a Sounds-page project: carry on as in "Starting from a riff" and "Choosing sounds". Copying again skips riffs already there. Name the folder after the song you write. The library itself (`Riffs/` in Wavelength's folder, or `$WAVELENGTH_RIFFS`) is the human's: read it with `wavelength riffs`, never edit it.
 
 ## Choosing sounds
 

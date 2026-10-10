@@ -1626,14 +1626,15 @@ else
 fi
 # a free port each run: two checkouts (or agents) running the check at once must not answer for each other
 sport=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-rm -rf out/check/serve-songs/riff-check*
+rm -rf out/check/serve-songs/riff-check* out/check/riff-library out/check/riff-song
 mkdir -p out/check/serve-songs/demo out/check/serve-songs/kitmap && cp examples/hello.json out/check/serve-songs/demo/job.json
 # a sampler kit given as a key -> file map (not a library name) once made /api/song throw: an empty 500
 cat > out/check/serve-songs/kitmap/job.json <<'JOB'
 {"tempo": 120, "tracks": [{"name": "Kit", "plugin": "builtin:sampler", "sampler": {"kit": {"36": "kick.wav", "38": "snare.wav"}},
   "notes": [{"beat": 0, "dur": 0.5, "key": 36}]}]}
 JOB
-"./$build/wavelength" serve out/check/serve-songs --port $sport 2>/dev/null &
+# the riff library goes to a folder of the check's own, never the person's (Riffs/ in Wavelength's folder)
+WAVELENGTH_RIFFS="$PWD/out/check/riff-library" "./$build/wavelength" serve out/check/serve-songs --port $sport 2>/dev/null &
 spid=$!
 for _ in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:$sport/ && break; sleep 0.1; done   # up to 5 s on a busy machine
 serve_why=""
@@ -1644,7 +1645,7 @@ echo "$page" | grep -q 'wavelength-token' || serve_why="the page has no token ($
 [ -z "$serve_why" ] && { curl -s "http://127.0.0.1:$sport/api/song?song=kitmap" | grep -q '"custom kit"' || serve_why="a song with a kit map: $(curl -s -w ' HTTP %{http_code}' "http://127.0.0.1:$sport/api/song?song=kitmap" | head -c 200)"; }
 # the Sounds page: a new project, a track, a riff saved (key names, listed in the manifest), a bad riff refused,
 # the riff played back for its whole loop through the track's sound, then deleted
-[ -z "$serve_why" ] && serve_why=$(python3 - "$sport" "out/check/serve-songs" "./$build/wavelength" <<'PY'
+[ -z "$serve_why" ] && serve_why=$(WAVELENGTH_RIFFS="$PWD/out/check/riff-library" python3 - "$sport" "out/check/serve-songs" "./$build/wavelength" <<'PY'
 import json, re, sys, urllib.request
 port, root = sys.argv[1], sys.argv[2]
 base = "http://127.0.0.1:%s/" % port
@@ -1681,10 +1682,37 @@ if not isinstance(wav, bytes) or len(wav) < 4.0 * 48000 * 4: sys.exit(print("the
 if not post("api/sounds", {"song": song, "op": "riff-delete", "id": "riff-1"}).get("ok"): sys.exit(print("deleting the riff failed") or 1)
 import os
 if os.path.exists("%s/%s/riffs.json" % (root, song)): sys.exit(print("riffs.json stayed after its last riff went") or 1)
+# the riff library: no project and no name needed; an instrument, groups (one name in any case), riffs filed and moved,
+# an instrument its riffs play on kept, the library neither listed as a song nor trashed like one
+L = "_riffs"
+if not post("api/sounds", {"song": L, "op": "add", "track": "Keys", "sound": {"plugin": "builtin:synth", "preset": "LD Chip"}, "tempo": 128}).get("ok"): sys.exit(print("adding a library instrument failed") or 1)
+if not post("api/sounds", {"song": L, "op": "group-add", "group": "Hooks"}).get("ok"): sys.exit(print("adding a group failed") or 1)
+if post("api/sounds", {"song": L, "op": "group-add", "group": "hooks"}).get("status") != 400: sys.exit(print("a group named again in another case was taken") or 1)
+for name, group in (("", "HOOKS"), ("Bass idea", "")):
+    if not post("api/sounds", {"song": L, "op": "riff", "riff": {**riff, "name": name, "track": "Keys", "group": group}}).get("ok"): sys.exit(print("saving a library riff failed") or 1)
+if not post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-2"], "group": "Bass"}).get("ok"): sys.exit(print("moving a riff to a new group failed") or 1)
+if post("api/sounds", {"song": L, "op": "remove", "track": "Keys"}).get("status") != 400: sys.exit(print("an instrument with riffs on it was removed") or 1)
+if post("api/song/trash", {"song": L}).get("status") != 400: sys.exit(print("the library was trashed like a song") or 1)
+d = json.loads(urllib.request.urlopen(base + "api/sounds?song=" + L).read())
+if not d.get("library") or d["groups"] != ["Hooks", "Bass"] or [(r["name"], r.get("group")) for r in d["riffs"]] != [("Riff", "Hooks"), ("Bass idea", "Bass")]:
+    sys.exit(print("the library: %s %s" % (d.get("groups"), [(r["name"], r.get("group")) for r in d["riffs"]])) or 1)
+if any(x["slug"] == L for x in json.loads(urllib.request.urlopen(base + "api/songs").read())["songs"]): sys.exit(print("the library is listed as a song") or 1)
+# wavelength riffs: the list, and `use` copying a group into a new song folder: the riff, its instrument as a track, a job
+lst = json.loads(subprocess.run([sys.argv[3], "riffs", "--group", "hooks", "--json"], capture_output=True, text=True).stdout)
+if [r["name"] for r in lst["riffs"]] != ["Riff"] or lst["riffs"][0]["line"] != "C5 D5": sys.exit(print("riffs --group: %s" % lst) or 1)
+u = subprocess.run([sys.argv[3], "riffs", "use", "out/check/riff-song", "group:Hooks", "Bass idea", "--json"], capture_output=True, text=True)
+got = json.load(open("out/check/riff-song/riffs.json"))["riffs"] if u.returncode == 0 else []
+snd = json.load(open("out/check/riff-song/sounds.json"))["tracks"] if u.returncode == 0 else []
+job = json.load(open("out/check/riff-song/job.json")) if u.returncode == 0 else {}
+if [(r["id"], r["track"], r.get("from"), "group" in r) for r in got] != [("riff-1", "Keys", "library:riff-1", False), ("riff-2", "Keys", "library:riff-2", False)] or \
+   [e["preset"] for e in snd] != ["LD Chip"] or [t["name"] for t in job.get("tracks", [])] != ["Keys"] or job.get("tempo") != 120:
+    sys.exit(print("riffs use: %s %s" % (u.stdout[-300:] + u.stderr[-300:], got)) or 1)
+again = json.loads(subprocess.run([sys.argv[3], "riffs", "use", "out/check/riff-song", "riff-1", "--json"], capture_output=True, text=True).stdout)
+if again["riffs"] or len(again["skipped"]) != 1: sys.exit(print("a riff copied twice: %s" % again) or 1)
 PY
 )
 if [ -z "$serve_why" ]; then
-  echo "ok   serve: UI, song list, token check, a song with a kit map, a project with a riff"
+  echo "ok   serve: UI, song list, token check, a song with a kit map, a project with a riff, the riff library and riffs use"
 else
   echo "FAIL serve: $serve_why"; fail=1
 fi

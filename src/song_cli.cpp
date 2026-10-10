@@ -10,6 +10,7 @@
 #include "term.hpp"
 #include "migrate.hpp"
 #include "purge.hpp"
+#include "riffs.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -47,6 +48,7 @@ const std::map<std::string, std::map<std::string, bool>> kCommands = {
     {"migrate", {{"--json", false}, {"--license", true}, {"--author", true}, {"--dry-run", false}, {"--no-copy", false}}},
     {"purge", {{"--json", false}, {"--dry-run", false}, {"--masters", false}}},
     {"comments", {{"--json", false}, {"--all", false}, {"--reply", true}, {"--text", true}, {"--done", false}, {"--resolve", true}, {"--reopen", true}}},
+    {"riffs", {{"--json", false}, {"--group", true}, {"--search", true}, {"--sort", true}}},
 };
 
 struct Out {
@@ -641,6 +643,131 @@ int cmdPurge(const CliArgs &a, const Out &o) {
     return 0;
 }
 
+// wavelength riffs [list] [--group NAME] [--search TEXT] [--sort newest|oldest|name|tempo|length]
+// wavelength riffs show <riff>...    wavelength riffs use <song> <riff>...
+// The riff library (riffs.hpp): riffs recorded on serve's Riffs page, apart from any song.
+int cmdRiffs(const CliArgs &a, const Out &o) {
+    const fs::path lib = riffLibraryDir();
+    const json rf = readRiffFile(lib / "riffs.json"), inst = libraryInstruments(lib);
+    const std::string sub = a.pos.size() > 1 ? a.pos[1] : "list";
+    auto lower = [](std::string x) { std::transform(x.begin(), x.end(), x.begin(), [](unsigned char c) { return (char)std::tolower(c); }); return x; };
+    auto soundOfRiff = [&](const json &r) { const std::string t = r.value("track", std::string()); return inst.contains(t) ? inst[t] : json(nullptr); };
+    auto brief = [&](const json &r) {
+        const json sound = soundOfRiff(r);
+        json x = {{"id", r.value("id", std::string())}, {"name", r.value("name", std::string())}, {"group", r.value("group", std::string())},
+                  {"instrument", r.value("track", std::string())}, {"sound", sound.is_null() ? "the library has no instrument by that name" : soundLine(sound)},
+                  {"tempo", r.value("tempo", 120.0)}, {"timeSignature", r.value("timeSignature", json::array({4, 4}))}, {"bars", r.value("bars", 1.0)},
+                  {"notes", r.value("notes", json::array()).size()}, {"line", riffNoteLine(r)}};
+        for (const char *k : {"note", "created", "updated"}) if (r.contains(k)) x[k] = r[k];
+        return x;
+    };
+    auto num = [](double v) { char b[32]; std::snprintf(b, sizeof b, "%g", v); return std::string(b); };
+    const term::Style &st = term::out();
+
+    if (sub == "list") {
+        if (a.pos.size() > 2) return o.fail("`wavelength riffs` lists the library; `riffs show <riff>` shows one");
+        const std::string group = a.get("--group"), search = lower(a.get("--search")), sort = a.get("--sort", "newest");
+        static const std::set<std::string> sorts = {"newest", "oldest", "name", "tempo", "length"};
+        if (!sorts.count(sort)) return o.fail("--sort is newest, oldest, name, tempo or length");
+        std::vector<json> list;
+        for (const auto &r : rf["riffs"]) {
+            if (a.has("--group") && lower(r.value("group", std::string())) != (lower(group) == "none" ? "" : lower(group))) continue;
+            const json b = brief(r);
+            if (!search.empty()) {
+                const std::string hay = lower(b["name"].get<std::string>() + " " + b["group"].get<std::string>() + " " + b["instrument"].get<std::string>() + " " +
+                                              b.value("note", std::string()) + " " + b["sound"].get<std::string>());
+                if (hay.find(search) == std::string::npos) continue;
+            }
+            list.push_back(b);
+        }
+        std::stable_sort(list.begin(), list.end(), [&](const json &x, const json &y) {
+            if (sort == "name") return lower(x["name"].get<std::string>()) < lower(y["name"].get<std::string>());
+            if (sort == "tempo") return x["tempo"].get<double>() < y["tempo"].get<double>();
+            if (sort == "length") return x["bars"].get<double>() < y["bars"].get<double>();
+            const std::string cx = x.value("created", std::string()), cy = y.value("created", std::string());
+            return sort == "oldest" ? cx < cy : cx > cy;
+        });
+        std::vector<std::string> groups = riffGroups(rf);
+        if (o.json) {
+            json gs = json::array();
+            for (const auto &g : groups) {
+                size_t n = 0;
+                for (const auto &r : rf["riffs"]) if (r.value("group", std::string()) == g) ++n;
+                gs.push_back({{"name", g}, {"riffs", n}});
+            }
+            o.emit({{"ok", true}, {"library", lib.u8string()}, {"groups", gs}, {"riffs", list}});
+            return 0;
+        }
+        std::fprintf(o.f, "Riff library: %s (%zu riff%s%s)\n", lib.u8string().c_str(), rf["riffs"].size(), rf["riffs"].size() == 1 ? "" : "s",
+                     groups.empty() ? "" : (", " + std::to_string(groups.size()) + (groups.size() == 1 ? " group" : " groups")).c_str());
+        if (rf["riffs"].empty()) { std::fprintf(o.f, "No riffs yet. Record them on the Riffs page of `wavelength serve`.\n"); return 0; }
+        if (list.empty()) { std::fprintf(o.f, "No riffs match.\n"); return 0; }
+        groups.push_back("");   // the riffs in no group last
+        for (const auto &g : groups) {
+            std::vector<const json *> in;
+            for (const auto &b : list) if (b["group"].get<std::string>() == g) in.push_back(&b);
+            if (in.empty()) continue;
+            std::fprintf(o.f, "\n%s (%zu)\n", st.bold(g.empty() ? "No group" : g).c_str(), in.size());
+            for (const json *b : in) {
+                const std::string meta = (*b)["instrument"].get<std::string>() + " (" + (*b)["sound"].get<std::string>() + "), " + num((*b)["bars"].get<double>()) +
+                                         ((*b)["bars"].get<double>() == 1 ? " bar" : " bars") + " at " + num((*b)["tempo"].get<double>()) + " BPM";
+                std::fprintf(o.f, "  %s %s  %s\n", st.dim(term::pad((*b)["id"].get<std::string>(), 9)).c_str(), st.bold((*b)["name"].get<std::string>()).c_str(), st.dim(meta).c_str());
+                std::fprintf(o.f, "            %s\n", (*b)["line"].get<std::string>().c_str());
+                if (b->contains("note")) std::fprintf(o.f, "            %s\n", st.dim((*b)["note"].get<std::string>()).c_str());
+            }
+        }
+        return 0;
+    }
+    if (sub == "show") {
+        std::vector<std::string> refs(a.pos.begin() + 2, a.pos.end());
+        if (refs.empty()) return o.fail("which riffs? an id (riff-3), a name, or group:NAME");
+        std::vector<json> picked;
+        std::string err;
+        if (!resolveRiffs(rf, refs, picked, err)) return o.fail(err);
+        if (o.json) {
+            json out = json::array();
+            for (auto r : picked) { r["sound"] = soundOfRiff(r); out.push_back(r); }
+            o.emit({{"ok", true}, {"library", lib.u8string()}, {"riffs", out}});
+            return 0;
+        }
+        for (const auto &r : picked) {
+            const json b = brief(r);
+            std::fprintf(o.f, "%s %s\n", st.bold(b["name"].get<std::string>()).c_str(), st.dim("(" + b["id"].get<std::string>() + (b["group"].get<std::string>().empty() ? "" : ", group " + b["group"].get<std::string>()) + ")").c_str());
+            const json m = b["timeSignature"];
+            std::fprintf(o.f, "  on %s: %s\n  %s %s at %s BPM in %d/%d, quantized %s\n", b["instrument"].get<std::string>().c_str(), b["sound"].get<std::string>().c_str(),
+                         num(b["bars"].get<double>()).c_str(), b["bars"].get<double>() == 1 ? "bar" : "bars", num(b["tempo"].get<double>()).c_str(), m[0].get<int>(), m[1].get<int>(),
+                         r.value("quantize", std::string("off")).c_str());
+            if (b.contains("note")) std::fprintf(o.f, "  %s\n", b["note"].get<std::string>().c_str());
+            std::fprintf(o.f, "  %s\n  beat   key    dur    vel\n", b["line"].get<std::string>().c_str());
+            json notes = r.value("notes", json::array());
+            std::stable_sort(notes.begin(), notes.end(), [](const json &x, const json &y) { return x.value("beat", 0.0) < y.value("beat", 0.0); });
+            for (const auto &n : notes)
+                std::fprintf(o.f, "  %-6s %-6s %-6s %s\n", num(n.value("beat", 0.0)).c_str(), n.value("key", std::string()).c_str(), num(n.value("dur", 0.0)).c_str(), num(n.value("vel", 0.8)).c_str());
+            std::fprintf(o.f, "\n");
+        }
+        return 0;
+    }
+    if (sub == "use") {
+        if (a.pos.size() < 4) return o.fail("wavelength riffs use <song folder> <riff>... (ids, names, or group:NAME)");
+        std::vector<std::string> refs(a.pos.begin() + 3, a.pos.end());
+        std::vector<json> picked;
+        std::string err;
+        if (!resolveRiffs(rf, refs, picked, err)) return o.fail(err);
+        const json r = useRiffs(fs::u8path(a.pos[2]), picked, lib, err);
+        if (!err.empty()) return o.fail(err);
+        if (o.json) { json out = r; out["ok"] = true; o.emit(out); return 0; }
+        for (const auto &x : r["riffs"])
+            done(o, "Copied " + x["name"].get<std::string>() + " as " + x["id"].get<std::string>() + " on " + x["track"].get<std::string>());
+        for (const auto &x : r["skipped"]) std::fprintf(o.f, "%s: %s\n", x["name"].get<std::string>().c_str(), x["why"].get<std::string>().c_str());
+        for (const auto &t : r["tracks"])
+            std::fprintf(o.f, "  track %s: %s%s\n", t["name"].get<std::string>().c_str(), t["sound"].get<std::string>().c_str(), t["added"].get<bool>() ? " (added to sounds.json and the job)" : " (already there)");
+        if (r["jobCreated"].get<bool>()) std::fprintf(o.f, "  made %s with those tracks (no notes yet) at the first riff's tempo\n", r["job"].get<std::string>().c_str());
+        if (!r["riffs"].empty()) std::fprintf(o.f, "%s holds the riffs (AGENTS.md, \"Starting from a riff\").\n", (fs::path(r["song"].get<std::string>()) / "riffs.json").u8string().c_str());
+        return 0;
+    }
+    return o.fail("wavelength riffs [list | show <riff>... | use <song> <riff>...]");
+}
+
 } // namespace
 
 bool isSongCommand(const std::string &cmd) { return kCommands.count(cmd) > 0; }
@@ -663,6 +790,7 @@ int runSongCommand(int argc, char **argv, std::FILE *f) {
     if (cmd == "migrate") return cmdMigrate(a, o);
     if (cmd == "fallbacks") return cmdFallbacks(a, o);
     if (cmd == "purge") return cmdPurge(a, o);
+    if (cmd == "riffs") return cmdRiffs(a, o);
     return cmdStep(a, o);
 }
 

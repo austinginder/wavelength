@@ -7,6 +7,7 @@
 #include "platform.hpp"
 #include "review.hpp"
 #include "song.hpp"
+#include "riffs.hpp"
 #include "sounds.hpp"
 #include "synth.hpp"
 
@@ -370,8 +371,9 @@ private:
         return {{"want", l.want}, {"done", l.done}, {"status", l.status}, {"error", l.error}, {"info", l.info}, {"from", l.from}, {"to", l.to}};
     }
 
-    fs::path songDir(const std::string &slug) const { return root_ / slug; }
-    bool songExists(const std::string &slug) const { std::error_code ec; return validSlug(slug) && fs::is_directory(songDir(slug), ec); }
+    // the riff library (riffs.hpp) answers to kRiffLibrarySlug wherever a song folder is asked for; it is made when first written
+    fs::path songDir(const std::string &slug) const { return slug == kRiffLibrarySlug ? riffLibraryDir() : root_ / slug; }
+    bool songExists(const std::string &slug) const { std::error_code ec; return slug == kRiffLibrarySlug || (validSlug(slug) && fs::is_directory(songDir(slug), ec)); }
 
     json songs();
     json song(const std::string &slug);
@@ -870,64 +872,6 @@ fs::path Server::playgroundJob(const std::string &plugin, const std::string &pre
     return dir / "job.json";
 }
 
-// A riff recorded on the Sounds page, checked and tidied for riffs.json: {id?, name, track, tempo, timeSignature,
-// bars, quantize, note?, notes, played?}; notes are {beat, dur, key (a note name), vel} from the riff's first downbeat.
-bool normalizeRiff(const json &in, json &out, std::string &err) {
-    static const char *names[] = {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"};
-    auto text = [&](const char *k, size_t max) {
-        std::string v = in.contains(k) && in[k].is_string() ? in[k].get<std::string>() : "";
-        v.erase(0, v.find_first_not_of(" \t\n"));
-        v.erase(v.find_last_not_of(" \t\n") + 1);
-        return v.substr(0, max);
-    };
-    out = json::object();
-    const std::string id = text("id", 40);
-    if (!id.empty()) {
-        if (!std::all_of(id.begin(), id.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; })) { err = "a riff id is a-z, 0-9 and dashes"; return false; }
-        out["id"] = id;
-    }
-    out["name"] = text("name", 80).empty() ? "Riff" : text("name", 80);
-    out["track"] = text("track", 80);
-    const double tempo = in.value("tempo", 0.0);
-    if (!(tempo >= 20 && tempo <= 400)) { err = "a riff needs its tempo (20 to 400 BPM)"; return false; }
-    out["tempo"] = std::round(tempo * 100) / 100;
-    int num = 4, den = 4;
-    if (in.contains("timeSignature") && in["timeSignature"].is_array() && in["timeSignature"].size() == 2 && in["timeSignature"][0].is_number_integer() &&
-        in["timeSignature"][1].is_number_integer()) {
-        num = in["timeSignature"][0].get<int>();
-        den = in["timeSignature"][1].get<int>();
-    }
-    if (num < 1 || num > 32 || (den != 1 && den != 2 && den != 4 && den != 8 && den != 16)) { err = "a time signature like [4, 4]"; return false; }
-    out["timeSignature"] = {num, den};
-    const double bars = in.value("bars", 0.0), beats = bars * num * 4.0 / den;
-    if (!(bars >= 0.25 && bars <= 64)) { err = "a riff is a quarter of a bar to 64 bars long"; return false; }
-    out["bars"] = std::round(bars * 1000) / 1000;
-    const std::string q = text("quantize", 8);
-    static const std::set<std::string> grids = {"off", "1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T"};
-    out["quantize"] = grids.count(q) ? q : "off";
-    if (!text("note", 2000).empty()) out["note"] = text("note", 2000);
-    auto noteList = [&](const char *k, double digits, bool required) -> bool {
-        if (!in.contains(k)) { if (required) err = "a riff needs its notes"; return !required; }
-        if (!in[k].is_array() || in[k].size() > 2000) { err = std::string(k) + ": a list of at most 2000 notes"; return false; }
-        json list = json::array();
-        for (const auto &n : in[k]) {
-            if (!n.is_object()) continue;
-            int key;
-            try { key = parseKey(n.value("key", json(60))); } catch (...) { err = "a note's key: 60 or a name like \"F#4\""; return false; }
-            if (key < 0 || key > 127) continue;
-            const double beat = n.value("beat", -1.0), dur = n.value("dur", 0.0), vel = n.value("vel", 0.8);
-            if (!(beat >= 0 && beat <= beats) || !(dur > 0)) continue;
-            const double m = std::pow(10.0, digits);
-            list.push_back({{"beat", std::round(beat * m) / m}, {"dur", std::max(1 / m, std::round(std::min(dur, beats) * m) / m)},
-                            {"key", std::string(names[key % 12]) + std::to_string(key / 12 - 1)}, {"vel", std::round(std::clamp(vel, 0.0, 1.0) * 100) / 100}});
-        }
-        if (required && list.empty()) { err = "the riff has no notes inside its bars"; return false; }
-        if (!list.empty()) out[k] = list;
-        return true;
-    };
-    return noteList("notes", 4, true) && noteList("played", 3, false);
-}
-
 // ---- the Sounds page: knobs, sounds.json, new projects ----
 
 // A knobs worker by key (spawned from `jobFile` when there is none), its hello for a null request, else its answer.
@@ -1104,12 +1048,13 @@ json Server::sounds(const std::string &slug) {
     json tempo = nullptr, meter = json::array({4, 4});
     if (hasJob && job.contains("tempo")) tempo = job["tempo"];
     if (hasJob && job.contains("timeSignature") && job["timeSignature"].is_array() && job["timeSignature"].size() == 2) meter = job["timeSignature"];
-    json rf;
-    const json riffs = readJson(base / "riffs.json", rf) && rf.contains("riffs") && rf["riffs"].is_array() ? rf["riffs"] : json::array();
+    const json rf = readRiffFile(base / "riffs.json");
+    const json &riffs = rf["riffs"];
     bool generator = false;   // a script writes the job: the page says job.json may be written again
     for (auto &[path, info] : files) if (path.find('/') == std::string::npos && path.size() > 3 && path.substr(path.size() - 3) == ".py") generator = true;
     return {{"song", slug}, {"tracks", tracks}, {"tempo", tempo}, {"timeSignature", meter}, {"riffs", riffs}, {"hasJob", hasJob}, {"generator", generator},
-            {"brief", files.count("brief.md") ? readFile(dir / "brief.md") : std::string()}, {"path", dir.string()}};
+            {"brief", files.count("brief.md") ? readFile(dir / "brief.md") : std::string()}, {"path", dir.string()},
+            {"library", slug == kRiffLibrarySlug}, {"groups", riffGroups(rf)}, {"songsDir", root_.string()}};
 }
 
 // POST /api/sounds {song, op, ...}: "set" {track, sound, note} a track's whole instrument; "add" {track, sound, note} a new
@@ -1118,6 +1063,7 @@ json Server::sounds(const std::string &slug) {
 json Server::soundsChange(const std::string &slug, const json &in) {
     std::lock_guard<std::mutex> lock(mu_);
     const fs::path dir = songDir(slug);
+    if (slug == kRiffLibrarySlug) { std::error_code ec; fs::create_directories(dir, ec); }
     const FileMap files = scanSong(dir);
     std::string jobPath = pick(files, "job.json", "job.json");
     const fs::path base = jobPath.empty() ? dir : (dir / jobPath).parent_path();
@@ -1173,6 +1119,12 @@ json Server::soundsChange(const std::string &slug, const json &in) {
             jobChanged = true;
         }
     } else if (op == "remove" || op == "reset") {
+        if (op == "remove") {
+            size_t n = 0;
+            const json rf = readRiffFile(base / "riffs.json");   // named: a loop over a temporary's member reads freed memory
+            for (const auto &r : rf["riffs"]) if (r.value("track", std::string()) == name) ++n;
+            if (n) return {{"error", std::to_string(n) + (n == 1 ? " riff plays" : " riffs play") + " on '" + name + "'; move or delete them first"}};
+        }
         json kept = json::array();
         for (auto &e : sf["tracks"]) if (!e.is_object() || e.value("track", std::string()) != name) kept.push_back(e);
         sf["tracks"] = kept;
@@ -1204,26 +1156,74 @@ json Server::soundsChange(const std::string &slug, const json &in) {
         if (job.contains("tempo") && !job["tempo"].is_number()) return {{"error", "the job has a tempo map; change it in the job"}};
         job["tempo"] = std::round(bpm * 100) / 100;
         jobChanged = true;
-    } else if (op == "riff" || op == "riff-delete") {
+    } else if (op == "riff" || op == "riff-delete" || op == "riff-group" || op == "group-add" || op == "group-rename" || op == "group-delete") {
         const fs::path rfile = base / "riffs.json";
-        json rf;
-        if (!readJson(rfile, rf) || !rf.contains("riffs") || !rf["riffs"].is_array())
-            rf = {{"format", "wavelength.riffs"}, {"formatVersion", "1.0"}, {"riffs", json::array()}};
+        json rf = readRiffFile(rfile);
         json &list = rf["riffs"];
+        std::vector<std::string> groups = riffGroups(rf);
         std::string savedId;
         auto at = [&](const std::string &id) { for (size_t i = 0; i < list.size(); ++i) if (list[i].value("id", std::string()) == id) return (long)i; return -1L; };
+        auto ids = [&]() {   // {id} or {ids: [...]}
+            std::vector<std::string> v;
+            if (in.contains("ids") && in["ids"].is_array()) for (auto &x : in["ids"]) if (x.is_string()) v.push_back(x.get<std::string>());
+            if (in.contains("id") && in["id"].is_string()) v.push_back(in["id"].get<std::string>());
+            return v;
+        };
+        auto groupName = [&](const char *k) {
+            std::string g = in.value(k, std::string()).substr(0, 80);
+            g.erase(0, g.find_first_not_of(" \t"));
+            g.erase(g.find_last_not_of(" \t") + 1);
+            return g;
+        };
+        auto lower = [](std::string x) { std::transform(x.begin(), x.end(), x.begin(), [](unsigned char c) { return (char)std::tolower(c); }); return x; };
+        auto known = [&](const std::string &g) { for (auto &x : groups) if (lower(x) == lower(g)) return true; return false; };
+        auto spelled = [&](const std::string &g) { for (auto &x : groups) if (lower(x) == lower(g)) return x; return g; };   // a group as first written
         if (op == "riff-delete") {
-            const long i = at(in.value("id", std::string()));
-            if (i < 0) return {{"error", "no such riff"}};
-            list.erase(list.begin() + i);
+            const std::vector<std::string> gone = ids();
+            if (gone.empty()) return {{"error", "which riffs?"}};
+            for (const auto &id : gone) {
+                const long i = at(id);
+                if (i < 0) return {{"error", "no riff " + id}};
+                list.erase(list.begin() + i);
+            }
+        } else if (op == "riff-group") {   // {ids, group}: "" takes them out of their group
+            const std::string g = spelled(groupName("group"));
+            for (const auto &id : ids()) {
+                const long i = at(id);
+                if (i < 0) return {{"error", "no riff " + id}};
+                if (g.empty()) list[(size_t)i].erase("group"); else list[(size_t)i]["group"] = g;
+            }
+            if (!g.empty() && !known(g)) groups.push_back(g);
+        } else if (op == "group-add") {
+            const std::string g = groupName("group");
+            if (g.empty()) return {{"error", "a group needs a name"}};
+            if (known(g)) return {{"error", "there is already a group named " + spelled(g)}};
+            groups.push_back(g);
+        } else if (op == "group-rename") {
+            const std::string from = groupName("group"), to = groupName("to");
+            if (to.empty()) return {{"error", "a group needs a name"}};
+            if (!known(from)) return {{"error", "no group named " + from}};
+            if (lower(to) != lower(from) && known(to)) return {{"error", "there is already a group named " + spelled(to)}};
+            const std::string was = spelled(from);
+            for (auto &g : groups) if (g == was) g = to;
+            for (auto &r : list) if (lower(r.value("group", std::string())) == lower(was)) r["group"] = to;
+        } else if (op == "group-delete") {   // its riffs stay, in no group
+            const std::string g = spelled(groupName("group"));
+            if (!known(g)) return {{"error", "no group named " + g}};
+            groups.erase(std::remove(groups.begin(), groups.end(), g), groups.end());
+            for (auto &r : list) if (lower(r.value("group", std::string())) == lower(g)) r.erase("group");
         } else {
             json r;
             if (!normalizeRiff(in.value("riff", json::object()), r, err)) return {{"error", err}};
+            if (r.contains("group")) {   // a group named in another case is the same group
+                r["group"] = spelled(r["group"].get<std::string>());
+                if (!known(r["group"].get<std::string>())) groups.push_back(r["group"].get<std::string>());
+            }
             if (!r.contains("id")) {   // a new one
-                std::set<std::string> ids;
-                for (auto &x : list) ids.insert(x.value("id", std::string()));
+                std::set<std::string> taken;
+                for (auto &x : list) taken.insert(x.value("id", std::string()));
                 int n = 1;
-                while (ids.count("riff-" + std::to_string(n))) ++n;
+                while (taken.count("riff-" + std::to_string(n))) ++n;
                 r["id"] = "riff-" + std::to_string(n);
                 savedId = r["id"];
                 r["created"] = nowRfc3339();
@@ -1233,16 +1233,16 @@ json Server::soundsChange(const std::string &slug, const json &in) {
                 savedId = r["id"];
                 const long i = at(savedId);
                 if (i < 0) return {{"error", "no such riff"}};
-                for (const char *k : {"created", "by"}) if (list[(size_t)i].contains(k)) r[k] = list[(size_t)i][k];
+                for (const char *k : {"created", "by", "from"}) if (list[(size_t)i].contains(k) && !r.contains(k)) r[k] = list[(size_t)i][k];
                 r["updated"] = nowRfc3339();
                 list[(size_t)i] = r;
             }
         }
+        rf["groups"] = groups;
+        if (!writeRiffFile(rfile, rf, err)) return {{"error", err}};
         std::error_code ec;
-        if (list.empty()) fs::remove(rfile, ec);
-        else if (!platform::writeFileAtomic(rfile, rf.dump(1) + "\n", err)) return {{"error", err}};
         listSource(slug, fs::relative(rfile, dir, ec).generic_string(), "application/json");
-        return {{"ok", true}, {"id", savedId}};
+        return {{"ok", true}, {"id", savedId}, {"groups", riffGroups(rf)}};
     } else if (op == "brief") {
         const std::string text = in.value("text", std::string());
         std::error_code ec;
@@ -1708,6 +1708,24 @@ int Server::run() {
         const json r = knobsAsk(in.value("key", std::string()), nullptr, q);
         sendJson(res, r, r.value("error", std::string()) == "gone" ? 410 : 200);
     });
+    // POST /api/riffs/use {song, ids}: library riffs copied into a song with the instruments they play on (riffs.hpp)
+    http_.Post("/api/riffs/use", [&](const httplib::Request &req, httplib::Response &res) {
+        json in;
+        std::string s, err;
+        try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
+        if (!songFrom(in, s) || s == kRiffLibrarySlug) return sendJson(res, {{"error", "unknown song"}}, 404);
+        std::vector<std::string> ids;
+        for (const auto &x : in.value("ids", json::array())) if (x.is_string()) ids.push_back(x.get<std::string>());
+        if (ids.empty()) return sendJson(res, {{"error", "which riffs?"}}, 400);
+        std::lock_guard<std::mutex> lock(mu_);
+        const json rf = readRiffFile(riffLibraryDir() / "riffs.json");
+        std::vector<json> picked;
+        if (!resolveRiffs(rf, ids, picked, err)) return sendJson(res, {{"error", err}}, 400);
+        json r = useRiffs(songDir(s), picked, riffLibraryDir(), err);
+        if (!err.empty()) return sendJson(res, {{"error", err}}, 400);
+        r["ok"] = true;
+        sendJson(res, r);
+    });
     http_.Post("/api/song/create", [&](const httplib::Request &req, httplib::Response &res) {
         json in;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
@@ -1779,6 +1797,7 @@ int Server::run() {
         std::string s;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
         if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        if (s == kRiffLibrarySlug) return sendJson(res, {{"error", "the riff library is not a song"}}, 400);
         const std::string to = in.value("to", std::string());
         if (to == s) return sendJson(res, {{"ok", true}, {"song", s}});
         if (!songSlug(to)) return sendJson(res, {{"error", "a folder name is lowercase letters, digits and single dashes"}}, 400);
@@ -1805,6 +1824,7 @@ int Server::run() {
         std::string s;
         try { in = json::parse(req.body); } catch (...) { return sendJson(res, {{"error", "bad request"}}, 400); }
         if (!songFrom(in, s)) return sendJson(res, {{"error", "unknown song"}}, 404);
+        if (s == kRiffLibrarySlug) return sendJson(res, {{"error", "the riff library is not a song"}}, 400);
         cancelPreviews(s, "");
         for (int i = 0; i < 50 && rendering(s); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));   // let a stopped render end
         std::string where, err;

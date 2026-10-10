@@ -28,7 +28,7 @@ express-to-nowhere/
   edits.json           source: note edits applied on top of the job (docs/job-format.md, "Note edits")
   sounds.json          source: instruments set by ear, applied on top of the job (docs/job-format.md, "Sounds")
   brief.md             source: what the song should be, written before its parts (serve's Sounds page)
-  riffs.json           source: riffs recorded on the Sounds page for the song to grow from (AGENTS.md, "Starting from a riff")
+  riffs.json           source: riffs recorded on the Sounds page, or copied from the riff library, for the song to grow from (AGENTS.md, "Starting from a riff")
   media/               files the job uses: samples, audio clips, preset files
   render/              the render that goes with the song: mix, picture, report (section 8)
   review.json          comments (section 7)
