@@ -965,7 +965,8 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			const ns = notes.map(n => `<rect class="nt ${sel.has(n.id) ? 'sel' : ''}" data-id="${n.id}" x="${x(n.beat).toFixed(2)}" y="${y(n.key) + 1}" width="${Math.max(2, x(n.dur) - .8).toFixed(2)}" height="${ROW - 2}" rx="2" style="fill-opacity:${(.4 + .6 * n.vel).toFixed(2)}"><title>${keyStr(n.key)} · beat ${(n.beat + 1).toFixed(2)} · ${n.dur.toFixed(2)} beats · velocity ${Math.round(n.vel * 127)}</title></rect>`).join('');
 			svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 			svg.style.height = H + 'px';
-			svg.innerHTML = bg + ghost + ns + `<line class="ph" data-r="ph" x1="-10" x2="-10" y1="0" y2="${H}"/>`;
+			const lassoRect = marquee ? `<rect class="lasso" x="${marquee.x.toFixed(2)}" y="${marquee.y.toFixed(2)}" width="${marquee.w.toFixed(2)}" height="${marquee.h.toFixed(2)}"/>` : '';
+			svg.innerHTML = bg + ghost + ns + lassoRect + `<line class="ph" data-r="ph" x1="-10" x2="-10" y1="0" y2="${H}"/>`;
 			let ruler = '';
 			for (let b = 0; b < beats - 1e-9; b++) {
 				const bar = b % bpb === 0, at = (b / beats * 100).toFixed(3) + '%';
@@ -977,6 +978,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			d.querySelector('[data-r="keys"]').innerHTML = labels;
 			d.querySelector('[data-r="keys"]').style.height = H + 'px';
 			d.querySelector('[data-r="count"]').textContent = `${notes.length} note${notes.length === 1 ? '' : 's'}${sel.size ? ` · ${sel.size} selected` : ''}`;
+			d.querySelector('[data-r="dup"]').disabled = !sel.size;
 			d.querySelector('[data-r="undo"]').disabled = !hist.length;
 			d.querySelector('[data-r="redo"]').disabled = !fut.length;
 		}
@@ -1024,13 +1026,21 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			e.preventDefault();
 			d.querySelector('[data-r="rollbox"]').focus();
 			const p = pos(e), id = +(e.target.closest('[data-id]')?.dataset.id || 0);
-			let n = notes.find(x => x.id === id), mode;
+			let n = notes.find(x => x.id === id), mode, copied = null;
 			if (n) {
 				if (e.shiftKey) { sel.has(n.id) ? sel.delete(n.id) : sel.add(n.id); draw(); return; }
 				if (!sel.has(n.id)) { sel.clear(); sel.add(n.id); }
-				mode = (n.beat + n.dur - p.beat) * p.px < 8 ? 'resize' : 'move';
+				mode = (n.beat + n.dur - p.beat) * p.px < 8 && !e.altKey ? 'resize' : 'move';
+				if (e.altKey) {   // Option-drag: the selected notes stay, copies of them move
+					remember();
+					copied = notes.filter(x => sel.has(x.id)).map(x => [x, mk(x)]);
+					notes.push(...copied.map(c => c[1]));
+					sel.clear(); copied.forEach(c => sel.add(c[1].id));
+					n = copied.find(c => c[0] === n)[1];
+				}
 				audition(take.track, n.key, n.vel);
-			} else {
+			} else if (!e.altKey) return lasso(e);
+			else {   // Option-drag on empty space draws a note to the length of the drag
 				remember();
 				n = mk({ beat: Math.min(floorB(p.beat), beats - (g() || .05)), dur: lastLen, key: p.key, vel: lastVel });
 				n.dur = Math.min(n.dur, beats - n.beat);
@@ -1041,11 +1051,13 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			}
 			// moves are measured from where the drag started (the dialog may shift as its text changes)
 			const start = { x: e.clientX, y: e.clientY, px: p.px }, orig = new Map(notes.filter(x => sel.has(x.id)).map(x => [x.id, { beat: x.beat, key: x.key, dur: x.dur }]));
-			let moved = mode === 'resize' && !id, lastKey = n.key;
+			let moved = (mode === 'resize' && !id) || !!copied, lastKey = n.key;
+			let dragged = false;
 			svg.setPointerCapture(e.pointerId);
 			const move = ev => {
 				const dBeat = (ev.clientX - start.x) / start.px, db = snapD(dBeat), dk = -Math.round((ev.clientY - start.y) / ROW);
 				if (!moved && (Math.abs(ev.clientX - start.x) > 3 || dk)) { if (id) remember(); moved = true; }
+				if (Math.abs(ev.clientX - start.x) > 3 || dk) dragged = true;
 				if (!moved) return;
 				if (mode === 'move') {
 					const minB = Math.min(...[...orig.values()].map(o => o.beat)), maxE = Math.max(...[...orig.values()].map(o => o.beat + o.dur));
@@ -1060,6 +1072,14 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			};
 			const up = () => {
 				svg.removeEventListener('pointermove', move);
+				if (copied && !dragged) {   // an Option-click: no copies stacked on the notes
+					const gone = new Set(copied.map(c => c[1].id));
+					notes = notes.filter(x => !gone.has(x.id));
+					sel.clear(); copied.forEach(c => sel.add(c[0].id));
+					hist.pop();
+					draw();
+					return;
+				}
 				if (mode === 'resize') lastLen = n.dur;
 				lastVel = n.vel;
 				if (moved) { range(); changed(); } else draw();
@@ -1068,9 +1088,57 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			svg.addEventListener('pointerup', up, { once: true });
 			svg.addEventListener('pointercancel', up, { once: true });
 		}
+		// a drag on empty space draws a box that selects the notes it touches (Shift adds to the selection);
+		// a click there with no drag adds a note
+		let marquee = null;
+		function lasso(e) {
+			const at = ev => { const r = svg.getBoundingClientRect(); return { x: (ev.clientX - r.left) / r.width * 1000, y: ev.clientY - r.top }; };
+			const p0 = at(e), first = pos(e), before = e.shiftKey ? new Set(sel) : new Set(), sx = e.clientX, sy = e.clientY;
+			svg.setPointerCapture(e.pointerId);
+			const move = ev => {
+				if (!marquee && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+				const p1 = at(ev);
+				marquee = { x: Math.min(p0.x, p1.x), y: Math.min(p0.y, p1.y), w: Math.abs(p1.x - p0.x), h: Math.abs(p1.y - p0.y) };
+				sel.clear(); before.forEach(i => sel.add(i));
+				for (const x of notes) {
+					const nx = x.beat / beats * 1000, nw = x.dur / beats * 1000, ny = (hi - x.key) * ROW;
+					if (nx < marquee.x + marquee.w && nx + nw > marquee.x && ny < marquee.y + marquee.h && ny + ROW > marquee.y) sel.add(x.id);
+				}
+				draw();
+			};
+			const up = () => {
+				svg.removeEventListener('pointermove', move);
+				if (marquee) { marquee = null; draw(); return; }
+				remember();   // a click: a note there, the snap grid's length or the last one drawn
+				const n = mk({ beat: Math.min(floorB(first.beat), beats - (g() || .05)), dur: lastLen, key: first.key, vel: lastVel });
+				n.dur = Math.min(n.dur, beats - n.beat);
+				notes.push(n);
+				sel.clear(); sel.add(n.id);
+				audition(take.track, n.key, n.vel);
+				range(); changed();
+			};
+			svg.addEventListener('pointermove', move);
+			svg.addEventListener('pointerup', up, { once: true });
+			svg.addEventListener('pointercancel', up, { once: true });
+		}
+		// a copy of the selected notes right after them: a bar on when they span more than half a bar, else the next
+		// beat (or grid step) past their end; notes that would fall past the riff's end are left out
+		function duplicate() {
+			const list = notes.filter(x => sel.has(x.id));
+			if (!list.length) return;
+			const span = Math.max(...list.map(x => x.beat + x.dur)) - Math.min(...list.map(x => x.beat));
+			const unit = span > bpb / 2 ? bpb : span > 1 ? 1 : (g() || .25), off = Math.max(unit, Math.ceil(span / unit - 1e-6) * unit);
+			const copies = list.filter(x => x.beat + off < beats - 1e-6).map(x => mk({ ...x, beat: +(x.beat + off).toFixed(4), dur: +Math.min(x.dur, beats - x.beat - off).toFixed(4) }));
+			if (!copies.length) { d.querySelector('[data-r="count"]').textContent = 'No room after them: add bars first'; return; }
+			remember();
+			notes.push(...copies);
+			sel.clear(); copies.forEach(c => sel.add(c.id));
+			range(); changed();
+		}
 		const chosen = () => sel.size ? notes.filter(x => sel.has(x.id)) : notes;
 		function key(e) {
 			const mod = e.metaKey || e.ctrlKey;
+			if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicate(); return; }
 			if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
 			if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); notes.forEach(x => sel.add(x.id)); draw(); return; }
 			if (e.key === 'Escape' && sel.size) { e.preventDefault(); sel.clear(); draw(); return; }
@@ -1110,6 +1178,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			if (a === 'played' && take.played) { remember(); notes = take.played.filter(n => n.beat < beats).map(n => mk({ ...n, dur: Math.min(n.dur, beats - n.beat) })); sel.clear(); range(); changed(); }
 			if (a === 'delete' && sel.size) { remember(); notes = notes.filter(x => !sel.has(x.id)); sel.clear(); changed(); }
 			if (a === 'all') { notes.forEach(x => sel.add(x.id)); draw(); }
+			if (a === 'duplicate') { duplicate(); d.querySelector('[data-r="rollbox"]').focus(); }
 			if (a === 'undo') undo();
 			if (a === 'redo') redo();
 			if (a === 'play') play();
@@ -1122,6 +1191,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				<button type="button" class="ed-btn" data-a="play" data-r="play" title="Space">Play (loops)</button>
 				<label>Snap <select data-r="snap">${Object.keys(GRID).map(k => `<option value="${k}" ${k === snapName ? 'selected' : ''}>${k === 'off' ? 'off' : k}</option>`).join('')}</select></label>
 				<button type="button" class="ed-btn" data-a="quantize" title="Starts and ends of the selected notes (or all) to the snap grid">Quantize</button>
+				<button type="button" class="ed-btn" data-a="duplicate" data-r="dup" title="Cmd-D: a copy of the selected notes right after them. Option-drag notes to drag a copy">Duplicate</button>
 				${take.played ? `<button type="button" class="ed-btn" data-a="played" title="Back to the notes as you played them">As played</button><label title="The take as you played it, faint behind the notes"><input type="checkbox" data-r="ghost"> Show the take</label>` : ''}
 				<label>Bars <select data-r="bars">${barOpts.map(b => `<option value="${b}" ${b === bars ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
 				<label>Tempo <input type="number" data-r="tempo" min="20" max="400" step="1" value="${tempo}"></label>
@@ -1131,7 +1201,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			</div>
 			<div class="sd-rollwrap"><div class="sd-rollkeys mono"><div class="sd-rollcorner"></div><div class="sd-rollkeyl" data-r="keys"></div></div>
 				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><div class="sd-ruler mono" data-r="ruler" title="Click to play from here; drag to move along"></div><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
-			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (drag to set its length), drag to move, drag its end to resize, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
+			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (Option-drag: to a length), drag a box to select (Shift adds), drag notes to move them (Option: a copy), drag an end to resize, Cmd-D duplicates, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
 			<div class="sd-riffmeta">
 				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (S.lib ? nextRiffName() : take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
 				${S.lib ? `<label class="wl-field"><span>Group</span><select name="group"><option value="">No group</option>${groups.map(g => `<option ${g === groupNow ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></label>` : ''}

@@ -151,6 +151,7 @@ dialog.wl-dlg.sd-riffdlg { width: min(1180px, 96vw); margin-top: 4vh; }   /* pin
 .sd-roll .nt { fill: var(--accent); stroke: color-mix(in srgb, var(--accent) 60%, #000); stroke-width: 1; vector-effect: non-scaling-stroke; cursor: grab; }
 .sd-roll .nt.sel { fill: var(--amber); stroke: color-mix(in srgb, var(--amber) 50%, #000); }
 .sd-roll .gh { fill: none; stroke: var(--muted); stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.sd-roll .lasso { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .sd-roll .ph { stroke: #e5484d; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .sd-rollhelp { margin: 8px 0 12px !important; font-size: 12px !important; }
 .sd-riffmeta { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
