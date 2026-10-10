@@ -22,7 +22,6 @@
 	try { Object.assign(S, JSON.parse(localStorage.getItem('wl-sounds') || '{}'), { data: null, K: null, vals: new Map(), base: new Map(), text: new Map(), open: new Set() }); } catch {}
 	Object.assign(S, { songSlug: S.slug === LIB ? '' : S.slug, lib: false, rq: '', rsel: new Set() });
 	const keep = () => { try { const { songSlug: slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief })); } catch {} };
-	const ROLES = ['Lead', 'Bass', 'Pad', 'Pluck', 'Arp', 'Keys', 'Stab', 'Chords', 'Sub', 'FX'];
 	let root, keys, built = false, saveTimer = 0, saving = Promise.resolve(), textTimer = 0;
 	const pendingText = new Map();
 
@@ -576,26 +575,24 @@
 		if (!presetCache.has(plugin)) presetCache.set(plugin, fetch('api/presets?plugin=' + encodeURIComponent(plugin)).then(r => r.json()).then(r => r.presets || []).catch(() => []));
 		return presetCache.get(plugin);
 	}
-	// the picker: instruments (unless presetOnly) and their presets, searchable; resolves with {plugin, preset} or null
-	async function chooseSound({ title, plugin, preset, presetOnly, name }) {
+	// the picker: instruments (unless presetOnly) and their presets, searchable; resolves with {plugin, preset, type,
+	// instrument} (the preset's type, '' for the default sound; the instrument's display name) or null
+	async function chooseSound({ title, plugin, preset, presetOnly, ok = 'Use it' }) {
 		const groups = presetOnly ? [] : await WLKeys.instruments();
 		let spec = plugin || '', chosen = preset || '', presets = [], types = [], ptype = '';
 		const specOf = g => g.formats[0].format === 'clap' && g.formats.filter(f => f.format === 'clap').length === 1 ? g.name : g.formats[0].spec;
 		const groupOf = s => groups.find(g => g.formats.some(f => f.spec === s) || g.name.toLowerCase() === plainName(s).toLowerCase());
 		let out = null;
 		await WLUI.modal({ title, cls: 'sd-dlg', body: `
-			${name != null ? `<label class="wl-field"><span>Track name</span><input name="name" value="${esc(name)}" list="sd-roles" autocomplete="off" spellcheck="false"><datalist id="sd-roles">${ROLES.map(r => `<option value="${r}">`).join('')}</datalist></label>` : ''}
 			<div class="sd-pickgrid ${presetOnly ? 'one' : ''}">
 				${presetOnly ? '' : `<div><input type="search" data-q="i" placeholder="Search instruments" autocomplete="off" spellcheck="false"><div class="pg-list" data-l="i"></div></div>`}
 				<div><input type="search" data-q="p" placeholder="Search presets" autocomplete="off" spellcheck="false"><div class="pt-body"><div class="pt-rail" data-r="types"></div><div class="pg-list" data-l="p"></div></div></div>
 			</div>
 			<p class="sd-try" data-r="try">Click a preset, then play it on your computer keys (A to K, W E T Y U O P; Z and X change the octave) or a MIDI keyboard before you pick it. Up and down step through the list.</p>`,
-			buttons: [{ value: 'cancel', label: 'Cancel' }, { value: 'ok', label: name != null ? 'Add' : 'Use it', cls: 'primary', submit: api => {
-				const n = api.dlg.querySelector('input[name="name"]');
-				if (n && !n.value.trim()) return api.error('Give the track a name.');
-				if (n && S.data.tracks.some(t => t.name === n.value.trim())) return api.error('There is already a track named ' + n.value.trim() + '.');
+			buttons: [{ value: 'cancel', label: 'Cancel' }, { value: 'ok', label: ok, cls: 'primary', submit: api => {
 				if (!spec) return api.error('Pick an instrument.');
-				out = { plugin: spec, preset: chosen, name: n?.value.trim() };
+				out = { plugin: spec, preset: chosen, type: chosen ? types[presets.findIndex(p => p.name === chosen)] || '' : '',
+					instrument: groupOf(spec)?.name || plainName(spec) };
 				api.done('ok');
 			} }],
 			init: api => {
@@ -659,7 +656,7 @@
 				d.querySelector('[data-r="types"]').addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (!b) return; ptype = b.dataset.type; drawP(); });
 				d.querySelector('[data-l="p"]').addEventListener('dblclick', e => { if (e.target.closest('[data-p]')) d.querySelector('button[value="ok"]').click(); });
 				drawI(); loadP();
-				(d.querySelector('input[name="name"]') || iq || pq).focus();
+				(iq || pq).focus();
 			} });
 		if (S.audition) {
 			S.audition = null;
@@ -670,15 +667,23 @@
 	}
 
 	/* ---------- tracks: add, reset, remove ---------- */
+	// a new track is named after its sound: the preset's type (Bass, Lead, Pad...), else the instrument; "Bass 2" when taken
+	function trackName(s) {
+		const used = new Set(S.data.tracks.map(t => t.name.toLowerCase()));
+		const base = s.type && s.type !== 'Other' ? s.type : s.instrument || plainName(s.plugin);
+		let name = base;
+		for (let i = 2; used.has(name.toLowerCase()); i++) name = base + ' ' + i;
+		return name;
+	}
 	async function addTrack() {
 		if (!S.data) return;
-		const used = new Set(S.data.tracks.map(t => t.name));
-		const s = await chooseSound({ title: 'Add an instrument', name: ROLES.find(r => !used.has(r)) || '' });
+		const s = await chooseSound({ title: 'Add an instrument', ok: 'Add' });
 		if (!s) return;
-		try { await change({ op: 'add', track: s.name, sound: { plugin: s.plugin, ...(s.preset ? { preset: s.preset } : {}) }, tempo: 128 }); }
+		const name = trackName(s);
+		try { await change({ op: 'add', track: name, sound: { plugin: s.plugin, ...(s.preset ? { preset: s.preset } : {}) }, tempo: 128 }); }
 		catch (e) { return WLUI.confirm({ title: 'Could not add it', body: esc(e.message) }); }
 		await reload();
-		await pick(s.name);
+		await pick(name);
 	}
 	function trackMenu(e, name) {
 		const t = row(name);
