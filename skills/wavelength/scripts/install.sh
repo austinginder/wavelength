@@ -121,15 +121,26 @@ if [ -z "$BIN" ]; then
   BIN="$BIN_DIR/$EXE"
 fi
 
+# the file a symlink on PATH points to (/usr/local/bin/wavelength -> <checkout>/build/wavelength)
+real_path() {
+  local p="$1" l
+  while [ -L "$p" ]; do
+    l="$(readlink "$p")"
+    case "$l" in /*) p="$l" ;; *) p="$(dirname "$p")/$l" ;; esac
+  done
+  printf '%s\n' "$p"
+}
+
 # docs and helper scripts must match the binary: a checkout next to it (a source build
 # elsewhere), else our checkout on the binary's release tag (or main for a -dev build)
 VERSION="$("$BIN" version 2>/dev/null | awk '{print $2}')"
 DOCS=""
-if [ -f "$(dirname "$BIN")/../AGENTS.md" ]; then DOCS="$(cd "$(dirname "$BIN")/.." && pwd)"
+REAL_DIR="$(dirname "$(real_path "$BIN")")"
+if [ -f "$REAL_DIR/../AGENTS.md" ]; then DOCS="$(cd "$REAL_DIR/.." && pwd)"
 else
   ensure_source
   case "$VERSION" in
-    *-dev|"") : ;;   # built from main: the checkout already matches
+    *-dev|"") checkout_ref origin/main ;;   # built from main: the newest docs, not whatever the checkout was left on
     *) if git -C "$SRC_DIR" rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then checkout_ref "v$VERSION"; fi ;;
   esac
   DOCS="$SRC_DIR"
