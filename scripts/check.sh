@@ -1691,25 +1691,30 @@ if not isinstance(wav, bytes) or len(wav) < 4.0 * 48000 * 4: sys.exit(print("the
 if not post("api/sounds", {"song": song, "op": "riff-delete", "id": "riff-1"}).get("ok"): sys.exit(print("deleting the riff failed") or 1)
 import os
 if os.path.exists("%s/%s/riffs.json" % (root, song)): sys.exit(print("riffs.json stayed after its last riff went") or 1)
-# the riff library: no project and no name needed; an instrument, groups (one name in any case), riffs filed and moved,
-# an instrument its riffs play on kept, the library neither listed as a song nor trashed like one
+# the riff library: no project and no name needed; an instrument, riffs in the day's numbered group, moved to a new group
+# and back, an instrument its riffs play on kept, the library neither listed as a song nor trashed like one
 L = "_riffs"
 if not post("api/sounds", {"song": L, "op": "add", "track": "Keys", "sound": {"plugin": "builtin:synth", "preset": "LD Chip"}, "tempo": 128}).get("ok"): sys.exit(print("adding a library instrument failed") or 1)
-if not post("api/sounds", {"song": L, "op": "group-add", "group": "Hooks"}).get("ok"): sys.exit(print("adding a group failed") or 1)
-if post("api/sounds", {"song": L, "op": "group-add", "group": "hooks"}).get("status") != 400: sys.exit(print("a group named again in another case was taken") or 1)
-for name, group in (("", "HOOKS"), ("Bass idea", "")):
-    if not post("api/sounds", {"song": L, "op": "riff", "riff": {**riff, "name": name, "track": "Keys", "group": group}}).get("ok"): sys.exit(print("saving a library riff failed") or 1)
-if not post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-2"], "group": "Bass"}).get("ok"): sys.exit(print("moving a riff to a new group failed") or 1)
+for name in ("", "Bass idea", "Third"):
+    r = post("api/sounds", {"song": L, "op": "riff", "riff": {**riff, "name": name, "track": "Keys"}})
+    if r.get("group") != 1: sys.exit(print("a library riff not in the day's group: %s" % r) or 1)
+r = post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-2", "riff-3"], "group": "new"})
+if r.get("group") != 2 or r.get("groups") != [1, 2]: sys.exit(print("moving riffs to a new group: %s" % r) or 1)
+if post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-2"], "group": 7}).get("status") != 400: sys.exit(print("a riff moved to a group no riff is in") or 1)
+if post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-3"], "group": 1}).get("group") != 1: sys.exit(print("moving a riff back failed") or 1)
+r = post("api/sounds", {"song": L, "op": "riff", "riff": {**riff, "id": "riff-2", "name": "Bass idea", "track": "Keys"}})
+if r.get("group") != 2: sys.exit(print("editing a riff moved it out of its group: %s" % r) or 1)
+if post("api/sounds", {"song": L, "op": "riff-delete", "ids": ["riff-3"]}).get("groups") != [1, 2]: sys.exit(print("deleting a riff failed") or 1)
 if post("api/sounds", {"song": L, "op": "remove", "track": "Keys"}).get("status") != 400: sys.exit(print("an instrument with riffs on it was removed") or 1)
 if post("api/song/trash", {"song": L}).get("status") != 400: sys.exit(print("the library was trashed like a song") or 1)
 d = json.loads(urllib.request.urlopen(base + "api/sounds?song=" + L).read())
-if not d.get("library") or d["groups"] != ["Hooks", "Bass"] or [(r["name"], r.get("group")) for r in d["riffs"]] != [("Riff", "Hooks"), ("Bass idea", "Bass")]:
-    sys.exit(print("the library: %s %s" % (d.get("groups"), [(r["name"], r.get("group")) for r in d["riffs"]])) or 1)
+if not d.get("library") or d["groups"] != [1, 2] or d.get("today") != 1 or [(r["name"], r.get("group")) for r in d["riffs"]] != [("Riff", 1), ("Bass idea", 2)]:
+    sys.exit(print("the library: %s %s %s" % (d.get("groups"), d.get("today"), [(r["name"], r.get("group")) for r in d["riffs"]])) or 1)
 if any(x["slug"] == L for x in json.loads(urllib.request.urlopen(base + "api/songs").read())["songs"]): sys.exit(print("the library is listed as a song") or 1)
 # wavelength riffs: the list, and `use` copying a group into a new song folder: the riff, its instrument as a track, a job
-lst = json.loads(subprocess.run([sys.argv[3], "riffs", "--group", "hooks", "--json"], capture_output=True, text=True).stdout)
+lst = json.loads(subprocess.run([sys.argv[3], "riffs", "--group", "1", "--json"], capture_output=True, text=True).stdout)
 if [r["name"] for r in lst["riffs"]] != ["Riff"] or lst["riffs"][0]["line"] != "C5 D5": sys.exit(print("riffs --group: %s" % lst) or 1)
-u = subprocess.run([sys.argv[3], "riffs", "use", "out/check/riff-song", "group:Hooks", "Bass idea", "--json"], capture_output=True, text=True)
+u = subprocess.run([sys.argv[3], "riffs", "use", "out/check/riff-song", "group:1", "Bass idea", "--json"], capture_output=True, text=True)
 got = json.load(open("out/check/riff-song/riffs.json"))["riffs"] if u.returncode == 0 else []
 snd = json.load(open("out/check/riff-song/sounds.json"))["tracks"] if u.returncode == 0 else []
 job = json.load(open("out/check/riff-song/job.json")) if u.returncode == 0 else {}
@@ -1718,6 +1723,23 @@ if [(r["id"], r["track"], r.get("from"), "group" in r) for r in got] != [("riff-
     sys.exit(print("riffs use: %s %s" % (u.stdout[-300:] + u.stderr[-300:], got)) or 1)
 again = json.loads(subprocess.run([sys.argv[3], "riffs", "use", "out/check/riff-song", "riff-1", "--json"], capture_output=True, text=True).stdout)
 if again["riffs"] or len(again["skipped"]) != 1: sys.exit(print("a riff copied twice: %s" % again) or 1)
+# a library from before numbered groups: named groups take numbers in their order (one name in any case), riffs in
+# no group one per day; read as such by `riffs` without changing the file, "Group 2" and group:3 name groups
+old = "out/check/riff-library-named"
+os.makedirs(old, exist_ok=True)
+named = {"format": "wavelength.riffs", "formatVersion": "1.0", "groups": ["Night", "Hooks", "Empty"], "riffs": [
+    {**riff, "id": "riff-%d" % i, "name": "R%d" % i, "track": "Keys", "created": "2026-01-0%dT10:00:00-05:00" % d, **({"group": g} if g else {})}
+    for i, d, g in ((1, 1, "night"), (2, 2, "Hooks"), (3, 3, None), (4, 3, None), (5, 5, None))]}
+json.dump(named, open(old + "/riffs.json", "w"))
+before = open(old + "/riffs.json").read()
+lst = json.loads(subprocess.run([sys.argv[3], "riffs", "--json"], capture_output=True, text=True, env={**os.environ, "WAVELENGTH_RIFFS": old}).stdout)
+got = sorted((r["id"], r["group"]) for r in lst["riffs"])
+if got != [("riff-1", 1), ("riff-2", 2), ("riff-3", 3), ("riff-4", 3), ("riff-5", 4)] or [g["group"] for g in lst["groups"]] != [1, 2, 3, 4]:
+    sys.exit(print("named groups as numbers: %s %s" % (got, lst["groups"])) or 1)
+for ref, want in (("Group 2", ["riff-2"]), ("group:3", ["riff-3", "riff-4"])):
+    sh = json.loads(subprocess.run([sys.argv[3], "riffs", "show", ref, "--json"], capture_output=True, text=True, env={**os.environ, "WAVELENGTH_RIFFS": old}).stdout or "{}")
+    if [r["id"] for r in sh.get("riffs", [])] != want: sys.exit(print("riffs show %s: %s" % (ref, sh)) or 1)
+if open(old + "/riffs.json").read() != before: sys.exit(print("riffs changed the library's file") or 1)
 PY
 )
 if [ -z "$serve_why" ]; then

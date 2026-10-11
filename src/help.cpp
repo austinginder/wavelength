@@ -240,15 +240,16 @@ Usage:
       render and serve open a .wavelength file directly.
   wavelength validate <song | file.wavelength> [--json]
       A song folder or package against the format spec.
-  wavelength riffs [--group NAME] [--search TEXT] [--sort newest|oldest|name|tempo|length] [--json]
+  wavelength riffs [--group N] [--search TEXT] [--sort newest|oldest|name|tempo|length] [--json]
   wavelength riffs show <riff>... [--json]
   wavelength riffs use <song> <riff>... [--json]
       The riff library: riffs recorded on the Riffs page of `wavelength serve`, kept apart from any song
-      and filed in groups (in Riffs/ in Wavelength's folder, or $WAVELENGTH_RIFFS). Lists each riff's id,
-      group, instrument, length, tempo and notes by bar. `show` gives a riff's notes in full and its
-      instrument's sound. `use` copies riffs into a song folder (made when it doesn't exist): riffs.json
-      gets them, sounds.json and the job a track for each instrument they play on, so the song grows from
-      them like a Sounds-page project. A riff is its id (riff-12), its name, or group:NAME for a whole group.
+      in numbered groups, one started each day (in Riffs/ in Wavelength's folder, or $WAVELENGTH_RIFFS).
+      Lists each riff's id, group, instrument, length, tempo and notes by bar. `show` gives a riff's notes
+      in full and its instrument's sound. `use` copies riffs into a song folder (made when it doesn't
+      exist): riffs.json gets them, sounds.json and the job a track for each instrument they play on, so
+      the song grows from them like a Sounds-page project. A riff is its id (riff-12), its name, or
+      group:3 for all of Group 3.
   wavelength fallbacks [song | job.json] [--suggest [--write] [--no-measure]] [--json]
       What each track plays on this computer: its own plugin or library, or which fallback. --suggest
       proposes a built-in stand-in (a synth patch, the drum kit, a General MIDI program) for every

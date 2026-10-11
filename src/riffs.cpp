@@ -103,7 +103,7 @@ bool normalizeRiff(const json &in, json &out, std::string &err) {
     }
     out["name"] = trimmed(in, "name", 80).empty() ? "Riff" : trimmed(in, "name", 80);
     out["track"] = trimmed(in, "track", 80);
-    if (!trimmed(in, "group", 80).empty()) out["group"] = trimmed(in, "group", 80);
+    if (riffGroup(in)) out["group"] = riffGroup(in);
     if (!trimmed(in, "from", 120).empty()) out["from"] = trimmed(in, "from", 120);
     const double tempo = in.value("tempo", 0.0);
     if (!(tempo >= 20 && tempo <= 400)) { err = "a riff needs its tempo (20 to 400 BPM)"; return false; }
@@ -153,26 +153,90 @@ json readRiffFile(const fs::path &file) {
 }
 
 bool writeRiffFile(const fs::path &file, json rf, std::string &err) {
-    const std::vector<std::string> groups = riffGroups(rf);
-    if (groups.empty()) rf.erase("groups"); else rf["groups"] = groups;
+    rf.erase("groups");   // the names groups had before they were numbers
+    if (rf.contains("today") && !currentDayGroup(rf)) rf.erase("today");   // a day gone by, or its riffs all moved
     std::error_code ec;
-    if (rf["riffs"].empty() && groups.empty()) { fs::remove(file, ec); return true; }
+    if (rf["riffs"].empty()) { fs::remove(file, ec); return true; }
     fs::create_directories(file.parent_path(), ec);
     return platform::writeFileAtomic(file, rf.dump(1) + "\n", err);
 }
 
-std::vector<std::string> riffGroups(const json &rf) {
-    std::vector<std::string> out;
-    std::set<std::string> seen;
-    auto add = [&](const json &g) {
-        if (!g.is_string()) return;
-        const std::string s = g.get<std::string>();
-        if (!s.empty() && seen.insert(lower(s)).second) out.push_back(s);
-    };
-    if (rf.contains("groups") && rf["groups"].is_array()) for (const auto &g : rf["groups"]) add(g);
+int riffGroup(const json &r) {
+    if (!r.is_object() || !r.contains("group") || !r["group"].is_number_integer()) return 0;
+    const long long g = r["group"].get<long long>();
+    return g >= 1 && g <= 1000000 ? (int)g : 0;
+}
+
+std::vector<int> riffGroups(const json &rf) {
+    std::set<int> in;
     if (rf.contains("riffs") && rf["riffs"].is_array())
-        for (const auto &r : rf["riffs"]) if (r.is_object() && r.contains("group")) add(r["group"]);
-    return out;
+        for (const auto &r : rf["riffs"]) if (riffGroup(r)) in.insert(riffGroup(r));
+    return {in.begin(), in.end()};
+}
+
+int newRiffGroup(const json &rf) {
+    const std::vector<int> in = riffGroups(rf);
+    return in.empty() ? 1 : in.back() + 1;
+}
+
+int currentDayGroup(const json &rf) {
+    if (!rf.contains("today") || !rf["today"].is_object() || rf["today"].value("day", std::string()) != nowRfc3339().substr(0, 10)) return 0;
+    const int g = riffGroup(rf["today"]);
+    const std::vector<int> in = riffGroups(rf);
+    return std::binary_search(in.begin(), in.end(), g) ? g : 0;
+}
+
+int todaysRiffGroup(json &rf) {
+    if (const int g = currentDayGroup(rf)) return g;
+    const int g = newRiffGroup(rf);
+    rf["today"] = {{"day", nowRfc3339().substr(0, 10)}, {"group", g}};
+    return g;
+}
+
+int riffGroupNumber(const std::string &text) {
+    std::string s;
+    for (char c : lower(text)) if (c != ' ' && c != '\t') s += c;
+    if (s.rfind("group", 0) == 0) s.erase(0, 5);
+    else if (s.rfind("g", 0) == 0) s.erase(0, 1);
+    if (s.empty() || s.size() > 6 || !std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; })) return 0;
+    return std::max(0, std::stoi(s));
+}
+
+bool fileRiffGroups(json &rf) {
+    if (!rf.contains("riffs") || !rf["riffs"].is_array()) return false;
+    json &list = rf["riffs"];
+    int next = newRiffGroup(rf);
+    // named groups, in the order they were made (the file's list, then names only a riff gives), one name in any case
+    std::vector<std::string> names;
+    std::map<std::string, int> number;
+    auto name = [&](const json &g) {
+        if (!g.is_string() || g.get<std::string>().empty()) return;
+        const std::string n = lower(g.get<std::string>());
+        if (number.emplace(n, 0).second) names.push_back(n);
+    };
+    if (rf.contains("groups") && rf["groups"].is_array()) for (const auto &g : rf["groups"]) name(g);
+    for (const auto &r : list) if (r.is_object() && r.contains("group")) name(r["group"]);
+    bool changed = rf.contains("groups");
+    rf.erase("groups");
+    std::set<std::string> used;
+    for (const auto &r : list) if (r.is_object() && r.contains("group") && r["group"].is_string()) used.insert(lower(r["group"].get<std::string>()));
+    for (const auto &n : names) if (used.count(n)) number[n] = next++;   // a named group with no riffs left goes
+    for (auto &r : list) {
+        if (!r.is_object() || !r.contains("group") || riffGroup(r)) continue;
+        if (r["group"].is_string() && number[lower(r["group"].get<std::string>())]) r["group"] = number[lower(r["group"].get<std::string>())];
+        else r.erase("group");
+        changed = true;
+    }
+    // riffs in no group: one for each day riffs were made, the earliest first
+    auto dayOf = [](const json &r) { return r.contains("created") && r["created"].is_string() ? r["created"].get<std::string>().substr(0, 10) : std::string(); };
+    std::map<std::string, int> days;
+    for (const auto &r : list) if (r.is_object() && !riffGroup(r)) days[dayOf(r)] = 0;
+    for (auto &[day, g] : days) {
+        g = next++;
+        if (day == nowRfc3339().substr(0, 10)) rf["today"] = {{"day", day}, {"group", g}};
+    }
+    for (auto &r : list) if (r.is_object() && !riffGroup(r)) { r["group"] = days[dayOf(r)]; changed = true; }
+    return changed;
 }
 
 json libraryInstruments(const fs::path &lib) {
@@ -241,11 +305,14 @@ bool resolveRiffs(const json &rf, const std::vector<std::string> &refs, std::vec
     std::set<std::string> taken;
     auto take = [&](const json &r) { if (taken.insert(r.value("id", std::string())).second) out.push_back(r); };
     for (const std::string &ref : refs) {
-        if (lower(ref).rfind("group:", 0) == 0) {
-            const std::string g = lower(ref.substr(6));
+        auto group = [&](int g) {
             size_t n = 0;
-            for (const auto &r : list) if (lower(r.value("group", std::string())) == g) { take(r); ++n; }
-            if (!n) { err = "no riffs in a group named '" + ref.substr(6) + "' (wavelength riffs lists the groups)"; return false; }
+            for (const auto &r : list) if (g && riffGroup(r) == g) { take(r); ++n; }
+            if (!n) err = "no riffs in " + (g ? "Group " + std::to_string(g) : "'" + ref + "'") + " (wavelength riffs lists the groups)";
+            return n > 0;
+        };
+        if (lower(ref).rfind("group:", 0) == 0) {
+            if (!group(riffGroupNumber(ref.substr(6)))) return false;
             continue;
         }
         const json *hit = nullptr;
@@ -260,6 +327,10 @@ bool resolveRiffs(const json &rf, const std::vector<std::string> &refs, std::vec
                 return false;
             }
             if (named.size() == 1) hit = named[0];
+        }
+        if (!hit && lower(ref).rfind("g", 0) == 0 && riffGroupNumber(ref)) {   // "Group 3", when no riff has that name
+            if (!group(riffGroupNumber(ref))) return false;
+            continue;
         }
         if (!hit) { err = "no riff '" + ref + "' in the library (wavelength riffs lists them)"; return false; }
         take(*hit);

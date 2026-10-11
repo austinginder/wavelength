@@ -643,18 +643,20 @@ int cmdPurge(const CliArgs &a, const Out &o) {
     return 0;
 }
 
-// wavelength riffs [list] [--group NAME] [--search TEXT] [--sort newest|oldest|name|tempo|length]
+// wavelength riffs [list] [--group N] [--search TEXT] [--sort newest|oldest|name|tempo|length]
 // wavelength riffs show <riff>...    wavelength riffs use <song> <riff>...
 // The riff library (riffs.hpp): riffs recorded on serve's Riffs page, apart from any song.
 int cmdRiffs(const CliArgs &a, const Out &o) {
     const fs::path lib = riffLibraryDir();
-    const json rf = readRiffFile(lib / "riffs.json"), inst = libraryInstruments(lib);
+    json rf = readRiffFile(lib / "riffs.json");
+    fileRiffGroups(rf);   // an older library's named groups as numbers, as serve files them (the file is left as it is)
+    const json inst = libraryInstruments(lib);
     const std::string sub = a.pos.size() > 1 ? a.pos[1] : "list";
     auto lower = [](std::string x) { std::transform(x.begin(), x.end(), x.begin(), [](unsigned char c) { return (char)std::tolower(c); }); return x; };
     auto soundOfRiff = [&](const json &r) { const std::string t = r.value("track", std::string()); return inst.contains(t) ? inst[t] : json(nullptr); };
     auto brief = [&](const json &r) {
         const json sound = soundOfRiff(r);
-        json x = {{"id", r.value("id", std::string())}, {"name", r.value("name", std::string())}, {"group", r.value("group", std::string())},
+        json x = {{"id", r.value("id", std::string())}, {"name", r.value("name", std::string())}, {"group", riffGroup(r)},
                   {"instrument", r.value("track", std::string())}, {"sound", sound.is_null() ? "the library has no instrument by that name" : soundLine(sound)},
                   {"tempo", r.value("tempo", 120.0)}, {"timeSignature", r.value("timeSignature", json::array({4, 4}))}, {"bars", r.value("bars", 1.0)},
                   {"notes", r.value("notes", json::array()).size()}, {"line", riffNoteLine(r)}};
@@ -666,15 +668,17 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
 
     if (sub == "list") {
         if (a.pos.size() > 2) return o.fail("`wavelength riffs` lists the library; `riffs show <riff>` shows one");
-        const std::string group = a.get("--group"), search = lower(a.get("--search")), sort = a.get("--sort", "newest");
+        const int group = riffGroupNumber(a.get("--group"));
+        const std::string search = lower(a.get("--search")), sort = a.get("--sort", "newest");
+        if (a.has("--group") && !group) return o.fail("--group is a group's number: 3, or \"Group 3\"");
         static const std::set<std::string> sorts = {"newest", "oldest", "name", "tempo", "length"};
         if (!sorts.count(sort)) return o.fail("--sort is newest, oldest, name, tempo or length");
         std::vector<json> list;
         for (const auto &r : rf["riffs"]) {
-            if (a.has("--group") && lower(r.value("group", std::string())) != (lower(group) == "none" ? "" : lower(group))) continue;
+            if (a.has("--group") && riffGroup(r) != group) continue;
             const json b = brief(r);
             if (!search.empty()) {
-                const std::string hay = lower(b["name"].get<std::string>() + " " + b["group"].get<std::string>() + " " + b["instrument"].get<std::string>() + " " +
+                const std::string hay = lower(b["name"].get<std::string>() + " group " + std::to_string(riffGroup(r)) + " " + b["instrument"].get<std::string>() + " " +
                                               b.value("note", std::string()) + " " + b["sound"].get<std::string>());
                 if (hay.find(search) == std::string::npos) continue;
             }
@@ -687,13 +691,13 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
             const std::string cx = x.value("created", std::string()), cy = y.value("created", std::string());
             return sort == "oldest" ? cx < cy : cx > cy;
         });
-        std::vector<std::string> groups = riffGroups(rf);
+        const std::vector<int> groups = riffGroups(rf);
         if (o.json) {
             json gs = json::array();
-            for (const auto &g : groups) {
+            for (const int g : groups) {
                 size_t n = 0;
-                for (const auto &r : rf["riffs"]) if (r.value("group", std::string()) == g) ++n;
-                gs.push_back({{"name", g}, {"riffs", n}});
+                for (const auto &r : rf["riffs"]) if (riffGroup(r) == g) ++n;
+                gs.push_back({{"group", g}, {"name", "Group " + std::to_string(g)}, {"riffs", n}});
             }
             o.emit({{"ok", true}, {"library", lib.u8string()}, {"groups", gs}, {"riffs", list}});
             return 0;
@@ -702,12 +706,11 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
                      groups.empty() ? "" : (", " + std::to_string(groups.size()) + (groups.size() == 1 ? " group" : " groups")).c_str());
         if (rf["riffs"].empty()) { std::fprintf(o.f, "No riffs yet. Record them on the Riffs page of `wavelength serve`.\n"); return 0; }
         if (list.empty()) { std::fprintf(o.f, "No riffs match.\n"); return 0; }
-        groups.push_back("");   // the riffs in no group last
-        for (const auto &g : groups) {
+        for (const int g : groups) {
             std::vector<const json *> in;
-            for (const auto &b : list) if (b["group"].get<std::string>() == g) in.push_back(&b);
+            for (const auto &b : list) if (b["group"].get<int>() == g) in.push_back(&b);
             if (in.empty()) continue;
-            std::fprintf(o.f, "\n%s (%zu)\n", st.bold(g.empty() ? "No group" : g).c_str(), in.size());
+            std::fprintf(o.f, "\n%s (%zu)\n", st.bold("Group " + std::to_string(g)).c_str(), in.size());
             for (const json *b : in) {
                 const std::string meta = (*b)["instrument"].get<std::string>() + " (" + (*b)["sound"].get<std::string>() + "), " + num((*b)["bars"].get<double>()) +
                                          ((*b)["bars"].get<double>() == 1 ? " bar" : " bars") + " at " + num((*b)["tempo"].get<double>()) + " BPM";
@@ -720,7 +723,7 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
     }
     if (sub == "show") {
         std::vector<std::string> refs(a.pos.begin() + 2, a.pos.end());
-        if (refs.empty()) return o.fail("which riffs? an id (riff-3), a name, or group:NAME");
+        if (refs.empty()) return o.fail("which riffs? an id (riff-3), a name, or group:3");
         std::vector<json> picked;
         std::string err;
         if (!resolveRiffs(rf, refs, picked, err)) return o.fail(err);
@@ -732,7 +735,7 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
         }
         for (const auto &r : picked) {
             const json b = brief(r);
-            std::fprintf(o.f, "%s %s\n", st.bold(b["name"].get<std::string>()).c_str(), st.dim("(" + b["id"].get<std::string>() + (b["group"].get<std::string>().empty() ? "" : ", group " + b["group"].get<std::string>()) + ")").c_str());
+            std::fprintf(o.f, "%s %s\n", st.bold(b["name"].get<std::string>()).c_str(), st.dim("(" + b["id"].get<std::string>() + (b["group"].get<int>() ? ", Group " + std::to_string(b["group"].get<int>()) : "") + ")").c_str());
             const json m = b["timeSignature"];
             std::fprintf(o.f, "  on %s: %s\n  %s %s at %s BPM in %d/%d, quantized %s\n", b["instrument"].get<std::string>().c_str(), b["sound"].get<std::string>().c_str(),
                          num(b["bars"].get<double>()).c_str(), b["bars"].get<double>() == 1 ? "bar" : "bars", num(b["tempo"].get<double>()).c_str(), m[0].get<int>(), m[1].get<int>(),
@@ -748,7 +751,7 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
         return 0;
     }
     if (sub == "use") {
-        if (a.pos.size() < 4) return o.fail("wavelength riffs use <song folder> <riff>... (ids, names, or group:NAME)");
+        if (a.pos.size() < 4) return o.fail("wavelength riffs use <song folder> <riff>... (ids, names, or group:3)");
         std::vector<std::string> refs(a.pos.begin() + 3, a.pos.end());
         std::vector<json> picked;
         std::string err;

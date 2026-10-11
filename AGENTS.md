@@ -61,16 +61,16 @@ When the song folder has a `riffs.json`, the human recorded or wrote short riffs
 
 ### The riff library: `wavelength riffs`
 
-The human also records or writes riffs apart from any song, on `serve`'s Riffs page: no project or name needed, each on an instrument they tuned there, filed in groups. When a prompt names riffs or a group ("use my riffs Crawl and Glass Steps", "the riffs in my Night drive group"), or is the prompt that page writes, find them and copy them into the song folder before writing anything:
+The human also records or writes riffs apart from any song, on `serve`'s Riffs page: no project or name needed, each on an instrument they tuned there. Riffs file themselves in numbered groups, a new group for each day they record (the human drags riffs between groups; groups have no names). When a prompt names riffs or a group ("use my riffs Crawl and Glass Steps", "the riffs in Group 3"), or is the prompt that page writes, find them and copy them into the song folder before writing anything:
 
 ```sh
 wavelength riffs                          # every riff: id, name, group, instrument and sound, length, tempo, notes by bar
-wavelength riffs --group "Night drive"    # one group (--search TEXT, --sort newest|oldest|name|tempo|length, --json)
+wavelength riffs --group 3                # one group (--search TEXT, --sort newest|oldest|name|tempo|length, --json)
 wavelength riffs show riff-12 "Glass Steps" --json    # notes in full, the take as played, the instrument's sound
-wavelength riffs use songs/night-run riff-12 "Glass Steps" group:Hooks
+wavelength riffs use songs/night-run riff-12 "Glass Steps" group:3
 ```
 
-A riff is its id, its name, or `group:NAME` for a whole group. `use` makes the song folder when it doesn't exist and puts the riffs in its `riffs.json`, the instruments they were played on in `sounds.json` and the job (a track each, no notes yet; the job takes the first riff's tempo when it is new), so the song starts like a Sounds-page project: carry on as in "Starting from a riff" and "Choosing sounds". Copying again skips riffs already there. Name the folder after the song you write. The library itself (`Riffs/` in Wavelength's folder, or `$WAVELENGTH_RIFFS`) is the human's: read it with `wavelength riffs`, never edit it.
+A riff is its id, its name, or `group:3` for all of Group 3 (`"Group 3"` works too). `use` makes the song folder when it doesn't exist and puts the riffs in its `riffs.json`, the instruments they were played on in `sounds.json` and the job (a track each, no notes yet; the job takes the first riff's tempo when it is new), so the song starts like a Sounds-page project: carry on as in "Starting from a riff" and "Choosing sounds". Copying again skips riffs already there. Name the folder after the song you write. The library itself (`Riffs/` in Wavelength's folder, or `$WAVELENGTH_RIFFS`) is the human's: read it with `wavelength riffs`, never edit it.
 
 ## Choosing sounds
 
