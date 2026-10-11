@@ -881,10 +881,11 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 	}
 	// play notes (beats) through the track's own sound, looped: one render (api/play), then the audio repeats.
 	// `from` is the beat it starts at (the loop still wraps to the riff's start)
-	let playing = null;
+	let playing = null, paused = null;   // paused: {id, beat}, where a riff's Pause stopped it
+	const PLAY_ICON = '<svg class="ip" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.8 1.4v7.2l6.2-3.6z"/></svg><svg class="ia" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.8 1.5h2.3v7H1.8zM5.9 1.5h2.3v7H5.9z"/></svg>';
 	async function playNotes(track, notes, tempo, beats, btn, from = 0) {
 		stopPlaying();
-		const spb = 60 / tempo, me = playing = { btn, from, tempo };
+		const spb = 60 / tempo, me = playing = { btn, from, tempo, id: btn?.dataset.play };
 		if (btn) btn.classList.add('on');
 		try {
 			const r = await fetch('api/play', { method: 'POST', headers: postHeaders(), body: JSON.stringify({ song: S.slug, track,
@@ -911,6 +912,8 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		src.connect(c.destination); src.start(0, off);
 		Object.assign(p, { src, t0: c.currentTime - off });
 	}
+	// where the loop is now, in beats
+	const loopBeat = p => !p.src ? p.from : ((R.ctx.currentTime - p.t0) % p.len) * p.tempo / 60;
 	function stopPlaying() {
 		if (!playing) return;
 		try { playing.src?.stop(); } catch {}
@@ -918,11 +921,16 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		playing = null;
 	}
 	const riffNotes = r => (r.notes || []).map(n => ({ ...n, key: keyNum(n.key) }));
-	function playRiff(r, btn) {
+	function playRiff(r, btn) {   // Play, Pause, and Play again goes on from there
 		if (!r) return;
-		if (playing?.btn === btn) return stopPlaying();
-		const [num, den] = r.timeSignature || [4, 4];
-		playNotes(r.track, riffNotes(r), r.tempo, r.bars * num * 4 / den, btn);
+		if (playing?.id === r.id) { paused = { id: r.id, beat: loopBeat(playing) }; return stopPlaying(); }
+		const [num, den] = r.timeSignature || [4, 4], from = paused?.id === r.id ? paused.beat : 0;
+		paused = null;
+		playNotes(r.track, riffNotes(r), r.tempo, r.bars * num * 4 / den, btn, from);
+	}
+	function keepPlayButton(box) {   // a redrawn list: the playing riff's new button shows Pause and stops it
+		const b = playing?.id && box.querySelector(`[data-play="${CSS.escape(playing.id)}"]`);
+		if (b) { b.classList.add('on'); playing.btn = b; }
 	}
 	// one note through the track's sound, to hear a pitch while editing (the newest request wins)
 	let audReq = null, audBusy = false;
@@ -1003,8 +1011,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		function nowBeat() {
 			const btn = d.querySelector('[data-r="play"]');
 			if (playing?.btn !== btn) return null;
-			if (!playing.src) return playing.from;
-			return ((R.ctx.currentTime - playing.t0) % playing.len) * playing.tempo / 60;
+			return loopBeat(playing);
 		}
 		// Play toggles from the start; `from` (the ruler) plays from there, or jumps there while playing; a re-render
 		// after an edit (`again`) goes on from where the loop was
@@ -1293,9 +1300,10 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		root.querySelector('#sd-riffcard').hidden = !S.data;
 		root.querySelector('#sd-riffcount').textContent = list.length || '';
 		box.innerHTML = list.map(r => `<div class="sd-riff">
-			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it through ${esc(r.track)}'s sound (loops; click again to stop)">▶</button>
+			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it through ${esc(r.track)}'s sound (loops; click again to pause)">${PLAY_ICON}</button>
 			<button class="pg-item" data-riff="${esc(r.id)}" title="${esc(r.note || '')}"><span class="n">${esc(r.name)}</span><span class="v">${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'} · ${(r.notes || []).length} notes${r.note ? ' · ' + esc(r.note) : ''}</span></button></div>`).join('')
 			|| '<div class="sd-hint">Record one with the button by the keyboard (a count-in at the song\'s tempo, then play), or Write one note by note.</div>';
+		keepPlayButton(box);
 	}
 	/* ---------- the riff library: groups, search, sort, ticked riffs, the prompt ---------- */
 	const ALL = -1;   // the group filter: every riff, else a group's number
@@ -1356,16 +1364,17 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		};
 		const chip = (gi, label, n, tip) => `<button class="sd-gchip ${S.rgroup === gi ? 'on' : ''}" data-gi="${gi}" title="${esc(tip)}">${esc(label)} <b>${n}</b></button>`;
 		root.querySelector('#sd-groups').innerHTML = chip(ALL, 'All', all.length, 'Every riff')
-			+ groups.map(g => chip(g, gname(g), all.filter(r => r.group === g).length,
+			+ [...groups].reverse().map(g => chip(g, gname(g), all.filter(r => r.group === g).length,
 				[days(g), g === S.data.today ? 'today: riffs you record now land here' : '', 'drop riffs here to move them'].filter(Boolean).join(' · '))).join('')
 			+ (all.length ? '<button class="sd-gadd" data-gnew title="Drop riffs here, or tick some and click, to start a group with them">New group</button>' : '');
 		box.innerHTML = libRiffs().map(r => `<div class="sd-riff lib ${S.rsel.has(r.id) ? 'sel' : ''}" data-rid="${esc(r.id)}" draggable="true">
 			<input type="checkbox" data-check="${esc(r.id)}" ${S.rsel.has(r.id) ? 'checked' : ''} aria-label="Tick ${esc(r.name)}">
-			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it on ${esc(r.track)} (loops; click again to stop)">▶</button>
+			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it on ${esc(r.track)} (loops; click again to pause)">${PLAY_ICON}</button>
 			${miniRoll(r)}
 			<button class="pg-item" data-riff="${esc(r.id)}" title="Edit ${esc(r.name)}${r.note ? ': ' + esc(r.note) : ''}"><span class="n">${esc(r.name)}${r.group && S.rgroup === ALL ? ` <i class="sd-gtag">${gname(r.group)}</i>` : ''}</span>
 				<span class="v">${esc([r.track, `${r.bars} bar${r.bars === 1 ? '' : 's'}`, `${r.tempo} BPM`, riffLine(r), when(r.created), r.note].filter(Boolean).join(' · '))}</span></button></div>`).join('')
 			|| `<div class="sd-hint">${all.length ? 'No riffs match.' : S.data?.tracks.length ? 'Press Record below and play (a count-in, then your riff), or Write one note by note. Keep it and it lands here.' : 'Add an instrument (left), then press Record below and play, or Write a riff note by note.'}</div>`;
+		keepPlayButton(box);
 		renderSelbar();
 		usePrompt();
 	}
@@ -1374,7 +1383,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		bar.hidden = !n;
 		if (!n) return;
 		bar.innerHTML = `<b>${n} ticked</b>
-			<label>Move to <select data-sel="move"><option value="">a group…</option>${groups.map(g => `<option value="${g}">${gname(g)}</option>`).join('')}<option value="new">New group</option></select></label>
+			<label>Move to <select data-sel="move"><option value="">a group…</option>${[...groups].reverse().map(g => `<option value="${g}">${gname(g)}</option>`).join('')}<option value="new">New group</option></select></label>
 			<button type="button" class="ed-btn" data-sel="all">Tick all shown</button>
 			<button type="button" class="ed-btn" data-sel="clear">Clear</button>
 			<button type="button" class="ed-btn danger" data-sel="delete">Delete</button>`;

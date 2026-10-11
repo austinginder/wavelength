@@ -120,7 +120,10 @@ dialog.wl-dlg.sd-dlg { width: min(860px, 94vw); }
 .sd-rlist { padding: 6px; max-height: 40vh; overflow: auto; }
 .sd-riff { display: flex; align-items: center; gap: 4px; }
 .sd-riff .pg-item { flex: 1; min-width: 0; grid-template-columns: minmax(0, 1fr); }
-.sd-rplay { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2); color: var(--accent); cursor: pointer; font-size: 10px; }
+.sd-rplay { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2); color: var(--accent); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.sd-rplay svg { width: 10px; height: 10px; fill: currentColor; }
+.sd-rplay .ia, .sd-rplay.on .ip { display: none; }
+.sd-rplay.on .ia { display: block; }
 .sd-rplay.on, .ed-btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 dialog.wl-dlg.sd-riffdlg { width: min(1180px, 96vw); margin-top: 4vh; }   /* pinned: a centred dialog moves as its text changes */
 .sd-takebar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 10px; font-size: 12.5px; color: var(--muted); }
