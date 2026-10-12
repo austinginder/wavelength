@@ -179,6 +179,14 @@ dialog.wl-dlg.sd-riffdlg { width: min(1180px, 96vw); margin-top: 4vh; }   /* pin
 .sd-gchip.on b { color: rgb(255 255 255 / .8); }
 .sd-gchip.drop, .sd-gadd.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
 .sd-gadd { color: var(--muted); border-style: dashed; background: none; }
+/* "Move to…": the groups as buttons, newest first, then New group */
+dialog.wl-dlg.sd-gpickdlg { width: min(520px, 94vw); }
+.sd-gpick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; max-height: min(52vh, 420px); overflow: auto; padding: 2px; }
+.sd-gpk { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); text-align: left; cursor: pointer; font: 600 13px var(--body); }
+.sd-gpk span { font: 11px var(--mono); color: var(--muted); }
+.sd-gpk:hover:not(:disabled), .sd-gpk:focus-visible { border-color: var(--accent); outline: none; }
+.sd-gpk:disabled { opacity: .45; cursor: default; }
+.sd-gpk.new { border-style: dashed; background: none; color: var(--muted); }
 .sd-selbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 4px 12px 2px; padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); font-size: 12.5px; }
 .sd-selbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .sd-selbar .danger { margin-left: auto; }

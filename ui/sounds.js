@@ -146,7 +146,6 @@
 		on('#sd-groups', 'dragleave', e => e.target.closest('[data-gi], [data-gnew]')?.classList.remove('drop'));
 		on('#sd-groups', 'drop', groupDrop);
 		on('#sd-selbar', 'click', selClick);
-		on('#sd-selbar', 'change', selChange);
 		on('#sd-rlist', 'change', e => { const c = e.target.closest('[data-check]'); if (!c) return; c.checked ? S.rsel.add(c.dataset.check) : S.rsel.delete(c.dataset.check); renderRiffs(); });
 		on('#sd-rlist', 'contextmenu', e => { const b = e.target.closest('[data-rid]'); if (b && S.lib) riffMenu(e, b.dataset.rid); });
 		on('#sd-rlist', 'dragstart', e => {
@@ -1374,6 +1373,10 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		for (let b = bpb; b < beats - 1e-6; b += bpb) bars += `<line x1="${x(b).toFixed(1)}" x2="${x(b).toFixed(1)}" y1="0" y2="${H}"/>`;
 		return `<svg class="sd-mini" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${bars}${ns.map(n => `<rect x="${x(n.beat).toFixed(1)}" y="${y(n.key).toFixed(1)}" width="${Math.max(1.5, x(n.dur) - 1).toFixed(1)}" height="3" rx="1"/>`).join('')}</svg>`;
 	}
+	const groupDays = g => {   // "Oct 9", or "Oct 9 to Oct 12" once riffs from other days are moved in
+		const ds = (S.data?.riffs || []).filter(r => r.group === g && r.created).map(r => r.created).sort(), a = day(ds[0]), b = day(ds[ds.length - 1]);
+		return a === b ? a : a + ' to ' + b;
+	};
 	const day = iso => { const t = iso ? new Date(iso) : null; return !t || isNaN(t) ? '' : t.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 	const when = iso => {
 		const t = iso ? new Date(iso) : null;
@@ -1386,14 +1389,10 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		for (const id of [...S.rsel]) if (!all.some(r => r.id === id)) S.rsel.delete(id);
 		root.querySelector('#sd-riffcard').hidden = !S.data;
 		root.querySelector('#sd-riffcount').textContent = all.length || '';
-		const days = g => {   // "Oct 9", or "Oct 9 to Oct 12" once riffs from other days are moved in
-			const ds = all.filter(r => r.group === g && r.created).map(r => r.created).sort(), a = day(ds[0]), b = day(ds[ds.length - 1]);
-			return a === b ? a : a + ' to ' + b;
-		};
 		const chip = (gi, label, n, tip) => `<button class="sd-gchip ${S.rgroup === gi ? 'on' : ''}" data-gi="${gi}" title="${esc(tip)}">${esc(label)} <b>${n}</b></button>`;
 		root.querySelector('#sd-groups').innerHTML = chip(ALL, 'All', all.length, 'Every riff')
 			+ [...groups].reverse().map(g => chip(g, gname(g), all.filter(r => r.group === g).length,
-				[days(g), g === S.data.today ? 'today: riffs you record now land here' : '', 'drop riffs here to move them'].filter(Boolean).join(' · '))).join('')
+				[groupDays(g), g === S.data.today ? 'today: riffs you record now land here' : '', 'drop riffs here to move them'].filter(Boolean).join(' · '))).join('')
 			+ (all.length ? '<button class="sd-gadd" data-gnew title="Drop riffs here, or tick some and click, to start a group with them">New group</button>' : '');
 		box.innerHTML = libRiffs().map(r => `<div class="sd-riff lib ${S.rsel.has(r.id) ? 'sel' : ''}" data-rid="${esc(r.id)}" draggable="true">
 			<input type="checkbox" data-check="${esc(r.id)}" ${S.rsel.has(r.id) ? 'checked' : ''} aria-label="Tick ${esc(r.name)}">
@@ -1407,11 +1406,11 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		usePrompt();
 	}
 	function renderSelbar() {
-		const bar = root.querySelector('#sd-selbar'), n = S.rsel.size, groups = S.data?.groups || [];
+		const bar = root.querySelector('#sd-selbar'), n = S.rsel.size;
 		bar.hidden = !n;
 		if (!n) return;
 		bar.innerHTML = `<b>${n} ticked</b>
-			<label>Move to <select data-sel="move"><option value="">a group…</option>${[...groups].reverse().map(g => `<option value="${g}">${gname(g)}</option>`).join('')}<option value="new">New group</option></select></label>
+			<button type="button" class="ed-btn" data-sel="move">Move to…</button>
 			<button type="button" class="ed-btn" data-sel="all">Tick all shown</button>
 			<button type="button" class="ed-btn" data-sel="clear">Clear</button>
 			<button type="button" class="ed-btn danger" data-sel="delete">Delete</button>`;
@@ -1447,13 +1446,36 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		const to = 'gnew' in c.dataset ? 'new' : +c.dataset.gi;
 		if (ids.length && to !== ALL) fileRiffs(ids, to);
 	}
-	async function selChange(e) {
-		const s = e.target.closest('[data-sel="move"]');
-		if (s?.value) await fileRiffs([...S.rsel], s.value === 'new' ? 'new' : +s.value);
+	// "Move to…": every group, newest first, and New group; the group the riffs are all in already can't be picked
+	async function moveTo(ids) {
+		const all = S.data?.riffs || [], moving = all.filter(r => ids.includes(r.id)), from = new Set(moving.map(r => r.group));
+		if (!moving.length) return;
+		const here = g => from.size === 1 && from.has(g), them = moving.length === 1 ? 'it' : 'them';
+		const btn = g => {
+			const n = all.filter(r => r.group === g).length;
+			return `<button type="button" class="sd-gpk" data-g="${g}" ${here(g) ? 'disabled' : ''}><b>${gname(g)}</b>
+				<span>${esc([`${n} riff${n === 1 ? '' : 's'}`, groupDays(g), here(g) ? 'here now' : g === S.data.today ? 'today' : ''].filter(Boolean).join(' · '))}</span></button>`;
+		};
+		const res = await WLUI.modal({ title: moving.length === 1 ? `Move ${moving[0].name} to…` : `Move ${moving.length} riffs to…`, cls: 'sd-dlg sd-gpickdlg',
+			body: `<div class="sd-gpick">${[...(S.data?.groups || [])].reverse().map(btn).join('')}
+				<button type="button" class="sd-gpk new" data-g="new"><b>New group</b><span>start one with ${them}</span></button></div>`,
+			buttons: [{ value: 'cancel', label: 'Cancel' }],
+			init: api => {
+				const box = api.dlg.querySelector('.sd-gpick');
+				box.addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (b && !b.disabled) api.done(b.dataset.g); });
+				box.addEventListener('keydown', e => {   // arrows walk the buttons
+					const bs = [...box.querySelectorAll('[data-g]:not([disabled])')], i = bs.indexOf(document.activeElement);
+					const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+					if (step && i >= 0) { e.preventDefault(); bs[(i + step + bs.length) % bs.length].focus(); }
+				});
+				box.querySelector('[data-g]:not([disabled])')?.focus();
+			} });
+		if (res) await fileRiffs(ids, res.value === 'new' ? 'new' : +res.value);
 	}
 	async function selClick(e) {
 		const b = e.target.closest('button[data-sel]');
 		if (!b) return;
+		if (b.dataset.sel === 'move') return moveTo([...S.rsel]);
 		if (b.dataset.sel === 'all') { for (const r of libRiffs()) S.rsel.add(r.id); return renderRiffs(); }
 		if (b.dataset.sel === 'clear') { S.rsel.clear(); return renderRiffs(); }
 		if (b.dataset.sel === 'delete') {
@@ -1463,14 +1485,13 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		}
 	}
 	function riffMenu(e, id) {
-		const r = riffById(id), groups = S.data?.groups || [];
+		const r = riffById(id);
 		if (!r) return;
 		WLUI.menu(e, [
 			{ label: 'Edit…', run: () => editRiff(r) },
 			{ label: S.rsel.has(id) ? 'Untick' : 'Tick', run: () => { S.rsel.has(id) ? S.rsel.delete(id) : S.rsel.add(id); renderRiffs(); } },
 			'-',
-			...groups.filter(g => g !== r.group).reverse().slice(0, 8).map(g => ({ label: 'Move to ' + gname(g), run: () => fileRiffs([id], g) })),   // the newest eight; drag for older ones
-			{ label: 'Move to a new group', run: () => fileRiffs([id], 'new') },
+			{ label: 'Move to…', run: () => moveTo([id]) },
 			'-',
 			{ label: 'Delete', danger: true, run: async () => {
 				if (!await WLUI.confirm({ title: `Delete ${r.name}?`, body: 'It leaves your riff library. Songs it was copied into keep their copies.', ok: 'Delete', danger: true })) return;
