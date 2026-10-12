@@ -113,8 +113,9 @@ Usage:
       --input-lead-in) is lined up with the markers and keeps its lead-in unless --lead-in.
       --deliver (or the job's "deliver") writes MP3/FLAC/WAV files of the result, as for render.
   wavelength state save <plugin> --out FILE [--preset NAME | --state FILE [--format F]] [--set "Name=value"]... [--json]
-      Load an optional starting preset or state, apply parameter values, save a preset
-      (.clap-preset for CLAP plugins, .vstpreset for VST3, .aupreset for Audio Units).
+      Load an optional starting preset or state, apply parameter values (plain numbers or the
+      plugin's own text, "Cutoff=800 Hz"), save a preset (.clap-preset for CLAP plugins,
+      .vstpreset for VST3, .aupreset for Audio Units).
   wavelength import <project.dawproject> [--out DIR] [--bitwig FILE.bwproject | none] [--json]
       Turn a DAWproject export (Bitwig, Studio One, Cubase...) into a job: arrangement notes,
       tracks with their plugins and saved states, volume, pan, mute, sends, groups, tempo,

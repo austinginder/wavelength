@@ -2052,7 +2052,13 @@ int cmdState(const Args &a) {
         if (eq == std::string::npos) return fail(a, "--set expects \"Name=value\", got '" + s + "'");
         ParamInfo pi;
         if (!inst->findParam(s.substr(0, eq), pi)) return fail(a, "no parameter '" + s.substr(0, eq) + "' on " + info.name);
-        values.push_back({pi.id, pi.cookie, std::clamp(std::stod(s.substr(eq + 1)), std::min(pi.min, pi.max), std::max(pi.min, pi.max))});
+        const std::string text = s.substr(eq + 1);   // a plain number, else the plugin's own text ("800 Hz"), as a track's params
+        char *end = nullptr;
+        double v = std::strtod(text.c_str(), &end);
+        if ((text.empty() || *end != '\0') && !inst->valueFromText(pi.id, text, v))
+            return fail(a, info.name + " could not read '" + text + "' as a value of '" + pi.name + "' (now showing '" + pi.display +
+                               "'); use a number in [" + std::to_string(pi.min) + " .. " + std::to_string(pi.max) + "] or its own text format");
+        values.push_back({pi.id, pi.cookie, std::clamp(v, std::min(pi.min, pi.max), std::max(pi.min, pi.max))});
     }
     if (!inst->setParams(values, err)) return fail(a, err);
     if (!values.empty() && !inst->commitParams(values, 48000, 512, err)) return fail(a, err);

@@ -1424,9 +1424,10 @@ then
 else
   echo "FAIL loop"; fail=1
 fi
-# mcp: initialize, the tool list, the built-in guide, and a render that answers with its summary and picture
+# mcp: initialize, the tool list, the built-in guide, a render that answers with its summary and picture, and
+# save_preset (refuses a parameter that is neither a number nor text; with Surge XT, Wavelength Trance, Dexed or OB-Xf installed, writes a state)
 if python3 - "./$build/wavelength" "out/check/mcp/$build" <<'PY'
-import base64, json, subprocess, sys
+import base64, json, os, subprocess, sys
 p = subprocess.Popen([sys.argv[1], "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 def call(i, method, params):
     p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n"); p.stdin.flush()
@@ -1438,13 +1439,23 @@ names = [t["name"] for t in call(2, "tools/list", {})["result"]["tools"]]
 guide = call(3, "tools/call", {"name": "guide", "arguments": {"section": "The loop"}})["result"]
 r = call(4, "tools/call", {"name": "render", "arguments": {"job": "examples/sfz-tour.json", "out": sys.argv[2]}})["result"]
 png = base64.b64decode(r["content"][1]["data"])[:8]
+bad = call(5, "tools/call", {"name": "save_preset", "arguments": {"plugin": "x", "out": sys.argv[2] + "/x.clap-preset", "params": {"Cutoff": [800]}}})["result"]
+clap = [q for q in json.loads(subprocess.run([sys.argv[1], "plugins", "--json"], capture_output=True, text=True).stdout or "{}").get("plugins", [])
+        if q.get("format") == "clap" and q.get("name") in ("Surge XT", "Wavelength Trance", "Dexed", "OB-Xf") and not q.get("blocked")]
+saved = True
+if clap:
+    f = os.path.abspath(sys.argv[2] + "/sounds/saved.clap-preset")
+    if os.path.exists(f): os.remove(f)
+    s = call(6, "tools/call", {"name": "save_preset", "arguments": {"plugin": clap[0]["id"], "out": f}})["result"]
+    saved = not s["isError"] and os.path.getsize(f) > 0 and f in s["content"][0]["text"]
 p.stdin.close(); p.wait(timeout=10)
-ok = (init["protocolVersion"] == "2025-06-18" and {"guide", "render", "list_presets", "stage"} <= set(names) and "## The loop" in guide["content"][0]["text"]
-      and not r["isError"] and r["content"][0]["text"].startswith("ok") and png == b"\x89PNG\r\n\x1a\n")
+ok = (init["protocolVersion"] == "2025-06-18" and {"guide", "render", "list_presets", "stage", "save_preset"} <= set(names) and "## The loop" in guide["content"][0]["text"]
+      and not r["isError"] and r["content"][0]["text"].startswith("ok") and png == b"\x89PNG\r\n\x1a\n"
+      and bad["isError"] and "needs a number" in bad["content"][0]["text"] and saved)
 sys.exit(0 if ok else 1)
 PY
 then
-  echo "ok   mcp: initialize, tools, guide, render with picture"
+  echo "ok   mcp: initialize, tools, guide, render with picture, save_preset"
 else
   echo "FAIL mcp"; fail=1
 fi

@@ -118,6 +118,19 @@ json tools() {
         {{"plugin", prop("string", "the plugin's name or id")}, {"preset", prop("string", "load this preset first")},
          {"search", prop("string", "only parameters whose name contains this")}},
         {"plugin"}, readOnly));
+    list.push_back(tool("save_preset", "Save a sound as a preset file",
+        "Saves a plugin's sound as a file a track loads as \"state\": a starting preset or state file plus parameter changes "
+        "(as in a track's \"params\": plain values or the plugin's own text; names from plugin_params). Keep a sound you designed so other "
+        "songs and DAW projects can use it; save it inside the song folder so the song carries it. The file is the format's own "
+        "state (Wavelength reads its content, not its name): name it .clap-preset for CLAP, .vstpreset for VST3, .aupreset for "
+        "Audio Units, .fxb for VST2.",
+        {{"plugin", prop("string", "the plugin's name or id (not builtin:synth: its sound is the track's \"synth\" object)")},
+         {"out", prop("string", "the file to write, a full path: <song folder>/sounds/lead.clap-preset")},
+         {"preset", prop("string", "start from this preset (default: the plugin's default sound)")},
+         {"state", prop("string", "start from this state file instead (a .vital, .clap-preset, .vstpreset, .fxp, ...)")},
+         {"params", {{"type", "object"}, {"additionalProperties", {{"type", json::array({"number", "string"})}}},
+                     {"description", "parameter values to set on top, {\"Filter Cutoff\": 0.4} or {\"Filter Cutoff\": \"800 Hz\"}; \"Module/Name\" or \"#id\" when a name is ambiguous"}}}},
+        {"plugin", "out"}, writes));
     list.push_back(tool("lint", "Check a job's harmony",
         "Before rendering: wrong notes, out-of-key chords, clashes between parts, parallel fifths and octaves, from the job's notes.",
         {{"job", prop("string", "path to job.json")}}, {"job"}, readOnly));
@@ -545,6 +558,27 @@ private:
             Result r = text("arrangement: " + out.value("file", ""));
             r.content.push_back(image(out.value("file", "")));
             return r;
+        }
+        if (name == "save_preset") {
+            const std::string plugin = need(a, "plugin"), file = fs::absolute(fs::u8path(need(a, "out"))).lexically_normal().u8string();
+            if (!str(a, "preset").empty() && !str(a, "state").empty()) return text("error: give preset or state, not both", true);
+            std::vector<std::string> args = {"state", "save", plugin, "--out", file, "--json"};
+            if (!str(a, "preset").empty()) { args.push_back("--preset"); args.push_back(str(a, "preset")); }
+            if (!str(a, "state").empty()) { args.push_back("--state"); args.push_back(str(a, "state")); }
+            if (a.contains("params") && !a["params"].is_null()) {
+                if (!a["params"].is_object()) return text("error: params is an object of parameter names and values", true);
+                for (auto &[k, v] : a["params"].items()) {
+                    if (!v.is_number() && !v.is_string()) return text("error: params \"" + k + "\" needs a number or the plugin's own text (plugin_params shows both)", true);
+                    args.push_back("--set");
+                    args.push_back(k + "=" + (v.is_string() ? v.get<std::string>() : v.dump()));
+                }
+            }
+            std::error_code ec;
+            fs::create_directories(fs::u8path(file).parent_path(), ec);
+            if (!run(args, id, progress, 600, out, fail)) return fail;
+            return text("saved " + std::to_string(out.value("bytes", 0)) + " bytes of " + out.value("format", "") + " state to " + file +
+                        "\nUse it on a track: " + json{{"plugin", plugin}, {"state", file}}.dump() +
+                        " (in a song, write the path relative to the job's folder: it is read from there)");
         }
         if (name == "patch_card") {
             if (!a.contains("patches") || !a["patches"].is_array() || a["patches"].empty()) return text("patches: give at least one {plugin, preset}", true);
