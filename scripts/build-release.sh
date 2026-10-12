@@ -3,11 +3,12 @@
 #   macOS    universal (arm64 + x86_64), natively
 #   Linux    x86_64 and arm64, in Docker (Ubuntu 22.04)
 #   Windows  x86_64, cross-compiled in Docker with llvm-mingw
-# Each build renders examples/mastering.json as a smoke test (Windows under Wine). Archives and
-# SHA256SUMS.txt land in dist/<tag>/; --upload attaches them to the GitHub release for the tag.
+# Each build renders examples/mastering.json as a smoke test (Windows under Wine). Archives, the MCP
+# Bundle wavelength.mcpb (scripts/build-mcpb.sh) and SHA256SUMS.txt land in dist/<tag>/, with the
+# server.json the MCP Registry publishes; --upload attaches all but server.json to the GitHub release.
 #
 # Usage: scripts/build-release.sh v0.1.1 [--upload] [--only macos|linux-x86_64|linux-arm64|windows-x86_64]
-# Needs Docker running, and gh for --upload.
+# Needs Docker running, npx for the bundle, and gh for --upload.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$(pwd)
@@ -97,8 +98,15 @@ if want windows-x86_64; then
   rm -rf "$work/windows"
 fi
 
-(cd "$dist" && rm -f SHA256SUMS.txt && shasum -a 256 wavelength-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
+# the MCP Bundle (every platform's binary in one wavelength.mcpb) and its server.json, once all four archives are here
+rm -f "$dist/wavelength.mcpb" "$dist/server.json"
+if [ -f "$dist/wavelength-macos-universal.tar.gz" ] && [ -f "$dist/wavelength-windows-x86_64.zip" ] &&
+   [ -f "$dist/wavelength-linux-x86_64.tar.gz" ] && [ -f "$dist/wavelength-linux-arm64.tar.gz" ]; then
+  echo "== MCP Bundle"
+  scripts/build-mcpb.sh "$tag" "$dist"
+fi
+(cd "$dist" && rm -f SHA256SUMS.txt && shasum -a 256 wavelength-* $(ls wavelength.mcpb 2>/dev/null) > SHA256SUMS.txt && cat SHA256SUMS.txt)
 if [ $upload = 1 ]; then
-  gh release upload "$tag" "$dist"/wavelength-* "$dist/SHA256SUMS.txt" --clobber
+  gh release upload "$tag" "$dist"/wavelength-* $(ls "$dist/wavelength.mcpb" 2>/dev/null) "$dist/SHA256SUMS.txt" --clobber
   echo "uploaded to $(gh release view "$tag" --json url --jq .url)"
 fi

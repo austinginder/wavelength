@@ -51,6 +51,8 @@ https://wavelength.run
 /plugin install wavelength@wavelength
 ```
 
+What the plugin runs: its MCP server starts `skills/wavelength/scripts/mcp.sh`, which uses the `wavelength` on your PATH or in `~/.wavelength`. When there is none, `install.sh` beside it downloads the latest release archive for your system from this repository's GitHub releases into `~/.wavelength`, checks it against the release's `SHA256SUMS.txt`, clears the macOS quarantine flag on the binary (it isn't notarized), and keeps a checkout of this repository there for the docs; with no release for your system it builds from that checkout. Nothing else is downloaded, and the engine itself doesn't go online except for `upgrade`, `version --check`, `kit install` and `samples --install-soundfont`, when you ask for them (plugins you have installed may check their own licences).
+
 **Agent skill** for Claude Code, Codex, Cursor, Gemini CLI and other agents that read `SKILL.md`: `npx skills add austinginder/wavelength`, or copy `skills/wavelength/` into your agent's skills folder (`~/.claude/skills/` for Claude Code). It installs the engine (release build, else from source) and walks the agent through writing, mixing and mastering a song.
 
 **MCP server** for Claude Desktop, Cursor and any other MCP client: `wavelength mcp` speaks the Model Context Protocol on stdin/stdout. Tools read the guide, list instruments, presets, samples, Apple Loops and parameters, save a sound as a preset file, draw patch cards, lint, render (the reply carries the report's summary and the picture of the song), stage faders, draw an arrangement, analyze audio, find bars and import MIDI, MusicXML, DAWproject, Bitwig and GarageBand project files; for songs: save, history, undo/redo/restore, diff, read and answer review comments, suggest fallbacks and pack.
@@ -58,6 +60,8 @@ https://wavelength.run
 ```json
 {"mcpServers": {"wavelength": {"command": "/path/to/wavelength", "args": ["mcp"]}}}
 ```
+
+From 0.6.0 each release also has `wavelength.mcpb`, an MCP Bundle with the engine for macOS, Windows and Linux: open it in Claude Desktop to install the server with no settings to edit.
 
 ## Install
 

@@ -52,7 +52,7 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | The `/wavelength` agent skill | released 0.2.0 | |
 | `wavelength mcp`, docs built into the binary, the Claude Code plugin | released 0.4.0 | |
 | `llms.txt` on wavelength.run | done | lists the docs of the latest release |
-| Listings: the official Claude Code plugin marketplace, MCP Registry, Glama, Smithery, skills.sh | next | after 0.4.0, which has the MCP server |
+| Listings: the official Claude Code plugin marketplace, MCP Registry, Glama, Smithery, skills.sh | 0.6.0 | releases carry `wavelength.mcpb` (an MCP Bundle with every platform's binary) and the `server.json` the MCP Registry lists; Smithery takes the same bundle; Glama runs the `Dockerfile` to list the tools (`glama.json` names the maintainer); skills.sh lists a skill once `npx skills add` installs it |
 | GitHub topics; docs indexed by Context7 | next | |
 
 ## 4. Songs people keep and share
