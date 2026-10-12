@@ -42,6 +42,7 @@ fetch() {
   else return 1; fi
 }
 ncpu() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
+sha256() { { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | awk '{print $1}'; }
 
 # 1. already installed?
 find_existing() {
@@ -78,6 +79,12 @@ install_release() {
   say "downloading $url"
   tmp="$(mktemp -d)"
   fetch "$url" "$tmp/asset" || { say "download failed: $url"; return 1; }
+  # the archive must match its line in the release's SHA256SUMS.txt
+  local sums want
+  sums="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*/SHA256SUMS.txt"' | sed 's/.*"\(http[^"]*\)"/\1/' | head -1)"
+  [ -n "$sums" ] && fetch "$sums" "$tmp/sums" || { say "the release has no SHA256SUMS.txt to check the download against"; return 1; }
+  want="$(awk -v n="${url##*/}" '$2 == n || $2 == "*" n {print $1}' "$tmp/sums" | head -1)"
+  [ -n "$want" ] && [ "$want" = "$(sha256 "$tmp/asset")" ] || { say "${url##*/} doesn't match its SHA-256 in the release: not installing it"; return 1; }
   case "$url" in
     *.zip) unzip -q "$tmp/asset" -d "$tmp/x" ;;
     *.tar.gz|*.tgz) mkdir -p "$tmp/x" && tar -xzf "$tmp/asset" -C "$tmp/x" ;;
