@@ -712,8 +712,10 @@ int cmdRiffs(const CliArgs &a, const Out &o) {
             if (in.empty()) continue;
             std::fprintf(o.f, "\n%s (%zu)\n", st.bold("Group " + std::to_string(g)).c_str(), in.size());
             for (const json *b : in) {
+                const json &m = (*b)["timeSignature"];   // the meter only when it isn't 4/4
+                const std::string meter = m == json::array({4, 4}) ? "" : " in " + std::to_string(m[0].get<int>()) + "/" + std::to_string(m[1].get<int>());
                 const std::string meta = (*b)["instrument"].get<std::string>() + " (" + (*b)["sound"].get<std::string>() + "), " + num((*b)["bars"].get<double>()) +
-                                         ((*b)["bars"].get<double>() == 1 ? " bar" : " bars") + " at " + num((*b)["tempo"].get<double>()) + " BPM";
+                                         ((*b)["bars"].get<double>() == 1 ? " bar" : " bars") + meter + " at " + num((*b)["tempo"].get<double>()) + " BPM";
                 std::fprintf(o.f, "  %s %s  %s\n", st.dim(term::pad((*b)["id"].get<std::string>(), 9)).c_str(), st.bold((*b)["name"].get<std::string>()).c_str(), st.dim(meta).c_str());
                 std::fprintf(o.f, "            %s\n", (*b)["line"].get<std::string>().c_str());
                 if (b->contains("note")) std::fprintf(o.f, "            %s\n", st.dim((*b)["note"].get<std::string>()).c_str());

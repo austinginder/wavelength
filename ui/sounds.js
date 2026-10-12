@@ -19,10 +19,10 @@
 (() => {
 	const LIB = '_riffs';   // the riff library, as the server names it
 	const S = { slug: '', data: null, sel: '', K: null, vals: new Map(), base: new Map(), text: new Map(), q: '', changedOnly: false, open: new Set(), octave: 4, vel: .85, len: 4, chord: 'single', tracks: {},
-		recBars: 2, countIn: true, click: true, quant: '1/16', rsort: 'newest', rgroup: -1, ubrief: '' };
+		recBars: 2, countIn: true, click: true, quant: '1/16', rsort: 'newest', rgroup: -1, ubrief: '', meters: {} };
 	try { Object.assign(S, JSON.parse(localStorage.getItem('wl-sounds') || '{}'), { data: null, K: null, vals: new Map(), base: new Map(), text: new Map(), open: new Set() }); } catch {}
 	Object.assign(S, { songSlug: S.slug === LIB ? '' : S.slug, lib: false, rq: '', rsel: new Set() });
-	const keep = () => { try { const { songSlug: slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief })); } catch {} };
+	const keep = () => { try { const { songSlug: slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief, meters } = S; localStorage.setItem('wl-sounds', JSON.stringify({ slug, octave, vel, len, chord, tracks, changedOnly, midi, recBars, countIn, click, quant, rsort, rgroup, ubrief, meters })); } catch {} };
 	let root, keys, built = false, saveTimer = 0, saving = Promise.resolve(), textTimer = 0;
 	const pendingText = new Map();
 
@@ -65,6 +65,7 @@
 				<button class="sd-recbtn" id="sd-rec" title="Record a riff on this track: a count-in, then play (keys, MIDI keyboard or the piano)"><i></i><span>Record</span></button>
 				<button class="sd-recbtn sd-writebtn" id="sd-write" title="Write a riff on this track note by note in a piano roll: no recording, the Length and Quantize set its bars and grid"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M11.3 1.7a1.5 1.5 0 0 1 2.1 0l.9.9a1.5 1.5 0 0 1 0 2.1L5.6 13.4 2 14l.6-3.6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><span>Write</span></button>
 				<label title="The riff's tempo: the song's unless you change it here (record slower if that's easier; its notes are in beats either way)">Tempo <input type="number" id="sd-rtempo" min="20" max="400" step="1"> <button type="button" class="sd-tap" id="sd-tap" title="Tap the beat a few times">Tap</button><span class="sd-songtempo" id="sd-songtempo"></span></label>
+				<label title="The time signature riffs are recorded and written in: the song's unless you change it here (remembered for this project)">Meter <select id="sd-rmeter"></select><span class="sd-songtempo" id="sd-songmeter"></span></label>
 				<label>Length <select id="sd-bars"><option value="1">1 bar</option><option value="2">2 bars</option><option value="4">4 bars</option><option value="8">8 bars</option><option value="0">free (Stop ends it)</option></select></label>
 				<label><input type="checkbox" id="sd-countin"> Count-in</label>
 				<label><input type="checkbox" id="sd-click"> Click</label>
@@ -112,6 +113,11 @@
 		cin.addEventListener('change', () => { S.countIn = cin.checked; keep(); });
 		clk.addEventListener('change', () => { S.click = clk.checked; keep(); });
 		qn.addEventListener('change', () => { S.quant = qn.value; keep(); });
+		on('#sd-rmeter', 'change', e => {
+			S.meters ||= {};
+			if (e.target.value === songMeter().join('/')) delete S.meters[S.slug]; else S.meters[S.slug] = e.target.value;
+			keep(); meterMenu();
+		});
 		const rt = root.querySelector('#sd-rtempo');
 		rt.addEventListener('change', () => { const v = Math.round(+rt.value); if (v >= 20 && v <= 400) S.recTempo = v === songTempo() ? null : v; rt.value = recTempo(); songTempoNote(); });
 		const taps = [];
@@ -192,6 +198,7 @@
 		root.querySelector('#sd-tempo').value = d && typeof d.tempo === 'number' ? d.tempo : '';
 		if (document.activeElement !== root.querySelector('#sd-rtempo')) root.querySelector('#sd-rtempo').value = recTempo();
 		songTempoNote();
+		meterMenu();
 		root.querySelector('#sd-tempo').disabled = !d?.hasJob || (d.tempo != null && typeof d.tempo !== 'number');
 		root.querySelector('#sd-add').disabled = !d;
 		root.querySelector('#sd-opensong').disabled = !S.slug;
@@ -770,11 +777,21 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 	};
 	const keyStr = k => NOTE_NAMES[k % 12] + (Math.floor(k / 12) - 1);
 	const R = { on: false, ctx: null, notes: [], open: new Map() };
-	const meter = () => S.data?.timeSignature?.length === 2 ? S.data.timeSignature : [4, 4];
+	// meters offered for riffs (a song's own odd meter is added); the recorder's is the song's unless picked for this project
+	const METERS = ['4/4', '3/4', '2/4', '5/4', '6/8', '7/8', '12/8'];
+	const meterOpts = m => { const k = m[0] + '/' + m[1]; return METERS.includes(k) ? METERS : [...METERS, k]; };
+	const songMeter = () => S.data?.timeSignature?.length === 2 ? S.data.timeSignature : [4, 4];
+	const meter = () => { const m = /^(\d+)\/(\d+)$/.exec(S.meters?.[S.slug] || ''); return m ? [+m[1], +m[2]] : songMeter(); };
+	function meterMenu() {
+		const el = root.querySelector('#sd-rmeter'), m = meter(), k = m.join('/'), song = songMeter().join('/');
+		el.innerHTML = [...new Set([...meterOpts(songMeter()), ...meterOpts(m)])].map(x => `<option value="${x}" ${x === k ? 'selected' : ''}>${x}</option>`).join('');
+		root.querySelector('#sd-songmeter').textContent = k !== song && !S.lib ? `song: ${song}` : '';
+	}
 	const songTempo = () => typeof S.data?.tempo === 'number' ? S.data.tempo : 120;
 	const recTempo = () => S.recTempo || songTempo();
 	const songTempoNote = () => { const el = root.querySelector('#sd-songtempo'); if (el) el.textContent = S.recTempo ? `song: ${songTempo()}` : ''; };
 	const riffById = id => (S.data?.riffs || []).find(r => r.id === id);
+	const oddMeter = r => { const m = (r.timeSignature || [4, 4]).join('/'); return m === '4/4' ? '' : m; };   // shown in a riff's line
 	function audio() {
 		R.ctx ??= new AudioContext({ latencyHint: 'interactive' });
 		if (R.ctx.state === 'suspended') R.ctx.resume();
@@ -801,14 +818,14 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		keys.releaseAll();
 		recStatus('Loading the instrument…');
 		await keys.ensure();   // so the first notes sound
-		const c = audio(), [num, den] = meter(), bpb = num * 4 / den, spb = 60 / recTempo();
-		const count = S.countIn ? Math.round(bpb) : 0, len = S.recBars ? S.recBars * bpb : 0;
+		const c = audio(), [num, den] = meter(), bpb = num * 4 / den, spb = 60 / recTempo(), unit = 4 / den;   // unit: the meter's beat (an 8th in 6/8)
+		const count = S.countIn ? bpb : 0, len = S.recBars ? S.recBars * bpb : 0;   // in quarter-note beats: the count-in is one bar
 		Object.assign(R, { on: true, track: t.name, notes: [], open: new Map(), bpb, spb, tempo: recTempo(), meter: [num, den], len, count,
 			start: c.currentTime + .25, next: 0 });
 		R.zero = R.start + count * spb;   // beat 0 on the audio clock
-		const tick = () => {   // the click, scheduled a little ahead
-			while (R.on && R.start + R.next * spb < c.currentTime + .3 && (!len || R.next < count + len)) {
-				if (S.click || R.next < count) blip(R.start + R.next * spb, (R.next - count) % Math.round(bpb) === 0);
+		const tick = () => {   // the click on every beat of the meter, accented on the bar, scheduled a little ahead
+			while (R.on && R.start + R.next * unit * spb < c.currentTime + .3 && (!len || R.next * unit < count + len - 1e-9)) {
+				if (S.click || R.next * unit < count - 1e-9) blip(R.start + R.next * unit * spb, R.next % num === 0);
 				R.next++;
 			}
 		};
@@ -820,7 +837,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		const show = () => {
 			if (!R.on) return;
 			const b = (c.currentTime - R.zero) / spb;
-			recStatus(b < 0 ? `Count-in ${Math.min(count, Math.floor(b + count) + 1)} / ${count}` : `Recording ${t.name} · bar ${Math.floor(b / bpb) + 1}.${Math.floor(b % bpb) + 1}${len ? ' of ' + (len / bpb) : ''} · ${R.notes.length + R.open.size} notes`);
+			recStatus(b < 0 ? `Count-in ${Math.min(num, Math.floor((b + count) / unit) + 1)} / ${num}` : `Recording ${t.name} · bar ${Math.floor(b / bpb) + 1}.${Math.floor((b % bpb) / unit) + 1}${len ? ' of ' + (len / bpb) : ''} · ${R.notes.length + R.open.size} notes`);
 			requestAnimationFrame(show);
 		};
 		show();
@@ -952,7 +969,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 	}
 	// the riff editor: a take (or a kept riff) in a piano roll to clean up, heard looped, named and kept
 	async function riffEditor(take, existing) {
-		const [num, den] = take.timeSignature, bpb = num * 4 / den;
+		let [num, den] = take.timeSignature, bpb = num * 4 / den;
 		let bars = take.bars, beats = bars * bpb, tempo = take.tempo, uid = 0;
 		const mk = n => ({ id: ++uid, beat: n.beat, dur: n.dur, key: n.key, vel: n.vel ?? .8 });
 		let notes = (existing ? riffNotes(existing) : take.played ? quantize(take.played, take.quantize, beats) : []).map(mk);
@@ -960,8 +977,11 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		const sel = new Set(), hist = [], fut = [];
 		let lastLen = GRID[snapName] || .25, lastVel = .8, lo = 48, hi = 72, dirty = !existing;
 		const ROW = 12;
-		const state = () => JSON.stringify({ notes, bars });
-		const restore = st => { const o = JSON.parse(st); notes = o.notes; bars = o.bars; beats = bars * bpb; uid = Math.max(0, ...notes.map(n => n.id)); sel.clear(); };
+		const state = () => JSON.stringify({ notes, bars, meter: [num, den] });
+		const setMeter = m => { [num, den] = m; bpb = num * 4 / den; beats = bars * bpb; };
+		const restore = st => { const o = JSON.parse(st); notes = o.notes; bars = o.bars; setMeter(o.meter); uid = Math.max(0, ...notes.map(n => n.id)); sel.clear(); syncBar(); };
+		// the bar and meter menus follow undo and redo
+		const syncBar = () => { if (!d) return; d.querySelector('[data-r="bars"]').value = bars; d.querySelector('[data-r="meter"]').value = num + '/' + den; };
 		const remember = () => { hist.push(state()); if (hist.length > 200) hist.shift(); fut.length = 0; dirty = true; };
 		const g = () => GRID[snapName] || 0;
 		const snapD = d => g() ? Math.round(d / g()) * g() : d;
@@ -980,11 +1000,10 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			const W = 1000, rows = hi - lo + 1, H = rows * ROW, x = b => b / beats * W, y = k => (hi - k) * ROW;
 			let bg = '';
 			for (let k = lo; k <= hi; k++) bg += `<rect class="${[1, 3, 6, 8, 10].includes(k % 12) ? 'bk' : 'wk'}" x="0" y="${y(k)}" width="${W}" height="${ROW}"/>`;
-			const step = g() || .25;
-			for (let b = 0; b <= beats + 1e-9; b += step) {
-				const bar = Math.abs(b / bpb - Math.round(b / bpb)) < 1e-6, beat = Math.abs(b - Math.round(b)) < 1e-6;
-				bg += `<line class="${bar ? 'bar' : beat ? 'bt' : 'sub'}" x1="${x(b).toFixed(2)}" x2="${x(b).toFixed(2)}" y1="0" y2="${H}"/>`;
-			}
+			const step = g() || .25, unit = 4 / den, on = (b, u) => Math.abs(b / u - Math.round(b / u)) < 1e-6;
+			const line = (b, cls) => `<line class="${cls}" x1="${x(b).toFixed(2)}" x2="${x(b).toFixed(2)}" y1="0" y2="${H}"/>`;
+			for (let i = 0; i * step <= beats + 1e-9; i++) { const b = i * step; if (!on(b, bpb)) bg += line(b, on(b, unit) ? 'bt' : 'sub'); }
+			for (let i = 0; i * bpb <= beats + 1e-9; i++) bg += line(i * bpb, 'bar');
 			const ghost = take.played && d.querySelector('[data-r="ghost"]')?.checked ? take.played.map(n => `<rect class="gh" x="${x(n.beat).toFixed(2)}" y="${y(n.key) + 1}" width="${Math.max(1.5, x(n.dur)).toFixed(2)}" height="${ROW - 2}" rx="1.5"/>`).join('') : '';
 			const ns = notes.map(n => `<rect class="nt ${sel.has(n.id) ? 'sel' : ''}" data-id="${n.id}" x="${x(n.beat).toFixed(2)}" y="${y(n.key) + 1}" width="${Math.max(2, x(n.dur) - .8).toFixed(2)}" height="${ROW - 2}" rx="2" style="fill-opacity:${(.4 + .6 * n.vel).toFixed(2)}"><title>${keyStr(n.key)} · beat ${(n.beat + 1).toFixed(2)} · ${n.dur.toFixed(2)} beats · velocity ${Math.round(n.vel * 127)}</title></rect>`).join('');
 			svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -992,9 +1011,10 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			const lassoRect = marquee ? `<rect class="lasso" x="${marquee.x.toFixed(2)}" y="${marquee.y.toFixed(2)}" width="${marquee.w.toFixed(2)}" height="${marquee.h.toFixed(2)}"/>` : '';
 			svg.innerHTML = bg + ghost + ns + lassoRect + `<line class="ph" data-r="ph" x1="-10" x2="-10" y1="0" y2="${H}"/>`;
 			let ruler = '';
-			for (let b = 0; b < beats - 1e-9; b++) {
-				const bar = b % bpb === 0, at = (b / beats * 100).toFixed(3) + '%';
-				ruler += `<i class="${bar ? 'bar' : ''}" style="left:${at}"></i>` + (bar ? `<span style="left:${at}">${b / bpb + 1}</span>` : '');
+			const unitR = 4 / den;
+			for (let i = 0; i * unitR < beats - 1e-9; i++) {   // a tick on every beat of the meter, the bar's number at its start
+				const b = i * unitR, bar = Math.abs(b / bpb - Math.round(b / bpb)) < 1e-6, at = (b / beats * 100).toFixed(3) + '%';
+				ruler += `<i class="${bar ? 'bar' : ''}" style="left:${at}"></i>` + (bar ? `<span style="left:${at}">${Math.round(b / bpb) + 1}</span>` : '');
 			}
 			d.querySelector('[data-r="ruler"]').innerHTML = ruler + '<b class="rph" data-r="rph" hidden></b>';
 			let labels = '';
@@ -1216,6 +1236,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				<button type="button" class="ed-btn" data-a="duplicate" data-r="dup" title="Cmd-D: a copy of the selected notes right after them. Option-drag notes to drag a copy">Duplicate</button>
 				${take.played ? `<button type="button" class="ed-btn" data-a="played" title="Back to the notes as you played them">As played</button><label title="The take as you played it, faint behind the notes"><input type="checkbox" data-r="ghost"> Show the take</label>` : ''}
 				<label>Bars <select data-r="bars">${barOpts.map(b => `<option value="${b}" ${b === bars ? 'selected' : ''}>${b}</option>`).join('')}</select></label>
+				<label title="The riff's time signature: beats per bar over the beat's note value">Meter <select data-r="meter">${meterOpts([num, den]).map(m => `<option value="${m}" ${m === num + '/' + den ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
 				<label>Tempo <input type="number" data-r="tempo" min="20" max="400" step="1" value="${tempo}"></label>
 				<span class="sp"></span>
 				<button type="button" class="ed-btn" data-a="undo" data-r="undo" title="Cmd-Z">Undo</button>
@@ -1223,7 +1244,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			</div>
 			<div class="sd-rollwrap"><div class="sd-rollkeys mono"><div class="sd-rollcorner"></div><div class="sd-rollkeyl" data-r="keys"></div></div>
 				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><div class="sd-ruler mono" data-r="ruler" title="Click to play from here; drag to move along"></div><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
-			<p class="sd-rollhelp">${esc(take.track)} · ${num}/${den} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (Option-drag: to a length), drag a box to select (Shift adds), drag notes to move them (Option: a copy), drag an end to resize, Cmd-D duplicates, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
+			<p class="sd-rollhelp">${esc(take.track)} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (Option-drag: to a length), drag a box to select (Shift adds), drag notes to move them (Option: a copy), drag an end to resize, Cmd-D duplicates, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
 			<div class="sd-riffmeta">
 				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (S.lib ? nextRiffName() : take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
 				<label class="wl-field"><span>What it's for (the agent reads it)</span><input name="note" value="${esc(existing?.note || '')}" placeholder="The hook for the drops; the intro's motif; a bassline under the breakdown…" maxlength="2000" autocomplete="off"></label>
@@ -1233,7 +1254,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				api.busy(true);
 				const asKey = x => ({ beat: +x.beat.toFixed(4), dur: +x.dur.toFixed(4), key: keyStr(x.key), vel: x.vel });
 				const riff = { ...(existing ? { id: existing.id } : {}), name: d.querySelector('[name="name"]').value, note: d.querySelector('[name="note"]').value, track: take.track,
-					tempo, timeSignature: take.timeSignature, bars, quantize: snapName,
+					tempo, timeSignature: [num, den], bars, quantize: snapName,
 					notes: [...notes].sort((a, b) => a.beat - b.beat || a.key - b.key).map(asKey),
 					...(take.played ? { played: take.played.map(asKey) } : {}) };
 				try {
@@ -1270,12 +1291,19 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				d.querySelector('.sd-takebar').addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (b) act(b.dataset.a); });
 				d.querySelector('[data-r="snap"]').addEventListener('change', e => { snapName = e.target.value; lastLen = g() || lastLen; draw(); });
 				d.querySelector('[data-r="ghost"]')?.addEventListener('change', draw);
+				const fitNotes = () => {   // notes past the end go, notes running over it end there
+					notes = notes.filter(x => x.beat < beats - 1e-6);
+					for (const x of notes) x.dur = Math.min(x.dur, beats - x.beat);
+				};
 				d.querySelector('[data-r="bars"]').addEventListener('change', e => {
 					remember();
 					bars = +e.target.value; beats = bars * bpb;
-					notes = notes.filter(x => x.beat < beats - 1e-6);
-					for (const x of notes) x.dur = Math.min(x.dur, beats - x.beat);
-					changed();
+					fitNotes(); changed();
+				});
+				d.querySelector('[data-r="meter"]').addEventListener('change', e => {   // notes keep their beats; the bars around them change
+					remember();
+					setMeter(e.target.value.split('/').map(Number));
+					fitNotes(); changed();
 				});
 				d.querySelector('[data-r="tempo"]').addEventListener('change', e => { const v = +e.target.value; if (v >= 20 && v <= 400) { tempo = v; dirty = true; changed(); } });
 				d.addEventListener('close', () => { stopPlaying(); cancelAnimationFrame(raf); clearTimeout(replayTimer); });
@@ -1301,7 +1329,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 		root.querySelector('#sd-riffcount').textContent = list.length || '';
 		box.innerHTML = list.map(r => `<div class="sd-riff">
 			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it through ${esc(r.track)}'s sound (loops; click again to pause)">${PLAY_ICON}</button>
-			<button class="pg-item" data-riff="${esc(r.id)}" title="${esc(r.note || '')}"><span class="n">${esc(r.name)}</span><span class="v">${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'} · ${(r.notes || []).length} notes${r.note ? ' · ' + esc(r.note) : ''}</span></button></div>`).join('')
+			<button class="pg-item" data-riff="${esc(r.id)}" title="${esc(r.note || '')}"><span class="n">${esc(r.name)}</span><span class="v">${esc(r.track)} · ${r.bars} bar${r.bars === 1 ? '' : 's'}${oddMeter(r) ? ' · ' + oddMeter(r) : ''} · ${(r.notes || []).length} notes${r.note ? ' · ' + esc(r.note) : ''}</span></button></div>`).join('')
 			|| '<div class="sd-hint">Record one with the button by the keyboard (a count-in at the song\'s tempo, then play), or Write one note by note.</div>';
 		keepPlayButton(box);
 	}
@@ -1372,7 +1400,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			<button class="sd-rplay" data-play="${esc(r.id)}" title="Play it on ${esc(r.track)} (loops; click again to pause)">${PLAY_ICON}</button>
 			${miniRoll(r)}
 			<button class="pg-item" data-riff="${esc(r.id)}" title="Edit ${esc(r.name)}${r.note ? ': ' + esc(r.note) : ''}"><span class="n">${esc(r.name)}${r.group && S.rgroup === ALL ? ` <i class="sd-gtag">${gname(r.group)}</i>` : ''}</span>
-				<span class="v">${esc([r.track, `${r.bars} bar${r.bars === 1 ? '' : 's'}`, `${r.tempo} BPM`, riffLine(r), when(r.created), r.note].filter(Boolean).join(' · '))}</span></button></div>`).join('')
+				<span class="v">${esc([r.track, `${r.bars} bar${r.bars === 1 ? '' : 's'}`, oddMeter(r), `${r.tempo} BPM`, riffLine(r), when(r.created), r.note].filter(Boolean).join(' · '))}</span></button></div>`).join('')
 			|| `<div class="sd-hint">${all.length ? 'No riffs match.' : S.data?.tracks.length ? 'Press Record below and play (a count-in, then your riff), or Write one note by note. Keep it and it lands here.' : 'Add an instrument (left), then press Record below and play, or Write a riff note by note.'}</div>`;
 		keepPlayButton(box);
 		renderSelbar();

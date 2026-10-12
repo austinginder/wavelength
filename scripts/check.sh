@@ -1702,7 +1702,7 @@ r = post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-2", "riff-3
 if r.get("group") != 2 or r.get("groups") != [1, 2]: sys.exit(print("moving riffs to a new group: %s" % r) or 1)
 if post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-2"], "group": 7}).get("status") != 400: sys.exit(print("a riff moved to a group no riff is in") or 1)
 if post("api/sounds", {"song": L, "op": "riff-group", "ids": ["riff-3"], "group": 1}).get("group") != 1: sys.exit(print("moving a riff back failed") or 1)
-r = post("api/sounds", {"song": L, "op": "riff", "riff": {**riff, "id": "riff-2", "name": "Bass idea", "track": "Keys"}})
+r = post("api/sounds", {"song": L, "op": "riff", "riff": {**riff, "id": "riff-2", "name": "Bass idea", "track": "Keys", "timeSignature": [3, 4]}})
 if r.get("group") != 2: sys.exit(print("editing a riff moved it out of its group: %s" % r) or 1)
 if post("api/sounds", {"song": L, "op": "riff-delete", "ids": ["riff-3"]}).get("groups") != [1, 2]: sys.exit(print("deleting a riff failed") or 1)
 if post("api/sounds", {"song": L, "op": "remove", "track": "Keys"}).get("status") != 400: sys.exit(print("an instrument with riffs on it was removed") or 1)
@@ -1714,6 +1714,8 @@ if any(x["slug"] == L for x in json.loads(urllib.request.urlopen(base + "api/son
 # wavelength riffs: the list, and `use` copying a group into a new song folder: the riff, its instrument as a track, a job
 lst = json.loads(subprocess.run([sys.argv[3], "riffs", "--group", "1", "--json"], capture_output=True, text=True).stdout)
 if [r["name"] for r in lst["riffs"]] != ["Riff"] or lst["riffs"][0]["line"] != "C5 D5": sys.exit(print("riffs --group: %s" % lst) or 1)
+txt = subprocess.run([sys.argv[3], "riffs"], capture_output=True, text=True).stdout   # a riff's meter shows when it isn't 4/4
+if txt.count(" in 3/4 at ") != 1 or " in 4/4" in txt: sys.exit(print("riffs listing without the 3/4 riff's meter:\n%s" % txt) or 1)
 u = subprocess.run([sys.argv[3], "riffs", "use", "out/check/riff-song", "group:1", "Bass idea", "--json"], capture_output=True, text=True)
 got = json.load(open("out/check/riff-song/riffs.json"))["riffs"] if u.returncode == 0 else []
 snd = json.load(open("out/check/riff-song/sounds.json"))["tracks"] if u.returncode == 0 else []
