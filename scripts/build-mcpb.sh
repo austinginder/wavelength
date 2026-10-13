@@ -60,6 +60,7 @@ call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "cli
 tools = [{"name": t["name"], "description": t.get("title") or t["description"]} for t in call(2, "tools/list", {})["tools"]]
 p.stdin.close(); p.wait(timeout=10)
 run = ["mcp"]
+env = {"WAVELENGTH_SONGS": "${user_config.songs_folder}"}
 manifest = {
     "manifest_version": "0.3",
     "name": "wavelength",
@@ -84,10 +85,20 @@ manifest = {
         "mcp_config": {
             "command": "${__dirname}/server/darwin/wavelength",
             "args": run,
+            "env": env,
             "platform_overrides": {
-                "win32": {"command": "${__dirname}/server/win32/wavelength.exe", "args": run},
-                "linux": {"command": "/bin/sh", "args": ["${__dirname}/server/linux/run.sh"] + run},
+                "win32": {"command": "${__dirname}/server/win32/wavelength.exe", "args": run, "env": env},
+                "linux": {"command": "/bin/sh", "args": ["${__dirname}/server/linux/run.sh"] + run, "env": env},
             },
+        },
+    },
+    "user_config": {
+        "songs_folder": {
+            "type": "directory",
+            "title": "Songs folder",
+            "description": "Where new songs go, a folder each (the agent can also name any folder).",
+            "required": False,
+            "default": "${HOME}/Music/Wavelength",
         },
     },
     "tools": tools,
