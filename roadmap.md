@@ -4,7 +4,7 @@ The goal: Wavelength is the tool an AI agent reaches for to make music. Editable
 
 This file tracks what's planned, what's missing and why. `changelog.md` records what shipped; "Known limits" in `AGENTS.md` lists what doesn't work today.
 
-Status: **released** in the version named, **0.6.0** (on main, not released yet), **next**, **later**, or **idea** (not decided).
+Status: **released** in the version named, **0.7.0** (on main, not released yet), **next**, **later**, or **idea** (not decided).
 
 ## 1. The agent sees what it can't hear
 
@@ -52,7 +52,9 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | The `/wavelength` agent skill | released 0.2.0 | |
 | `wavelength mcp`, docs built into the binary, the Claude Code plugin | released 0.4.0 | |
 | `llms.txt` on wavelength.run | done | lists the docs of the latest release |
-| Listings: the official Claude Code plugin marketplace, MCP Registry, Glama, Smithery, skills.sh | 0.6.0 | releases carry `wavelength.mcpb` (an MCP Bundle with every platform's binary) and the `server.json` the MCP Registry lists; Smithery takes the same bundle; Glama runs the `Dockerfile` to list the tools (`glama.json` names the maintainer); skills.sh lists a skill once `npx skills add` installs it |
+| MCP tools for clients that can't write files (`write_job`, `read_job`, `list_songs`; songs by name in a songs folder) | released 0.6.0 | Claude Desktop makes a song with the server alone |
+| `wavelength.mcpb`: the MCP server as one bundle with every platform's binary | released 0.6.0 | Claude Desktop installs it with a double-click |
+| Listings: the official Claude Code plugin marketplace, MCP Registry, Glama, Smithery, skills.sh | next | ready since 0.6.0: the release's `wavelength.mcpb` and `server.json` (MCP Registry, Smithery), the `Dockerfile` and `glama.json` (Glama); skills.sh lists a skill once `npx skills add` installs it. Steps in docs/releasing.md |
 | GitHub topics; docs indexed by Context7 | next | |
 
 ## 4. Songs people keep and share
@@ -83,7 +85,7 @@ Cloud agents start in an empty Linux container. A song has to render there, and 
 | Adaptive music for games: layers and stingers exported for Godot and Unity | later | |
 | Vocals: generated vocal stems brought in as clips | later | the biggest gap against Suno |
 | DAWproject import: plugin effect automation, launcher clips, more Bitwig devices; Bitwig project audio clips and Bitwig 6 automation clips | later | |
-| Sounds tuned by a person, the song written by an agent | 0.6.0 | `serve`'s Sounds page: instruments, presets and knobs (or the plugin's own window) set by ear while playing, kept in `sounds.json` over whatever writes the job; riffs recorded over a click and edited in a piano roll (`riffs.json`) for the agent to build the song around; a brief and a prompt hand the folder to an agent |
+| Sounds tuned by a person, the song written by an agent | released 0.6.0 | `serve`'s Sounds page: instruments, presets and knobs (or the plugin's own window) set by ear while playing, kept in `sounds.json` over whatever writes the job; riffs recorded over a click and edited in a piano roll (`riffs.json`) for the agent to build the song around; a brief and a prompt hand the folder to an agent |
 | Live playback through the speakers | released 0.5.0 | in `serve`: the editor loops bars live while the mixer changes, and the Playground plays instruments live from the keyboard |
 
 ## 6. Measuring progress
@@ -98,7 +100,7 @@ Songs, packages and projects come from other people, so every reader has to surv
 
 | | Status | Notes |
 |---|---|---|
-| Bounds-checked readers for every binary format (plists, ZIP, Serum, SoundFont, VST presets) and a depth limit on XML | 0.6.0 | a crafted file fails with an error, never reads past its buffer; `scripts/make-hostile-files.py` keeps one file per fixed case |
-| A package's own instruments (SFZ, DecentSampler, EXS) read only the song | 0.6.0 | |
-| Fuzzing the readers | 0.6.0 | `scripts/fuzz.py` over 14 formats under AddressSanitizer and UBSan; a continuous run is later |
-| The regression checks in the Linux Docker image | 0.6.0 | `scripts/check-linux.sh`: no plugins or libraries, so the examples play their fallbacks; Windows still runs only the release test |
+| Bounds-checked readers for every binary format (plists, ZIP, Serum, SoundFont, VST presets) and a depth limit on XML | released 0.6.0 | a crafted file fails with an error, never reads past its buffer; `scripts/make-hostile-files.py` keeps one file per fixed case |
+| A package's own instruments (SFZ, DecentSampler, EXS) read only the song | released 0.6.0 | |
+| Fuzzing the readers | released 0.6.0 | `scripts/fuzz.py` over 14 formats under AddressSanitizer and UBSan; a continuous run is later |
+| The regression checks in the Linux Docker image | released 0.6.0 | `scripts/check-linux.sh`: no plugins or libraries, so the examples play their fallbacks; Windows still runs only the release test |

@@ -216,7 +216,7 @@ A helper script is in the source checkout (release archives don't include `scrip
 
 ## Roadmap
 
-[roadmap.md](roadmap.md) tracks what's planned and what's missing, and why; `changelog.md` records what shipped. Next after 0.5.0: comparing a render with a reference track, a tempo map from a video's hit times, a Docker image with the kit, package-manager installs, and listings in the plugin and MCP directories.
+[roadmap.md](roadmap.md) tracks what's planned and what's missing, and why; `changelog.md` records what shipped. Next after 0.6.0: comparing a render with a reference track, a tempo map from a video's hit times, a Docker image with the kit, package-manager installs, and listings in the plugin and MCP directories.
 
 ## License
 
