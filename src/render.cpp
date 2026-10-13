@@ -1217,22 +1217,24 @@ bool renderJob(const Job &job, const std::string &outDir, bool verbose, RenderRe
     // drops that don't land. A section is checked when it is named like a payoff (Drop, Chorus, Peak, Hook,
     // Final, Climax, Finale) or follows a section named like a build (Build, Rise, Pre..., Ramp, Climb,
     // Lead-in); an escalation (Climax, Peak, Finale after another payoff) must at least rise.
-    auto has = [](std::string n, std::initializer_list<const char *> words, bool wholeWord) {
+    enum Match { Anywhere, Word, WordStart };   // "Buildup" has build anywhere; "Rising" starts a word with "ris"
+    auto has = [](std::string n, std::initializer_list<const char *> words, Match how) {
         std::transform(n.begin(), n.end(), n.begin(), ::tolower);
         for (const char *w : words)
             for (size_t p = n.find(w); p != std::string::npos; p = n.find(w, p + 1)) {
                 const size_t e = p + std::strlen(w);
-                if (!wholeWord || ((p == 0 || !std::isalpha((unsigned char)n[p - 1])) && (e == n.size() || !std::isalpha((unsigned char)n[e]))))
-                    return true;
+                const bool starts = p == 0 || !std::isalpha((unsigned char)n[p - 1]), ends = e == n.size() || !std::isalpha((unsigned char)n[e]);
+                if (how == Anywhere || (starts && (how == WordStart || ends))) return true;
             }
         return false;
     };
-    auto buildLike = [&](const std::string &n) { return has(n, {"build", "rise", "riser", "pre", "ramp", "climb", "lead", "into", "up", "rebuild", "ignition"}, true)
-                                                     || has(n, {"build", "rise"}, false); };
+    // "rise" only at the start of a word (Rise, Riser, Rising): a Reprise, a Sunrise or a Surprise isn't a build
+    auto buildLike = [&](const std::string &n) { return has(n, {"pre", "ramp", "climb", "lead", "into", "up", "ignition"}, Word)
+                                                     || has(n, {"build"}, Anywhere) || has(n, {"rise", "rising"}, WordStart); };
     auto payoff = [&](const std::string &n) {
-        return !buildLike(n) && !has(n, {"end"}, true) && has(n, {"drop", "chorus", "peak", "climax", "finale", "hook", "final"}, false);
+        return !buildLike(n) && !has(n, {"end"}, Word) && has(n, {"drop", "chorus", "peak", "climax", "finale", "hook", "final"}, Anywhere);
     };
-    auto escalation = [&](const std::string &n) { return has(n, {"climax", "peak", "finale"}, false); };
+    auto escalation = [&](const std::string &n) { return has(n, {"climax", "peak", "finale"}, Anywhere); };
     // every boundary: the last 2 bars before it against the first 4 after it (what a listener compares)
     for (size_t m = 1; m < result.sections.size() && m < job.markers.size(); ++m) {
         const double prevStart = job.markers[m - 1].beat, at = job.markers[m].beat;

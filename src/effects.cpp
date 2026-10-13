@@ -144,6 +144,36 @@ struct Filter : Effect {
 };
 
 // --------------------------------------------------------------------------------- delay
+// A delay time in samples along the timeline. A time in beats follows the tempo map: the echo heard at song time t is
+// the input from that many song beats before t, so echoes stay on the beat through a tempo change (the read head
+// moves, as a tempo-synced delay plugin's does). One tempo, or a time in ms: a constant.
+struct DelaySpan {
+    double fixed = 1, longest = 1;
+    std::vector<double> grid;   // with a tempo map: the time at every 64th sample, read between
+    double at(size_t i) const {
+        if (grid.empty()) return fixed;
+        const size_t k = std::min(i / 64, grid.size() - 2);
+        return grid[k] + (grid[k + 1] - grid[k]) * (double)(i - k * 64) / 64;
+    }
+};
+DelaySpan delaySpan(double beats, double ms, const Job &job, size_t frames) {
+    const double sr = job.sampleRate;
+    const TempoMap &tm = job.tempo;
+    DelaySpan s;
+    if (ms > 0 || tm.points().size() < 2) {
+        s.fixed = s.longest = std::max(1.0, (ms > 0 ? ms / 1000.0 : beats * 60.0 / tm.bpmAtBeat(0)) * sr);
+        return s;
+    }
+    s.grid.resize(frames / 64 + 2);
+    for (size_t k = 0; k < s.grid.size(); ++k) {
+        const double t = (double)(k * 64) / sr, b = tm.secToBeat(t);
+        const double sec = b >= beats ? t - tm.beatToSec(b - beats) : beats * 60.0 / tm.bpmAtBeat(0);   // before the song: its first tempo
+        s.grid[k] = std::max(1.0, sec * sr);
+        s.longest = std::max(s.longest, s.grid[k]);
+    }
+    return s;
+}
+
 struct Delay : Effect {
     double timeBeats, timeMs, feedback, hp, lp;
     bool pingpong, filterEchoes;   // filterEchoes: every echo passes the filters, the first included (Logic's Tape Delay)
@@ -159,7 +189,6 @@ struct Delay : Effect {
     // tape wow (a periodic sweep of the delay time) and flutter (a random step to a new time at its rate, glided)
     double wowRate = 0, wowDepthMs = 0, flutterRate = 0, flutterDepthMs = 0;
     bool wowTriangle = false;
-    double secondsOf(double beats, double ms, const Job &job) const { return ms > 0 ? ms / 1000.0 : beats * 60.0 / job.tempo.bpmAtBeat(0); }
     Delay(const json &j, const Job &job, std::string &err) {
         label = "delay";
         timeBeats = j.value("time", 0.75);
@@ -253,15 +282,15 @@ struct Delay : Effect {
     bool process(Audio &a, const FxContext &c, std::string &err) override {
         const double sr = c.job.sampleRate;
         if (!taps.empty()) return processTaps(a, c);
-        const double d = std::max(1.0, secondsOf(timeBeats, timeMs, c.job) * sr);
+        const DelaySpan d = delaySpan(timeBeats, timeMs, c.job, a.frames());
         if (!loop.empty()) return processLoop(a, c, d, err);
-        const double dR = sides ? std::max(1.0, secondsOf(timeBeatsR, timeMsR, c.job) * sr) : d;
+        const DelaySpan dR = sides ? delaySpan(timeBeatsR, timeMsR, c.job, a.frames()) : d;
         const double fbGainR = sides ? feedbackR : feedback;
         // wow and flutter move both sides' delay time together (one tape): a sine or triangle sweep of +-wow depth,
         // and a new random offset within +-flutter depth at each flutter tick, glided over about 12 ms
         const double mod = (wowDepthMs + flutterDepthMs) * 0.001 * sr;
         dsp::DelayLine L, R;
-        L.resize((size_t)(d + mod) + 4); R.resize((size_t)(dR + mod) + 4);
+        L.resize((size_t)(d.longest + mod) + 4); R.resize((size_t)(dR.longest + mod) + 4);
         Biquad hpl, hpr, lpl, lpr;
         hpl.set(Biquad::HighPass, hp, 0.7071, 0, sr); hpr = hpl;
         lpl.set(Biquad::LowPass, lp, 0.7071, 0, sr); lpr = lpl;
@@ -285,7 +314,7 @@ struct Delay : Effect {
                 off += flutterNow;
             }
             const double offS = off * 0.001 * sr;   // around the set time (the line keeps room for the swing)
-            double tl = L.tap(std::max(1.0, d + offS)), tr = R.tap(std::max(1.0, dR + offS));
+            double tl = L.tap(std::max(1.0, d.at(i) + offS)), tr = R.tap(std::max(1.0, dR.at(i) + offS));
             const double ftl = lpl.process(hpl.process(tl)), ftr = lpr.process(hpr.process(tr));
             const double fbl = ftl * feedback, fbr = ftr * fbGainR;
             if (filterEchoes) tl = ftl, tr = ftr;
@@ -302,19 +331,19 @@ struct Delay : Effect {
     // pan (the near side at full level, the far side falling as (1 - |pan|)^2); the feedback tap's echo goes back in
     bool processTaps(Audio &a, const FxContext &c) {
         const double sr = c.job.sampleRate;
-        struct Live { double d, gl, gr; Biquad h, l; bool hp, lp; };
+        struct Live { DelaySpan d; double gl, gr; Biquad h, l; bool hp, lp; };
         std::vector<Live> live;
         double longest = 1;
         for (auto &t : taps) {
             Live x;
-            x.d = std::max(1.0, secondsOf(t.beats, t.ms, c.job) * sr);
+            x.d = delaySpan(t.beats, t.ms, c.job, a.frames());
             x.gl = t.gain * (t.pan > 0 ? (1 - t.pan) * (1 - t.pan) : 1.0);
             x.gr = t.gain * (t.pan < 0 ? (1 + t.pan) * (1 + t.pan) : 1.0);
             x.hp = t.hp > 0; x.lp = t.lp > 0 && t.lp < 0.49 * sr;
             if (x.hp) x.h.set(Biquad::HighPass, t.hp, 0.7071, 0, sr);
             if (x.lp) x.l.set(Biquad::LowPass, t.lp, 0.7071, 0, sr);
-            longest = std::max(longest, x.d);
-            live.push_back(x);
+            longest = std::max(longest, x.d.longest);
+            live.push_back(std::move(x));
         }
         dsp::DelayLine line;
         line.resize((size_t)longest + 4);
@@ -322,7 +351,7 @@ struct Delay : Effect {
             double wl = 0, wr = 0, back = 0;
             for (size_t k = 0; k < live.size(); ++k) {
                 Live &x = live[k];
-                double v = line.tap(x.d);
+                double v = line.tap(x.d.at(i));
                 if (x.hp) v = x.h.process(v);
                 if (x.lp) v = x.l.process(v);
                 if ((int)k == feedbackTap) back = v;
@@ -339,14 +368,14 @@ struct Delay : Effect {
     // echo 1 = the input delayed; echo k+1 = echo k through loopFx, the loop filters and the feedback
     // gain, delayed again (channels swapped for ping-pong). For linear effects (filters, frequency and
     // pitch shifters, EQ) this is exactly a feedback loop; distortion in the loop shapes each echo on its own.
-    bool processLoop(Audio &a, const FxContext &c, double d, std::string &err) {
+    bool processLoop(Audio &a, const FxContext &c, const DelaySpan &d, std::string &err) {
         const double sr = c.job.sampleRate;
         const size_t n = a.frames();
         auto delayed = [&](Audio &x) {
             for (auto *ch : {&x.left, &x.right}) {
                 dsp::DelayLine line;
-                line.resize((size_t)d + 4);
-                for (size_t i = 0; i < n; ++i) { const double t = line.tap(d); line.push((*ch)[i]); (*ch)[i] = (float)t; }
+                line.resize((size_t)d.longest + 4);
+                for (size_t i = 0; i < n; ++i) { const double t = line.tap(d.at(i)); line.push((*ch)[i]); (*ch)[i] = (float)t; }
             }
         };
         auto peak = [&](const Audio &x) {
@@ -1375,10 +1404,15 @@ struct Vibrato : Effect {
     }
     bool process(Audio &a, const FxContext &c, std::string &) override {
         const double sr = c.job.sampleRate;
-        // a delay swinging by A samples at f Hz shifts pitch by up to 2*pi*f*A/sr: solve A for the cents wanted
-        const double f = lfo.hz > 0 ? lfo.hz : c.job.tempo.bpmAtBeat(0) / 60.0 / lfo.beats;
+        // a delay swinging by A samples at f Hz shifts pitch by up to 2*pi*f*A/sr: solve A for the cents wanted. A rate
+        // in note values follows the tempo map, so the line is sized for the slowest tempo (the widest swing).
+        double slowest = lfo.hz;
+        if (lfo.hz <= 0) {
+            slowest = 1e9;
+            for (auto &p : c.job.tempo.points()) slowest = std::min(slowest, p.bpm / 60.0 / lfo.beats);
+        }
         const double maxCents = 100;
-        const double maxA = (std::pow(2.0, maxCents / 1200) - 1) * sr / (2 * dsp::kPi * std::max(0.05, f));
+        const double maxA = (std::pow(2.0, maxCents / 1200) - 1) * sr / (2 * dsp::kPi * std::max(0.05, slowest));
         dsp::DelayLine L, R;
         L.resize((size_t)(2 * maxA) + 16); R.resize((size_t)(2 * maxA) + 16);
         // the wave is integrated so its derivative (the pitch) follows the LFO shape
@@ -1387,8 +1421,10 @@ struct Vibrato : Effect {
             const double t = i / sr;
             L.push(a.left[i]); R.push(a.right[i]);
             const double cents = std::clamp(depth.at(t), 0.0, maxCents);
+            const double beat = lfo.hz > 0 ? 0 : c.job.tempo.secToBeat(t);
+            const double f = lfo.hz > 0 ? lfo.hz : c.job.tempo.bpmAtBeat(beat) / 60.0 / lfo.beats;
             const double A = (std::pow(2.0, cents / 1200) - 1) * sr / (2 * dsp::kPi * std::max(0.05, f));
-            integ = std::sin(2 * dsp::kPi * (lfo.hz > 0 ? t * lfo.hz : c.job.tempo.secToBeat(t) / lfo.beats) + lfo.phase * 2 * dsp::kPi);
+            integ = std::sin(2 * dsp::kPi * (lfo.hz > 0 ? t * lfo.hz : beat / lfo.beats) + lfo.phase * 2 * dsp::kPi);
             const double d = 2 + maxA + A * integ;
             a.left[i] = (float)L.tap(d);
             a.right[i] = (float)R.tap(d);
@@ -1534,7 +1570,7 @@ struct Tune : Effect {
 struct Ringmod : Effect {
     Envelope freq, mix;
     int mode = 0;   // 0 ring, 1 shift, 2 dual
-    double feedback = 0, delaySec = 0, delayLevel = 1, spread = 0;
+    double feedback = 0, delayBeats = 0, delayMs = 0, delayLevel = 1, spread = 0;
     Ringmod(const json &j, const Job &job, std::string &err) {
         label = "ringmod";
         const std::string m = j.value("mode", "ring");
@@ -1545,8 +1581,8 @@ struct Ringmod : Effect {
         freq = param(j, "freq", 100, job.tempo, scale == "exp");   // exp: its curves glide and its LFO swings in octaves
         mix = param(j, "mix", 1, job.tempo);
         feedback = std::clamp(j.value("feedback", 0.0), 0.0, 0.95);
-        if (j.contains("delayMs")) delaySec = std::clamp(j["delayMs"].get<double>(), 0.0, 4000.0) / 1000;
-        else if (j.contains("delay")) delaySec = std::clamp(j["delay"].get<double>() * 60 / job.tempo.bpmAtBeat(0), 0.0, 4.0);
+        if (j.contains("delayMs")) delayMs = std::clamp(j["delayMs"].get<double>(), 0.0, 4000.0);
+        else if (j.contains("delay")) delayBeats = std::clamp(j["delay"].get<double>(), 0.0, 16.0);   // follows the tempo map
         delayLevel = std::clamp(j.value("delayLevel", 1.0), 0.0, 2.0);
         spread = j.value("spread", 0.0);
         checkKeys(j, {"mode", "freq", "freqScale", "mix", "feedback", "delay", "delayMs", "delayLevel", "spread"}, *this);
@@ -1578,9 +1614,10 @@ struct Ringmod : Effect {
         const double sr = c.job.sampleRate;
         const size_t n = a.frames();
         Hilbert hl, hr;
-        const size_t D = delaySec > 0 ? std::max<size_t>(1, (size_t)std::llround(delaySec * sr)) : 0;
-        std::vector<double> dl(D ? D : 1, 0.0), dr(D ? D : 1, 0.0);   // the echo lines on the effect signal
-        size_t di = 0;
+        const bool echo = delayMs > 0 || delayBeats > 0;
+        const DelaySpan D = delaySpan(delayBeats, delayMs, c.job, n);
+        dsp::DelayLine dl, dr;   // the echo lines on the effect signal
+        if (echo) { dl.resize((size_t)D.longest + 4); dr.resize((size_t)D.longest + 4); }
         double phase = 0, outL = 0, outR = 0;   // the effect's last output, fed back
         const double off = 2 * dsp::kPi * spread;
         for (size_t i = 0; i < n; ++i) {
@@ -1601,10 +1638,9 @@ struct Ringmod : Effect {
             phase += 2 * dsp::kPi * std::clamp(freq.at(t), -0.45 * sr, 0.45 * sr) / sr;
             if (phase > 2 * dsp::kPi) phase -= 2 * dsp::kPi;
             else if (phase < -2 * dsp::kPi) phase += 2 * dsp::kPi;
-            if (D) {
-                const double el = dl[di], er = dr[di];
-                dl[di] = wl; dr[di] = wr;
-                di = (di + 1) % D;
+            if (echo) {
+                const double d = std::max(1.0, std::round(D.at(i))), el = dl.tap(d), er = dr.tap(d);
+                dl.push(wl); dr.push(wr);
                 wl += delayLevel * el;
                 wr += delayLevel * er;
             }

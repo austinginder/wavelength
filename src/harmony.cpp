@@ -371,10 +371,25 @@ json analyzeHarmony(const Job &job, const HarmonyOptions &o) {
                 names.push_back(at != c.pcs.end() ? sp[(size_t)(at - c.pcs.begin())] : pcName(p, sharpKey(k.tonic, k.minor)));
             }
             const std::string span = len == 1 ? "bar " + std::to_string(b + 1) : "bars " + std::to_string(b + 1) + "-" + std::to_string(e + 1);
-            // a major chord resolving down a fifth to a chord of the key is a secondary dominant: tension on purpose
-            if ((c.suffix.empty() || c.suffix == "5") && next.root == (c.root + 5) % 12 && inKey(next.root, k.tonic, k.minor, k.mode)) {
-                out["info"].push_back({{"kind", "secondary dominant"}, {"bars", {b + 1, e + 1}}, {"at", span}, {"chord", c.name()},
-                                       {"detail", c.name() + " (" + c.spelled() + ") leads to " + next.name() + ": V of " + next.name() + " in " + keyLabel(k.tonic, k.minor, k.mode)}});
+            // a major chord resolving down a fifth to a chord of the key is a secondary dominant: tension on purpose. It
+            // can fill the bars, or take half a bar: E to Am in one bar of a classical sequence, or E in the second half
+            // resolving to the next bar (the whole bar's notes then read as neither chord). A half-bar one has to
+            // hold every note outside the key.
+            auto dominantOf = [&](const Chord &d, const Chord &to) {
+                return d.root >= 0 && to.root >= 0 && (d.suffix.empty() || d.suffix == "5") && to.root == (d.root + 5) % 12 && inKey(to.root, k.tonic, k.minor, k.mode);
+            };
+            auto holdsOffs = [&](const Chord &d) {
+                return std::all_of(offs.begin(), offs.end(), [&](int p) { return std::find(d.pcs.begin(), d.pcs.end(), p) != d.pcs.end(); });
+            };
+            const bool sk = sharpKey(k.tonic, k.minor);
+            const Chord h0 = chordOf(half0[(size_t)e], -1, sk), h1 = chordOf(half1[(size_t)e], -1, sk), n0 = chordOf(half0[(size_t)(e + 1)], -1, sk);
+            const Chord *dom = nullptr, *goal = nullptr;
+            if (dominantOf(c, next)) { dom = &c; goal = &next; }
+            else if (h0.name() != h1.name() && dominantOf(h0, h1) && holdsOffs(h0)) { dom = &h0; goal = &h1; }
+            else if (h0.name() != h1.name() && dominantOf(h1, n0) && holdsOffs(h1)) { dom = &h1; goal = &n0; }
+            if (dom) {
+                out["info"].push_back({{"kind", "secondary dominant"}, {"bars", {b + 1, e + 1}}, {"at", span}, {"chord", dom->name()},
+                                       {"detail", dom->name() + " (" + dom->spelled() + ") leads to " + goal->name() + ": V of " + goal->name() + " in " + keyLabel(k.tonic, k.minor, k.mode)}});
             } else {
                 out["problems"].push_back({{"kind", "key excursion"}, {"bars", {b + 1, e + 1}}, {"at", span}, {"key", keyLabel(k.tonic, k.minor, k.mode)},
                                            {"chord", c.name()}, {"notes", names}, {"back", "bar " + std::to_string(e + 2)},

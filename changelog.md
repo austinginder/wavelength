@@ -4,6 +4,13 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- `analyze` (and `card`'s sounding key) read a stepped wave sharp: the NES triangle (32 steps through the console's high-passes, as Wavelength Retro plays it at Era 0) read E1 as F1 -45 c, some notes a semitone high, at full confidence. Its pitch tracker took a dip one step short of the period; a much deeper dip just past the first is now taken as the period.
+- A built-in `delay` timed in beats kept the song's first tempo through a tempo map (a ramp from 96 to 144 BPM left its echoes 0.625 s apart all the way). Beat times now follow the map, `right` and `taps` too, and so do `ringmod`'s `delay` and the depth of a `vibrato` whose rate is a note value.
+- The counterpoint lint (`wavelength lint`) counted bars in 4/4 whatever the meter (a 12/8 song's bar 3 was reported as bar 4, and `--from`/`--to` missed it), reported parallels between notes eight bars apart across a rest in both voices (a rest of more than a beat now ends a line), and at tempos where a beat isn't a whole number of samples (130 BPM) could read a voice from the chord before and report parallel octaves in a clean chorale. `--from`/`--to` on `lint --harmony` count the meter's bars too.
+- `lint --harmony` reported a secondary dominant on half a bar (E to Am inside one bar of F major) as a one-bar key change; it is listed as a secondary dominant, like one that fills its bar.
+- The weak-drop check read a section named Reprise as a build (it holds "rise"), so the section after it had to land like a drop. "Rise" counts only at the start of a word (Rise, Riser, Rising).
+
 ## [0.6.0] - 2026-10-12
 
 ### Added

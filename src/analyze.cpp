@@ -37,6 +37,12 @@ double yin(const float *x, size_t n, double sr, double fmin, double fmax, std::v
     for (size_t tau = tauMin; tau < tauMax; ++tau) {
         if (c[tau] < 0.15) {
             while (tau + 1 < tauMax && c[tau + 1] < c[tau]) ++tau;
+            // a much deeper dip just past this one is the period: a stepped wave leaves a dip at every step short of
+            // it (the NES triangle's 32 steps through the console's high-passes: E1 read 55 cents sharp, one step early)
+            size_t best = tau;
+            for (size_t t = tau + 1; t + 1 < tauMax && (double)t < (double)tau * 1.25; ++t)
+                if (c[t] < c[t - 1] && c[t] <= c[t + 1] && c[t] < c[best]) best = t;
+            if (c[best] < 0.5 * c[tau]) tau = best;
             // parabolic interpolation around the dip
             const double a = c[tau - 1], b = c[tau], cc = c[tau + 1], den = a - 2 * b + cc;
             const double t = den != 0 ? (double)tau + 0.5 * (a - cc) / den : (double)tau;

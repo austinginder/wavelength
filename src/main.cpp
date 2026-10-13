@@ -1911,8 +1911,8 @@ int cmdLint(const Args &a) {
     }
     // range: --from/--to bars (from inclusive, to exclusive) or a section's markers
     double fromBeat = -1e18, toBeat = 1e18;
-    if (a.has("--from")) fromBeat = (std::atof(a.get("--from").c_str()) - 1) * 4;
-    if (a.has("--to")) toBeat = (std::atof(a.get("--to").c_str()) - 1) * 4;
+    if (a.has("--from")) fromBeat = job.meter.barToBeat(std::atof(a.get("--from").c_str()));   // bars in the song's meter
+    if (a.has("--to")) toBeat = job.meter.barToBeat(std::atof(a.get("--to").c_str()));
     if (a.has("--section")) {
         const std::string want = a.get("--section");
         size_t m = 0;
@@ -1930,25 +1930,32 @@ int cmdLint(const Args &a) {
         }
         return idx;
     }(), fromBeat, toBeat, skipped);
-    auto noteAt = [&](const Voice &v, double t) {
-        std::vector<int> keys;
+    // the voice's note sounding at t (its key, and when that note ends), or key -1. Starts are rounded to 0.1 ms (so
+    // parts written to the same beat meet), so a note counts from 0.1 ms before its start and to 0.1 ms before its end:
+    // at a tempo where a beat isn't whole samples a rounded start can fall just before the note it belongs to
+    struct Sounding { int key = -1; double end = 0; };
+    auto soundingAt = [&](const Voice &v, double t) {
+        std::vector<std::pair<int, double>> keys;
         for (auto &n : v.t->notes)
-            if (n.start <= t + 1e-6 && t < n.start + n.length - 1e-6) keys.push_back(n.key);
-        if (keys.empty()) return -1;
-        std::sort(keys.begin(), keys.end(), std::greater<int>());
-        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-        if (v.rank >= 0) return v.rank < (int)keys.size() ? keys[(size_t)v.rank] : -1;
-        return v.lowest ? keys.back() : keys.front();
+            if (n.start <= t + 1e-4 && t < n.start + n.length - 1e-4) keys.push_back({n.key, n.start + n.length});
+        if (keys.empty()) return Sounding{};
+        std::sort(keys.begin(), keys.end(), [](auto &p, auto &q) { return p.first != q.first ? p.first > q.first : p.second > q.second; });
+        keys.erase(std::unique(keys.begin(), keys.end(), [](auto &p, auto &q) { return p.first == q.first; }), keys.end());
+        if (v.rank >= 0) return v.rank < (int)keys.size() ? Sounding{keys[(size_t)v.rank].first, keys[(size_t)v.rank].second} : Sounding{};
+        const auto &k = v.lowest ? keys.back() : keys.front();
+        return Sounding{k.first, k.second};
     };
+    auto noteAt = [&](const Voice &v, double t) { return soundingAt(v, t).key; };
     auto starts = [&](const Voice &v) {
         std::set<double> s;
         for (auto &n : v.t->notes) s.insert(std::round(n.start * 1e4) / 1e4);
         return s;
     };
-    auto where = [&](double t) {
+    auto where = [&](double t) {   // bars in the song's meter, beats within the bar in quarter notes (as timeline prints them)
         const double beat = std::round(job.tempo.secToBeat(t) * 1000) / 1000;   // 71.99999 is bar 19 beat 1, not bar 18 beat 5
+        const int bar = job.meter.barIndex(beat) + 1;
         char buf[48];
-        std::snprintf(buf, sizeof buf, "bar %d beat %.2f", (int)std::floor(beat / 4) + 1, beat - 4 * std::floor(beat / 4) + 1);
+        std::snprintf(buf, sizeof buf, "bar %d beat %.2f", bar, beat - job.meter.barToBeat(bar) + 1);
         return std::string(buf);
     };
     auto inRange = [&](double t) { const double b = job.tempo.secToBeat(t); return b >= fromBeat - 1e-6 && b < toBeat - 1e-6; };
@@ -1966,8 +1973,12 @@ int cmdLint(const Args &a) {
             const std::vector<double> on(s.begin(), s.end());
             for (size_t k = 1; k < on.size(); ++k) {
                 const double t0 = on[k - 1], t1 = on[k];
-                const int a0 = noteAt(voices[x], t0), a1 = noteAt(voices[x], t1), b0 = noteAt(voices[y], t0), b1 = noteAt(voices[y], t1);
+                const Sounding sa = soundingAt(voices[x], t0), sb = soundingAt(voices[y], t0);
+                const int a0 = sa.key, a1 = noteAt(voices[x], t1), b0 = sb.key, b1 = noteAt(voices[y], t1);
                 if (a0 < 0 || a1 < 0 || b0 < 0 || b1 < 0 || a0 == a1 || b0 == b1) continue;
+                // a rest of more than a beat in either voice ends its line: the notes on each side aren't one move
+                const double next = job.tempo.secToBeat(t1);
+                if (next - job.tempo.secToBeat(sa.end) > 1 + 1e-6 || next - job.tempo.secToBeat(sb.end) > 1 + 1e-6) continue;
                 const int i0 = std::abs(a0 - b0) % 12, i1 = std::abs(a1 - b1) % 12;
                 const bool similar = (a1 - a0 > 0) == (b1 - b0 > 0);
                 ++moves[{x, y}];

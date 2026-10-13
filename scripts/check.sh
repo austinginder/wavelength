@@ -77,6 +77,42 @@ sys.exit(0 if any(x.get("track") == "Kick" and x.get("reason") == "drum sample" 
 else
   echo "FAIL lint: the long kick sample was read as pitched notes"; fail=1
 fi
+# lint reads what was written (cases from the Retro Classical songs): the counterpoint lint counts bars in a 12/8 song's
+# own meter (its report and --from/--to), takes no parallel across an 8-bar rest, and finds none in a clean organ
+# chorale at 130 BPM, where a beat isn't whole samples and a start rounded to 0.1 ms fell before its note; the harmony
+# lint hears E to Am inside one bar of F major as a secondary dominant, not a key change
+mkdir -p out/check/lint-read
+lintread_why=$(python3 - "./$build/wavelength" <<'PY' || echo "the check crashed"
+import json, subprocess, sys
+d = "out/check/lint-read/"
+def job(name, tracks, **extra):
+    json.dump({"tempo": 120, **extra, "tracks": [{"name": n, "plugin": "builtin:synth", "preset": "PD Warm",
+               "notes": [{"beat": b, "dur": l, "key": k} for b, l, k in notes]} for n, notes in tracks]}, open(d + name, "w"))
+def lint(name, *args):
+    return json.loads(subprocess.run([sys.argv[1], "lint", d + name, "--json", *args], capture_output=True, text=True).stdout)
+# 12/8 (6 beats a bar): fifths E5/A4 -> G5/C5 in bar 3, beats 12 and 15
+job("meter.json", [("Upper", [(12, 3, 76), (15, 3, 79)]), ("Lower", [(12, 3, 69), (15, 3, 72)])], timeSignature=[12, 8])
+r = lint("meter.json", "--low", "Lower")
+if [p["at"] for p in r["problems"]] != ["bar 3 beat 4.00"]: sys.exit(print("12/8 parallel reported at %s, not bar 3 beat 4.00" % [p["at"] for p in r["problems"]]))
+if len(lint("meter.json", "--low", "Lower", "--from", "3", "--to", "4")["problems"]) != 1: sys.exit(print("12/8: --from 3 --to 4 missed the bar-3 fifths"))
+# the same octaves C#5/C#3 -> G#4/G#2, then after eight empty bars
+job("rest.json", [("Upper", [(0, 4, 76), (4, 4, 73), (40, 4, 68)]), ("Bass", [(0, 4, 45), (4, 4, 49), (40, 4, 44)])])
+job("norest.json", [("Upper", [(0, 4, 76), (4, 4, 73), (8, 4, 68)]), ("Bass", [(0, 4, 45), (4, 4, 49), (8, 4, 44)])])
+if lint("rest.json", "--low", "Bass")["problems"]: sys.exit(print("octaves reported across an eight-bar rest"))
+if len(lint("norest.json", "--low", "Bass")["problems"]) != 1: sys.exit(print("the octaves without the rest were not reported"))
+# Ritornello Machine's organ chorale (clean four-part writing), from bar 49 at 130 BPM
+chords = [(47, 57, 62, 66), (40, 55, 62, 71), (45, 55, 61, 69), (38, 54, 57, 66), (43, 50, 59, 67), (49, 52, 59, 67), (42, 52, 58, 66), (47, 50, 59, 66)]
+job("chorale.json", [("Organ", [(192 + 4 * i, 4, k) for i, c in enumerate(chords) for k in c])], tempo=130)
+if lint("chorale.json", "--split", "Organ=4")["problems"]: sys.exit(print("parallels in a clean chorale at 130 BPM: %s" % lint("chorale.json", "--split", "Organ=4")["problems"][:2]))
+# F major: F | E (2 beats) Am (2 beats) | F | F, chords over a bass
+fm, e, am = (57, 60, 65), (56, 59, 64), (57, 60, 64)
+job("halfbar.json", [("Chords", [(0, 4, k) for k in fm] + [(4, 2, k) for k in e] + [(6, 2, k) for k in am] + [(b, 4, k) for b in (8, 12) for k in fm]),
+                     ("Bass", [(0, 4, 41), (4, 2, 40), (6, 2, 45), (8, 4, 41), (12, 4, 41)])], keys=[{"bar": 1, "key": "F major"}])
+h = lint("halfbar.json", "--harmony")
+if h["problems"] or [i["kind"] for i in h["info"]] != ["secondary dominant"]: sys.exit(print("E to Am in one bar: problems %s, info %s" % (h["problems"], h["info"])))
+PY
+)
+if [ -z "$lintread_why" ]; then echo "ok   lint: 12/8 bars, rests, a chorale at 130 BPM, a half-bar secondary dominant"; else echo "FAIL lint: $lintread_why"; fail=1; fi
 # late curves on buses and the master warn like on tracks; a bus fed only after its curve starts does not
 mkdir -p out/check/late-curves
 cat > out/check/late-curves/job.json <<'JOB'
@@ -1052,6 +1088,71 @@ PY
 )
 fi
 if [ -n "$ring_why" ]; then echo "FAIL ringmod: $ring_why"; fail=1; else echo "ok   ringmod: ring, shift and dual modes make the sidebands they should"; fi
+# a delay timed in beats follows the tempo map: through a ramp from 96 to 144 BPM, a blip's echoes land on beats 1-4, and
+# after it on beats 37-40 (they kept the first tempo's 0.625 s before); a section named Reprise isn't read as a build
+# (it holds "rise"), a Rise still is; the NES triangle (32 steps through the console's high-passes) reads at its pitch
+# (YIN took a dip one step short of the period: E1 read as F1 -45 c)
+mkdir -p out/check/tempo-fx
+python3 - <<'PY'
+import json, math, struct, wave
+d = "out/check/tempo-fx/"
+blip = {"osc": [{"wave": "sine"}], "filter": {"type": "off"}, "amp": {"attack": 0.001, "decay": 0.05, "sustain": 0, "release": 0.02}}
+json.dump({"tempo": [{"beat": 0, "bpm": 96}, {"beat": 32, "bpm": 144, "ramp": True}], "leadIn": 0, "tail": 2, "stems": "16",
+           "tracks": [{"name": "Blip", "plugin": "builtin:synth", "synth": blip, "notes": [{"beat": b, "dur": 0.1, "key": 84, "vel": 1} for b in (0, 36)],
+                       "fx": [{"type": "delay", "time": 1, "feedback": 0.7, "pingpong": False, "mix": 1, "highpass": 20, "lowpass": 20000}]}]},
+          open(d + "delay.json", "w"))
+for name in ("Reprise", "Rise"):
+    json.dump({"tempo": 120, "tail": 1, "stems": "none", "markers": [{"beat": 0, "name": "Theme"}, {"beat": 16, "name": name}, {"beat": 32, "name": "Coda"}],
+               "tracks": [{"name": "Pad", "plugin": "builtin:synth", "preset": "PD Warm", "automation": {"gain": [[0, 0], [32, -8, "step"]]},
+                           "notes": [{"beat": b, "dur": 4, "key": k, "vel": 0.8} for b in range(0, 48, 4) for k in (60, 64, 67)]}]},
+              open(d + name.lower() + ".json", "w"))
+sr = 48000
+out, ph, y1, x1, y2, x2 = [], 0.0, 0.0, 0.0, 0.0, 0.0
+a1, a2 = math.exp(-2 * math.pi * 90 / sr), math.exp(-2 * math.pi * 440 / sr)
+for i in range(2 * sr):   # E1, 41.2 Hz
+    step = int(ph * 32) % 32
+    x = (15 - step if step < 16 else step - 16) / 7.5 - 1
+    ph = (ph + 41.2034 / sr) % 1.0
+    y1 = a1 * (y1 + x - x1); x1 = x
+    y2 = a2 * (y2 + y1 - x2); x2 = y1
+    out.append(y2)
+with wave.open(d + "nes-triangle-e1.wav", "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+    w.writeframes(b"".join(struct.pack("<h", int(max(-1, min(1, v * 0.8)) * 32767)) for v in out))
+PY
+tempofx_why=""
+if ! "./$build/wavelength" render out/check/tempo-fx/delay.json --out out/check/tempo-fx/delay --json > /dev/null 2>&1; then tempofx_why="the delay job did not render"
+else tempofx_why=$(python3 - <<'PY' || echo "the delay check crashed"
+import array, math, wave
+w = wave.open("out/check/tempo-fx/delay/stems/01-blip.wav")
+sr, ch = w.getframerate(), w.getnchannels()
+a = array.array("h", w.readframes(w.getnframes()))
+hop = int(sr * 0.005)
+env = [10 * math.log10(sum(a[j] * a[j] for j in range(i * ch, (i + hop) * ch, ch)) / hop / 32768 ** 2 + 1e-12) for i in range(0, len(a) // ch - hop, hop)]
+peak, on, armed = max(env), [], True
+for k, e in enumerate(env):
+    if armed and e > peak - 12: on.append(k * 0.005); armed = False
+    elif e < peak - 24: armed = True
+k = 48 / 32   # bpm per beat on the ramp
+t32 = 60 / k * math.log(144 / 96)
+beats = [96 * (math.exp(t * k / 60) - 1) / k if t <= t32 else 32 + (t - t32) * 144 / 60 for t in on]
+got = [b for b in beats if b < 30][:4] + [b for b in beats if b > 36][:4]   # each blip's first four echoes
+if len(got) < 8 or any(abs(b - x) > 0.04 for b, x in zip(got, [1, 2, 3, 4, 37, 38, 39, 40])): print("echoes at beats %s, not on 1-4 and 37-40" % [round(b, 2) for b in got])
+PY
+)
+fi
+for name in reprise rise; do
+  "./$build/wavelength" render "out/check/tempo-fx/$name.json" --out "out/check/tempo-fx/$name" --json > "out/check/tempo-fx/$name.out" 2>/dev/null
+done
+if [ -z "$tempofx_why" ] && ! python3 -c '
+import json, sys
+w = lambda n: [x for x in json.load(open("out/check/tempo-fx/%s.out" % n))["warnings"] if "lands only" in x]
+sys.exit(0 if not w("reprise") and len(w("rise")) == 1 else 1)' 2>/dev/null; then tempofx_why="the weak-drop check read Reprise as a build, or no longer reads Rise as one"
+fi
+if [ -z "$tempofx_why" ] && [ "$("./$build/wavelength" analyze out/check/tempo-fx/nes-triangle-e1.wav --json 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["pitch"]["note"])')" != "E1" ]; then
+  tempofx_why="analyze read the NES triangle's E1 as another note"
+fi
+if [ -n "$tempofx_why" ]; then echo "FAIL tempo map and names: $tempofx_why"; fail=1; else echo "ok   tempo map and names: a beat-timed delay follows a ramp; Reprise isn't a build; the NES triangle reads E1"; fi
 # meter changes: 3/4 then 4/4 at bar 3 and 6/8 at bar 5 put bar 4 at beat 10 and bar 6 at beat 17 (timeline), a key and
 # --from/--to by bar follow them, and a MIDI file keeps them both ways
 mkdir -p out/check/meter
