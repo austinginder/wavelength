@@ -1,7 +1,9 @@
 #include "mcp.hpp"
 
 #include "docs.hpp"
+#include "job.hpp"
 #include "platform.hpp"
+#include "song.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -38,7 +40,9 @@ const char *kInstructions =
     "stems, a mix, a report with loudness per track and section, and a picture of the song. You can't hear the result: "
     "read the report and look at the picture, and ask the human to listen. Before writing a first job, read the guide "
     "(the `guide` tool, doc \"agents\", in full); `guide` with doc \"job-format\" or \"effects\" is the reference. "
-    "Never guess instrument or preset names: list them with list_instruments and list_presets.";
+    "Never guess instrument or preset names: list them with list_instruments and list_presets. If you can't write files "
+    "yourself, write_job saves a job into a song folder (new songs go to the songs folder; list_songs lists them) and "
+    "read_job reads one back; every tool takes a song by its folder or its name.";
 
 std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
@@ -70,6 +74,64 @@ std::string fmt(const char *f, double v) {
     return b;
 }
 
+// ---- songs ------------------------------------------------------------------------------------
+// Where new songs go when the agent names no folder: $WAVELENGTH_SONGS, else Music/Wavelength in the
+// home folder (outside Documents, which macOS asks permission for).
+fs::path songsRoot() {
+    const char *e = std::getenv("WAVELENGTH_SONGS");
+    return e && *e ? fs::u8path(e) : platform::homeDir() / "Music" / "Wavelength";
+}
+
+// A song argument: a path, or the bare name of a folder in songsRoot() (clients such as Claude
+// Desktop have no working folder that means anything).
+fs::path songFolder(const std::string &s) {
+    std::error_code ec;
+    const fs::path p = fs::u8path(s);
+    if (p.is_relative() && !p.has_parent_path() && !fs::exists(p, ec)) return songsRoot() / p;
+    return fs::absolute(p, ec);
+}
+
+// A job argument: a job file, a song folder (its job.json) or a song's name.
+std::string jobFile(const std::string &s) {
+    std::error_code ec;
+    fs::path p = songFolder(s);
+    if (fs::is_directory(p, ec)) p /= "job.json";
+    return p.u8string();
+}
+
+std::string slugOf(const std::string &title) {
+    std::string slug;
+    for (unsigned char c : title) {
+        if (std::isalnum(c)) slug += (char)std::tolower(c);
+        else if (!slug.empty() && slug.back() != '-') slug += '-';
+    }
+    if (slug.size() > 60) slug.resize(60);
+    while (!slug.empty() && slug.back() == '-') slug.pop_back();
+    return slug.empty() ? "song" : slug;
+}
+
+// JSON for people and agents to read: anything that fits in 100 characters on one line (a note, a
+// marker, a short list), the rest indented
+std::string tidyJson(const json &j, int indent = 0) {
+    const std::string flat = j.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (flat.size() + indent <= 100 || !j.is_structured() || j.empty()) return flat;
+    const std::string pad(indent + 2, ' ');
+    std::string s = j.is_object() ? "{\n" : "[\n";
+    bool first = true;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        s += (first ? "" : ",\n") + pad + (j.is_object() ? json(it.key()).dump() + ": " : std::string()) + tidyJson(*it, indent + 2);
+        first = false;
+    }
+    return s + "\n" + std::string(indent, ' ') + (j.is_object() ? "}" : "]");
+}
+
+std::string readText(const fs::path &f) {
+    std::ifstream in(f, std::ios::binary);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
 // ---- tools ------------------------------------------------------------------------------------
 json prop(const char *type, const char *desc) { return {{"type", type}, {"description", desc}}; }
 
@@ -81,6 +143,7 @@ json tools() {
         if (!required.empty()) schema["required"] = required;
         return json{{"name", name}, {"title", title}, {"description", desc}, {"inputSchema", schema}, {"annotations", ann}};
     };
+    const json jobProp = prop("string", "the song: its folder, its job.json, or its name in the songs folder");
     json list = json::array();
     list.push_back(tool("guide", "Read the Wavelength guide",
         "Wavelength's own documentation, matching this engine. doc \"agents\" is the operating guide: the render loop, choosing "
@@ -90,6 +153,25 @@ json tools() {
         {{"doc", {{"type", "string"}, {"enum", {"agents", "job-format", "effects", "song-format"}}, {"description", "which document (default agents)"}}},
          {"section", prop("string", "part of a heading, e.g. \"Mixing\"; omit for the whole document")}},
         {}, readOnly));
+    const std::string root = songsRoot().u8string();
+    list.push_back(tool("list_songs", "List the songs",
+        ("The songs in the songs folder (" + root + "; WAVELENGTH_SONGS sets another): each one's name, how long ago its job "
+         "changed and whether it has a render. Give a song's name as job or song to the other tools.").c_str(),
+        {{"search", prop("string", "only songs whose name contains this")}}, {}, readOnly));
+    list.push_back(tool("read_job", "Read a song's job",
+        "A song's job.json as it is now, with the files beside it that change what it plays or say what it is for: sounds.json "
+        "(sounds a person chose and tuned by ear), edits.json (note edits from the review page), riffs.json (recorded riffs) and "
+        "brief.md (what they want). Read it before changing a song you didn't write in this conversation.",
+        {{"job", jobProp}}, {"job"}, readOnly));
+    list.push_back(tool("write_job", "Write a song's job",
+        ("Saves a job (the JSON the job-format guide describes) as a song's job.json, for clients that can't write files "
+         "themselves. Without song, it makes a new song folder in " + root + ", named after title. The job is parsed first: "
+         "one that doesn't parse is refused with the reason and nothing is written. It replaces the song's job.json (use save "
+         "first to keep the old one as a revision); then lint and render it by the song's name or folder.").c_str(),
+        {{"job", {{"type", "object"}, {"description", "the job itself: tempo, tracks with their sounds and notes, markers, master..."}}},
+         {"song", prop("string", "the song to write: its folder or its name (omit for a new song)")},
+         {"title", prop("string", "a new song's title; its folder is named after it")}},
+        {"job"}, writes));
     list.push_back(tool("list_instruments", "List instruments and effects",
         "The plugins installed on this computer (CLAP, VST3, VST2) and Wavelength's built-in instruments (builtin:synth needs no "
         "plugin). Use the names or ids it gives as a track's \"plugin\" or an effect's plugin; never guess them.",
@@ -128,25 +210,26 @@ json tools() {
          {"out", prop("string", "the file to write, a full path: <song folder>/sounds/lead.clap-preset")},
          {"preset", prop("string", "start from this preset (default: the plugin's default sound)")},
          {"state", prop("string", "start from this state file instead (a .vital, .clap-preset, .vstpreset, .fxp, ...)")},
-         {"params", {{"type", "object"}, {"additionalProperties", {{"type", json::array({"number", "string"})}}},
-                     {"description", "parameter values to set on top, {\"Filter Cutoff\": 0.4} or {\"Filter Cutoff\": \"800 Hz\"}; \"Module/Name\" or \"#id\" when a name is ambiguous"}}}},
+         {"params", {{"type", "object"},
+                     {"description", "parameter values to set on top, each a number or the plugin's own text: {\"Filter Cutoff\": 0.4} or "
+                                     "{\"Filter Cutoff\": \"800 Hz\"}; \"Module/Name\" or \"#id\" when a name is ambiguous"}}}},
         {"plugin", "out"}, writes));
     list.push_back(tool("lint", "Check a job's harmony",
         "Before rendering: wrong notes, out-of-key chords, clashes between parts, parallel fifths and octaves, from the job's notes.",
-        {{"job", prop("string", "path to job.json")}}, {"job"}, readOnly));
+        {{"job", jobProp}}, {"job"}, readOnly));
     list.push_back(tool("stage", "Set every fader from its loudness",
         "Gain staging: renders the job once and sets each track's fader to target - its stem LUFS, the target from the track's role "
         "(a word of its name: Kick -12, Bass -15.5, Sub -19, Lead -16, Pad -22, Arp -21 ...) or targets.json beside the job. Writes "
         "gains.json beside the job (for a generator script); apply also sets the gains in the job. Lists tracks no role fits and tracks "
         "that peak over 0 dBFS after their fader.",
-        {{"job", prop("string", "path to job.json")}, {"apply", prop("boolean", "also set the gains in the job file")},
+        {{"job", jobProp}, {"apply", prop("boolean", "also set the gains in the job file")},
          {"report", prop("string", "measure this render's report.json instead of rendering")}},
         {"job"}, writes));
     list.push_back(tool("render", "Render a song",
         "Renders a job through its instruments and effects and returns the report's summary (loudness of the mix, each section "
         "and track, warnings with their fixes) and the picture of the song (sections, loudness contour, spectrum, every track's "
         "notes over its level). Writes mix.wav, report.json and song.png into out. from_bar/to_bar render a few bars in seconds.",
-        {{"job", prop("string", "path to job.json")}, {"out", prop("string", "output folder (default: out next to the job)")},
+        {{"job", jobProp}, {"out", prop("string", "output folder (default: out next to the job)")},
          {"from_bar", prop("number", "render from this bar (with to_bar)")}, {"to_bar", prop("number", "render up to this bar (exclusive)")},
          {"tracks", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "only these tracks (with the song's buses and master)"}}},
          {"stems", {{"type", "string"}, {"enum", {"none", "16", "24", "float"}}, {"description", "stem files (default none)"}}},
@@ -159,7 +242,7 @@ json tools() {
     list.push_back(tool("picture", "Picture of an arrangement",
         "Draws a job's arrangement before rendering (sections, bars, every track's notes) and returns the image; the render tool "
         "draws the full picture with levels and spectrum.",
-        {{"job", prop("string", "path to job.json")}, {"width", prop("number", "pixels, 800-3200 (default 1400)")}}, {"job"}, writes));
+        {{"job", jobProp}, {"width", prop("number", "pixels, 800-3200 (default 1400)")}}, {"job"}, writes));
     list.push_back(tool("patch_card", "See how presets sound",
         "Plays each patch through one probe (a held C4, C2-C5, a C minor chord, 16ths) and returns a picture: one patch = a full card "
         "(the held note's spectrum with note names and harmonics, level, attack and tail, pitch over time, waveform, the four octaves, "
@@ -181,8 +264,8 @@ json tools() {
         {"path"}, readOnly));
     list.push_back(tool("timeline", "Song time of bars and markers",
         "Song time of every marker and every few bars from the tempo map, in song and file seconds: find bar 57, or plan a length.",
-        {{"job", prop("string", "path to job.json")}, {"every", prop("number", "bars between rows (default 8)")}}, {"job"}, readOnly));
-    const json song = prop("string", "the song folder (with wavelength.json and its job)");
+        {{"job", jobProp}, {"every", prop("number", "bars between rows (default 8)")}}, {"job"}, readOnly));
+    const json song = prop("string", "the song: its folder, or its name in the songs folder");
     list.push_back(tool("save", "Save a revision of a song",
         "Saves the song's job and its source, notes and media files as a revision in its history (the first save makes the "
         "manifest). Save before a risky change; renders are revisions too.",
@@ -220,7 +303,7 @@ json tools() {
     list.push_back(tool("import", "Import MIDI, MusicXML, DAWproject, a Bitwig or a GarageBand project",
         "Makes a job from a MIDI file, a MusicXML score (MuseScore, Sibelius, Dorico), a DAWproject, a Bitwig Studio project (.bwproject, no export needed) "
         "or a GarageBand project (.band: its tracks play their own channel strips), ready to render and edit.",
-        {{"file", prop("string", ".mid, .musicxml/.mxl, .dawproject, .bwproject or .band")}, {"out", prop("string", "folder for job.json")}}, {"file", "out"}, writes));
+        {{"file", prop("string", ".mid, .musicxml/.mxl, .dawproject, .bwproject or .band")}, {"out", prop("string", "the song folder for job.json, or a new song's name in the songs folder")}}, {"file", "out"}, writes));
     return list;
 }
 
@@ -230,6 +313,15 @@ public:
     explicit Server(std::FILE *out) : out_(out) {}
 
     int run() {
+        // Warm the plugin cache now, so the first list_instruments on a new computer doesn't spend
+        // its client's tool timeout scanning (a second `plugins` waits for this one's lock, then reads
+        // what it found). Its output goes to /dev/null, never into the protocol.
+        platform::Process scan;
+        if (platform::spawn({platform::selfExecutable(), "plugins", "--json"}, scan, false, true))
+            std::thread([scan]() mutable {
+                std::string crash;
+                while (!platform::finished(scan, crash)) std::this_thread::sleep_for(std::chrono::seconds(1));
+            }).detach();
         std::thread reader([this] {
             for (std::string line; std::getline(std::cin, line);) {
                 std::lock_guard<std::mutex> g(m_);
@@ -421,6 +513,77 @@ private:
             if (!docText(doc, str(a, "section"), t, err)) return text("error: " + err, true);
             return text(t);
         }
+        if (name == "list_songs") {
+            const fs::path root = songsRoot();
+            const std::string q = lower(str(a, "search"));
+            std::error_code ec;
+            struct Row { std::string name; fs::file_time_type changed; bool rendered; };
+            std::vector<Row> rows;
+            for (fs::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+                const fs::path job = it->path() / "job.json";
+                if (!it->is_directory(ec) || !fs::exists(job, ec)) continue;
+                const std::string n = it->path().filename().u8string();
+                if (!q.empty() && lower(n).find(q) == std::string::npos) continue;
+                rows.push_back({n, fs::last_write_time(job, ec), fs::exists(it->path() / "out" / "mix.wav", ec) || fs::exists(it->path() / "render", ec)});
+            }
+            if (rows.empty()) return text("no songs" + std::string(q.empty() ? "" : " matching that") + " in " + root.u8string() + ": write_job makes one");
+            std::sort(rows.begin(), rows.end(), [](const Row &x, const Row &y) { return x.changed > y.changed; });
+            std::string lines = "songs in " + root.u8string() + ", newest first:\n";
+            const auto now = fs::file_time_type::clock::now();
+            for (auto &r : rows) {
+                const long days = (long)std::chrono::duration_cast<std::chrono::hours>(now - r.changed).count() / 24;
+                lines += r.name + "  (job changed " + (days < 1 ? std::string("today") : days == 1 ? std::string("yesterday") : std::to_string(days) + " days ago") +
+                         (r.rendered ? ", rendered" : "") + ")\n";
+            }
+            return text(lines);
+        }
+        if (name == "read_job") {
+            const fs::path file = fs::u8path(jobFile(need(a, "job"))), dir = file.parent_path();
+            std::error_code ec;
+            if (!fs::is_regular_file(file, ec)) return text("error: no job at " + file.u8string() + " (list_songs lists the songs)", true);
+            const uintmax_t kMax = 512 * 1024;
+            if (fs::file_size(file, ec) > kMax) return text("error: " + file.u8string() + " is over 512 KB: too big to read whole here", true);
+            std::string t = "job.json (" + file.u8string() + "):\n" + readText(file);
+            for (const char *f : {"brief.md", "sounds.json", "edits.json", "riffs.json"}) {
+                const fs::path x = dir / f;
+                if (!fs::is_regular_file(x, ec)) continue;
+                t += std::string("\n\n") + f + (fs::file_size(x, ec) > kMax ? ": over 512 KB, not shown" : ":\n" + readText(x));
+            }
+            return text(t);
+        }
+        if (name == "write_job") {
+            if (!a.contains("job") || !a["job"].is_object()) return text("error: job is the job itself, a JSON object (tempo, tracks, ...)", true);
+            std::error_code ec;
+            fs::path dir;
+            if (!str(a, "song").empty()) dir = songFolder(str(a, "song"));
+            else {
+                const std::string slug = slugOf(str(a, "title"));
+                dir = songsRoot() / slug;
+                for (int n = 2; fs::exists(dir, ec) && n < 1000; ++n) dir = songsRoot() / (slug + "-" + std::to_string(n));
+            }
+            Job parsed;
+            std::string err;
+            bool ok = false;
+            try { ok = parseJob(a["job"], dir.u8string(), parsed, err, true); }
+            catch (const std::exception &e) { err = e.what(); }
+            if (!ok) return text("error: the job doesn't parse, so nothing was written: " + err, true);
+            fs::create_directories(dir, ec);
+            if (ec) return text("error: could not make " + dir.u8string() + ": " + ec.message(), true);
+            const fs::path file = dir / "job.json", tmp = dir / "job.json.tmp";
+            {
+                std::ofstream o(tmp, std::ios::binary);
+                o << tidyJson(a["job"]) << "\n";
+                if (!o) return text("error: could not write " + tmp.u8string(), true);
+            }
+            fs::rename(tmp, file, ec);
+            if (ec) return text("error: could not write " + file.u8string() + ": " + ec.message(), true);
+            std::string names;
+            size_t notes = 0;
+            for (auto &tr : parsed.tracks) { names += (names.empty() ? "" : ", ") + tr.name; notes += tr.notes.size(); }
+            return text("wrote " + file.u8string() + ": " + std::to_string(parsed.tracks.size()) + " tracks (" + names + "), " + std::to_string(notes) +
+                        " notes, " + std::to_string(parsed.markers.size()) + " markers\nlint and render it with job \"" +
+                        (fs::equivalent(dir.parent_path(), songsRoot(), ec) ? dir.filename().u8string() : dir.u8string()) + "\"");
+        }
         if (name == "list_instruments") {
             if (!run({"plugins", "--json"}, id, progress, 900, out, fail)) return fail;
             const std::string q = lower(str(a, "search")), kind = str(a, "kind");
@@ -517,23 +680,23 @@ private:
             return text(lines.empty() ? "no parameters match" : lines);
         }
         if (name == "stage") {
-            std::vector<std::string> args = {"stage", need(a, "job"), "--json"};
+            std::vector<std::string> args = {"stage", jobFile(need(a, "job")), "--json"};
             if (a.value("apply", false)) args.push_back("--apply");
             if (a.contains("report") && a["report"].is_string()) { args.push_back("--report"); args.push_back(a["report"].get<std::string>()); }
             if (!run(args, id, progress, 7200, out, fail)) return fail;
             return text(out.dump(1));
         }
         if (name == "lint") {   // the harmony check, then voice leading (parallel fifths and octaves)
-            if (!run({"lint", need(a, "job"), "--harmony", "--json"}, id, progress, 300, out, fail)) return fail;
+            if (!run({"lint", jobFile(need(a, "job")), "--harmony", "--json"}, id, progress, 300, out, fail)) return fail;
             json voices;
             Result vfail;
             json both = {{"harmony", out}};
-            if (run({"lint", need(a, "job"), "--json"}, id, progress, 300, voices, vfail)) both["voiceLeading"] = voices;
+            if (run({"lint", jobFile(need(a, "job")), "--json"}, id, progress, 300, voices, vfail)) both["voiceLeading"] = voices;
             else both["voiceLeading"] = {{"error", vfail.content.empty() ? json("failed") : vfail.content[0].value("text", json("failed"))}};
             return text(both.dump(1));
         }
         if (name == "timeline") {
-            std::vector<std::string> args = {"timeline", need(a, "job"), "--json"};
+            std::vector<std::string> args = {"timeline", jobFile(need(a, "job")), "--json"};
             if (a.contains("every") && a["every"].is_number()) { args.push_back("--every"); args.push_back(numArg(a["every"])); }
             if (!run(args, id, progress, 120, out, fail)) return fail;
             return text(out.dump(1));
@@ -548,11 +711,11 @@ private:
             return text(out.dump(1));
         }
         if (name == "import") {
-            if (!run({"import", need(a, "file"), "--out", need(a, "out"), "--json"}, id, progress, 600, out, fail)) return fail;
+            if (!run({"import", need(a, "file"), "--out", songFolder(need(a, "out")).u8string(), "--json"}, id, progress, 600, out, fail)) return fail;
             return text(out.dump(1));
         }
         if (name == "picture") {
-            std::vector<std::string> args = {"picture", need(a, "job"), "--json"};
+            std::vector<std::string> args = {"picture", jobFile(need(a, "job")), "--json"};
             if (a.contains("width") && a["width"].is_number()) { args.push_back("--width"); args.push_back(numArg(a["width"])); }
             if (!run(args, id, progress, 120, out, fail)) return fail;
             Result r = text("arrangement: " + out.value("file", ""));
@@ -607,13 +770,13 @@ private:
         }
         if (name == "render") return render(a, id, progress);
         if (name == "save") {
-            std::vector<std::string> args = {"save", need(a, "song"), "--json"};
+            std::vector<std::string> args = {"save", songFolder(need(a, "song")).u8string(), "--json"};
             if (!str(a, "message").empty()) { args.push_back("-m"); args.push_back(str(a, "message")); }
             if (!run(args, id, progress, 120, out, fail)) return fail;
             return text(out.dump(1));
         }
         if (name == "history" || name == "comments") {
-            std::vector<std::string> args = {name, need(a, "song"), "--json"};
+            std::vector<std::string> args = {name, songFolder(need(a, "song")).u8string(), "--json"};
             if (name == "comments" && a.value("all", false)) args.push_back("--all");
             if (!run(args, id, progress, 120, out, fail)) return fail;
             return text(out.dump(1));
@@ -621,7 +784,7 @@ private:
         if (name == "undo") {
             const std::string action = str(a, "action").empty() ? "undo" : str(a, "action");
             if (action != "undo" && action != "redo" && action != "restore") return text("error: action is undo, redo or restore", true);
-            std::vector<std::string> args = {action, need(a, "song")};
+            std::vector<std::string> args = {action, songFolder(need(a, "song")).u8string()};
             if (action == "restore") {
                 if (!a.contains("revision") || !a["revision"].is_number()) return text("error: restore needs a revision", true);
                 args.push_back(numArg(a["revision"]));
@@ -631,7 +794,7 @@ private:
             return text(out.dump(1));
         }
         if (name == "diff") {
-            std::vector<std::string> args = {"diff", need(a, "song")};
+            std::vector<std::string> args = {"diff", songFolder(need(a, "song")).u8string()};
             for (const char *k : {"from", "to"})
                 if (a.contains(k) && a[k].is_number()) args.push_back("r" + numArg(a[k]));
             args.push_back("--json");
@@ -639,20 +802,20 @@ private:
             return text(out.dump(1));
         }
         if (name == "reply") {
-            std::vector<std::string> args = {"comments", need(a, "song"), "--reply", need(a, "id"), "--text", need(a, "text"), "--json"};
+            std::vector<std::string> args = {"comments", songFolder(need(a, "song")).u8string(), "--reply", need(a, "id"), "--text", need(a, "text"), "--json"};
             if (a.value("done", false)) args.push_back("--done");
             if (!run(args, id, progress, 120, out, fail)) return fail;
             return text(out.dump(1));
         }
         if (name == "fallbacks") {
-            std::vector<std::string> args = {"fallbacks", need(a, "song"), "--json"};
+            std::vector<std::string> args = {"fallbacks", songFolder(need(a, "song")).u8string(), "--json"};
             if (a.value("suggest", false) || a.value("write", false)) args.push_back("--suggest");
             if (a.value("write", false)) args.push_back("--write");
             if (!run(args, id, progress, 1800, out, fail)) return fail;
             return text(out.dump(1));
         }
         if (name == "pack") {
-            std::vector<std::string> args = {"pack", need(a, "song"), "--json"};
+            std::vector<std::string> args = {"pack", songFolder(need(a, "song")).u8string(), "--json"};
             if (!str(a, "out").empty()) { args.push_back("--out"); args.push_back(str(a, "out")); }
             if (!run(args, id, progress, 600, out, fail)) return fail;
             return text(out.dump(1));
@@ -661,7 +824,7 @@ private:
     }
 
     Result render(const json &a, const json &id, const json &progress) {
-        const std::string job = need(a, "job");
+        const std::string job = jobFile(need(a, "job"));
         std::string outDir = str(a, "out");
         if (outDir.empty()) outDir = (fs::path(job).parent_path() / "out").string();
         std::vector<std::string> args = {"render", job, "--out", outDir, "--json", "--stems", str(a, "stems").empty() ? "none" : str(a, "stems")};
