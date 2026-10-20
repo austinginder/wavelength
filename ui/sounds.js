@@ -1064,7 +1064,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			return { beat: Math.min(beats, Math.max(0, (e.clientX - r.left) / r.width * beats)), key: Math.min(127, Math.max(0, hi - Math.floor((e.clientY - r.top) / ROW))), px: r.width / beats };
 		}
 		function down(e) {
-			if (e.button !== 0) return;
+			if (e.button !== 0 || e.ctrlKey) return;   // Ctrl-click is a right-click on a Mac: the menu takes it
 			e.preventDefault();
 			d.querySelector('[data-r="rollbox"]').focus();
 			const p = pos(e), id = +(e.target.closest('[data-id]')?.dataset.id || 0);
@@ -1208,6 +1208,56 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			lastVel = list[0].vel;
 			changed();
 		}
+		// the bars select gets a length the riff grew to (Half time past the end)
+		function growBars(end) {
+			const need = Math.ceil(end / bpb - 1e-6);
+			if (need <= bars) return true;
+			if (need > 64) return false;
+			bars = need; beats = bars * bpb;
+			const el = d.querySelector('[data-r="bars"]'), have = [...el.options].map(o => +o.value);
+			if (!have.includes(bars)) el.innerHTML = [...have, bars].sort((a, b) => a - b).map(b => `<option value="${b}">${b}</option>`).join('');
+			syncBar();
+			return true;
+		}
+		// right-click on the roll: changes to the selected notes (or all of them, with none selected), measured from
+		// where they start; a right-click on a note outside the selection selects it alone
+		function rollMenu(e) {
+			const id = +(e.target.closest('[data-id]')?.dataset.id || 0);
+			if (id && !sel.has(id)) { sel.clear(); sel.add(id); draw(); }
+			const list = chosen(), many = list.length > 1;
+			const start = list.length ? Math.min(...list.map(x => x.beat)) : 0, end = list.length ? Math.max(...list.map(x => x.beat + x.dur)) : 0;
+			const kLo = list.length ? Math.min(...list.map(x => x.key)) : 0, kHi = list.length ? Math.max(...list.map(x => x.key)) : 0;
+			const apply = fn => () => { remember(); fn(); range(); changed(); };
+			const stretch = f => apply(() => { for (const x of list) { x.beat = +(start + (x.beat - start) * f).toFixed(4); x.dur = +(x.dur * f).toFixed(4); } });
+			const octave = dk => apply(() => { for (const x of list) x.key += dk; });
+			const starts = [...new Set(list.map(x => x.beat))].sort((a, b) => a - b);
+			WLUI.menu(e, [
+				{ label: 'Half time', hint: 'twice as long', disabled: !list.length, run: () => {
+					const fits = start + (end - start) * 2;
+					if (fits > 64 * bpb + 1e-6) { d.querySelector('[data-r="count"]').textContent = 'No room: a riff holds 64 bars at most'; return; }
+					remember();
+					growBars(fits);
+					for (const x of list) { x.beat = +(start + (x.beat - start) * 2).toFixed(4); x.dur = +(x.dur * 2).toFixed(4); }
+					range(); changed();
+				} },
+				{ label: 'Double time', hint: 'half as long', disabled: !list.length, run: stretch(.5) },
+				'-',
+				{ label: 'Reverse', hint: 'last note first', disabled: !many, run: apply(() => { for (const x of list) x.beat = +(start + end - x.beat - x.dur).toFixed(4); }) },
+				{ label: 'Invert', hint: 'high notes low, low notes high', disabled: kLo === kHi, run: apply(() => { for (const x of list) x.key = kLo + kHi - x.key; }) },
+				{ label: 'Legato', hint: 'each note to the next', disabled: starts.length < 2, run: apply(() => {
+					for (const x of list) { const next = starts.find(b => b > x.beat + 1e-6); if (next != null) x.dur = +(next - x.beat).toFixed(4); }
+				}) },
+				{ label: 'Up an octave', disabled: !list.length || kHi + 12 > 127, run: octave(12) },
+				{ label: 'Down an octave', disabled: !list.length || kLo - 12 < 0, run: octave(-12) },
+				'-',
+				{ label: 'Quantize', hint: g() ? 'to ' + snapName : 'snap is off', disabled: !list.length || !g(), run: () => act('quantize') },
+				{ label: 'Duplicate', hint: 'Cmd-D', disabled: !sel.size, run: () => act('duplicate') },
+				{ label: 'Select all', hint: 'Cmd-A', disabled: !notes.length || sel.size === notes.length, run: () => act('all') },
+				'-',
+				{ label: sel.size ? 'Delete' : 'Delete every note', danger: true, disabled: !list.length, run: () => { remember(); const gone = new Set(list.map(x => x.id)); notes = notes.filter(x => !gone.has(x.id)); sel.clear(); changed(); } },
+			].map(it => it === '-' ? it : { ...it, run: () => { it.run(); d.querySelector('[data-r="rollbox"]').focus(); },   // keys go on working on the roll
+				...(sel.size || it.disabled || /^(Delete|Select|Duplicate)/.test(it.label) ? {} : { hint: it.hint ? it.hint + ', every note' : 'every note' }) }));
+		}
 		function undo() { if (!hist.length) return; fut.push(state()); restore(hist.pop()); range(); changed(); }
 		function redo() { if (!fut.length) return; hist.push(state()); restore(fut.pop()); range(); changed(); }
 		function act(a) {
@@ -1243,7 +1293,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 			</div>
 			<div class="sd-rollwrap"><div class="sd-rollkeys mono"><div class="sd-rollcorner"></div><div class="sd-rollkeyl" data-r="keys"></div></div>
 				<div class="sd-rollbox" data-r="rollbox" tabindex="0"><div class="sd-ruler mono" data-r="ruler" title="Click to play from here; drag to move along"></div><svg class="sd-roll" preserveAspectRatio="none" data-r="svg"></svg></div></div>
-			<p class="sd-rollhelp">${esc(take.track)} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (Option-drag: to a length), drag a box to select (Shift adds), drag notes to move them (Option: a copy), drag an end to resize, Cmd-D duplicates, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all</p>
+			<p class="sd-rollhelp">${esc(take.track)} · <span data-r="count"></span> · click the ruler to play from there, click to add a note (Option-drag: to a length), drag a box to select (Shift adds), drag notes to move them (Option: a copy), drag an end to resize, Cmd-D duplicates, Delete removes, the wheel sets velocity, arrows move (Shift: an octave), Shift-click selects more, Cmd-A all, right-click for half time, double time, reverse and more</p>
 			<div class="sd-riffmeta">
 				<label class="wl-field"><span>Name</span><input name="name" value="${esc(existing?.name || (S.lib ? nextRiffName() : take.track + ' riff ' + n))}" maxlength="80" autocomplete="off"></label>
 				<label class="wl-field"><span>What it's for (the agent reads it)</span><input name="note" value="${esc(existing?.note || '')}" placeholder="The hook for the drops; the intro's motif; a bassline under the breakdown…" maxlength="2000" autocomplete="off"></label>
@@ -1268,6 +1318,7 @@ ${riffLines(d)}${typeof d.tempo === 'number' ? `\nTempo: ${d.tempo} BPM.\n` : ''
 				svg = d.querySelector('[data-r="svg"]');
 				const box = d.querySelector('[data-r="rollbox"]');
 				svg.addEventListener('pointerdown', down);
+				svg.addEventListener('contextmenu', rollMenu);
 				const ruler = d.querySelector('[data-r="ruler"]');
 				ruler.addEventListener('pointerdown', e => {
 					if (e.button !== 0) return;

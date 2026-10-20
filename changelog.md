@@ -4,6 +4,9 @@ All notable changes to Wavelength. Versions follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- The riff piano roll on `serve`'s Sounds page has a right-click menu for the selected notes (or every note, with none selected): Half time (twice as long, the riff gains bars when it needs them), Double time, Reverse, Invert (high notes low), Legato (each note to the next), up or down an octave, plus Quantize, Duplicate, Select all and Delete. Each change is one undo step.
+
 ### Fixed
 - `analyze` (and `card`'s sounding key) read a stepped wave sharp: the NES triangle (32 steps through the console's high-passes, as Wavelength Retro plays it at Era 0) read E1 as F1 -45 c, some notes a semitone high, at full confidence. Its pitch tracker took a dip one step short of the period; a much deeper dip just past the first is now taken as the period.
 - A built-in `delay` timed in beats kept the song's first tempo through a tempo map (a ramp from 96 to 144 BPM left its echoes 0.625 s apart all the way). Beat times now follow the map, `right` and `taps` too, and so do `ringmod`'s `delay` and the depth of a `vibrato` whose rate is a note value.
