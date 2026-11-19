@@ -1764,10 +1764,12 @@ spid=$!
 for _ in $(seq 50); do curl -s -o /dev/null http://127.0.0.1:$sport/ && break; sleep 0.1; done   # up to 5 s on a busy machine
 serve_why=""
 page=$(curl -s -w '\nHTTP %{http_code}' http://127.0.0.1:$sport/)
-echo "$page" | grep -q 'wavelength-token' || serve_why="the page has no token ($(echo "$page" | tail -1); $(echo "$page" | head -c 160 | tr '\n' ' '))"
-[ -z "$serve_why" ] && { curl -s http://127.0.0.1:$sport/api/songs | grep -q '"demo"' || serve_why="the song list lacks demo: $(curl -s http://127.0.0.1:$sport/api/songs | head -c 200)"; }
+# here-strings, not `echo "$page" | grep -q`: the page is ~60 KB, grep -q stops at the match while echo is still
+# writing, and pipefail counts echo's SIGPIPE (exit 141) as a miss; the message's own pipe then ended the script
+grep -q 'wavelength-token' <<<"$page" || serve_why="the page has no token ($(tail -1 <<<"$page"); $(head -c 160 <<<"$page" | tr '\n' ' '))"
+[ -z "$serve_why" ] && { body=$(curl -s http://127.0.0.1:$sport/api/songs); grep -q '"demo"' <<<"$body" || serve_why="the song list lacks demo: ${body:0:200}"; }
 [ -z "$serve_why" ] && { code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' "http://127.0.0.1:$sport/api/review?song=demo"); [ "$code" = "403" ] || serve_why="a POST without the token got $code, not 403"; }
-[ -z "$serve_why" ] && { curl -s "http://127.0.0.1:$sport/api/song?song=kitmap" | grep -q '"custom kit"' || serve_why="a song with a kit map: $(curl -s -w ' HTTP %{http_code}' "http://127.0.0.1:$sport/api/song?song=kitmap" | head -c 200)"; }
+[ -z "$serve_why" ] && { body=$(curl -s -w ' HTTP %{http_code}' "http://127.0.0.1:$sport/api/song?song=kitmap"); grep -q '"custom kit"' <<<"$body" || serve_why="a song with a kit map: ${body:0:200}"; }
 # the Sounds page: a new project, a track, a riff saved (key names, listed in the manifest), a bad riff refused,
 # the riff played back for its whole loop through the track's sound, then deleted
 [ -z "$serve_why" ] && serve_why=$(WAVELENGTH_RIFFS="$PWD/out/check/riff-library" python3 - "$sport" "out/check/serve-songs" "./$build/wavelength" <<'PY'
