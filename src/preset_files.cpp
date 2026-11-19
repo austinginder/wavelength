@@ -633,8 +633,17 @@ std::vector<PresetInfo> filePresets(const PluginInfo &plugin) {
             const auto &first = programs[0].second;   // the version string every program starts with
             const size_t slot = std::find_if(first.begin(), first.end(), [](uint8_t c) { return c < 0x20 || c >= 0x7f; }) - first.begin();
             for (size_t i = 0; i < programs.size(); ++i) {
-                auto key = programs[i].second;   // the patch without its program slot (the u32 after the version string)
-                if (slot + 4 <= key.size()) key.erase(key.begin() + (long)slot, key.begin() + (long)slot + 4);
+                // the patch without its program slot (the u32 after the version string). Built from the two slices
+                // rather than erased from a copy: GCC 16 warns (-Wstringop-overflow) on the inlined erase.
+                const auto &patch = programs[i].second;
+                std::vector<uint8_t> key;
+                if (slot + 4 <= patch.size()) {
+                    key.reserve(patch.size() - 4);
+                    key.insert(key.end(), patch.begin(), patch.begin() + (long)slot);
+                    key.insert(key.end(), patch.begin() + (long)slot + 4, patch.end());
+                } else {
+                    key = patch;
+                }
                 if (!sounds.insert(key).second) continue;
                 PresetInfo pi;
                 pi.name = programs[i].first.empty() ? "Program " + std::to_string(i + 1) : programs[i].first;
