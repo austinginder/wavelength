@@ -127,6 +127,61 @@ fs::path homeDir() {
 #endif
 }
 
+fs::path bitwigPackagesDir() {
+#if defined(__APPLE__)
+    return homeDir() / "Library/Application Support/Bitwig/Bitwig Studio/installed-packages";
+#elif defined(_WIN32)
+    return fs::path(env("LOCALAPPDATA")) / "Bitwig Studio/installed-packages";
+#else
+    return homeDir() / ".BitwigStudio/installed-packages";
+#endif
+}
+
+fs::path bitwigUserLibrary() {
+#if defined(__APPLE__) || defined(_WIN32)
+    return homeDir() / "Documents/Bitwig Studio/Library";
+#else
+    return homeDir() / "Bitwig Studio/Library";
+#endif
+}
+
+std::string pathHere(const std::string &path) {
+    std::string s = path;
+    std::replace(s.begin(), s.end(), '\\', '/');
+    const bool drive = s.size() > 2 && std::isalpha((unsigned char)s[0]) && s[1] == ':' && s[2] == '/';
+    if (s.empty() || (s[0] != '/' && !drive)) return "";
+    std::error_code ec;
+    if (fs::exists(fs::u8path(path), ec)) return "";
+    // Bitwig package content: <anything>/installed-packages/<format version>/<vendor>/<package>/...
+    const std::string marker = "/installed-packages/";
+    if (const size_t k = s.find(marker); k != std::string::npos) {
+        if (const size_t v = s.find('/', k + marker.size()); v != std::string::npos && v + 1 < s.size()) {
+            // Format 1.0 files content by type first (1.0/samples/<vendor>/<package>/...); 5.0 drops that level
+            // (5.0/<vendor>/<package>/...). Try the path as written, then without its first folder.
+            const std::string tail = s.substr(v + 1);
+            std::vector<fs::path> rests = {fs::u8path(tail)};
+            if (const size_t t = tail.find('/'); t != std::string::npos && t + 1 < tail.size()) rests.push_back(fs::u8path(tail.substr(t + 1)));
+            std::vector<fs::path> versions;
+            for (auto &e : fs::directory_iterator(bitwigPackagesDir(), ec)) if (e.is_directory(ec)) versions.push_back(e.path());
+            std::sort(versions.rbegin(), versions.rend());
+            for (auto &rest : rests)
+                for (auto &dir : versions) if (fs::exists(dir / rest, ec)) return (dir / rest).u8string();
+        }
+    }
+    // Another home folder: /Users/<name>/..., /home/<name>/..., C:/Users/<name>/...
+    size_t after = std::string::npos;
+    for (const char *prefix : {"/Users/", "/home/"})
+        if (s.rfind(prefix, 0) == 0) after = std::strlen(prefix);
+    if (drive && s.compare(2, 7, "/Users/") == 0) after = 9;
+    if (after != std::string::npos) {
+        if (const size_t e = s.find('/', after); e != std::string::npos && e + 1 < s.size()) {
+            const fs::path here = homeDir() / fs::u8path(s.substr(e + 1));
+            if (fs::exists(here, ec)) return here.u8string();
+        }
+    }
+    return "";
+}
+
 fs::path cacheDir() {
 #if defined(__APPLE__)
     return homeDir() / "Library/Caches/wavelength";

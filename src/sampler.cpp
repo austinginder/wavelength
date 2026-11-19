@@ -838,7 +838,7 @@ std::string multisampleCategory(const std::string &xml) {
 std::string resolveIn(const std::string &name, const std::string &baseDir) {
     if (name.rfind("lib:", 0) == 0) return resolveLibraryFile(name);
     fs::path p(name);
-    if (p.is_absolute()) return fs::exists(p) ? p.string() : "";
+    if (p.is_absolute()) return fs::exists(p) ? p.string() : platform::pathHere(name);
     if (!baseDir.empty() && fs::exists(fs::path(baseDir) / p)) return (fs::path(baseDir) / p).string();
     for (auto &root : sampleRoots()) if (fs::exists(fs::path(root) / p)) return (fs::path(root) / p).string();
     return "";
@@ -1152,19 +1152,13 @@ std::vector<std::string> sampleRoots() {
     std::error_code sec;
     if (fs::is_directory(soundFontDir(), sec)) roots.push_back(soundFontDir());   // `samples --install-soundfont` puts them here
     // Bitwig Studio's installed sound content, newest package format first
-#if defined(__APPLE__)
-    const fs::path bitwig = fs::path(home()) / "Library/Application Support/Bitwig/Bitwig Studio/installed-packages";
-#elif defined(_WIN32)
-    const fs::path bitwig = fs::path(getenv("LOCALAPPDATA") ? getenv("LOCALAPPDATA") : "") / "Bitwig Studio/installed-packages";
-#else
-    const fs::path bitwig = fs::path(home()) / ".BitwigStudio/installed-packages";
-#endif
+    const fs::path bitwig = platform::bitwigPackagesDir();
     std::error_code ec;
     std::vector<std::string> versions;
     for (auto &e : fs::directory_iterator(bitwig, ec)) if (e.is_directory(ec)) versions.push_back(e.path().string());
     std::sort(versions.rbegin(), versions.rend());
     roots.insert(roots.end(), versions.begin(), versions.end());
-    const fs::path userLib = fs::path(home()) / "Documents/Bitwig Studio/Library";
+    const fs::path userLib = platform::bitwigUserLibrary();
     if (fs::exists(userLib, ec)) roots.push_back(userLib.string());
 #if defined(__APPLE__)
     // Logic's and GarageBand's Sampler instruments (.exs; their samples are found by the instruments), and the

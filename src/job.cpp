@@ -467,6 +467,7 @@ bool parseJob(const json &jobIn, const std::string &baseDir, Job &out, std::stri
                 tr.stateFile = s.is_string() ? s.get<std::string>() : s.at("file").get<std::string>();
                 tr.stateFormat = s.is_object() ? s.value("format", "auto") : "auto";
                 if (fs::path(tr.stateFile).is_relative()) tr.stateFile = (fs::path(baseDir) / tr.stateFile).string();
+                else if (const std::string here = platform::pathHere(tr.stateFile); !here.empty()) tr.stateFile = here;   // written on another computer
             }
             if (t.contains("sampler")) tr.sampler = t["sampler"];
             if (t.contains("shepard")) tr.shepard = t["shepard"];

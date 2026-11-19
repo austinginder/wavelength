@@ -20,6 +20,18 @@ std::filesystem::path cacheDir();
 // User settings and extracted presets: ~/Library/Application Support/Wavelength on macOS,
 // $XDG_CONFIG_HOME/wavelength on Linux, %APPDATA%\Wavelength on Windows.
 std::filesystem::path dataDir();
+// Bitwig Studio's installed sound content (one folder per package format version inside):
+// ~/Library/Application Support/Bitwig/Bitwig Studio/installed-packages on macOS,
+// ~/.BitwigStudio/installed-packages on Linux, %LOCALAPPDATA%\Bitwig Studio\installed-packages on Windows.
+std::filesystem::path bitwigPackagesDir();
+// Bitwig Studio's user library: ~/Documents/Bitwig Studio/Library on macOS and Windows,
+// ~/Bitwig Studio/Library on Linux.
+std::filesystem::path bitwigUserLibrary();
+// A job or song written on another computer names its files there. For an absolute `path` that doesn't
+// exist here: the same Bitwig package file under this computer's installed-packages (any format version,
+// newest first), or the same file under this home folder when `path` is in another one (/Users/<name>/,
+// /home/<name>/, C:\Users\<name>\). Empty when neither exists, or when `path` is relative or exists.
+std::string pathHere(const std::string &path);
 // Separator for path lists in environment variables (':' or ';').
 char pathListSeparator();
 std::vector<std::string> envPathList(const char *var);
